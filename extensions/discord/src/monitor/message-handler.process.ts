@@ -40,6 +40,7 @@ import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
+import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import {
   createDiscordAckReactionAdapter,
@@ -940,10 +941,12 @@ export async function processDiscordMessage(
         }
       }
     } else if (shouldSendAckReaction && ackReaction && removeAckAfterReply) {
-      void removeReactionDiscord(messageChannelId, message.id, ackReaction, {
-        rest: discordRest,
-        accountId,
-      }).catch((err) => {
+      void removeReactionDiscord(
+        messageChannelId,
+        message.id,
+        ackReaction,
+        ackReactionContext,
+      ).catch((err: unknown) => {
         logAckFailure({
           log: logVerbose,
           channel: "discord",
