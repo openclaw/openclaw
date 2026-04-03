@@ -10,6 +10,7 @@ type OpenAICompletionsCompatDefaultsInput = {
 export type OpenAICompletionsCompatDefaults = {
   supportsStore: boolean;
   supportsDeveloperRole: boolean;
+  supportsReasoningEffort: boolean;
   supportsUsageInStreaming: boolean;
   supportsStrictMode: boolean;
 };
@@ -48,6 +49,11 @@ export function resolveOpenAICompletionsCompatDefaults(
     supportsStore:
       !isNonStandard && knownProviderFamily !== "mistral" && !usesExplicitProxyLikeEndpoint,
     supportsDeveloperRole: !isNonStandard && !isMoonshotLike && !usesConfiguredNonOpenAIEndpoint,
+    supportsReasoningEffort:
+      !isZai &&
+      knownProviderFamily !== "mistral" &&
+      endpointClass !== "xai-native" &&
+      !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming: !isNonStandard && !usesConfiguredNonOpenAIEndpoint,
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };

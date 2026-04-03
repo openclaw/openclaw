@@ -1351,7 +1351,6 @@ function detectCompat(model: OpenAIModeModel) {
   const isZai = endpointClass === "zai-native" || (isDefaultRoute && provider === "zai");
   const useMaxTokens =
     endpointClass === "chutes-native" || (isDefaultRoute && provider === "chutes") || isMistral;
-  const isGrok = endpointClass === "xai-native" || (isDefaultRoute && provider === "xai");
   const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"
@@ -1366,7 +1365,7 @@ function detectCompat(model: OpenAIModeModel) {
   return {
     supportsStore: compatDefaults.supportsStore,
     supportsDeveloperRole: compatDefaults.supportsDeveloperRole,
-    supportsReasoningEffort: !isGrok && !isMistral && !isZai,
+    supportsReasoningEffort: compatDefaults.supportsReasoningEffort,
     reasoningEffortMap,
     supportsUsageInStreaming: compatDefaults.supportsUsageInStreaming,
     maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
