@@ -122,15 +122,30 @@ export function resolveFallbackRetryPrompt(params: {
   if (!params.isFallbackRetry) {
     return params.body;
   }
-  // When the session has no persisted history (e.g. a freshly-spawned subagent
-  // whose first attempt failed before the SessionManager flushed the user
-  // message to disk), the fallback model would receive only the generic
-  // recovery prompt and lose the original task entirely.  Preserve the
-  // original body in that case so the fallback model can execute the task.
+  // Always preserve the original user message as the prompt body for the
+  // fallback model.  The previous approach replaced it with a generic
+  // "Continue where you left off" message, which works when the *same*
+  // model retries (it can read its own partial work in the transcript).
+  // However, when failing over to a *different* model (e.g. GPT → local
+  // Qwen), the fallback model has no prior work in the transcript and the
+  // generic prompt causes it to respond with "I don't know what we were
+  // doing" — losing the user's intent entirely.
+  //
+  // The user's message is already in the session transcript from the first
+  // (failed) attempt, so the fallback model will see it in history AND
+  // receive it as the active prompt.  A small context prefix signals that
+  // this is a retry so the model can skip any partial work it finds in the
+  // transcript.
   if (!params.sessionHasHistory) {
     return params.body;
   }
-  return "Continue where you left off. The previous model attempt failed or timed out.";
+  return (
+    "Note: the previous model attempt failed or timed out. " +
+    "You are the fallback model. The user's original message follows — " +
+    "answer it directly, ignoring any partial/failed responses in the " +
+    "conversation history.\n\n" +
+    params.body
+  );
 }
 
 export function prependInternalEventContext(

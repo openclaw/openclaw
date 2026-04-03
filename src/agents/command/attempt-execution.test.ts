@@ -16,14 +16,20 @@ describe("resolveFallbackRetryPrompt", () => {
     ).toBe(originalBody);
   });
 
-  it("returns recovery prompt for fallback retry with existing session history", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
-        sessionHasHistory: true,
-      }),
-    ).toBe("Continue where you left off. The previous model attempt failed or timed out.");
+  it("includes original body with context prefix for fallback retry with existing session history", () => {
+    const result = resolveFallbackRetryPrompt({
+      body: originalBody,
+      isFallbackRetry: true,
+      sessionHasHistory: true,
+    });
+    // The fallback prompt should contain the original user message
+    expect(result).toContain(originalBody);
+    // It should also include a note about the previous failure
+    expect(result).toContain("previous model attempt failed");
+    // It should NOT be just the generic "Continue" message
+    expect(result).not.toBe(
+      "Continue where you left off. The previous model attempt failed or timed out.",
+    );
   });
 
   it("preserves original body for fallback retry when session has no history (subagent spawn)", () => {
