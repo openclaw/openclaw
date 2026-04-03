@@ -47,13 +47,6 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
-import {
-  archiveSessionTranscriptsForSessionDetailed,
-  cleanupSessionBeforeMutation,
-  emitGatewaySessionEndPluginHook,
-  emitSessionUnboundLifecycleEvent,
-  performGatewaySessionReset,
-} from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -997,6 +990,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const reason = p.reason === "new" ? "new" : "reset";
+    const { performGatewaySessionReset } = await import("./sessions.runtime.js");
     const result = await performGatewaySessionReset({
       key,
       reason,
@@ -1037,6 +1031,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
+    const {
+      archiveSessionTranscriptsForSessionDetailed,
+      cleanupSessionBeforeMutation,
+      emitGatewaySessionEndPluginHook,
+      emitSessionUnboundLifecycleEvent,
+    } = await import("./sessions.runtime.js");
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const mutationCleanupError = await cleanupSessionBeforeMutation({
