@@ -3,8 +3,10 @@ const { recordInboundSessionMock } = vi.hoisted(() => ({
   recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./bot-message-context.session.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./bot-message-context.session.runtime.js")>();
+vi.mock("./bot-message-context.session.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
+    "./bot-message-context.session.runtime.js",
+  );
   return {
     ...actual,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),

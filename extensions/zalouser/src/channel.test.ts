@@ -4,8 +4,8 @@ import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { sendMessageZalouser, sendReactionZalouser } from "./send.js";
 
-vi.mock("./send.js", async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
+vi.mock("./send.js", async () => {
+  const actual = (await vi.importActual("./send.js")) as Record<string, unknown>;
   return {
     ...actual,
     sendMessageZalouser: vi.fn(async () => ({ ok: true, messageId: "mid-1" })),

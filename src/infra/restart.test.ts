@@ -4,19 +4,22 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async (importOriginal) => {
+vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(importOriginal, {
-    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-  });
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+    },
+  );
 });
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
 }));
 
-vi.mock("../config/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/paths.js")>();
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
   return {
     ...actual,
     resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),

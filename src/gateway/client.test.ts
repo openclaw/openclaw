@@ -92,8 +92,10 @@ vi.mock("ws", () => ({
   WebSocket: MockWebSocket,
 }));
 
-vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-auth-store.js")>();
+vi.mock("../infra/device-auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/device-auth-store.js")>(
+    "../infra/device-auth-store.js",
+  );
   return {
     ...actual,
     loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
@@ -102,8 +104,8 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../logger.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logger.js")>();
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
   return {
     ...actual,
     logDebug: (...args: unknown[]) => logDebugMock(...args),

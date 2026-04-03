@@ -14,19 +14,19 @@ vi.mock("./facade-runtime.js", () => ({
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
-vi.mock("node:fs/promises", async (importOriginal) => {
+vi.mock("node:fs/promises", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
   return mockNodeBuiltinModule(
-    importOriginal,
+    () => vi.importActual<typeof import("node:fs/promises")>("node:fs/promises"),
     { mkdir, access, rename },
     { mirrorToDefault: true },
   );
 });
 
-vi.mock("node:os", async (importOriginal) => {
+vi.mock("node:os", async () => {
   const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
   return mockNodeBuiltinModule(
-    importOriginal,
+    () => vi.importActual<typeof import("node:os")>("node:os"),
     { homedir: () => "/home/test" },
     { mirrorToDefault: true },
   );

@@ -91,8 +91,9 @@ const pluginRuntimeState = vi.hoisted(
     }) satisfies { registry: PluginRegistry },
 );
 
-vi.mock("../infra/home-dir.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/home-dir.js")>();
+vi.mock("../infra/home-dir.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
   return {
     ...actual,
     expandHomePrefix: (value: string) => {

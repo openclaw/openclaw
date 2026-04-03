@@ -9,8 +9,8 @@ const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 const chatSendMock = vi.fn();
 
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session-utils.js")>();
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => loadSessionEntryMock(...args),
@@ -19,8 +19,10 @@ vi.mock("../session-utils.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/subagent-registry-read.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../agents/subagent-registry-read.js")>();
+vi.mock("../../agents/subagent-registry-read.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/subagent-registry-read.js")>(
+    "../../agents/subagent-registry-read.js",
+  );
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>

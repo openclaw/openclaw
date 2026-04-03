@@ -74,8 +74,8 @@ vi.mock("../globals.js", () => ({
   setVerbose: (enabled: boolean) => setVerbose(enabled),
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
   defaultRuntime: mocks.defaultRuntime,
 }));
 
@@ -105,8 +105,10 @@ vi.mock("../daemon/program-args.js", () => ({
   }),
 }));
 
-vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/bonjour-discovery.js")>()),
+vi.mock("../infra/bonjour-discovery.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/bonjour-discovery.js")>(
+    "../infra/bonjour-discovery.js",
+  )),
   discoverGatewayBeacons: (opts: unknown) => discoverGatewayBeacons(opts),
 }));
 
