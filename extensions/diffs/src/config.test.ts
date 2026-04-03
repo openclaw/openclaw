@@ -6,7 +6,7 @@ import {
   ResolvingThemes,
 } from "@pierre/diffs";
 import AjvPkg from "ajv";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -404,6 +404,10 @@ describe("diffs viewer URL helpers", () => {
 });
 
 describe("renderDiffDocument", () => {
+  afterEach(async () => {
+    await disposeHighlighter();
+  });
+
   it("renders before/after input into a complete viewer document", async () => {
     const rendered = await renderDiffDocument(
       {
