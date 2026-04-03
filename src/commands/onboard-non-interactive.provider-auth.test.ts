@@ -887,7 +887,6 @@ describe("onboard (non-interactive): provider auth", () => {
     resetFileLockStateForTest();
     clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
-    ensureWorkspaceAndSessionsMock.mockClear();
   });
 
   it("stores MiniMax API key in the global auth profile", async () => {
