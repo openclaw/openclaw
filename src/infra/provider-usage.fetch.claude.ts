@@ -1,4 +1,4 @@
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageErrorSnapshot, buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -83,7 +83,10 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const orgs = (await orgRes.json()) as ClaudeWebOrganizationsResponse;
+  const orgs = (await orgRes.json().catch(() => null)) as ClaudeWebOrganizationsResponse | null;
+  if (!orgs) {
+    return null;
+  }
   const orgId = orgs?.[0]?.uuid?.trim();
   if (!orgId) {
     return null;
@@ -99,7 +102,10 @@ async function fetchClaudeWebUsage(
     return null;
   }
 
-  const data = (await usageRes.json()) as ClaudeWebUsageResponse;
+  const data = (await usageRes.json().catch(() => null)) as ClaudeWebUsageResponse | null;
+  if (!data) {
+    return null;
+  }
   const windows = buildClaudeUsageWindows(data);
 
   if (windows.length === 0) {
@@ -166,7 +172,10 @@ export async function fetchClaudeUsage(
     });
   }
 
-  const data = (await res.json()) as ClaudeUsageResponse;
+  const data = (await res.json().catch(() => null)) as ClaudeUsageResponse | null;
+  if (!data) {
+    return buildUsageErrorSnapshot("anthropic", "Invalid JSON");
+  }
   const windows = buildClaudeUsageWindows(data);
 
   return {
