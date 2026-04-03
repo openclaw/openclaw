@@ -39,6 +39,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
   internalEvents?: AgentInternalEvent[];
+  /** Raw user text for diagnostics call tracing (model.call.requestText). */
+  triggerText?: string;
   /**
    * Called after every LLM API call completes (model.call trace).
    * Only invoked when diagnostics.callTrace.enabled and logLlmCalls are true.

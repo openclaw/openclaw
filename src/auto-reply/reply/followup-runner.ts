@@ -230,6 +230,7 @@ export function createFollowupRunner(params: {
                 config: runtimeConfig,
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
+                triggerText: queued.summaryLine,
                 extraSystemPrompt: run.extraSystemPrompt,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
