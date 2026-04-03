@@ -1,3 +1,4 @@
+import { resolveDmGroupAccessWithLists } from "openclaw/plugin-sdk/channel-policy";
 import {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
