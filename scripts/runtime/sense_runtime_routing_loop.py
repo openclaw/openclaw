@@ -170,6 +170,10 @@ def main() -> int:
             if next_step == 'configure_provider':
                 final_state = 'provider_config_missing'
                 break
+            if isinstance(provider_status, dict) and provider_status.get('provider_config_present') is True and provider_status.get('provider_runtime_recognized') is False:
+                final_state = 'provider_not_ready'
+                next_step = 'configure_provider'
+                break
             if next_step == 'check_model_config':
                 pass
             elif next_step == 'run_runtime_task':

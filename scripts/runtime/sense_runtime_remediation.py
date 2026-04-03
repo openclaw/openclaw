@@ -33,6 +33,7 @@ PROVIDER_REQUIRED_API_KEY_MAP = {
     'gpu-runtime': 'NVIDIA_API_KEY',
     'openrouter': 'OPENROUTER_API_KEY',
 }
+KNOWN_PROVIDER_NAMES = ['openai', 'anthropic', 'ollama', 'nvidia', 'openrouter']
 
 PRIORITIZED_REQUIREMENT_STEPS = [
     ('API key missing:', 'check_api_key_config'),
@@ -207,14 +208,67 @@ def infer_provider_and_model_from_config(config: dict) -> dict:
     }
 
 
-def merge_provider_model_sources(runtime_signals: dict, config: dict) -> dict:
+def collect_runtime_text(payload: dict | None) -> str:
+    if not isinstance(payload, dict):
+        return ''
+    chunks: list[str] = []
+    summary = payload.get('summary')
+    if isinstance(summary, str):
+        chunks.append(summary)
+    key_points = payload.get('key_points')
+    if isinstance(key_points, list):
+        for item in key_points:
+            if isinstance(item, str):
+                chunks.append(item)
+    details = payload.get('details')
+    if isinstance(details, dict):
+        raw_output = details.get('raw_output')
+        if isinstance(raw_output, str):
+            chunks.append(raw_output)
+    return '\n'.join(chunks)
+
+
+def infer_provider_from_runtime_payloads(
+    sandbox_signals: dict,
+    start_result: dict | None,
+    runtime_status: dict | None,
+) -> dict:
+    sandbox_provider = str(sandbox_signals.get('provider') or 'unknown')
+    if sandbox_provider not in {'', 'unknown'}:
+        return {
+            'provider': sandbox_provider,
+            'provider_runtime_recognized': True,
+            'provider_runtime_source': 'sandbox-status',
+        }
+
+    for source_name, payload in [('start-result', start_result), ('runtime', runtime_status)]:
+        text = collect_runtime_text(payload).lower()
+        for provider_name in KNOWN_PROVIDER_NAMES:
+            if provider_name in text:
+                return {
+                    'provider': provider_name,
+                    'provider_runtime_recognized': True,
+                    'provider_runtime_source': source_name,
+                }
+
+    return {
+        'provider': 'unknown',
+        'provider_runtime_recognized': False,
+        'provider_runtime_source': None,
+    }
+
+
+def merge_provider_model_sources(runtime_signals: dict, config: dict, start_result: dict | None = None, runtime_status: dict | None = None) -> dict:
     merged = dict(runtime_signals)
     config_signals = infer_provider_and_model_from_config(config)
-
-    runtime_provider = str(merged.get('provider') or 'unknown')
+    runtime_provider_signals = infer_provider_from_runtime_payloads(merged, start_result, runtime_status)
+    runtime_provider = str(runtime_provider_signals.get('provider') or merged.get('provider') or 'unknown')
     runtime_model = str(merged.get('model') or 'unknown')
+    merged['provider_runtime_recognized'] = runtime_provider_signals.get('provider_runtime_recognized', False)
+    merged['provider_runtime_source'] = runtime_provider_signals.get('provider_runtime_source')
     if runtime_provider not in {'', 'unknown'}:
-        merged['provider_source'] = 'runtime'
+        merged['provider'] = runtime_provider
+        merged['provider_source'] = runtime_provider_signals.get('provider_runtime_source') or 'runtime'
     else:
         merged['provider'] = config_signals.get('provider', 'unknown')
         merged['provider_source'] = config_signals.get('provider_source')
@@ -343,6 +397,9 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
 
     if provider in {'', 'unknown'}:
         missing.append('provider configuration missing')
+        missing.append('provider source unknown')
+    elif provider_status.get('provider_runtime_recognized') is False:
+        missing.append('provider runtime not recognizing configured provider')
     if model in {'', 'unknown'}:
         missing.append('model configuration missing')
 
@@ -364,9 +421,9 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
     return deduped
 
 
-def build_provider_status(provider_status: dict, start_result: dict | None) -> dict:
+def build_provider_status(provider_status: dict, start_result: dict | None, runtime_status: dict | None = None) -> dict:
     config, checked_sources = load_openclaw_config()
-    status = merge_provider_model_sources(provider_status, config)
+    status = merge_provider_model_sources(provider_status, config, start_result, runtime_status)
     api_key_status = check_api_key_presence(config, status, start_result)
     status.update(api_key_status)
 
@@ -374,11 +431,14 @@ def build_provider_status(provider_status: dict, start_result: dict | None) -> d
     model = str(status.get('model') or 'unknown')
     status['provider_config_present'] = provider not in {'', 'unknown'}
     status['model_config_present'] = model not in {'', 'unknown'}
+    if status.get('provider_runtime_recognized') is None:
+        status['provider_runtime_recognized'] = False
 
     missing = infer_missing_requirements(status, start_result)
     status['checked_sources'] = checked_sources or ['env']
     status['provider_ready'] = (
         status.get('provider_config_present') is True
+        and status.get('provider_runtime_recognized') is True
         and status.get('model_config_present') is True
         and (status.get('api_key_required') is False or status.get('api_key_present') is True)
     )
@@ -388,11 +448,11 @@ def build_provider_status(provider_status: dict, start_result: dict | None) -> d
 
 def run_provider_signal_check(script_dir: Path, args: argparse.Namespace, *, start_attempted: bool) -> dict:
     initial_sandbox_payload = get_sandbox_status(script_dir, args)
-    initial_provider_status = build_provider_status(summarize_capabilities(initial_sandbox_payload), None)
+    initial_provider_status = build_provider_status(summarize_capabilities(initial_sandbox_payload), None, None)
     start_result = run_runtime_start(script_dir, args)
     runtime_status = get_runtime_status(script_dir, args)
     followup_sandbox_payload = get_sandbox_status(script_dir, args)
-    followup_provider_status = build_provider_status(summarize_capabilities(followup_sandbox_payload), start_result)
+    followup_provider_status = build_provider_status(summarize_capabilities(followup_sandbox_payload), start_result, runtime_status)
     resolved_next_step = resolve_missing_requirements_next_step(followup_provider_status.get('missing_requirements'))
     return {
         'initial_provider_status': initial_provider_status,
@@ -540,13 +600,15 @@ def main() -> int:
         provider_signals = summarize_capabilities(sandbox_payload)
         start_result = run_runtime_start(script_dir, args)
         followup_status = get_decision(script_dir, args)
-        provider_status = build_provider_status(provider_signals, start_result)
+        runtime_status = get_runtime_status(script_dir, args)
+        provider_status = build_provider_status(provider_signals, start_result, runtime_status)
         resolved_next_step = resolve_missing_requirements_next_step(provider_status.get('missing_requirements'))
         response['remediation_result'] = 'checked provider readiness and triggered sense runtime start'
         response['provider_status'] = provider_status
         response['missing_requirements'] = provider_status.get('missing_requirements') or []
         response['resolved_next_step'] = resolved_next_step
         response['start_result'] = start_result
+        response['runtime_status'] = runtime_status
         response['followup_status'] = followup_status
         if provider_status.get('provider_ready') is False:
             response['next_step'] = resolved_next_step or 'configure_provider'

@@ -263,8 +263,10 @@ Provider remediation notes:
   - `checked_sources`
   - `detected_keys`
   - `provider_config_present`
+  - `provider_runtime_recognized`
   - `model_config_present`
   - `provider_source`
+  - `provider_runtime_source`
   - `model_source`
   - `provider_ready`
   - `missing_requirements[]`
@@ -283,6 +285,27 @@ The current signals are inferred conservatively from:
 - start result summary and key points
 - `~/.openclaw/openclaw.json`
 - environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `OLLAMA_API_KEY`)
+
+Provider source semantics are intentionally split:
+
+- `provider_source`
+  - where the selected provider value came from
+  - one of `config`, `sandbox-status`, `start-result`, `runtime`, `unknown`
+- `provider_runtime_source`
+  - where runtime recognition came from
+  - one of `sandbox-status`, `start-result`, `runtime`, `null`
+
+Current `provider_runtime_recognized` is inferred from:
+
+- structured sandbox status provider field
+- runtime start summary / key points / raw output
+- runtime status summary / key points / raw output
+
+If config contains a provider but runtime signals do not recognize it yet, remediation returns:
+
+- `provider_config_present = true`
+- `provider_runtime_recognized = false`
+- `missing_requirements` including `provider runtime not recognizing configured provider`
 
 Provider-specific API key mapping is intentionally minimal:
 
