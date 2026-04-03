@@ -32,13 +32,13 @@ import type {
 } from "./bot-message-context.types.js";
 import {
   buildSenderLabel,
-  buildTelegramGroupPeerId,
   expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
   resolveTelegramMediaPlaceholder,
-} from "./bot/helpers.js";
+} from "./bot/body-helpers.js";
+import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 

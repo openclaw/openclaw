@@ -538,9 +538,15 @@ export async function runAgentTurnWithFallback(params: {
                       params.getActiveSessionEntry()?.sessionId,
                     );
                     if (phase === "start") {
+                      // Keep custom compaction callbacks active, but gate the
+                      // fallback user-facing notice behind explicit opt-in.
+                      const notifyUser =
+                        params.followupRun.run.config.agents?.defaults?.compaction?.notifyUser ===
+                        true;
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
                       } else if (
+                        notifyUser &&
                         params.opts?.onBlockReply &&
                         shouldEmitCompactionStartNotice(compactionNoticeKey)
                       ) {

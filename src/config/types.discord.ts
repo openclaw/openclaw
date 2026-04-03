@@ -140,8 +140,8 @@ export type DiscordVoiceConfig = {
 };
 
 export type DiscordExecApprovalConfig = {
-  /** Enable exec approval forwarding to Discord DMs. Default: false. */
-  enabled?: boolean;
+  /** Enable mode for Discord exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
   /** Discord user IDs to receive approval prompts. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */

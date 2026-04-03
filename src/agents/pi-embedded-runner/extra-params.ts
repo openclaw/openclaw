@@ -198,6 +198,7 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelApi?: string,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -223,7 +224,7 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
+  const cacheRetention = resolveCacheRetention(extraParams, provider, modelApi);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
@@ -316,6 +317,7 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     ctx.agent.streamFn,
     ctx.effectiveExtraParams,
     ctx.provider,
+    ctx.model?.api,
   );
 
   if (wrappedStreamFn) {

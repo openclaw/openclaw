@@ -127,6 +127,26 @@ describe("agent-runner-utils", () => {
     });
   });
 
+  it("does not force final-tag enforcement for minimax providers", () => {
+    const run = makeRun({ workspaceDir: process.cwd() });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "minimax",
+      primaryProvider: "minimax",
+      authProfileId: "profile-minimax",
+      authProfileIdSource: "user",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "minimax",
+      model: "MiniMax-M2.7",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(resolved.enforceFinalTag).toBe(false);
+  });
+
   it("builds embedded contexts and scopes auth profile by provider", () => {
     const run = makeRun({
       authProfileId: "profile-openai",

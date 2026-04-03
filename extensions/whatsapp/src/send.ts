@@ -73,7 +73,7 @@ export async function sendMessageWhatsApp(
       });
       const caption = text || undefined;
       mediaBuffer = media.buffer;
-      mediaType = media.contentType;
+      mediaType = media.contentType ?? "application/octet-stream";
       if (media.kind === "audio") {
         // WhatsApp expects explicit opus codec for PTT voice notes.
         mediaType =

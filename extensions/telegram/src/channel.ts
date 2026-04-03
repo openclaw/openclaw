@@ -40,8 +40,7 @@ import {
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
-import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
-import { telegramNativeApprovalAdapter } from "./approval-native.js";
+import { telegramApprovalCapability } from "./approval-native.js";
 import * as auditModule from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
@@ -578,10 +577,8 @@ export const telegramPlugin = createChatChannelPlugin({
         await deleteTelegramUpdateOffset({ accountId });
       },
     },
-    auth: telegramNativeApprovalAdapter.auth,
-    approvals: {
-      delivery: telegramNativeApprovalAdapter.delivery,
-      native: telegramNativeApprovalAdapter.native,
+    approvalCapability: {
+      ...telegramApprovalCapability,
       render: {
         exec: {
           buildPendingPayload: ({ request, nowMs }) =>

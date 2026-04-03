@@ -10,7 +10,7 @@ read_when:
 
 OpenClaw has three public release lanes:
 
-- stable: tagged releases that publish to npm `latest` and mirror the same version onto `beta` unless `beta` already points at a newer prerelease
+- stable: tagged releases that publish to npm `beta` by default, or to npm `latest` when explicitly requested
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
@@ -23,9 +23,9 @@ OpenClaw has three public release lanes:
 - Beta prerelease version: `YYYY.M.D-beta.N`
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
-- `latest` means the current stable npm release
-- `beta` means the current beta install target, which may point to either the active prerelease or the latest promoted stable build
-- Stable and stable correction releases publish to npm `latest` and also retag npm `beta` to that same non-beta version after promotion, unless `beta` already points at a newer prerelease
+- `latest` means the current promoted stable npm release
+- `beta` means the current beta install target
+- Stable and stable correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Every OpenClaw release ships the npm package and macOS app together
 
 ## Release cadence
@@ -47,9 +47,16 @@ OpenClaw has three public release lanes:
   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.D`
   (or the matching beta/correction version) to verify the published registry
   install path in a fresh temp prefix
-- Maintainer workflows may reuse a successful preflight run for the real
-  publish so the publish step promotes prepared release artifacts instead of
-  rebuilding them again
+- Maintainer release automation now uses preflight-then-promote:
+  - real npm publish must pass a successful npm `preflight_run_id`
+  - stable npm releases default to `beta`
+  - stable npm publish can target `latest` explicitly via workflow input
+  - stable npm promotion from `beta` to `latest` is still available as a separate manual workflow step
+  - public `macOS Release` is validation-only
+  - real private mac publish must pass successful private mac
+    `preflight_run_id` and `validate_run_id`
+  - the real publish paths promote prepared artifacts instead of rebuilding
+    them again
 - For stable correction releases like `YYYY.M.D-N`, the post-publish verifier
   also checks the same temp-prefix upgrade path from `YYYY.M.D` to `YYYY.M.D-N`
   so release corrections cannot silently leave older global installs on the
@@ -68,9 +75,46 @@ OpenClaw has three public release lanes:
     URL, and a `CFBundleVersion` at or above the canonical Sparkle build floor
     for that release version
 
+## NPM workflow inputs
+
+`OpenClaw NPM Release` accepts these operator-controlled inputs:
+
+- `tag`: required release tag such as `v2026.4.2`, `v2026.4.2-1`, or
+  `v2026.4.2-beta.1`
+- `preflight_only`: `true` for validation/build/package only, `false` for the
+  real publish path
+- `preflight_run_id`: required on the real publish path so the workflow reuses
+  the prepared tarball from the successful preflight run
+- `npm_dist_tag`: npm target tag for the publish path; defaults to `beta`
+
+Rules:
+
+- Stable and correction tags may publish to either `beta` or `latest`
+- Beta prerelease tags may publish only to `beta`
+- The real publish path must use the same `npm_dist_tag` used during preflight;
+  the workflow verifies that metadata before publish continues
+
+## Stable npm release sequence
+
+When cutting a stable npm release:
+
+1. Run `OpenClaw NPM Release` with `preflight_only=true`
+2. Choose `npm_dist_tag=beta` for the normal beta-first flow, or `latest` only
+   when you intentionally want a direct stable publish
+3. Save the successful `preflight_run_id`
+4. Run `OpenClaw NPM Release` again with `preflight_only=false`, the same
+   `tag`, the same `npm_dist_tag`, and the saved `preflight_run_id`
+5. If the release landed on `beta`, run `OpenClaw NPM Promote Beta` later with
+   the exact stable version when you want to move that published build to
+   `latest`
+
+That keeps the direct publish path and the beta-first promotion path both
+documented and operator-visible.
+
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
+- [`.github/workflows/openclaw-npm-promote-beta.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-promote-beta.yml)
 - [`scripts/openclaw-npm-release-check.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/openclaw-npm-release-check.ts)
 - [`scripts/package-mac-dist.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-dist.sh)
 - [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)

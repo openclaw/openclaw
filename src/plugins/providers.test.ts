@@ -200,8 +200,9 @@ describe("resolvePluginProviders", () => {
     applyPluginAutoEnableMock.mockReset();
     applyPluginAutoEnableMock.mockImplementation(
       (params): PluginAutoEnableResult => ({
-        config: params.config,
+        config: params.config ?? ({} as OpenClawConfig),
         changes: [],
+        autoEnabledReasons: {},
       }),
     );
     setManifestPlugins([
@@ -375,7 +376,13 @@ describe("resolvePluginProviders", () => {
 
   it("loads provider plugins from the auto-enabled config snapshot", () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledProviderConfig();
-    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnableMock.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {
+        google: ["google auth configured"],
+      },
+    });
 
     resolvePluginProviders({ config: rawConfig });
 

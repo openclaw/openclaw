@@ -720,31 +720,13 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.maxCharsCap":
     "Hard cap for web_fetch maxChars (applies to config and tool calls).",
   "tools.web.fetch.maxResponseBytes": "Max download size before truncation.",
+  "tools.web.fetch.provider": "Web fetch fallback provider id.",
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
-  "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl fallback for web_fetch (if configured).",
-  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
-  "tools.web.fetch.firecrawl.baseUrl":
-    "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
-  "tools.web.fetch.firecrawl.onlyMainContent":
-    "When true, Firecrawl returns only the main content (default: true).",
-  "tools.web.fetch.firecrawl.maxAgeMs":
-    "Firecrawl maxAge (ms) for cached results when supported by the API.",
-  "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
-  "tools.web.x_search.enabled":
-    "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
-  "tools.web.x_search.apiKey": "xAI API key for X search (fallback: XAI_API_KEY env var).",
-  "tools.web.x_search.model": 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
-  "tools.web.x_search.inlineCitations":
-    "Keep inline citations from xAI in x_search responses when available (default: false).",
-  "tools.web.x_search.maxTurns":
-    "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
-  "tools.web.x_search.timeoutSeconds": "Timeout in seconds for x_search requests.",
-  "tools.web.x_search.cacheTtlMinutes": "Cache TTL in minutes for x_search results.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
@@ -1116,6 +1098,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+  "agents.defaults.compaction.notifyUser":
+    "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":

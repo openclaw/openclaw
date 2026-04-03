@@ -103,10 +103,11 @@ function resolveWebSearchLoadOptions(params: {
   cache?: boolean;
 }) {
   const env = params.env ?? process.env;
-  const { config } = resolveBundledWebSearchResolutionConfig({
-    ...params,
-    env,
-  });
+  const { config, activationSourceConfig, autoEnabledReasons } =
+    resolveBundledWebSearchResolutionConfig({
+      ...params,
+      env,
+    });
   const onlyPluginIds = resolveWebSearchCandidatePluginIds({
     config,
     workspaceDir: params.workspaceDir,
@@ -116,6 +117,8 @@ function resolveWebSearchLoadOptions(params: {
   return {
     env,
     config,
+    activationSourceConfig,
+    autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     cache: params.cache ?? false,
     activate: params.activate ?? false,

@@ -7,6 +7,7 @@ import {
   isTelegramExecApprovalClientEnabled,
   isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
+  shouldHandleTelegramExecApprovalRequest,
   shouldEnableTelegramExecApprovalButtons,
   shouldInjectTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
@@ -27,7 +28,7 @@ function buildConfig(
 }
 
 describe("telegram exec approvals", () => {
-  it("requires enablement and an explicit or inferred approver", () => {
+  it("auto-enables when approvers resolve and disables only when forced off", () => {
     expect(isTelegramExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
@@ -36,18 +37,23 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
     expect(
       isTelegramExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true }, { allowFrom: ["123"] }),
+        cfg: buildConfig(undefined, { allowFrom: ["123"] }),
       }),
     ).toBe(true);
     expect(
       isTelegramExecApprovalClientEnabled({
-        cfg: buildConfig({ enabled: true, approvers: ["123"] }),
+        cfg: buildConfig({ approvers: ["123"] }),
       }),
     ).toBe(true);
+    expect(
+      isTelegramExecApprovalClientEnabled({
+        cfg: buildConfig({ enabled: false, approvers: ["123"] }),
+      }),
+    ).toBe(false);
   });
 
   it("matches approvers by normalized sender id", () => {
-    const cfg = buildConfig({ enabled: true, approvers: [123, "456"] });
+    const cfg = buildConfig({ approvers: [123, "456"] });
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "123" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "456" })).toBe(true);
     expect(isTelegramExecApprovalApprover({ cfg, senderId: "789" })).toBe(false);
@@ -71,6 +77,29 @@ describe("telegram exec approvals", () => {
     expect(
       resolveTelegramExecApprovalTarget({ cfg: buildConfig({ enabled: true, approvers: ["1"] }) }),
     ).toBe("dm");
+  });
+
+  it("matches agent filters from the Telegram session key when request.agentId is absent", () => {
+    const cfg = buildConfig({
+      enabled: true,
+      approvers: ["123"],
+      agentFilter: ["ops"],
+    });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        request: {
+          id: "req-1",
+          request: {
+            command: "echo hi",
+            sessionKey: "agent:ops:telegram:direct:123:tail",
+          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
+        },
+      }),
+    ).toBe(true);
   });
 
   it("only injects approval buttons on eligible telegram targets", () => {

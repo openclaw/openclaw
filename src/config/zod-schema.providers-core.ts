@@ -46,9 +46,22 @@ const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
-  .refine((value) => typeof value === "string", {
-    message: "Discord IDs must be strings (wrap numeric IDs in quotes).",
-  });
+  .transform((value, ctx) => {
+    if (typeof value === "number") {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `Discord ID "${String(value)}" is not a valid non-negative safe integer. ` +
+            `Wrap it in quotes in your config file.`,
+        });
+        return z.NEVER;
+      }
+      return String(value);
+    }
+    return value;
+  })
+  .pipe(z.string());
 const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
@@ -1432,6 +1445,7 @@ export const BlueBubblesAccountSchemaBase = z
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
+    enrichGroupParticipantsFromContacts: z.boolean().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),

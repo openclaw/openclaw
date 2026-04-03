@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
@@ -55,6 +56,24 @@ function parseCopilotTokenResponse(value: unknown): {
 
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
+function resolveCopilotProxyHost(proxyEp: string): string | null {
+  const trimmed = proxyEp.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const urlText = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(urlText);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -71,12 +90,14 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
 
   // pi-ai expects converting proxy.* -> api.*
   // (see upstream getGitHubCopilotBaseUrl).
-  const host = proxyEp.replace(/^https?:\/\//, "").replace(/^proxy\./i, "api.");
-  if (!host) {
+  const proxyHost = resolveCopilotProxyHost(proxyEp);
+  if (!proxyHost) {
     return null;
   }
+  const host = proxyHost.replace(/^proxy\./i, "api.");
 
-  return `https://${host}`;
+  const baseUrl = `https://${host}`;
+  return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
 }
 
 export async function resolveCopilotApiToken(params: {

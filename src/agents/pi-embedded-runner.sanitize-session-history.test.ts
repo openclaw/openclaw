@@ -37,6 +37,9 @@ vi.mock("../plugins/provider-runtime.js", () => ({
             dropThinkingBlockModelHints: ["claude"],
           }
         : undefined,
+  sanitizeProviderReplayHistoryWithPlugin: vi.fn(async ({ messages }) => messages),
+  resolveProviderReplayPolicyWithPlugin: vi.fn(() => undefined),
+  validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
 }));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
