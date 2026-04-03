@@ -485,6 +485,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
   "auth.cooldowns.billingBackoffHoursByProvider": "Billing Backoff Overrides",
   "auth.cooldowns.billingMaxHours": "Billing Backoff Cap (hours)",
+  "auth.cooldowns.authPermanentBackoffMinutes": "Auth-Permanent Backoff (minutes)",
+  "auth.cooldowns.authPermanentMaxMinutes": "Auth-Permanent Backoff Cap (minutes)",
   "auth.cooldowns.failureWindowHours": "Failover Window (hours)",
   "auth.cooldowns.overloadedProfileRotations": "Overloaded Profile Rotations",
   "auth.cooldowns.overloadedBackoffMs": "Overloaded Backoff (ms)",
