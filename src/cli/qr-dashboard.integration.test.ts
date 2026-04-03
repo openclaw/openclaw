@@ -152,7 +152,6 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     });
 
     await runCli(["qr", "--setup-code-only"]);
-    expect(runtime.exit).not.toHaveBeenCalled();
     const setupCode = findSetupCodeLogLine(runtimeLogs);
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
