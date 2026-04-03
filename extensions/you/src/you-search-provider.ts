@@ -27,16 +27,14 @@ export function createYouWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "you",
     label: "You.com Search",
-    hint: "Free-tier search with optional API key for higher rate limits",
-    credentialLabel: "You.com API key (optional)",
+    hint: "Web search, deep research, and content extraction",
+    credentialLabel: "You.com API key",
     envVars: ["YDC_API_KEY"],
     placeholder: "ydc-...",
     signupUrl: "https://you.com/platform",
     docsUrl: "https://docs.openclaw.ai/tools/you",
-    // You.com supports free tier (no API key) so it goes after Tavily (70) but before DuckDuckGo (100)
+    // After Tavily (70), before DuckDuckGo (100)
     autoDetectOrder: 80,
-    // requiresCredential: false means it can work without an API key
-    requiresCredential: false,
     credentialPath: "plugins.entries.you.config.webSearch.apiKey",
     inactiveSecretPaths: ["plugins.entries.you.config.webSearch.apiKey"],
     getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "you"),

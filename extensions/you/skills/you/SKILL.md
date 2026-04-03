@@ -11,18 +11,19 @@ You.com provides three complementary tools for web search and research:
 
 ## When to use which tool
 
-| Need                               | Tool           | API Key Required |
-| ---------------------------------- | -------------- | ---------------- |
-| Quick web search                   | `web_search`   | No (free tier)   |
-| Search with freshness/filters      | `web_search`   | No (free tier)   |
-| Deep research with citations       | `web_research` | Yes              |
-| Extract content from specific URLs | `web_contents` | Yes              |
+| Need                               | Tool           |
+| ---------------------------------- | -------------- |
+| Quick web search                   | `web_search`   |
+| Search with freshness/filters      | `web_search`   |
+| Deep research with citations       | `web_research` |
+| Extract content from specific URLs | `web_contents` |
+
+All tools require `YDC_API_KEY`.
 
 ## web_search
 
-You.com powers this automatically when selected as the search provider. Works
-without an API key (free tier) but with rate limits. Set `YDC_API_KEY` for
-higher rate limits.
+You.com powers this automatically when selected as the search provider. Requires
+`YDC_API_KEY`.
 
 | Parameter | Description                            |
 | --------- | -------------------------------------- |
@@ -71,17 +72,17 @@ JavaScript-rendered pages.
 
 ## Choosing the right workflow
 
-### Path A: Quick answers (no API key needed)
+### Path A: Quick answers
 
 1. **`web_search`** — Get search results, snippets, and URLs
 
-### Path B: Deep research (API key required)
+### Path B: Deep research
 
 1. **`web_research`** — One call for synthesized, cited answers
    - Best for complex questions that need thorough investigation
    - Returns Markdown with inline citations traceable to sources
 
-### Path C: Custom pipelines (API key required)
+### Path C: Custom pipelines
 
 1. **`web_search`** — Find relevant URLs
 2. **`web_contents`** — Extract full page content from those URLs
@@ -90,7 +91,7 @@ JavaScript-rendered pages.
 
 ## Tips
 
-- **Start with `web_search`** — it's free and handles most queries
+- **Use `web_search`** for most queries
 - **Use `web_research` for complex questions** — saves multiple tool calls
 - **Use `web_contents` sparingly** — only when you need full page content
 - **Cache responses** — results are cached automatically for efficiency

@@ -13,11 +13,11 @@ title: "You.com"
 
 OpenClaw can use **You.com** in three ways:
 
-- as the `web_search` provider (free tier available)
+- as the `web_search` provider
 - as `web_research` for deep, multi-step research with citations
 - as `web_contents` for extracting content from specific URLs
 
-You.com provides a search API with a free tier for basic usage, plus a Research API for comprehensive, cited answers and a Contents API for extracting clean content from webpages.
+You.com provides a Search API, a Research API for comprehensive cited answers, and a Contents API for extracting clean content from webpages. All three require a `YDC_API_KEY`.
 
 ## Get an API key
 
@@ -25,7 +25,7 @@ You.com provides a search API with a free tier for basic usage, plus a Research 
 2. Generate an API key in the dashboard.
 3. Store it in config or set `YDC_API_KEY` in the gateway environment.
 
-**Note:** `web_search` with You.com works without an API key (free tier with rate limits). `web_research` and `web_contents` require an API key.
+**Note:** All You.com tools require an API key (`YDC_API_KEY`).
 
 ## Configure You.com search
 
@@ -37,7 +37,7 @@ You.com provides a search API with a free tier for basic usage, plus a Research 
         enabled: true,
         config: {
           webSearch: {
-            apiKey: "...", // optional for web_search; required for web_research/web_contents
+            apiKey: "...",
           },
         },
       },
@@ -58,8 +58,7 @@ Notes:
 - Choosing You.com in onboarding or `openclaw configure --section web` enables the bundled You.com plugin automatically.
 - Store You.com config under `plugins.entries.you.config.webSearch.*`.
 - `web_search` with You.com supports `query` and `count` (up to 100 results).
-- `web_search` works without an API key (free tier with rate limits).
-- `web_research` and `web_contents` require `YDC_API_KEY`.
+- All tools require `YDC_API_KEY`.
 
 ## You.com plugin tools
 
@@ -108,11 +107,11 @@ Tips:
 
 ## Choosing the right tool
 
-| Need                               | Tool           | API Key  |
-| ---------------------------------- | -------------- | -------- |
-| Quick web search                   | `web_search`   | Optional |
-| Deep research with citations       | `web_research` | Required |
-| Extract content from specific URLs | `web_contents` | Required |
+| Need                               | Tool           |
+| ---------------------------------- | -------------- |
+| Quick web search                   | `web_search`   |
+| Deep research with citations       | `web_research` |
+| Extract content from specific URLs | `web_contents` |
 
 ## Related
 

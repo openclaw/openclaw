@@ -33,7 +33,7 @@ describe("you plugin", () => {
     expect(provider.id).toBe("you");
     expect(provider.autoDetectOrder).toBe(80);
     expect(provider.envVars).toEqual(["YDC_API_KEY"]);
-    expect(provider.requiresCredential).toBe(false);
+    expect(provider.requiresCredential).toBeUndefined();
 
     const toolNames = registrations.tools.map((t) => (t as Record<string, unknown>).name);
     expect(toolNames).toContain("web_research");
