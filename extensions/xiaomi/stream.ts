@@ -61,7 +61,6 @@ function rewriteXiaomiReasoningContentAsTextInMessage(message: unknown): void {
       typedBlock.text.trim()
     ) {
       hasRenderableText = true;
-      break;
     }
     if (typedBlock.type === "toolCall") {
       hasToolCalls = true;

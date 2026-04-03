@@ -59,49 +59,52 @@ function runWrappedXiaomiStream(params: {
 }
 
 describe("xiaomi provider plugin", () => {
-  it("normalizes reasoning-only final assistant messages into text for MiMo reasoning models", async () => {
-    const stream = runWrappedXiaomiStream({
-      modelId: "mimo-v2-pro",
-      events: [
+  it.each(["mimo-v2-pro", "mimo-v2-omni"])(
+    "normalizes reasoning-only final assistant messages into text for %s",
+    async (modelId) => {
+      const stream = runWrappedXiaomiStream({
+        modelId,
+        events: [
+          {
+            type: "done",
+            reason: "stop",
+            message: {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "MiMo final answer" }],
+              stopReason: "stop",
+            },
+          },
+        ],
+        resultMessage: {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "MiMo final answer" }],
+          stopReason: "stop",
+        },
+      });
+
+      const events: unknown[] = [];
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      await expect(stream.result()).resolves.toEqual({
+        role: "assistant",
+        content: [{ type: "text", text: "MiMo final answer" }],
+        stopReason: "stop",
+      });
+      expect(events).toEqual([
         {
           type: "done",
           reason: "stop",
           message: {
             role: "assistant",
-            content: [{ type: "thinking", thinking: "MiMo final answer" }],
+            content: [{ type: "text", text: "MiMo final answer" }],
             stopReason: "stop",
           },
         },
-      ],
-      resultMessage: {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "MiMo final answer" }],
-        stopReason: "stop",
-      },
-    });
-
-    const events: unknown[] = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-
-    await expect(stream.result()).resolves.toEqual({
-      role: "assistant",
-      content: [{ type: "text", text: "MiMo final answer" }],
-      stopReason: "stop",
-    });
-    expect(events).toEqual([
-      {
-        type: "done",
-        reason: "stop",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "MiMo final answer" }],
-          stopReason: "stop",
-        },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("leaves non-target Xiaomi models unchanged", async () => {
     const stream = runWrappedXiaomiStream({
