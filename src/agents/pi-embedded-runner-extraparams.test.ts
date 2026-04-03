@@ -2844,6 +2844,24 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("service_tier");
   });
 
+  it("does not inject Anthropic service_tier for spoofed Anthropic-looking hosts", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: {
+        serviceTier: "standard_only",
+      },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com.attacker.example/v1",
+      } as unknown as Model<"anthropic-messages">,
+      payload: {},
+    });
+    expect(payload).not.toHaveProperty("service_tier");
+  });
+
   it("maps fast mode to priority service_tier for openai-codex responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai-codex",

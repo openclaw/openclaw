@@ -219,6 +219,10 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+function shouldEnableAnthropicThinkingRecovery(api: string | null | undefined): boolean {
+  return api === "anthropic-messages" || api === "bedrock-converse-stream";
+}
+
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
@@ -227,9 +231,22 @@ export function resolveEmbeddedAgentStreamFn(params: {
   sessionId: string;
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
+  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
   if (params.providerStreamFn) {
-    return params.providerStreamFn;
+    const inner = params.providerStreamFn;
+    // The default pi-coding-agent streamFn injects apiKey from authStorage
+    // into options via modelRegistry.getApiKeyAndHeaders(). Provider-supplied
+    // stream functions bypass that default, so we replicate the injection here
+    // so the resolved credential reaches the provider's HTTP layer.
+    if (params.authStorage) {
+      const { authStorage, model } = params;
+      return async (m, context, options) => {
+        const apiKey = await authStorage.getApiKey(model.provider);
+        return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
+      };
+    }
+    return inner;
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
@@ -944,6 +961,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: params.model,
+        authStorage: params.authStorage,
       });
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
@@ -1095,10 +1113,7 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (
-        params.model.api === "anthropic-messages" ||
-        params.model.api === "bedrock-converse-stream"
-      ) {
+      if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
         activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
           activeSession.agent.streamFn,
           { id: activeSession.sessionId },
@@ -1130,10 +1145,7 @@ export async function runEmbeddedAttempt(
       }
 
       try {
-        if (
-          params.model.api === "anthropic-messages" ||
-          params.model.api === "bedrock-converse-stream"
-        ) {
+        if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
           const originalMessageCount = activeSession.messages.length;
           const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
           if (messages !== activeSession.messages) {

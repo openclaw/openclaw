@@ -422,6 +422,7 @@ OpenClaw currently provides that in Node by:
 - using `fake-indexeddb` as the IndexedDB API shim expected by the SDK
 - restoring the Rust crypto IndexedDB contents from `crypto-idb-snapshot.json` before `initRustCrypto`
 - persisting the updated IndexedDB contents back to `crypto-idb-snapshot.json` after init and during runtime
+- serializing snapshot restore and persist against `crypto-idb-snapshot.json` with an advisory file lock so gateway runtime persistence and CLI maintenance do not race on the same snapshot file
 
 This is compatibility/storage plumbing, not a custom crypto implementation.
 The snapshot file is sensitive runtime state and is stored with restrictive file permissions.
@@ -590,6 +591,7 @@ Current behavior:
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
 - Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.
 - Fetched room context (including reply and thread context lookups) is filtered by sender allowlists (`groupAllowFrom`), so non-allowlisted messages are excluded from agent context.
+- This filtering is channel-level hardening behavior. Other channels may still expose supplemental context as received.
 
 ## DM and room policy example
 
