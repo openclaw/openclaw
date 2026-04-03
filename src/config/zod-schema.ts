@@ -866,6 +866,42 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        a2a: z
+          .object({
+            enabled: z.boolean().optional(),
+            name: z.string().optional(),
+            description: z.string().optional(),
+            url: z.string().optional(),
+            provider: z
+              .object({
+                name: z.string().optional(),
+                url: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+            skills: z
+              .array(
+                z
+                  .object({
+                    id: z.string(),
+                    name: z.string(),
+                    description: z.string().optional(),
+                    inputSchema: z.record(z.unknown()).optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+            auth: z
+              .object({
+                apiKey: SecretInputSchema.optional().register(sensitive),
+                bearerTokens: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            targetAgentId: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((gateway, ctx) => {

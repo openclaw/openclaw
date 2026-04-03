@@ -16,7 +16,7 @@ import { agentCommandFromIngress } from "../commands/agent.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import { buildAgentCard } from "./a2a-agent-card.js";
-import { resolveSecretValue } from "../config/secrets.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,10 +68,23 @@ function pruneOldTasks(): void {
   if (taskStore.size <= MAX_TASKS) {
     return;
   }
+  // First pass: remove expired entries.
   const now = Date.now();
   for (const [id, task] of taskStore) {
     if (now - new Date(task.status.timestamp).getTime() > TASK_TTL_MS) {
       taskStore.delete(id);
+    }
+  }
+  // Second pass: if still over cap, evict oldest entries.
+  if (taskStore.size > MAX_TASKS) {
+    const entries = [...taskStore.entries()].toSorted(
+      (a, b) =>
+        new Date(a[1].status.timestamp).getTime() -
+        new Date(b[1].status.timestamp).getTime(),
+    );
+    const excess = entries.length - MAX_TASKS;
+    for (let i = 0; i < excess; i++) {
+      taskStore.delete(entries[i][0]);
     }
   }
 }
@@ -127,7 +140,9 @@ function authorizeA2aRequest(req: IncomingMessage): boolean {
 
   // Check API key header.
   if (a2aAuth.apiKey) {
-    const expected = resolveSecretValue(a2aAuth.apiKey);
+    const { ref } = resolveSecretInputRef({ value: a2aAuth.apiKey });
+    // Plain string value (not a secret ref).
+    const expected = ref ? undefined : (typeof a2aAuth.apiKey === "string" ? a2aAuth.apiKey : undefined);
     const provided = req.headers["x-api-key"];
     if (typeof provided === "string" && typeof expected === "string" && provided === expected) {
       return true;
@@ -425,7 +440,9 @@ async function dispatchToAgent(
     }, 120_000);
   });
 
-  await agentCommandFromIngress({
+  // Run the agent command and the event collector concurrently so the
+  // 120s timeout in collectPromise also covers a stalled ingress call.
+  const commandPromise = agentCommandFromIngress({
     agentId,
     sessionKey,
     runId,
@@ -435,5 +452,6 @@ async function dispatchToAgent(
     allowModelOverride: false,
   });
 
+  await Promise.all([commandPromise, collectPromise]);
   return collectPromise;
 }
