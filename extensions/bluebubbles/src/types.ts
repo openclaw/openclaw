@@ -63,8 +63,6 @@ export type BlueBubblesAccountConfig = {
   allowPrivateNetwork?: boolean;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
-  /** Per-action tool gating for this account. */
-  actions?: BlueBubblesActionConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: {
     enabled?: boolean;
