@@ -33,7 +33,7 @@ import {
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
-  resolveTelegramMediaPlaceholder,
+  resolveTelegramPrimaryMedia,
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -127,7 +127,8 @@ export async function resolveTelegramInboundBody(params: {
   const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
-  let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
+  const primaryMedia = resolveTelegramPrimaryMedia(msg);
+  let placeholder = primaryMedia?.placeholder ?? "";
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
   const stickerSupportsVision = msg.sticker
     ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })
@@ -154,15 +155,8 @@ export async function resolveTelegramInboundBody(params: {
 
   let bodyText = rawBody;
   if (allMedia.length === 0 && placeholder && rawBody !== placeholder) {
-    const mediaFileRef =
-      msg.video ??
-      msg.video_note ??
-      msg.document ??
-      msg.audio ??
-      msg.voice ??
-      (msg.photo ? msg.photo[msg.photo.length - 1] : undefined);
-    const mediaTag = mediaFileRef?.file_id
-      ? `${placeholder} [file_id:${mediaFileRef.file_id}]`
+    const mediaTag = primaryMedia?.fileRef.file_id
+      ? `${placeholder} [file_id:${primaryMedia.fileRef.file_id}]`
       : placeholder;
     bodyText = `${mediaTag}\n${bodyText}`.trim();
   }
