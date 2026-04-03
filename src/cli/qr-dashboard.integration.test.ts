@@ -18,12 +18,12 @@ type CliRuntimeEnv = RuntimeEnv & {
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
 const runtime = vi.hoisted<CliRuntimeEnv>(() => ({
-  log: (...args: unknown[]) => {
+  log: vi.fn((...args: unknown[]) => {
     runtimeLogs.push(args.map(String).join(" "));
-  },
-  error: (...args: unknown[]) => {
+  }),
+  error: vi.fn((...args: unknown[]) => {
     runtimeErrors.push(args.map(String).join(" "));
-  },
+  }),
   exit: vi.fn<(code: number) => void>(),
 }));
 
