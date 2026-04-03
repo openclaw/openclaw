@@ -1,5 +1,3 @@
-@import "./chat.css";
-
 /* ===========================================
    Login Gate
    =========================================== */
@@ -2878,6 +2876,16 @@ td.data-table-key-col {
 
   .chat-compose {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .chat {
+    padding: 0;
+  }
+
+  .chat-thread {
+    padding: 0 0 16px;
   }
 }
 
