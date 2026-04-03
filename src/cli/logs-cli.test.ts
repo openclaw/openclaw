@@ -18,9 +18,8 @@ const buildGatewayConnectionDetails = vi.fn(
 );
 
 vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: (
-    ...args: Parameters<typeof import("../gateway/call.js").buildGatewayConnectionDetails>
-  ) => buildGatewayConnectionDetails(...args),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  buildGatewayConnectionDetails: (...args: any[]) => buildGatewayConnectionDetails(...(args as [])),
 }));
 
 vi.mock("../logging/log-tail.js", () => ({
