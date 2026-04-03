@@ -44,7 +44,7 @@ env:
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
-  CLAWHUB_REF: "0cb0db9786be074aa820e5dd330cd1142158b62d"
+  CLAWHUB_REF: "4af2bd50a71465683dbf8aa269af764b9d39bdf5"
 
 jobs:
   preview_plugins_clawhub:
@@ -197,7 +197,7 @@ jobs:
           cat > "$RUNNER_TEMP/clawhub" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawdhub/src/cli.ts" "$@"
+          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawhub/src/cli.ts" "$@"
           EOF
           chmod +x "$RUNNER_TEMP/clawhub"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
@@ -257,7 +257,7 @@ jobs:
           cat > "$RUNNER_TEMP/clawhub" <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
-          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawdhub/src/cli.ts" "$@"
+          exec bun "$GITHUB_WORKSPACE/clawhub-source/packages/clawhub/src/cli.ts" "$@"
           EOF
           chmod +x "$RUNNER_TEMP/clawhub"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
