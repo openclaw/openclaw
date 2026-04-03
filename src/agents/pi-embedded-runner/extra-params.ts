@@ -210,6 +210,7 @@ function createStreamFnWithExtraParams(
     extraParams,
     provider,
     typeof model?.api === "string" ? model.api : undefined,
+    typeof model?.id === "string" ? model.id : undefined,
   );
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
