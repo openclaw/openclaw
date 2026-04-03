@@ -8,7 +8,7 @@ title: "Railway with Telegram"
 
 Deploy OpenClaw on Railway, connect it to Telegram, and use either the web Control UI or Telegram DMs as your main chat surface.
 
-This guide is the detailed companion to [Railway](/install/railway). It focuses on the setup that was validated end to end in a live Railway deployment, including the Control UI, Telegram DM access, and the most common Railway-specific fixes.
+This guide is the detailed companion to [Railway](/install/railway). It focuses on the setup that was validated end-to-end in a live Railway deployment, including the Control UI, Telegram DM access, and the most common Railway-specific fixes.
 
 If you already know the flow and only need the short version, use [Railway plus Telegram Quick Reference](/install/railway-telegram-quick-ref).
 
@@ -171,6 +171,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ```
 
 Read `from.id` from the update payload.
+
+If `getUpdates` returns nothing because your bot is using webhooks, follow the [Telegram channel guide](/channels/telegram) and use logs to read the same `from.id` value instead.
 
 This ID is what you put in `channels.telegram.allowFrom`.
 

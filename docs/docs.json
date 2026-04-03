@@ -947,6 +947,7 @@
                   "install/oracle",
                   "install/railway",
                   "install/railway-telegram-setup",
+                  "install/railway-telegram-quick-ref",
                   "install/raspberry-pi",
                   "install/render"
                 ]

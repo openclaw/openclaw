@@ -4,6 +4,22 @@
     "target": "OpenClaw"
   },
   {
+    "source": "Devices CLI",
+    "target": "设备 CLI"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway 网关"
+  },
+  {
+    "source": "Gateway troubleshooting",
+    "target": "Gateway 故障排除"
+  },
+  {
+    "source": "Pairing",
+    "target": "配对"
+  },
+  {
     "source": "Railway",
     "target": "Railway"
   },
@@ -18,22 +34,6 @@
   {
     "source": "Telegram",
     "target": "Telegram"
-  },
-  {
-    "source": "Pairing",
-    "target": "配对"
-  },
-  {
-    "source": "Devices CLI",
-    "target": "设备 CLI"
-  },
-  {
-    "source": "Gateway troubleshooting",
-    "target": "Gateway 故障排除"
-  },
-  {
-    "source": "Gateway",
-    "target": "Gateway 网关"
   },
   {
     "source": "Pi",
