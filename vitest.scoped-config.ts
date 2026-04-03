@@ -57,6 +57,7 @@ export function createScopedVitestConfig(
           exclude?: string[];
           pool?: "threads" | "forks";
           passWithNoTests?: boolean;
+          setupFiles?: string[];
         };
       }
     ).test ?? {};
@@ -73,6 +74,7 @@ export function createScopedVitestConfig(
       ...baseTest,
       isolate,
       runner: "./test/non-isolated-runner.ts",
+      setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],
       ...(scopedDir ? { dir: scopedDir } : {}),
       include: relativizeScopedPatterns(include, scopedDir),
       exclude,

@@ -491,6 +491,26 @@ const telegramCommandTestPlugin: ChannelPlugin = {
     formatAllowFrom: normalizeTelegramAllowFromEntries,
   }),
   auth: telegramNativeApprovalAdapter.auth,
+  approvalCapability: {
+    resolveApproveCommandBehavior: ({ cfg, accountId, senderId, approvalKind }) => {
+      if (approvalKind !== "exec") {
+        return undefined;
+      }
+      if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
+        return undefined;
+      }
+      if (
+        isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
+        !getTelegramExecApprovalApprovers({ cfg, accountId }).includes(senderId?.trim() ?? "")
+      ) {
+        return { kind: "ignore" } as const;
+      }
+      return {
+        kind: "reply",
+        text: "❌ Telegram exec approvals are not enabled for this bot account.",
+      } as const;
+    },
+  },
   pairing: {
     idLabel: "telegramUserId",
   },

@@ -195,6 +195,46 @@ describe("config io write", () => {
     },
   );
 
+  it("keeps writes inside an OPENCLAW_STATE_DIR override even when the real home config exists", async () => {
+    await withSuiteHome(async (home) => {
+      const liveConfigPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(liveConfigPath), { recursive: true });
+      await fs.writeFile(
+        liveConfigPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const overrideDir = path.join(home, "isolated-state");
+      const env = { OPENCLAW_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
+      const io = createConfigIO({
+        env,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      expect(io.configPath).toBe(path.join(overrideDir, "openclaw.json"));
+
+      await io.writeConfigFile({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: { mode: "local" },
+        session: { mainKey: "main", store: path.join(overrideDir, "sessions.json") },
+      });
+
+      const livePersisted = JSON.parse(await fs.readFile(liveConfigPath, "utf-8")) as {
+        gateway?: { mode?: unknown; port?: unknown };
+      };
+      expect(livePersisted.gateway).toEqual({ mode: "local", port: 18789 });
+
+      const overridePersisted = JSON.parse(
+        await fs.readFile(path.join(overrideDir, "openclaw.json"), "utf-8"),
+      ) as {
+        session?: { store?: unknown };
+      };
+      expect(overridePersisted.session?.store).toBe(path.join(overrideDir, "sessions.json"));
+    });
+  });
+
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
       const io = createConfigIO({
