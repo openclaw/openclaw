@@ -32,19 +32,6 @@ function makeParams() {
 describe("runCronIsolatedAgentTurn message tool policy", () => {
   let previousFastTestEnv: string | undefined;
 
-  async function expectMessageToolDisabledForPlan(plan: {
-    requested: boolean;
-    mode: "none" | "announce";
-    channel?: string;
-    to?: string;
-  }) {
-    mockRunCronFallbackPassthrough();
-    resolveCronDeliveryPlanMock.mockReturnValue(plan);
-    await runCronIsolatedAgentTurn(makeParams());
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
-  }
-
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
     resetRunCronIsolatedAgentTurnHarness();
@@ -61,20 +48,28 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it('disables the message tool when delivery.mode is "none"', async () => {
-    await expectMessageToolDisabledForPlan({
+  it("keeps the message tool enabled for cron-owned runs regardless of delivery mode", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
       requested: false,
       mode: "none",
     });
+    await runCronIsolatedAgentTurn(makeParams());
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   });
 
-  it("disables the message tool when cron delivery is active", async () => {
-    await expectMessageToolDisabledForPlan({
+  it("keeps the message tool enabled for cron-owned runs when delivery is active", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
       requested: true,
       mode: "announce",
       channel: "telegram",
       to: "123",
     });
+    await runCronIsolatedAgentTurn(makeParams());
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
   });
 
   it("keeps the message tool enabled for shared callers when delivery is not requested", async () => {
@@ -91,5 +86,23 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(false);
+  });
+
+  it("disables the message tool for shared callers when delivery is requested", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      deliveryContract: "shared",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.disableMessageTool).toBe(true);
   });
 });

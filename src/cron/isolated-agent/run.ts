@@ -102,10 +102,11 @@ function resolveCronToolPolicy(params: {
     // was successfully resolved. When resolution fails the agent should not
     // be blocked by a target it cannot satisfy (#27898).
     requireExplicitMessageTarget: params.deliveryRequested && params.resolvedDelivery.ok,
-    // Cron-owned runs always route user-facing delivery through the runner
-    // itself. Shared callers keep the previous behavior so non-cron paths do
-    // not silently lose the message tool when no explicit delivery is active.
-    disableMessageTool: params.deliveryContract === "cron-owned" ? true : params.deliveryRequested,
+    // Cron-owned runs must keep the message tool available so isolated cron
+    // jobs can explicitly send attachments or richer payloads (for example
+    // Discord media with components). Shared callers keep the previous
+    // delivery-requested behavior.
+    disableMessageTool: params.deliveryContract === "shared" ? params.deliveryRequested : false,
   };
 }
 
@@ -159,11 +160,16 @@ async function resolveCronDeliveryContext(params: {
 function appendCronDeliveryInstruction(params: {
   commandBody: string;
   deliveryRequested: boolean;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
 }) {
   if (!params.deliveryRequested) {
     return params.commandBody;
   }
-  return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+  const explicitTargetInstruction =
+    params.resolvedDelivery.ok && params.resolvedDelivery.channel && params.resolvedDelivery.to
+      ? `When using the message tool for this cron delivery, set channel to "${params.resolvedDelivery.channel}" and target to "${params.resolvedDelivery.to}"${params.resolvedDelivery.accountId ? ` with accountId "${params.resolvedDelivery.accountId}"` : ""}.`
+      : "When using the message tool for this cron delivery, include an explicit channel and target.";
+  return `${params.commandBody}\n\n${explicitTargetInstruction} Plain-text summaries are delivered automatically only when you do not send the final result yourself. If you use the message tool for the final delivery (for example attachments, media, richer components, or a different recipient), send everything there and then return exactly NO_REPLY.`.trim();
 }
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -379,7 +385,11 @@ export async function runCronIsolatedAgentTurn(params: {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
   }
-  commandBody = appendCronDeliveryInstruction({ commandBody, deliveryRequested });
+  commandBody = appendCronDeliveryInstruction({
+    commandBody,
+    deliveryRequested,
+    resolvedDelivery,
+  });
 
   const existingSkillsSnapshot = cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = resolveCronSkillsSnapshot({
@@ -802,7 +812,6 @@ export async function runCronIsolatedAgentTurn(params: {
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
   const skipMessagingToolDelivery =
-    deliveryContract === "shared" &&
     deliveryRequested &&
     finalRunResult.didSendViaMessagingTool === true &&
     (finalRunResult.messagingToolSentTargets ?? []).some((target) =>
