@@ -5,13 +5,63 @@ import {
   normalizeSecretInputString,
 } from "./secret-input.js";
 
-export type MSTeamsCredentials = {
+// ── Credential types ───────────────────────────────────────────────────────
+
+export type MSTeamsSecretCredentials = {
+  type: "secret";
   appId: string;
   appPassword: string;
   tenantId: string;
 };
 
+export type MSTeamsFederatedCredentials = {
+  type: "federated";
+  appId: string;
+  tenantId: string;
+  certificatePath?: string;
+  certificateThumbprint?: string;
+  useManagedIdentity?: boolean;
+  managedIdentityClientId?: string;
+};
+
+export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCredentials;
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
+  const fromCfg = cfg?.authType;
+  if (fromCfg === "secret" || fromCfg === "federated") return fromCfg;
+
+  const fromEnv = process.env.MSTEAMS_AUTH_TYPE;
+  if (fromEnv === "federated") return "federated";
+
+  return "secret";
+}
+
+// ── hasConfiguredMSTeamsCredentials ────────────────────────────────────────
+
 export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
+  const authType = resolveAuthType(cfg);
+
+  const hasAppId = Boolean(
+    normalizeSecretInputString(cfg?.appId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_APP_ID),
+  );
+  const hasTenantId = Boolean(
+    normalizeSecretInputString(cfg?.tenantId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID),
+  );
+
+  if (authType === "federated") {
+    const hasCert = Boolean(cfg?.certificatePath || process.env.MSTEAMS_CERTIFICATE_PATH);
+    const hasManagedIdentity = Boolean(
+      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true",
+    );
+
+    return hasAppId && hasTenantId && (hasCert || hasManagedIdentity);
+  }
+
+  // "secret" (default) — original logic
   return Boolean(
     normalizeSecretInputString(cfg?.appId) &&
     hasConfiguredSecretInput(cfg?.appPassword) &&
@@ -19,22 +69,63 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
   );
 }
 
+// ── resolveMSTeamsCredentials ─────────────────────────────────────────────
+
 export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
+  const authType = resolveAuthType(cfg);
+
   const appId =
     normalizeSecretInputString(cfg?.appId) ||
     normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
+
+  const tenantId =
+    normalizeSecretInputString(cfg?.tenantId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
+
+  if (!appId || !tenantId) {
+    return undefined;
+  }
+
+  if (authType === "federated") {
+    const certificatePath =
+      cfg?.certificatePath || process.env.MSTEAMS_CERTIFICATE_PATH || undefined;
+
+    const certificateThumbprint =
+      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
+
+    const useManagedIdentity = Boolean(
+      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true",
+    );
+
+    const managedIdentityClientId =
+      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
+
+    // At least one federated mechanism must be configured.
+    if (!certificatePath && !useManagedIdentity) {
+      return undefined;
+    }
+
+    return {
+      type: "federated",
+      appId,
+      tenantId,
+      certificatePath,
+      certificateThumbprint,
+      useManagedIdentity: useManagedIdentity || undefined,
+      managedIdentityClientId,
+    };
+  }
+
+  // "secret" (default) — original logic
   const appPassword =
     normalizeResolvedSecretInputString({
       value: cfg?.appPassword,
       path: "channels.msteams.appPassword",
     }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
-  const tenantId =
-    normalizeSecretInputString(cfg?.tenantId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
 
-  if (!appId || !appPassword || !tenantId) {
+  if (!appPassword) {
     return undefined;
   }
 
-  return { appId, appPassword, tenantId };
+  return { type: "secret", appId, appPassword, tenantId };
 }
