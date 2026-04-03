@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithReconnect } from "./reconnect.js";
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
-  vi.clearAllMocks();
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
