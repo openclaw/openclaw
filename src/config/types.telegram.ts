@@ -231,6 +231,8 @@ export type TelegramAccountConfig = {
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
+  /** Emit internal message hooks for mention-skipped topic messages. */
+  ingest?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
@@ -253,6 +255,8 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Emit internal message hooks for mention-skipped group messages. */
+  ingest?: boolean;
   /** Per-group override for group message policy (open|disabled|allowlist). */
   groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */

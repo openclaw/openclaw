@@ -15,27 +15,39 @@ OpenClaw runs work in the background through tasks, scheduled jobs, event hooks,
 
 ```mermaid
 flowchart TD
-    A{Run on a schedule?} -->|Yes| B{Exact timing needed?}
-    A -->|No| C{React to events?}
-    B -->|Yes| D[Cron]
-    B -->|No| E[Heartbeat]
-    C -->|Yes| F[Hooks]
-    C -->|No| G[Standing Orders]
+    START([What do you need?]) --> Q1{Schedule work?}
+    START --> Q2{Track detached work?}
+    START --> Q3{Orchestrate multi-step flows?}
+    START --> Q4{React to lifecycle events?}
+    START --> Q5{Give the agent persistent instructions?}
+
+    Q1 -->|Yes| Q1a{Exact timing or flexible?}
+    Q1a -->|Exact| CRON["Scheduled Tasks (Cron)"]
+    Q1a -->|Flexible| HEARTBEAT[Heartbeat]
+
+    Q2 -->|Yes| TASKS[Background Tasks]
+    Q3 -->|Yes| FLOW[Task Flow]
+    Q4 -->|Yes| HOOKS[Hooks]
+    Q5 -->|Yes| SO[Standing Orders]
 ```
 
-| Use case                             | Recommended         | Why                                      |
-| ------------------------------------ | ------------------- | ---------------------------------------- |
-| Check inbox every 30 min             | Heartbeat           | Batches with other checks, context-aware |
-| Send daily report at 9 AM sharp      | Cron (isolated)     | Exact timing needed                      |
-| Monitor calendar for upcoming events | Heartbeat           | Natural fit for periodic awareness       |
-| Run weekly deep analysis             | Cron (isolated)     | Standalone task, can use different model |
-| Remind me in 20 minutes              | Cron (main, `--at`) | One-shot with precise timing             |
-| React to commands or lifecycle       | Hooks               | Event-driven, runs custom scripts        |
-| Persistent agent instructions        | Standing orders     | Injected into every session              |
+| Use case                                | Recommended            | Why                                              |
+| --------------------------------------- | ---------------------- | ------------------------------------------------ |
+| Send daily report at 9 AM sharp         | Scheduled Tasks (Cron) | Exact timing, isolated execution                 |
+| Remind me in 20 minutes                 | Scheduled Tasks (Cron) | One-shot with precise timing (`--at`)            |
+| Run weekly deep analysis                | Scheduled Tasks (Cron) | Standalone task, can use different model         |
+| Check inbox every 30 min                | Heartbeat              | Batches with other checks, context-aware         |
+| Monitor calendar for upcoming events    | Heartbeat              | Natural fit for periodic awareness               |
+| Inspect status of a subagent or ACP run | Background Tasks       | Tasks ledger tracks all detached work            |
+| Audit what ran and when                 | Background Tasks       | `openclaw tasks list` and `openclaw tasks audit` |
+| Multi-step research then summarize      | Task Flow              | Durable orchestration with revision tracking     |
+| Run a script on session reset           | Hooks                  | Event-driven, fires on lifecycle events          |
+| Execute code on every tool call         | Hooks                  | Hooks can filter by event type                   |
+| Always check compliance before replying | Standing Orders        | Injected into every session automatically        |
 
-### Cron vs heartbeat
+### Scheduled Tasks (Cron) vs Heartbeat
 
-| Dimension       | Cron                                | Heartbeat                             |
+| Dimension       | Scheduled Tasks (Cron)              | Heartbeat                             |
 | --------------- | ----------------------------------- | ------------------------------------- |
 | Timing          | Exact (cron expressions, one-shot)  | Approximate (default every 30 min)    |
 | Session context | Fresh (isolated) or shared          | Full main-session context             |
@@ -43,7 +55,7 @@ flowchart TD
 | Delivery        | Channel, webhook, or silent         | Inline in main session                |
 | Best for        | Reports, reminders, background jobs | Inbox checks, calendar, notifications |
 
-Use cron when you need precise timing or isolated execution. Use heartbeat when the work benefits from full session context and approximate timing is fine.
+Use Scheduled Tasks (Cron) when you need precise timing or isolated execution. Use Heartbeat when the work benefits from full session context and approximate timing is fine.
 
 ## Core concepts
 
@@ -94,6 +106,10 @@ See [Heartbeat](/gateway/heartbeat).
 
 ## Related
 
-- [Task Flow](/automation/taskflow) — flow orchestration above tasks
+- [Scheduled Tasks](/automation/cron-jobs) — precise scheduling and one-shot reminders
+- [Background Tasks](/automation/tasks) — task ledger for all detached work
+- [Task Flow](/automation/taskflow) — durable multi-step flow orchestration
+- [Hooks](/automation/hooks) — event-driven lifecycle scripts
+- [Standing Orders](/automation/standing-orders) — persistent agent instructions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Configuration Reference](/gateway/configuration-reference) — all config keys
