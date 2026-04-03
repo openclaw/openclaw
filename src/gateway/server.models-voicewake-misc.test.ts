@@ -89,6 +89,7 @@ type ModelCatalogRpcEntry = {
   id: string;
   name: string;
   provider: string;
+  alias?: string;
   contextWindow?: number;
 };
 
@@ -358,6 +359,92 @@ describe("gateway server models + voicewake", () => {
         },
       ],
     });
+  });
+
+  test("models.list applies configured metadata and alias to synthetic allowlist entries", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            nvidia: {
+              baseUrl: "https://nvidia.example.com",
+              models: [
+                {
+                  id: "moonshotai/kimi-k2.5",
+                  name: "Kimi K2.5 (Configured)",
+                  contextWindow: 32_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "moonshotai/kimi-k2.5",
+            name: "Kimi K2.5 (Configured)",
+            alias: "Kimi K2.5 (NVIDIA)",
+            provider: "nvidia",
+            contextWindow: 32_000,
+          },
+        ]);
+      },
+    );
+  });
+
+  test("models.list prefers configured provider metadata over discovered entries", async () => {
+    await withModelsConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-z" },
+            models: {
+              "openai/gpt-test-z": { alias: "GPT Test Z Alias" },
+            },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://openai.example.com",
+              models: [
+                {
+                  id: "gpt-test-z",
+                  name: "Configured GPT Test Z",
+                  contextWindow: 64_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      async () => {
+        seedPiCatalog();
+        const res = await listModels();
+        expect(res.ok).toBe(true);
+        expect(res.payload?.models).toEqual([
+          {
+            id: "gpt-test-z",
+            name: "Configured GPT Test Z",
+            alias: "GPT Test Z Alias",
+            provider: "openai",
+            contextWindow: 64_000,
+          },
+        ]);
+      },
+    );
   });
 
   test("models.list rejects unknown params", async () => {

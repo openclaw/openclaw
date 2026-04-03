@@ -655,6 +655,36 @@ describe("resolveSessionModelRef", () => {
     expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
   });
 
+  test("keeps nested model ids under the stored provider override", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-nested",
+      updatedAt: Date.now(),
+      providerOverride: "nvidia",
+      modelOverride: "moonshotai/kimi-k2.5",
+    });
+
+    expect(resolved).toEqual({ provider: "nvidia", model: "moonshotai/kimi-k2.5" });
+  });
+
+  test("strips a duplicated provider prefix from stored overrides", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "anthropic/claude-opus-4-6",
+    });
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "s-qualified-override",
+      updatedAt: Date.now(),
+      providerOverride: "openai-codex",
+      modelOverride: "openai-codex/gpt-5.4",
+    });
+
+    expect(resolved).toEqual({ provider: "openai-codex", model: "gpt-5.4" });
+  });
+
   test("falls back to resolved provider for unprefixed legacy runtime model", () => {
     const cfg = createModelDefaultsConfig({
       primary: "google-gemini-cli/gemini-3-pro-preview",
