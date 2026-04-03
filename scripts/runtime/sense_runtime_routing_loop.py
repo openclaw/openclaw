@@ -187,8 +187,13 @@ def main() -> int:
             executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'check_model_config', 'result': model_cfg_result})
             next_step = str(model_cfg_result.get('resolved_next_step') or model_cfg_result.get('next_step') or next_step)
             provider_status = model_cfg_result.get('provider_status') if isinstance(model_cfg_result, dict) else None
+            model_status = model_cfg_result.get('model_status') if isinstance(model_cfg_result, dict) else None
             if next_step == 'configure_provider':
                 final_state = 'provider_model_missing'
+                break
+            if isinstance(model_status, dict) and model_status.get('model_config_present') is True and model_status.get('model_runtime_recognized') is False:
+                final_state = 'model_not_ready'
+                next_step = 'check_model_config'
                 break
             if next_step == 'run_runtime_task':
                 final_state = 'ready_for_runtime_task'

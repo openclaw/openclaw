@@ -307,6 +307,27 @@ If config contains a provider but runtime signals do not recognize it yet, remed
 - `provider_runtime_recognized = false`
 - `missing_requirements` including `provider runtime not recognizing configured provider`
 
+Model source semantics are intentionally split the same way:
+
+- `model_source`
+  - where the selected model value came from
+  - one of `config`, `sandbox-status`, `start-result`, `runtime`, `unknown`
+- `model_runtime_source`
+  - where runtime recognition came from
+  - one of `sandbox-status`, `start-result`, `runtime`, `null`
+
+Current `model_runtime_recognized` is inferred from:
+
+- structured sandbox status model field
+- runtime start summary / key points / raw output
+- runtime status summary / key points / raw output
+
+If config contains a model but runtime signals do not recognize it yet, remediation returns:
+
+- `model_config_present = true`
+- `model_runtime_recognized = false`
+- `missing_requirements` including `runtime not recognizing configured model`
+
 Provider-specific API key mapping is intentionally minimal:
 
 - `openai` -> `OPENAI_API_KEY`
