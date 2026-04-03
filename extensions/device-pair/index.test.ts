@@ -453,6 +453,23 @@ describe("device-pair /pair default setup code", () => {
       text: "⚠️ This command requires operator.pairing for internal gateway callers.",
     });
   });
+
+  it("rejects unknown subcommands that fall back to setup code issuance without operator.pairing", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "foo",
+        commandBody: "/pair foo",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
 });
 
 describe("device-pair notify pending formatting", () => {
