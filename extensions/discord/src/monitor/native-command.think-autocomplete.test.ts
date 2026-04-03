@@ -11,29 +11,47 @@ import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtim
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
+type EnsureConfiguredBindingRouteReady =
+  typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredBindingRouteReady;
+type ResolveConfiguredBindingRoute =
+  typeof import("openclaw/plugin-sdk/conversation-runtime").resolveConfiguredBindingRoute;
+
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
-  vi.fn<() => Promise<{ ok: boolean; error?: string }>>(async () => ({ ok: true })),
+  vi.fn<EnsureConfiguredBindingRouteReady>(async () => ({ ok: true })),
 );
 const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
-  vi.fn<
-    () => {
-      bindingResolution: {
-        record: {
-          conversation: {
-            channel: string;
-            accountId: string;
-            conversationId: string;
-          };
-        };
-      };
-      boundSessionKey: string;
-      route: {
-        agentId: string;
-        sessionKey: string;
-      };
-    } | null
-  >(() => null),
+  vi.fn<ResolveConfiguredBindingRoute>(({ route }) => ({
+    bindingResolution: null,
+    route,
+  })),
 );
+
+type ConfiguredBindingRoute = ReturnType<ResolveConfiguredBindingRoute>;
+type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRoute["bindingResolution"]>;
+
+function createConfiguredRouteResult(
+  params: Parameters<ResolveConfiguredBindingRoute>[0],
+): ConfiguredBindingRoute {
+  return {
+    bindingResolution: {
+      record: {
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "C1",
+        },
+      },
+    } as ConfiguredBindingResolution,
+    boundSessionKey: SESSION_KEY,
+    route: {
+      ...params.route,
+      agentId: "main",
+      sessionKey: SESSION_KEY,
+      matchedBy: "binding.channel",
+      lastRoutePolicy: "session",
+    },
+  };
+}
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
@@ -69,7 +87,10 @@ describe("discord native /think autocomplete", () => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockReturnValue(null);
+    resolveConfiguredBindingRouteMock.mockImplementation(({ route }) => ({
+      bindingResolution: null,
+      route,
+    }));
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,
@@ -154,22 +175,7 @@ describe("discord native /think autocomplete", () => {
 
   it("falls back when a configured binding is unavailable", async () => {
     const cfg = createConfig();
-    resolveConfiguredBindingRouteMock.mockReturnValue({
-      bindingResolution: {
-        record: {
-          conversation: {
-            channel: "discord",
-            accountId: "default",
-            conversationId: "C1",
-          },
-        },
-      },
-      boundSessionKey: SESSION_KEY,
-      route: {
-        agentId: "main",
-        sessionKey: SESSION_KEY,
-      },
-    });
+    resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
       ok: false,
       error: "acpx exited",
