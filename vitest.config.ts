@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
@@ -16,27 +15,12 @@ function parsePositiveInt(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-export function resolveLocalVitestMaxWorkers(
-  env = process.env,
-  system = {
-    cpuCount: os.cpus().length || 1,
-    totalMemoryBytes: os.totalmem(),
-  },
-) {
+export function resolveLocalVitestMaxWorkers(env = process.env, _system = undefined) {
   const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
   if (override !== null) {
     return clamp(override, 1, 16);
   }
-
-  const cpuCount = Math.max(1, system.cpuCount || 1);
-  const memoryGiB = (system.totalMemoryBytes || 0) / 1024 ** 3;
-  let workers = cpuCount >= 16 ? 6 : cpuCount >= 10 ? 4 : cpuCount >= 6 ? 3 : 2;
-  if (memoryGiB < 24) {
-    workers = Math.min(workers, 2);
-  } else if (memoryGiB < 48) {
-    workers = Math.min(workers, 3);
-  }
-  return clamp(workers, 1, 16);
+  return 1;
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
