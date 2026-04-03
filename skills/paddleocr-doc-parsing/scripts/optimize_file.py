@@ -123,10 +123,10 @@ def main() -> None:
         epilog=f"""
 Examples:
   # Optimize image with default quality
-  python scripts/optimize_file.py input.png output.png
+  uv run scripts/optimize_file.py input.png output.png
 
   # Optimize with specific quality
-  python scripts/optimize_file.py input.jpg output.jpg --quality 70
+  uv run scripts/optimize_file.py input.jpg output.jpg --quality 70
 
 Supported formats:
   - Images: {SUPPORTED_FORMATS_DISPLAY}
@@ -172,7 +172,7 @@ Supported formats:
 
     print(f"\nOptimized file saved to: {output_path}")
     print("\nYou can now process with:")
-    print(f'  python scripts/layout_caller.py --file-path "{output_path}" --pretty')
+    print(f'  uv run scripts/layout_caller.py --file-path "{output_path}" --pretty')
 
 
 if __name__ == "__main__":
