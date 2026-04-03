@@ -12,8 +12,8 @@ const hookRunnerMocks = vi.hoisted(() => ({
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
 }));
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {
     ...actual,
     default: {
