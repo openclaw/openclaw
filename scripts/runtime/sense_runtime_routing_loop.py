@@ -235,6 +235,10 @@ def main() -> int:
                 final_state = 'selected_model_not_ready'
                 next_step = 'check_selected_model_config'
                 break
+            if isinstance(model_status, dict) and model_status.get('selected_model_match') is False:
+                final_state = 'selected_model_mismatch'
+                next_step = 'check_selected_model_config'
+                break
             if next_step == 'run_runtime_task':
                 final_state = 'ready_for_runtime_task'
                 break

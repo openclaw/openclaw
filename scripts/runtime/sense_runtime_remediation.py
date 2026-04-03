@@ -518,16 +518,32 @@ def build_provider_status(provider_status: dict, start_result: dict | None, runt
 
 def build_model_status(provider_status: dict) -> dict:
     default_model = str(provider_status.get('default_model') or 'unknown')
-    selected_model = str(provider_status.get('model') or 'unknown')
+    configured_selected_model = str(provider_status.get('model') or 'unknown')
+    selected_model_expected = default_model if default_model not in {'', 'unknown'} else (configured_selected_model if configured_selected_model not in {'', 'unknown'} else None)
+    selected_model_expected_source = provider_status.get('default_model_source') if selected_model_expected == default_model and default_model not in {'', 'unknown'} else provider_status.get('model_source')
+    selected_model_runtime = str(provider_status.get('model') or 'unknown') if provider_status.get('model_runtime_recognized') else None
+    if selected_model_runtime in {'', 'unknown'}:
+        selected_model_runtime = None
+    selected_model_match = None
+    selected_model_diff_reason = None
+    if selected_model_expected and selected_model_runtime:
+        selected_model_match = selected_model_expected == selected_model_runtime
+        if selected_model_match is False:
+            selected_model_diff_reason = 'runtime selected model differs from configured selected model'
     model_status = {
         'default_model': default_model,
         'default_model_source': provider_status.get('default_model_source'),
         'default_model_present': provider_status.get('default_model_present'),
-        'selected_model': selected_model,
-        'selected_model_source': provider_status.get('model_source'),
+        'selected_model': selected_model_expected,
+        'selected_model_source': selected_model_expected_source,
         'selected_model_present': provider_status.get('selected_model_present'),
+        'selected_model_expected': selected_model_expected,
+        'selected_model_expected_source': selected_model_expected_source,
+        'selected_model_runtime': selected_model_runtime,
         'selected_model_runtime_recognized': provider_status.get('model_runtime_recognized'),
         'selected_model_runtime_source': provider_status.get('model_runtime_source'),
+        'selected_model_match': selected_model_match,
+        'selected_model_diff_reason': selected_model_diff_reason,
         'model_ready': provider_status.get('model_ready'),
         'missing_requirements': [],
     }
@@ -535,11 +551,13 @@ def build_model_status(provider_status: dict) -> dict:
     if default_model in {'', 'unknown'}:
         missing.append('default model configuration missing')
         missing.append('default model source unknown')
-    if selected_model in {'', 'unknown'}:
+    if configured_selected_model in {'', 'unknown'}:
         missing.append('selected model configuration missing')
         missing.append('selected model source unknown')
     elif provider_status.get('model_runtime_recognized') is False:
         missing.append('runtime not recognizing selected model')
+    elif selected_model_match is False:
+        missing.append('runtime selected model differs from configured selected model')
     model_status['missing_requirements'] = missing
     return model_status
 
@@ -788,6 +806,8 @@ def main() -> int:
             response['resolved_next_step'] = 'check_selected_model_config'
         elif model_status.get('selected_model_runtime_recognized') is False:
             response['resolved_next_step'] = 'check_selected_model_config'
+        elif model_status.get('selected_model_match') is False:
+            response['resolved_next_step'] = 'check_selected_model_config'
         else:
             response['resolved_next_step'] = 'run_runtime_task'
         response['initial_provider_status'] = provider_probe['initial_provider_status']
@@ -797,9 +817,17 @@ def main() -> int:
             'selected_model': model_status.get('selected_model'),
             'selected_model_source': model_status.get('selected_model_source'),
             'selected_model_present': model_status.get('selected_model_present'),
+            'selected_model_expected': model_status.get('selected_model_expected'),
+            'selected_model_expected_source': model_status.get('selected_model_expected_source'),
+            'selected_model_runtime': model_status.get('selected_model_runtime'),
             'selected_model_runtime_recognized': model_status.get('selected_model_runtime_recognized'),
             'selected_model_runtime_source': model_status.get('selected_model_runtime_source'),
-            'missing_requirements': [item for item in (model_status.get('missing_requirements') or []) if 'selected model' in item or 'runtime not recognizing selected model' == item],
+            'selected_model_match': model_status.get('selected_model_match'),
+            'selected_model_diff_reason': model_status.get('selected_model_diff_reason'),
+            'missing_requirements': [
+                item for item in (model_status.get('missing_requirements') or [])
+                if 'selected model' in item or item == 'runtime not recognizing selected model'
+            ],
         }
         response['next_step'] = response['resolved_next_step']
     elif recommended_action == 'configure_provider':

@@ -345,16 +345,35 @@ Current `model_status` includes:
 - `default_model_present`
 - `selected_model`
 - `selected_model_source`
+- `selected_model_expected`
+- `selected_model_expected_source`
+- `selected_model_runtime`
 - `selected_model_present`
 - `selected_model_runtime_recognized`
 - `selected_model_runtime_source`
+- `selected_model_match`
+- `selected_model_diff_reason`
 - `model_ready`
+
+Selected-model diff semantics:
+
+- `selected_model_expected`
+  - the configured model the manager expects runtime to use
+  - currently derived from config-first signals
+- `selected_model_runtime`
+  - the model runtime appears to have selected
+  - derived from sandbox status, start result, or runtime status
+- `selected_model_match`
+  - `true` when both values exist and match
+  - `false` when both values exist and differ
+  - `null` when one side is still unknown
 
 Routing loop can now stop more specifically as:
 
 - `default_model_missing`
 - `selected_model_missing`
 - `selected_model_not_ready`
+- `selected_model_mismatch`
 
 Provider-specific API key mapping is intentionally minimal:
 
