@@ -200,6 +200,28 @@ function hasBoundConversationForSession(params: {
   });
 }
 
+function resolveDispatchAccountId(params: {
+  cfg: OpenClawConfig;
+  channelRaw: string | undefined;
+  accountIdRaw: string | undefined;
+}): string | undefined {
+  const channel = String(params.channelRaw ?? "")
+    .trim()
+    .toLowerCase();
+  if (!channel) {
+    return params.accountIdRaw?.trim() || undefined;
+  }
+  const explicit = params.accountIdRaw?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
+  return typeof configuredDefaultAccountId === "string" && configuredDefaultAccountId.trim()
+    ? configuredDefaultAccountId.trim()
+    : undefined;
+}
+
 export type AcpDispatchAttemptResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
@@ -394,12 +416,17 @@ export async function tryDispatchAcpReply(params: {
           resolveAgentIdFromSessionKey(canonicalSessionKey)
         ).trim()
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const effectiveDispatchAccountId = resolveDispatchAccountId({
+    cfg: params.cfg,
+    channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+    accountIdRaw: params.ctx.AccountId,
+  });
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
     deliver: delivery.deliver,
     provider: params.ctx.Surface ?? params.ctx.Provider,
-    accountId: params.ctx.AccountId,
+    accountId: effectiveDispatchAccountId,
   });
 
   const acpDispatchStartedAt = Date.now();
