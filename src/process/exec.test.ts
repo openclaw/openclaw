@@ -4,15 +4,28 @@ import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 
+const spawnMock = vi.hoisted(() => vi.fn());
+
 let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
 let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
 let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
 
-async function loadExecModules() {
+async function loadExecModules(options?: { mockSpawn?: boolean }) {
   vi.resetModules();
-  vi.doUnmock("node:child_process");
+  if (options?.mockSpawn) {
+    vi.doMock("node:child_process", async () => {
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      return {
+        ...actual,
+        spawn: spawnMock,
+      };
+    });
+  } else {
+    vi.doUnmock("node:child_process");
+  }
   ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
   ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, shouldSpawnWithShell } =
     await import("./exec.js"));
@@ -23,8 +36,31 @@ describe("runCommandWithTimeout", () => {
     return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
   }
 
+  function createKilledChild(signal: NodeJS.Signals = "SIGKILL"): ChildProcess {
+    const child = new EventEmitter() as EventEmitter & ChildProcess;
+    child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
+    child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
+    child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
+    child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
+    child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
+    child.pid = 1234;
+    child.killed = false;
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn((receivedSignal?: NodeJS.Signals) => {
+      const resolvedSignal = receivedSignal ?? signal;
+      child.killed = true;
+      child.signalCode = resolvedSignal;
+      child.emit("exit", null, resolvedSignal);
+      child.emit("close", null, resolvedSignal);
+      return true;
+    }) as ChildProcess["kill"];
+    return child;
+  }
+
   beforeEach(async () => {
     vi.useRealTimers();
+    spawnMock.mockReset();
     await loadExecModules();
   });
 
@@ -100,13 +136,19 @@ describe("runCommandWithTimeout", () => {
 
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
-    { timeout: 15_000 },
+    { timeout: 5_000 },
     async () => {
-      const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      vi.useFakeTimers();
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
         timeoutMs: 2_000,
         noOutputTimeoutMs: 200,
       });
 
+      await vi.advanceTimersByTimeAsync(250);
+      const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
       expect(result.code).not.toBe(0);
@@ -115,12 +157,18 @@ describe("runCommandWithTimeout", () => {
 
   it.runIf(process.platform !== "win32")(
     "reports global timeout termination when overall timeout elapses",
-    { timeout: 15_000 },
+    { timeout: 5_000 },
     async () => {
-      const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      vi.useFakeTimers();
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
         timeoutMs: 200,
       });
 
+      await vi.advanceTimersByTimeAsync(250);
+      const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
       expect(result.code).not.toBe(0);
