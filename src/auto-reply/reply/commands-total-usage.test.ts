@@ -1,6 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
+vi.mock("@mariozechner/pi-ai/oauth", () => ({
+  getOAuthApiKey: vi.fn(),
+  getOAuthProviders: vi.fn(() => []),
+}));
+
+vi.mock("../../plugins/runtime/index.js", () => ({
+  createPluginRuntime: () => ({ channel: {} }),
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  disposeAllSessionMcpRuntimes: vi.fn(),
+  disposeSessionMcpRuntime: vi.fn(),
+  getOrCreateSessionMcpRuntime: vi.fn(),
+  getSessionMcpRuntimeManager: vi.fn(),
+}));
+
 const loadCostUsageSummaryMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({
     updatedAt: Date.now(),
