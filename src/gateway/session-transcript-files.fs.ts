@@ -12,6 +12,10 @@ import {
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 
 export type ArchiveFileReason = SessionArchiveReason;
+export type ArchivedSessionTranscript = {
+  sourcePath: string;
+  archivedPath: string;
+};
 
 function classifySessionTranscriptCandidate(
   sessionId: string,
@@ -136,7 +140,22 @@ export function archiveSessionTranscripts(opts: {
    */
   restrictToStoreDir?: boolean;
 }): string[] {
-  const archived: string[] = [];
+  return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
+}
+
+export function archiveSessionTranscriptsDetailed(opts: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  reason: "reset" | "deleted";
+  /**
+   * When true, only archive files resolved under the session store directory.
+   * This prevents maintenance operations from mutating paths outside the agent sessions dir.
+   */
+  restrictToStoreDir?: boolean;
+}): ArchivedSessionTranscript[] {
+  const archived: ArchivedSessionTranscript[] = [];
   const storeDir =
     opts.restrictToStoreDir && opts.storePath
       ? canonicalizePathForComparison(path.dirname(opts.storePath))
@@ -158,12 +177,54 @@ export function archiveSessionTranscripts(opts: {
       continue;
     }
     try {
-      archived.push(archiveFileOnDisk(candidatePath, opts.reason));
+      archived.push({
+        sourcePath: candidatePath,
+        archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
+      });
     } catch {
       // Best-effort.
     }
   }
   return archived;
+}
+
+export function resolveStableSessionEndTranscript(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  archivedTranscripts?: ArchivedSessionTranscript[];
+}): { sessionFile?: string; transcriptArchived?: boolean } {
+  const archivedTranscripts = params.archivedTranscripts ?? [];
+  if (archivedTranscripts.length > 0) {
+    const preferredPath = params.sessionFile?.trim()
+      ? canonicalizePathForComparison(params.sessionFile)
+      : undefined;
+    const archivedMatch =
+      preferredPath == null
+        ? undefined
+        : archivedTranscripts.find(
+            (entry) => canonicalizePathForComparison(entry.sourcePath) === preferredPath,
+          );
+    const archivedPath = archivedMatch?.archivedPath ?? archivedTranscripts[0]?.archivedPath;
+    if (archivedPath) {
+      return { sessionFile: archivedPath, transcriptArchived: true };
+    }
+  }
+
+  for (const candidate of resolveSessionTranscriptCandidates(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    params.agentId,
+  )) {
+    const candidatePath = canonicalizePathForComparison(candidate);
+    if (fs.existsSync(candidatePath)) {
+      return { sessionFile: candidatePath, transcriptArchived: false };
+    }
+  }
+
+  return {};
 }
 
 export async function cleanupArchivedSessionTranscripts(opts: {
