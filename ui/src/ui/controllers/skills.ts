@@ -229,7 +229,9 @@ export async function searchClawHub(state: SkillsState, query: string) {
     }
     state.clawhubSearchError = getErrorMessage(err);
   } finally {
-    state.clawhubSearchLoading = false;
+    if (query === state.clawhubSearchQuery) {
+      state.clawhubSearchLoading = false;
+    }
   }
 }
 
