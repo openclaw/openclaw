@@ -95,7 +95,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/exec approvals: fall back to the origin session key for async approval followups and keep resume-failure status delivery sanitized so Telegram followups still land without leaking raw exec metadata. (#59351) Thanks @seonang.
 - Node-host/exec approvals: bind `pnpm dlx` invocations through the approval planner's mutable-script path so the effective runtime command is resolved for approval instead of being left unbound. (#58374)
 - Exec/node hosts: stop forwarding the gateway workspace cwd to remote node exec when no workdir was explicitly requested, so cross-platform node approvals fall back to the node default cwd instead of failing with `SYSTEM_RUN_DENIED`. (#58977) Thanks @Starhappysh.
-- TUI/chat: keep queued sends visible with a `pending N` status, preserve busy-state visibility across fallback/error transitions, expose `/verbose full`, and reclaim width for long links and paths. (#59800) Thanks @vincentkoc.
+- TUI/chat: preserve pending local sends across history reloads, keep busy/error state coherent through fallback and terminal-error paths, and reclaim width for long links and paths. (#59800) Thanks @vincentkoc.
 
 ## 2026.4.2
 
