@@ -753,7 +753,7 @@ export async function preflightDiscordMessage(
   const mentionText = hasTypedText ? baseText : "";
   const wasMentioned =
     !isDirectMessage &&
-    (Boolean(message.mentionedEveryone) ||
+    (((!author.bot || sender.isPluralKit) && Boolean(message.mentionedEveryone)) ||
       matchesMentionWithExplicit({
         text: mentionText,
         mentionRegexes,
