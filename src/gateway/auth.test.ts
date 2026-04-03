@@ -1040,7 +1040,7 @@ describe("trusted-proxy auth", () => {
       });
 
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_loopback_auth_required");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("fails closed when forwarded headers are present but the client chain resolves to loopback", async () => {
@@ -1151,7 +1151,7 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("rejects loopback proxy when x-forwarded-for is empty", async () => {
@@ -1174,7 +1174,7 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("rejects loopback proxy when x-forwarded-for chain is empty", async () => {
@@ -1197,7 +1197,7 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("rejects loopback proxy when x-forwarded-for resolves to loopback", async () => {
@@ -1220,7 +1220,7 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("rejects loopback proxy when x-forwarded-for is not an IP chain", async () => {
@@ -1243,7 +1243,7 @@ describe("trusted-proxy auth", () => {
         } as never,
       });
       expect(res.ok).toBe(false);
-      expect(res.reason).toBe("trusted_proxy_loopback_client_invalid");
+      expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
     it("rejects loopback proxy without matching proxy auth header", async () => {

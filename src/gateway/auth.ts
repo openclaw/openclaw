@@ -378,10 +378,10 @@ function authorizeTrustedProxy(params: {
       trustedProxies,
     });
     if (!forwardedClientIp || isLoopbackAddress(forwardedClientIp)) {
-      return { reason: "trusted_proxy_loopback_client_invalid" };
+      return { reason: "trusted_proxy_loopback_source" };
     }
     if (!trustedProxyConfig.authHeader?.trim() || !trustedProxyConfig.authValue?.trim()) {
-      return { reason: "trusted_proxy_loopback_auth_required" };
+      return { reason: "trusted_proxy_loopback_source" };
     }
   }
 
