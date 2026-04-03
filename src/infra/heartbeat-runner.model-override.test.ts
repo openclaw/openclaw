@@ -235,6 +235,51 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   });
 
+  it("passes per-agent heartbeat lightContext override after merging defaults", async () => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "30m",
+              lightContext: false,
+            },
+          },
+          list: [
+            { id: "main", default: true },
+            {
+              id: "ops",
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "whatsapp",
+                lightContext: true,
+              },
+            },
+          ],
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
+      const result = await runHeartbeatWithSeed({
+        seedSession,
+        cfg,
+        agentId: "ops",
+        sessionKey,
+      });
+
+      expect(result.replySpy).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          isHeartbeat: true,
+          bootstrapContextMode: "lightweight",
+        }),
+        cfg,
+      );
+    });
+  });
+
   it("does not pass heartbeatModelOverride when no heartbeat model is configured", async () => {
     const replyOpts = await runDefaultsHeartbeat({ model: undefined });
     expect(replyOpts).toEqual(

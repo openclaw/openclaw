@@ -68,6 +68,21 @@ describe("diffConfigPaths", () => {
     };
     expect(diffConfigPaths(prev, next)).toContain("memory.qmd.paths");
   });
+
+  it("collapses changed agents.list heartbeat entries to agents.list", () => {
+    const prev = {
+      agents: {
+        list: [{ id: "ops", heartbeat: { every: "5m", lightContext: false } }],
+      },
+    };
+    const next = {
+      agents: {
+        list: [{ id: "ops", heartbeat: { every: "5m", lightContext: true } }],
+      },
+    };
+
+    expect(diffConfigPaths(prev, next)).toEqual(["agents.list"]);
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {
@@ -174,6 +189,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toEqual([]);
   });
 
+  it("restarts heartbeat when agents.list entries change", () => {
+    const plan = buildGatewayReloadPlan(["agents.list"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toContain("agents.list");
+    expect(plan.noopPaths).toEqual([]);
+  });
+
   it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
     expect(plan.restartGateway).toBe(false);
@@ -236,6 +259,12 @@ describe("buildGatewayReloadPlan", () => {
       expectReloadHooks: true,
     },
     {
+      path: "agents.list",
+      expectRestartGateway: false,
+      expectHotPath: "agents.list",
+      expectRestartHeartbeat: true,
+    },
+    {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
@@ -270,6 +299,9 @@ describe("buildGatewayReloadPlan", () => {
     }
     if (testCase.expectReloadHooks) {
       expect(plan.reloadHooks).toBe(true);
+    }
+    if (testCase.expectRestartHeartbeat) {
+      expect(plan.restartHeartbeat).toBe(true);
     }
   });
 });
