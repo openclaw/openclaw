@@ -398,4 +398,60 @@ describe("matrix exec approvals", () => {
       }),
     ).toBe(false);
   });
+
+  it("allows unbound foreign-channel approvals when only one matrix account can handle them", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-default:example.org",
+              accessToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["@owner:example.org"],
+              },
+            },
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot-ops:example.org",
+              accessToken: "tok-ops",
+              execApprovals: {
+                enabled: false,
+                approvers: ["@owner:example.org"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-5",
+      request: {
+        command: "echo hi",
+        agentId: "ops-agent",
+        sessionKey: "agent:ops-agent:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleMatrixExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
 });

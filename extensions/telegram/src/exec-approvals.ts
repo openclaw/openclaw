@@ -65,6 +65,15 @@ export function isTelegramExecApprovalTargetRecipient(params: {
   });
 }
 
+function countTelegramExecApprovalHandlerAccounts(cfg: OpenClawConfig): number {
+  return listTelegramAccountIds(cfg).filter((accountId) =>
+    isChannelExecApprovalClientEnabledFromConfig({
+      enabled: resolveTelegramExecApprovalConfig({ cfg, accountId })?.enabled,
+      approverCount: getTelegramExecApprovalApprovers({ cfg, accountId }).length,
+    }),
+  ).length;
+}
+
 function matchesTelegramRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -77,7 +86,7 @@ function matchesTelegramRequestAccount(params: {
     channel: "telegram",
   });
   if (turnSourceChannel && turnSourceChannel !== "telegram" && !boundAccountId) {
-    return listTelegramAccountIds(params.cfg).length <= 1;
+    return countTelegramExecApprovalHandlerAccounts(params.cfg) <= 1;
   }
   return (
     !boundAccountId ||

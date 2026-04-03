@@ -1,6 +1,7 @@
 import {
   createChannelExecApprovalProfile,
   getExecApprovalReplyMetadata,
+  isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
   resolveApprovalRequestChannelAccountId,
   resolveApprovalApprovers,
@@ -38,6 +39,15 @@ function resolveMatrixExecApprovalConfig(params: {
   };
 }
 
+function countMatrixExecApprovalHandlerAccounts(cfg: OpenClawConfig): number {
+  return listMatrixAccountIds(cfg).filter((accountId) =>
+    isChannelExecApprovalClientEnabledFromConfig({
+      enabled: resolveMatrixExecApprovalConfig({ cfg, accountId }).enabled,
+      approverCount: getMatrixExecApprovalApprovers({ cfg, accountId }).length,
+    }),
+  ).length;
+}
+
 function matchesMatrixRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -50,7 +60,7 @@ function matchesMatrixRequestAccount(params: {
     channel: "matrix",
   });
   if (turnSourceChannel && turnSourceChannel !== "matrix" && !boundAccountId) {
-    return listMatrixAccountIds(params.cfg).length <= 1;
+    return countMatrixExecApprovalHandlerAccounts(params.cfg) <= 1;
   }
   return (
     !boundAccountId ||
