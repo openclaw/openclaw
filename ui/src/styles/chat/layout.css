@@ -912,6 +912,18 @@
   object-fit: contain;
 }
 
+.agent-chat__welcome-avatar--logo-fallback {
+  width: 48px;
+  height: 48px;
+  padding: 8px;
+  border-radius: var(--radius-lg);
+  background: var(--panel-strong);
+  border: 1px solid var(--border);
+  object-fit: contain;
+  box-sizing: border-box;
+  display: block;
+}
+
 .agent-chat__badges {
   display: flex;
   gap: 8px;

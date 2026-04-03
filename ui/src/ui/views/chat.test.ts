@@ -429,6 +429,10 @@ describe("chat view", () => {
 
     expect(welcomeImage?.getAttribute("src")).toBe("/favicon.svg");
     expect(welcomeImage?.getAttribute("alt")).toBe("OpenClaw");
+    expect(welcomeImage?.classList.contains("agent-chat__welcome-avatar--logo-fallback")).toBe(
+      true,
+    );
+    expect(welcomeImage?.getAttribute("style")).toBeNull();
   });
 
   it("falls back to the bundled logo in the welcome state when the assistant avatar is not a URL", () => {
