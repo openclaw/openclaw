@@ -3,7 +3,7 @@ import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { enqueueFollowupRun, getFollowupAgentPrompt, scheduleFollowupDrain } from "./queue.js";
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -24,7 +24,9 @@ function createRun(params: {
   originatingThreadId?: string | number;
 }): FollowupRun {
   return {
-    prompt: params.prompt,
+    execution: {
+      agentPrompt: params.prompt,
+    },
     messageId: params.messageId,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,
@@ -81,7 +83,7 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(staleCalls).toHaveLength(0);
     expect(freshCalls).toHaveLength(1);
-    expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
+    expect(getFollowupAgentPrompt(freshCalls[0])).toBe("after-empty-schedule");
   });
 
   it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
@@ -119,8 +121,8 @@ describe("followup queue drain restart after idle window", () => {
     await secondProcessed.promise;
 
     expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toBe("before-idle");
-    expect(calls[1]?.prompt).toBe("after-idle");
+    expect(getFollowupAgentPrompt(calls[0])).toBe("before-idle");
+    expect(getFollowupAgentPrompt(calls[1])).toBe("after-idle");
   });
 
   it("restarts an idle drain with the newest followup callback", async () => {
@@ -157,9 +159,9 @@ describe("followup queue drain restart after idle window", () => {
     await secondProcessed.promise;
 
     expect(staleCalls).toHaveLength(1);
-    expect(staleCalls[0]?.prompt).toBe("before-idle");
+    expect(getFollowupAgentPrompt(staleCalls[0])).toBe("before-idle");
     expect(freshCalls).toHaveLength(1);
-    expect(freshCalls[0]?.prompt).toBe("after-idle");
+    expect(getFollowupAgentPrompt(freshCalls[0])).toBe("after-idle");
   });
 
   it("does not auto-start a drain when a busy run only refreshes the callback", async () => {
@@ -193,7 +195,7 @@ describe("followup queue drain restart after idle window", () => {
     });
 
     expect(staleCalls).toHaveLength(0);
-    expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
+    expect(getFollowupAgentPrompt(freshCalls[0])).toBe("queued-while-busy");
   });
 
   it("restarts an idle drain across distinct enqueue and drain module instances when enqueue refreshes the callback", async () => {
@@ -242,8 +244,8 @@ describe("followup queue drain restart after idle window", () => {
         { timeout: 1_000 },
       );
 
-      expect(calls[0]?.prompt).toBe("before-idle");
-      expect(calls[1]?.prompt).toBe("after-idle");
+      expect(getFollowupAgentPrompt(calls[0])).toBe("before-idle");
+      expect(getFollowupAgentPrompt(calls[1])).toBe("after-idle");
     } finally {
       clearSessionQueues([key]);
       drainA.clearFollowupDrainCallback(key);
@@ -276,8 +278,8 @@ describe("followup queue drain restart after idle window", () => {
 
     await allProcessed.promise;
     expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toBe("first");
-    expect(calls[1]?.prompt).toBe("second");
+    expect(getFollowupAgentPrompt(calls[0])).toBe("first");
+    expect(getFollowupAgentPrompt(calls[1])).toBe("second");
   });
 
   it("does not process messages after clearSessionQueues clears the callback", async () => {
@@ -303,7 +305,7 @@ describe("followup queue drain restart after idle window", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt).toBe("before-clear");
+    expect(getFollowupAgentPrompt(calls[0])).toBe("before-clear");
   });
 
   it("clears the remembered callback after a queue drains fully", async () => {
@@ -326,6 +328,6 @@ describe("followup queue drain restart after idle window", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt).toBe("before-idle");
+    expect(getFollowupAgentPrompt(calls[0])).toBe("before-idle");
   });
 });

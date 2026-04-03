@@ -5,6 +5,7 @@ import { defaultRuntime } from "../../runtime.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   enqueueFollowupRun,
+  getFollowupAgentPrompt,
   resetRecentQueuedMessageIdDedupe,
   scheduleFollowupDrain,
 } from "./queue.js";
@@ -28,7 +29,9 @@ function createRun(params: {
   originatingThreadId?: string | number;
 }): FollowupRun {
   return {
-    prompt: params.prompt,
+    execution: {
+      agentPrompt: params.prompt,
+    },
     messageId: params.messageId,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,
@@ -122,7 +125,7 @@ describe("followup queue deduplication", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(getFollowupAgentPrompt(calls[0])).toContain("[Queued messages while agent was busy]");
   });
 
   it("deduplicates same message_id after queue drain restarts", async () => {
