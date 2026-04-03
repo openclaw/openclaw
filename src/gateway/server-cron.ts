@@ -10,6 +10,7 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
+import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
   appendCronRunLog,
@@ -291,16 +292,31 @@ export function buildGatewayCronService(params: {
           sessionKey = customSessionId;
         }
       }
-      return await runCronIsolatedAgentTurn({
-        cfg: runtimeConfig,
-        deps: params.deps,
-        job,
-        message,
-        abortSignal,
-        agentId,
-        sessionKey,
-        lane: "cron",
-      });
+      try {
+        return await runCronIsolatedAgentTurn({
+          cfg: runtimeConfig,
+          deps: params.deps,
+          job,
+          message,
+          abortSignal,
+          agentId,
+          sessionKey,
+          lane: "cron",
+        });
+      } finally {
+        // Clean up browser tabs/processes opened during this cron run.
+        // Without this, browser processes become orphaned (PPID=1) after
+        // the cron task completes. See #60104.
+        try {
+          await closeTrackedBrowserTabsForSessions({
+            sessionKeys: [sessionKey],
+            onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
+          });
+        } catch {
+          // Best-effort cleanup — do not let browser cleanup failures
+          // mask the actual cron run result.
+        }
+      }
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);

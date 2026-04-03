@@ -1,5 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
+import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
@@ -604,6 +605,19 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
       return;
     }
+
+    // Clean up browser tabs/processes opened by this subagent session.
+    // Without this, browser processes become orphaned after the subagent
+    // exits. See #60104.
+    try {
+      await closeTrackedBrowserTabsForSessions({
+        sessionKeys: [entry.childSessionKey],
+        onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+      });
+    } catch {
+      // Best-effort cleanup.
+    }
+
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
   };
 
