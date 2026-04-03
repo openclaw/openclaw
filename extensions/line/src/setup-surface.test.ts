@@ -208,6 +208,37 @@ describe("line setup wizard", () => {
     });
   });
 
+  it("uses configured defaultAccount for omitted DM policy account context", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    const cfg = {
+      channels: {
+        line: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["Uroot"],
+          accounts: {
+            work: {
+              channelAccessToken: "token",
+              channelSecret: "secret",
+              dmPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(lineSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+
+    const next = lineSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.line?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
+  });
+
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
     const { lineSetupWizard } = await import("./setup-surface.js");
 
