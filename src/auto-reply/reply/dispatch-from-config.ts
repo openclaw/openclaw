@@ -11,6 +11,7 @@ import { parseSessionThreadInfo } from "../../config/sessions/delivery-info.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -192,6 +193,7 @@ const resolveSessionStoreLookupByKey = (
 type AcpDispatchSessionData = {
   sessionKey?: string;
   entry?: SessionEntry;
+  ttsAuto?: TtsAutoMode;
   suppressUserDelivery: boolean;
 };
 
@@ -213,6 +215,7 @@ const resolveAcpDispatchSessionData = (params: {
   return {
     sessionKey,
     entry: sessionStoreEntry.entry,
+    ttsAuto: normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto),
     suppressUserDelivery: isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry),
   };
 };
@@ -673,7 +676,7 @@ export async function dispatchReplyFromConfig(params: {
       sessionKey: acpDispatchSession.sessionKey,
       abortSignal: params.replyOptions?.abortSignal,
       inboundAudio,
-      sessionTtsAuto,
+      sessionTtsAuto: acpDispatchSession.ttsAuto,
       ttsChannel,
       suppressUserDelivery: acpDispatchSession.suppressUserDelivery,
       shouldRouteToOriginating,
@@ -825,7 +828,7 @@ export async function dispatchReplyFromConfig(params: {
         sessionKey: acpDispatchSession.sessionKey,
         abortSignal: params.replyOptions?.abortSignal,
         inboundAudio,
-        sessionTtsAuto,
+        sessionTtsAuto: acpDispatchSession.ttsAuto,
         ttsChannel,
         suppressUserDelivery: acpDispatchSession.suppressUserDelivery,
         shouldRouteToOriginating,
