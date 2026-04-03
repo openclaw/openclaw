@@ -1,3 +1,4 @@
+---
 name: session-persistence
 description: Three-layer memory persistence system for continuous context across sessions. Use when you need to maintain state, recover from session restarts, or track workspace changes. Provides SPARSE/FULL checkpoint triggers, delta recovery from .jsonl, and automatic knowledge sync.
 homepage: https://github.com/openclaw/openclaw/issues/59095
@@ -5,12 +6,6 @@ metadata:
   openclaw:
     emoji: "🧠"
     requires: { bins: ["python3"] }
-    install:
-      - id: pip-xxhash
-        kind: pip
-        formula: xxhash
-        label: "Install xxhash for fast file hashing (optional)"
-
 ---
 
 # Session Persistence - Three-Layer Memory System
@@ -43,6 +38,8 @@ L3 Raw Layer (.jsonl + daily memory)
 
 ## Quick Start
 
+> **Prerequisites:** Python 3.8+. Optionally install `xxhash` for faster file hashing: `pip install xxhash`
+
 ### 1. Session Startup (AGENTS.md)
 
 Add to your AGENTS.md Session Startup section:
@@ -53,7 +50,7 @@ cat ~/.openclaw/workspace/memory/session-checkpoint.md
 
 # Recover delta (if checkpoint has delta_since_last)
 SP_DIR=~/.openclaw/workspace/memory/projects/session-persistence
-python3 $SP_DIR/jsonl_recovery.py recover >> ~/.openclaw/workspace/memory/session-checkpoint.md
+python3 $SP_DIR/scripts/jsonl_recovery.py recover >> ~/.openclaw/workspace/memory/session-checkpoint.md
 ```
 
 ### 2. Heartbeat Maintenance (HEARTBEAT.md)
@@ -63,16 +60,18 @@ Add to your HEARTBEAT.md:
 ```bash
 # Workspace consistency check
 WD=~/.openclaw/workspace/memory/projects/workspace-watchdog
-python3 $WD/workspace_watchdog.py verify
-python3 $WD/workspace_watchdog.py snapshot "heartbeat-$(date +%Y-%m-%d-%H%M)"
+python3 $WD/scripts/workspace_watchdog.py verify
+python3 $WD/scripts/workspace_watchdog.py snapshot "heartbeat-$(date +%Y-%m-%d-%H%M)"
 
 # Session checkpoint
 SP_DIR=~/.openclaw/workspace/memory/projects/session-persistence
-python3 $SP_DIR/checkpoint_manager.py check-full --heartbeat
-python3 $SP_DIR/knowledge_sync.py sync
+python3 $SP_DIR/scripts/checkpoint_manager.py check-full --heartbeat
+python3 $SP_DIR/scripts/knowledge_sync.py sync
 ```
 
 ## Core Scripts
+
+All scripts live under `scripts/` within this skill directory.
 
 ### checkpoint_manager.py
 
@@ -80,16 +79,16 @@ Handles SPARSE/FULL checkpoint triggers with Circuit Breaker protection.
 
 ```bash
 # Increment message count (call after each message)
-python3 checkpoint_manager.py increment
+python3 {baseDir}/scripts/checkpoint_manager.py increment
 
 # Check if SPARSE should trigger
-python3 checkpoint_manager.py check-sparse
+python3 {baseDir}/scripts/checkpoint_manager.py check-sparse
 
 # Check if FULL should trigger (heartbeat)
-python3 checkpoint_manager.py check-full --heartbeat
+python3 {baseDir}/scripts/checkpoint_manager.py check-full --heartbeat
 
 # View current state
-python3 checkpoint_manager.py status
+python3 {baseDir}/scripts/checkpoint_manager.py status
 ```
 
 **Trigger Logic:**
@@ -106,13 +105,13 @@ Recovers delta messages from .jsonl after checkpoint timestamp.
 
 ```bash
 # Recover and append to checkpoint
-python3 jsonl_recovery.py recover
+python3 {baseDir}/scripts/jsonl_recovery.py recover
 
 # Find session files
-python3 jsonl_recovery.py find-sessions
+python3 {baseDir}/scripts/jsonl_recovery.py find-sessions
 
 # Check status
-python3 jsonl_recovery.py status
+python3 {baseDir}/scripts/jsonl_recovery.py status
 ```
 
 **Limits:**
@@ -126,13 +125,13 @@ Syncs Key Decisions from checkpoint to knowledge-graph.
 
 ```bash
 # Sync to knowledge-graph
-python3 knowledge_sync.py sync
+python3 {baseDir}/scripts/knowledge_sync.py sync
 
 # Preview changes
-python3 knowledge_sync.py dry-run
+python3 {baseDir}/scripts/knowledge_sync.py dry-run
 
 # Check status
-python3 knowledge_sync.py status
+python3 {baseDir}/scripts/knowledge_sync.py status
 ```
 
 **Sync Flow:**
@@ -147,13 +146,13 @@ Detects workspace file changes after compaction.
 
 ```bash
 # Verify changes since last snapshot
-python3 workspace_watchdog.py verify
+python3 {baseDir}/scripts/workspace_watchdog.py verify
 
 # Create new snapshot
-python3 workspace_watchdog.py snapshot "description"
+python3 {baseDir}/scripts/workspace_watchdog.py snapshot "description"
 
 # Check status
-python3 workspace_watchdog.py status
+python3 {baseDir}/scripts/workspace_watchdog.py status
 ```
 
 **Change Classification:**
@@ -208,11 +207,13 @@ _delta_since_last: start → end_
 ### Checkpoint Not Triggering
 
 Check state.json:
+
 ```bash
 cat ~/.openclaw/workspace/memory/projects/session-persistence/state.json
 ```
 
 If `degraded: true`, reset:
+
 ```bash
 python3 -c "
 import json
