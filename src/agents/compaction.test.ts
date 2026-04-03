@@ -5,6 +5,7 @@ import {
   estimateMessagesTokens,
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
+  stripAnalysisScratchpad,
 } from "./compaction.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
@@ -251,8 +252,30 @@ describe("pruneHistoryForContextShare", () => {
     expect(keptToolResults).toHaveLength(0);
 
     // The orphan count should reflect both dropped tool_results
-    // droppedMessages = 1 (assistant) + 2 (orphaned tool_results) = 3
     // droppedMessagesList only has the assistant message
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length + 2);
+  });
+});
+
+describe("stripAnalysisScratchpad", () => {
+  it("strips analysis tags and keeps the summary content", () => {
+    const input = "<analysis>Internal thinking here.</analysis><summary>Factual summary.</summary>";
+    expect(stripAnalysisScratchpad(input)).toBe("Factual summary.");
+  });
+
+  it("handles multiline content and case-insensitive tags", () => {
+    const input =
+      "<ANALYSIS>\nThinking...\nMore thinking.\n</analysis>\n<Summary>\nClean summary.\n</SUMMARY>";
+    expect(stripAnalysisScratchpad(input)).toBe("Clean summary.");
+  });
+
+  it("falls back to trimmed text if summary tags are missing", () => {
+    const input = "<analysis>Thinking.</analysis> No tags here.";
+    expect(stripAnalysisScratchpad(input)).toBe("No tags here.");
+  });
+
+  it("removes analysis even if summary tag is missing", () => {
+    const input = "Plain text <analysis>Thinking</analysis>";
+    expect(stripAnalysisScratchpad(input)).toBe("Plain text");
   });
 });

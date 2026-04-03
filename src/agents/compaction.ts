@@ -260,7 +260,7 @@ async function summarizeChunks(params: {
     params.summarizationInstructions,
   );
   for (const chunk of chunks) {
-    summary = await retryAsync(
+    const rawSummary: string = await retryAsync(
       () =>
         generateSummary(
           chunk,
@@ -281,6 +281,7 @@ async function summarizeChunks(params: {
         shouldRetry: (err) => !(err instanceof Error && err.name === "AbortError"),
       },
     );
+    summary = stripAnalysisScratchpad(rawSummary) || undefined;
   }
 
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -317,6 +318,19 @@ function generateSummary(
     customInstructions,
     previousSummary,
   );
+}
+
+export function stripAnalysisScratchpad(text: string): string {
+  // Removes <analysis>...</analysis> blocks (case-insensitive, handles newlines)
+  let stripped = text.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "").trim();
+
+  // Extracts content from <summary>...</summary> if it exists, otherwise keeps the rest
+  const summaryMatch = /<summary>([\s\S]*?)<\/summary>/i.exec(stripped);
+  if (summaryMatch?.[1]) {
+    stripped = summaryMatch[1].trim();
+  }
+
+  return stripped;
 }
 
 /**
