@@ -63,7 +63,11 @@ import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./contro
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillMessage } from "./controllers/skills.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
@@ -413,6 +417,16 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
   @state() skillsDetailKey: string | null = null;
+  @state() clawhubSearchQuery = "";
+  @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
+  @state() clawhubSearchLoading = false;
+  @state() clawhubSearchError: string | null = null;
+  @state() clawhubDetail: ClawHubSkillDetail | null = null;
+  @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailLoading = false;
+  @state() clawhubDetailError: string | null = null;
+  @state() clawhubInstallSlug: string | null = null;
+  @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
