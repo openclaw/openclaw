@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolvePluginActivationInputs } from "./activation-context.js";
+import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
@@ -24,41 +24,23 @@ export function resolvePluginProviders(params: {
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
-  const autoEnabled = resolvePluginActivationInputs({
+  const activation = resolveBundledPluginCompatibleActivationInputs({
     rawConfig: params.config,
     env,
+    workspaceDir: params.workspaceDir,
+    onlyPluginIds: params.onlyPluginIds,
     applyAutoEnable: true,
-  });
-  const bundledProviderCompatPluginIds =
-    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
-      ? resolveBundledProviderCompatPluginIds({
-          config: autoEnabled.config,
-          workspaceDir: params.workspaceDir,
-          env,
-          onlyPluginIds: params.onlyPluginIds,
-        })
-      : [];
-  const activation = resolvePluginActivationInputs({
-    rawConfig: params.config,
-    resolvedConfig: autoEnabled.config,
-    autoEnabledReasons: autoEnabled.autoEnabledReasons,
-    env,
-    compat: {
-      allowlistPluginIds: params.bundledProviderAllowlistCompat
-        ? bundledProviderCompatPluginIds
-        : undefined,
-      enablementPluginIds: params.bundledProviderAllowlistCompat
-        ? bundledProviderCompatPluginIds
-        : undefined,
-      vitestPluginIds: params.bundledProviderVitestCompat
-        ? bundledProviderCompatPluginIds
-        : undefined,
+    compatMode: {
+      allowlist: params.bundledProviderAllowlistCompat,
+      enablement: "allowlist",
+      vitest: params.bundledProviderVitestCompat,
     },
+    resolveCompatPluginIds: resolveBundledProviderCompatPluginIds,
   });
   const config = params.bundledProviderVitestCompat
     ? withBundledProviderVitestCompat({
         config: activation.config,
-        pluginIds: bundledProviderCompatPluginIds,
+        pluginIds: activation.compatPluginIds,
         env,
       })
     : activation.config;

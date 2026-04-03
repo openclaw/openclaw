@@ -1,4 +1,4 @@
-import { resolvePluginActivationInputs } from "./activation-context.js";
+import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveBundledWebFetchPluginIds } from "./bundled-web-fetch.js";
 import { type NormalizedPluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
@@ -53,26 +53,17 @@ export function resolveBundledWebFetchResolutionConfig(params: {
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
 } {
-  const autoEnabled = resolvePluginActivationInputs({
+  const activation = resolveBundledPluginCompatibleActivationInputs({
     rawConfig: params.config,
     env: params.env,
-    applyAutoEnable: true,
-  });
-  const bundledCompatPluginIds = resolveBundledWebFetchCompatPluginIds({
-    config: autoEnabled.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const activation = resolvePluginActivationInputs({
-    rawConfig: params.config,
-    resolvedConfig: autoEnabled.config,
-    autoEnabledReasons: autoEnabled.autoEnabledReasons,
-    env: params.env,
-    compat: {
-      allowlistPluginIds: params.bundledAllowlistCompat ? bundledCompatPluginIds : undefined,
-      enablementPluginIds: bundledCompatPluginIds,
-      vitestPluginIds: bundledCompatPluginIds,
+    applyAutoEnable: true,
+    compatMode: {
+      allowlist: params.bundledAllowlistCompat,
+      enablement: "always",
+      vitest: true,
     },
+    resolveCompatPluginIds: resolveBundledWebFetchCompatPluginIds,
   });
 
   return {

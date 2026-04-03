@@ -16,7 +16,7 @@ export function resolveBundledProviderCompatPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  onlyPluginIds?: string[];
+  onlyPluginIds?: readonly string[];
 }): string[] {
   const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
   const registry = loadPluginManifestRegistry({
@@ -39,7 +39,7 @@ export function resolveEnabledProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  onlyPluginIds?: string[];
+  onlyPluginIds?: readonly string[];
 }): string[] {
   const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
   const registry = loadPluginManifestRegistry({

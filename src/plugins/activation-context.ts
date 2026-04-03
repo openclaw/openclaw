@@ -18,6 +18,12 @@ export type PluginActivationCompatConfig = {
   vitestPluginIds?: readonly string[];
 };
 
+export type PluginActivationBundledCompatMode = {
+  allowlist?: boolean;
+  enablement?: "always" | "allowlist";
+  vitest?: boolean;
+};
+
 export type PluginActivationInputs = {
   rawConfig?: OpenClawConfig;
   config?: OpenClawConfig;
@@ -27,7 +33,21 @@ export type PluginActivationInputs = {
   autoEnabledReasons: Record<string, string[]>;
 };
 
-function applyPluginActivationCompat(params: {
+export type PluginActivationSnapshot = Pick<
+  PluginActivationInputs,
+  | "rawConfig"
+  | "config"
+  | "normalized"
+  | "activationSourceConfig"
+  | "activationSource"
+  | "autoEnabledReasons"
+>;
+
+export type BundledPluginCompatibleActivationInputs = PluginActivationInputs & {
+  compatPluginIds: string[];
+};
+
+export function applyPluginCompatibilityOverrides(params: {
   config?: OpenClawConfig;
   compat?: PluginActivationCompatConfig;
   env: NodeJS.ProcessEnv;
@@ -54,14 +74,13 @@ function applyPluginActivationCompat(params: {
   return vitestCompat;
 }
 
-export function resolvePluginActivationInputs(params: {
+export function resolvePluginActivationSnapshot(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
   autoEnabledReasons?: Record<string, string[]>;
   env?: NodeJS.ProcessEnv;
-  compat?: PluginActivationCompatConfig;
   applyAutoEnable?: boolean;
-}): PluginActivationInputs {
+}): PluginActivationSnapshot {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
   let resolvedConfig = params.resolvedConfig ?? params.rawConfig;
@@ -76,20 +95,105 @@ export function resolvePluginActivationInputs(params: {
     autoEnabledReasons = autoEnabled.autoEnabledReasons;
   }
 
-  const config = applyPluginActivationCompat({
-    config: resolvedConfig,
-    compat: params.compat,
-    env,
-  });
-
   return {
     rawConfig,
-    config,
-    normalized: normalizePluginsConfig(config?.plugins),
+    config: resolvedConfig,
+    normalized: normalizePluginsConfig(resolvedConfig?.plugins),
     activationSourceConfig: rawConfig,
     activationSource: createPluginActivationSource({
       config: rawConfig,
     }),
     autoEnabledReasons: autoEnabledReasons ?? {},
+  };
+}
+
+export function resolvePluginActivationInputs(params: {
+  rawConfig?: OpenClawConfig;
+  resolvedConfig?: OpenClawConfig;
+  autoEnabledReasons?: Record<string, string[]>;
+  env?: NodeJS.ProcessEnv;
+  compat?: PluginActivationCompatConfig;
+  applyAutoEnable?: boolean;
+}): PluginActivationInputs {
+  const env = params.env ?? process.env;
+  const snapshot = resolvePluginActivationSnapshot({
+    rawConfig: params.rawConfig,
+    resolvedConfig: params.resolvedConfig,
+    autoEnabledReasons: params.autoEnabledReasons,
+    env,
+    applyAutoEnable: params.applyAutoEnable,
+  });
+  const config = applyPluginCompatibilityOverrides({
+    config: snapshot.config,
+    compat: params.compat,
+    env,
+  });
+
+  return {
+    rawConfig: snapshot.rawConfig,
+    config,
+    normalized: normalizePluginsConfig(config?.plugins),
+    activationSourceConfig: snapshot.activationSourceConfig,
+    activationSource: snapshot.activationSource,
+    autoEnabledReasons: snapshot.autoEnabledReasons,
+  };
+}
+
+export function resolveBundledPluginCompatibleActivationInputs(params: {
+  rawConfig?: OpenClawConfig;
+  resolvedConfig?: OpenClawConfig;
+  autoEnabledReasons?: Record<string, string[]>;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  onlyPluginIds?: readonly string[];
+  applyAutoEnable?: boolean;
+  compatMode: PluginActivationBundledCompatMode;
+  resolveCompatPluginIds: (params: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    onlyPluginIds?: readonly string[];
+  }) => string[];
+}): BundledPluginCompatibleActivationInputs {
+  const snapshot = resolvePluginActivationSnapshot({
+    rawConfig: params.rawConfig,
+    resolvedConfig: params.resolvedConfig,
+    autoEnabledReasons: params.autoEnabledReasons,
+    env: params.env,
+    applyAutoEnable: params.applyAutoEnable,
+  });
+  const allowlistCompatEnabled = params.compatMode.allowlist === true;
+  const shouldResolveCompatPluginIds =
+    allowlistCompatEnabled ||
+    params.compatMode.enablement === "always" ||
+    (params.compatMode.enablement === "allowlist" && allowlistCompatEnabled) ||
+    params.compatMode.vitest === true;
+  const compatPluginIds = shouldResolveCompatPluginIds
+    ? params.resolveCompatPluginIds({
+        config: snapshot.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        onlyPluginIds: params.onlyPluginIds,
+      })
+    : [];
+  const activation = resolvePluginActivationInputs({
+    rawConfig: snapshot.rawConfig,
+    resolvedConfig: snapshot.config,
+    autoEnabledReasons: snapshot.autoEnabledReasons,
+    env: params.env,
+    compat: {
+      allowlistPluginIds: allowlistCompatEnabled ? compatPluginIds : undefined,
+      enablementPluginIds:
+        params.compatMode.enablement === "always" ||
+        (params.compatMode.enablement === "allowlist" && allowlistCompatEnabled)
+          ? compatPluginIds
+          : undefined,
+      vitestPluginIds: params.compatMode.vitest ? compatPluginIds : undefined,
+    },
+  });
+
+  return {
+    ...activation,
+    compatPluginIds,
   };
 }
