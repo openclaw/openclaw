@@ -380,8 +380,9 @@ def main():
     )
     parser.add_argument(
         "--tool-args",
-        default="",
-        help="Comma-separated tool arguments (e.g., '--input:str:Input file,--output:str:Output file')",
+        nargs='+',
+        default=[],
+        help="Tool arguments as flag/type/desc tuples, e.g. '--input:str:Input file' '--output:str:Output file'",
     )
 
     args = parser.parse_args()
@@ -440,7 +441,9 @@ def main():
         # Generate tool if requested
         if args.tool:
             print(f"\nGenerating tool '{args.tool}'...")
-            success = generate_tool(skill_dir, args.tool, args.type, args.tool_desc, args.tool_args)
+            # Convert tool_args list to comma-separated string for generate_tool
+            tool_args_str = ','.join(args.tool_args) if args.tool_args else ''
+            success = generate_tool(skill_dir, args.tool, args.type, args.tool_desc, tool_args_str)
             if success:
                 print(f"✅ Tool generated: {skill_dir}/scripts/{args.tool}.{args_type_to_ext(args.type)}")
                 print("\nNext steps:")

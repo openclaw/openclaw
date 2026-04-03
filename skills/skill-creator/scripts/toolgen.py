@@ -40,7 +40,11 @@ set -euo pipefail
             name = flag.lstrip('-').replace('-', '_')
             # Only emit option itself (no duplicate), since short aliases not supported
             lines.append(f"        {flag})")
-            lines.append(f"            {name}=\"$2\"; shift 2;;")
+            # Boolean flags don't consume a value; others do
+            if opt.get('type') == 'bool':
+                lines.append(f"            {name}=true; shift 1;;")
+            else:
+                lines.append(f"            {name}=\"$2\"; shift 2;;")
         lines.append("        *) break;;")
         lines.append("    esac")
         lines.append("done\n")
@@ -145,7 +149,8 @@ def generate_node(tool_name, description, arguments):
             name = arg.get('name', arg['flag'].lstrip('-').replace('-', '_'))
             opt_type = arg.get('type', 'string')
             options.append(f"    '{name}': {{ type: '{opt_type}' }}")
-    opts_str = ",\n".join(options) if options else ""
+
+    # opts_str computed but not used - removed
 
     content = f'''#!/usr/bin/env node
 /**
@@ -153,10 +158,23 @@ def generate_node(tool_name, description, arguments):
  * Description: {description}
  */
 
-// ESM syntax
-import minimist from 'minimist';
-
-const args = minimist(process.argv.slice(2));
+// Simple argument parsing without external deps
+const args = {};
+// Parse flags
+for (let i = 2; i < process.argv.length; i++) {
+  const arg = process.argv[i];
+  if (arg.startsWith('--')) {
+    const parts = arg.slice(2).split(':');
+    const key = parts[0];
+    if (parts.length > 1) {
+      // Has type hint, ignore for now; store raw
+      args[key] = process.argv[i+1] || true;
+      i++; // consume value
+    } else {
+      args[key] = true;
+    }
+  }
+}
 
 // TODO: implement
 console.log('Running {tool_name} with args:', args);
