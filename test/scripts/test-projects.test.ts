@@ -17,7 +17,7 @@ describe("test-projects args", () => {
       "exec",
       "vitest",
       "--config",
-      "vitest.projects.config.ts",
+      "vitest.config.ts",
       "src/foo.test.ts",
     ]);
   });
@@ -28,7 +28,7 @@ describe("test-projects args", () => {
       "vitest",
       "run",
       "--config",
-      "vitest.projects.config.ts",
+      "vitest.config.ts",
       "src/foo.test.ts",
     ]);
   });
