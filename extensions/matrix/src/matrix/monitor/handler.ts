@@ -417,16 +417,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       return;
     }
     const botReply = params.semanticFinalText.trim();
-    const nextTurns = botReply
-      ? [
-          ...params.turns,
-          {
-            senderId: `agent:${params.agentId}`,
-            text: botReply,
-            timestampMs: Date.now(),
-          },
-        ]
-      : params.turns;
+    const nextTurns = [...params.turns];
+    if (botReply) {
+      nextTurns.push({
+        senderId: `agent:${params.agentId}`,
+        text: botReply,
+        timestampMs: Date.now(),
+      });
+    }
     params.state.turns = nextTurns.slice(-MAX_BOT_CHAIN_TURNS);
     params.state.terminated = false;
     delete params.state.reasonCode;

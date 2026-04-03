@@ -29,6 +29,10 @@ const INSUFFICIENT_HISTORY_RESULT: MatrixSemanticLoopJudgeResult = {
   reasonShort: "Need at least two turns to judge progress.",
 };
 
+function readNonEmptyString(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
 function normalizeConfidence(value: unknown): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
     return 0;
@@ -66,19 +70,11 @@ function parseStructuredResult(value: unknown): MatrixSemanticLoopJudgeResult | 
   if (!decision) {
     return null;
   }
-  const reasonCode =
-    typeof candidate.reasonCode === "string" && candidate.reasonCode.trim()
-      ? candidate.reasonCode.trim()
-      : "unspecified";
-  const reasonShort =
-    typeof candidate.reasonShort === "string" && candidate.reasonShort.trim()
-      ? candidate.reasonShort.trim()
-      : "No short reason provided.";
   return {
     decision,
     confidence: normalizeConfidence(candidate.confidence),
-    reasonCode,
-    reasonShort,
+    reasonCode: readNonEmptyString(candidate.reasonCode, "unspecified"),
+    reasonShort: readNonEmptyString(candidate.reasonShort, "No short reason provided."),
   };
 }
 
@@ -143,11 +139,14 @@ function createCaptureDispatcher(params: {
   agentId: string;
 }) {
   let response = "";
+  const appendResponseText = (text: string) => {
+    response += response ? `\n${text}` : text;
+  };
   const { dispatcher, replyOptions, markDispatchIdle } =
     params.core.channel.reply.createReplyDispatcherWithTyping({
       deliver: async (payload) => {
         if (payload.text) {
-          response += (response ? "\n" : "") + payload.text;
+          appendResponseText(payload.text);
         }
       },
       humanDelay: params.core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),

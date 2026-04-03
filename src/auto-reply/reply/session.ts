@@ -87,6 +87,22 @@ function resolveStaleSessionEndReason(params: {
   return undefined;
 }
 
+function resetNewSessionRuntimeState(entry: SessionEntry): void {
+  entry.compactionCount = 0;
+  entry.memoryFlushCompactionCount = undefined;
+  entry.memoryFlushAt = undefined;
+  // Clear stale context hash so the first flush in the new session is not
+  // incorrectly skipped due to a hash match with the old transcript (#30115).
+  entry.memoryFlushContextHash = undefined;
+  // Clear stale token metrics from previous session so /status doesn't
+  // display the old session's context usage after /new or /reset.
+  entry.totalTokens = undefined;
+  entry.inputTokens = undefined;
+  entry.outputTokens = undefined;
+  entry.estimatedCostUsd = undefined;
+  entry.contextTokens = undefined;
+}
+
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -649,19 +665,7 @@ export async function initSessionState(params: {
     });
     sessionEntry = resolvedSessionFile.sessionEntry;
     if (isNewSession) {
-      sessionEntry.compactionCount = 0;
-      sessionEntry.memoryFlushCompactionCount = undefined;
-      sessionEntry.memoryFlushAt = undefined;
-      // Clear stale context hash so the first flush in the new session is not
-      // incorrectly skipped due to a hash match with the old transcript (#30115).
-      sessionEntry.memoryFlushContextHash = undefined;
-      // Clear stale token metrics from previous session so /status doesn't
-      // display the old session's context usage after /new or /reset.
-      sessionEntry.totalTokens = undefined;
-      sessionEntry.inputTokens = undefined;
-      sessionEntry.outputTokens = undefined;
-      sessionEntry.estimatedCostUsd = undefined;
-      sessionEntry.contextTokens = undefined;
+      resetNewSessionRuntimeState(sessionEntry);
     }
     // Preserve per-session overrides while resetting compaction state on /new.
     sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
