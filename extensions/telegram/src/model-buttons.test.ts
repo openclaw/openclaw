@@ -205,6 +205,11 @@ describe("buildModelsKeyboard", () => {
         currentModel: "anthropic/claude-sonnet-4",
         firstText: "claude-sonnet-4 ✓",
       },
+      {
+        name: "legacy bare model id fallback still marks current model",
+        currentModel: "claude-sonnet-4",
+        firstText: "claude-sonnet-4 ✓",
+      },
     ] as const;
     for (const testCase of cases) {
       const result = buildModelsKeyboard({
@@ -281,6 +286,20 @@ describe("buildModelsKeyboard", () => {
 
     expect(openaiResult[0]?.[0]?.text).toBe("OpenAI Shared");
     expect(anthropicResult[0]?.[0]?.text).toBe("Anthropic Shared");
+  });
+
+  it("does not mark same-id models from other providers as current", () => {
+    const result = buildModelsKeyboard({
+      provider: "openai-codex",
+      models: ["gpt-5.4", "gpt-5.3-codex-spark"],
+      currentModel: "github-copilot/gpt-5.4",
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    const texts = result.flat().map((button) => button.text);
+    expect(texts).toContain("gpt-5.4");
+    expect(texts).not.toContain("gpt-5.4 ✓");
   });
 
   it("renders pagination controls for first, middle, and last pages", () => {
