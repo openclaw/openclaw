@@ -8,7 +8,9 @@ title: "Skills Config"
 
 # Skills Config
 
-All skills-related configuration lives under `skills` in `~/.openclaw/openclaw.json`.
+Most skills loader/install configuration lives under `skills` in
+`~/.openclaw/openclaw.json`. Agent-specific skill visibility lives under
+`agents.defaults.skills` and `agents.list[].skills`.
 
 ```json5
 {
@@ -51,6 +53,35 @@ Examples:
 - Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3-pro-image-preview"`
 - Native fal setup: `agents.defaults.imageGenerationModel.primary: "fal/fal-ai/flux/dev"`
 
+## Agent skill allowlists
+
+Use agent config when you want the same machine/workspace skill roots, but a
+different visible skill set per agent.
+
+```json5
+{
+  agents: {
+    defaults: {
+      skills: ["github", "weather"],
+    },
+    list: [
+      { id: "writer" }, // inherits defaults -> github, weather
+      { id: "docs", skills: ["docs-search"] }, // replaces defaults
+      { id: "locked-down", skills: [] }, // no skills
+    ],
+  },
+}
+```
+
+Rules:
+
+- `agents.defaults.skills`: shared baseline allowlist for agents that omit
+  `agents.list[].skills`.
+- Omit `agents.defaults.skills` to leave skills unrestricted by default.
+- `agents.list[].skills`: explicit final skill set for that agent; it does not
+  merge with defaults.
+- `agents.list[].skills: []`: expose no skills for that agent.
+
 ## Fields
 
 - Built-in skill roots always include `~/.openclaw/skills`, `~/.agents/skills`,
@@ -65,6 +96,10 @@ Examples:
   This only affects **skill installs**; the Gateway runtime should still be Node
   (Bun not recommended for WhatsApp/Telegram).
 - `entries.<skillKey>`: per-skill overrides.
+- `agents.defaults.skills`: optional default skill allowlist inherited by agents
+  that omit `agents.list[].skills`.
+- `agents.list[].skills`: optional per-agent final skill allowlist; explicit
+  lists replace inherited defaults instead of merging.
 
 Per-skill fields:
 
