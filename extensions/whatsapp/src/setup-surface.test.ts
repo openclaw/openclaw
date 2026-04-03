@@ -216,6 +216,40 @@ describe("whatsapp setup wizard", () => {
     expect(status.statusLines).toEqual(["WhatsApp (work): not linked"]);
   });
 
+  it("uses configured defaultAccount for omitted-account setup status", async () => {
+    hoisted.detectWhatsAppLinked.mockImplementation(async (_cfg, accountId) => accountId === "work");
+
+    const status = await whatsappGetStatus({
+      cfg: {
+        channels: {
+          whatsapp: {
+            defaultAccount: "work",
+            accounts: {
+              default: {
+                authDir: "/tmp/default",
+              },
+              work: {
+                authDir: "/tmp/work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.statusLines).toEqual(["WhatsApp (work): linked"]);
+    expect(hoisted.detectWhatsAppLinked).toHaveBeenCalledWith(
+      expect.any(Object),
+      "work",
+    );
+    expect(hoisted.detectWhatsAppLinked).not.toHaveBeenCalledWith(
+      expect.any(Object),
+      DEFAULT_ACCOUNT_ID,
+    );
+  });
+
   it("normalizes allowFrom entries when list mode is selected", async () => {
     const { result } = await runSeparatePhoneFlow({
       selectValues: ["separate", "allowlist", "list"],
