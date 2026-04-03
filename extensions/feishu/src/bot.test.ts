@@ -23,6 +23,15 @@ type BindingReadiness = Awaited<
 type ReplyDispatcher = Parameters<
   PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
 >[0]["dispatcher"];
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends (...args: never[]) => unknown
+    ? T[K]
+    : T[K] extends ReadonlyArray<unknown>
+      ? T[K]
+      : T[K] extends object
+        ? DeepPartial<T[K]>
+        : T[K];
+};
 
 function createReplyDispatcher(): ReplyDispatcher {
   return {
@@ -163,13 +172,7 @@ function createUnboundConfiguredRoute(
   return { bindingResolution: null, route };
 }
 
-function createFeishuBotRuntime(
-  overrides: Partial<PluginRuntime> & {
-    channel?: Partial<PluginRuntime["channel"]>;
-    system?: Partial<PluginRuntime["system"]>;
-    media?: Partial<PluginRuntime["media"]>;
-  } = {},
-): PluginRuntime {
+function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   return {
     channel: {
       routing: {
