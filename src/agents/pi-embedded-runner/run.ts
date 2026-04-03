@@ -27,8 +27,8 @@ import {
 } from "../failover-error.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import {
-  hasDifferentLiveSessionModelSelection,
-  consumeLiveSessionModelSwitch,
+  shouldSwitchToLiveModel,
+  clearLiveModelSwitchPending,
 } from "../live-model-switch.js";
 import {
   applyAuthHeaderOverride,
@@ -235,12 +235,6 @@ export async function runEmbeddedPiAgent(
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
-      const resolveCurrentLiveSelection = () => ({
-        provider,
-        model: modelId,
-        authProfileId: preferredProfileId,
-        authProfileIdSource: params.authProfileIdSource,
-      });
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -620,12 +614,23 @@ export async function runEmbeddedPiAgent(
             !attempt.lastToolError &&
             attempt.toolMetas.length === 0 &&
             attempt.assistantTexts.length === 0;
-          const requestedSelection = consumeLiveSessionModelSwitch(params.sessionId);
-          if (
-            requestedSelection &&
-            canRestartForLiveSwitch &&
-            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), requestedSelection)
-          ) {
+          const requestedSelection = shouldSwitchToLiveModel({
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+            defaultProvider: DEFAULT_PROVIDER,
+            defaultModel: DEFAULT_MODEL,
+            currentProvider: provider,
+            currentModel: modelId,
+            currentAuthProfileId: preferredProfileId,
+            currentAuthProfileIdSource: params.authProfileIdSource,
+          });
+          if (requestedSelection && canRestartForLiveSwitch) {
+            await clearLiveModelSwitchPending({
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+            });
             log.info(
               `live session model switch requested during active attempt for ${params.sessionId}: ${provider}/${modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
             );

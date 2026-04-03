@@ -132,6 +132,14 @@ export type SessionEntry = {
   authProfileOverride?: string;
   authProfileOverrideSource?: "auto" | "user";
   authProfileOverrideCompactionCount?: number;
+  /**
+   * Set to `true` by the `/model` command when the user explicitly switches
+   * models during an active run.  The embedded runner checks this flag to
+   * decide whether to throw `LiveSessionModelSwitchError`.  System-initiated
+   * fallbacks (rate-limit retry rotation) never set this flag, so they are
+   * never mistaken for user-initiated switches.
+   */
+  liveModelSwitchPending?: boolean;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";
