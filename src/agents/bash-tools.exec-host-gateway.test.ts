@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
+const buildExecApprovalFollowupTargetMock = vi.hoisted(() => vi.fn(() => null));
 
 vi.mock("../infra/exec-approvals.js", () => ({
   evaluateShellAllowlist: vi.fn(() => ({
@@ -20,6 +21,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
   recordAllowlistUse: vi.fn(),
   resolveApprovalAuditCandidatePath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
+  resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
   addAllowlistEntry: vi.fn(),
   addDurableCommandApproval: vi.fn(),
 }));
@@ -39,7 +41,7 @@ vi.mock("./bash-tools.exec-host-shared.js", () => ({
   })),
   buildDefaultExecApprovalRequestArgs: vi.fn(() => ({})),
   buildHeadlessExecApprovalDeniedMessage: vi.fn(() => "denied"),
-  buildExecApprovalFollowupTarget: vi.fn(() => null),
+  buildExecApprovalFollowupTarget: buildExecApprovalFollowupTargetMock,
   buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
   createExecApprovalDecisionState: vi.fn(() => ({
     baseDecision: { timedOut: false },
@@ -80,9 +82,14 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
 
 describe("processGatewayAllowlist", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js"));
+  });
+
+  beforeEach(() => {
     buildExecApprovalPendingToolResultMock.mockReset();
+    buildExecApprovalFollowupTargetMock.mockReset();
+    buildExecApprovalFollowupTargetMock.mockReturnValue(null);
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
       content: [],
@@ -98,7 +105,6 @@ describe("processGatewayAllowlist", () => {
       sentApproverDms: false,
       unavailableReason: null,
     });
-    ({ processGatewayAllowlist } = await import("./bash-tools.exec-host-gateway.js"));
   });
 
   it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
@@ -120,5 +126,30 @@ describe("processGatewayAllowlist", () => {
 
     expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
     expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("uses sessionKey for followups when notifySessionKey is absent", async () => {
+    await processGatewayAllowlist({
+      command: "echo ok",
+      workdir: process.cwd(),
+      env: process.env as Record<string, string>,
+      pty: false,
+      defaultTimeoutSec: 30,
+      security: "allowlist",
+      ask: "off",
+      safeBins: new Set(),
+      safeBinProfiles: {},
+      warnings: [],
+      approvalRunningNoticeMs: 0,
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      sessionKey: "agent:main:telegram:direct:123",
+    });
+
+    expect(buildExecApprovalFollowupTargetMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
   });
 });

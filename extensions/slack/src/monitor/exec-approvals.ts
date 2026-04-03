@@ -3,10 +3,10 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildApprovalInteractiveReply,
-  createExecApprovalChannelRuntime,
-  deliverApprovalRequestViaChannelNativePlan,
+  createChannelNativeApprovalRuntime,
   getExecApprovalApproverDmNoticeText,
   resolveExecApprovalCommandDisplay,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalChannelRuntime,
   type ExecApprovalDecision,
   type ExecApprovalRequest,
@@ -16,6 +16,7 @@ import { logError } from "openclaw/plugin-sdk/text-runtime";
 import { slackNativeApprovalAdapter } from "../approval-native.js";
 import {
   getSlackExecApprovalApprovers,
+  isSlackExecApprovalClientEnabled,
   normalizeSlackApproverId,
   shouldHandleSlackExecApprovalRequest,
 } from "../exec-approvals.js";
@@ -26,6 +27,10 @@ type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
   channelId: string;
   messageTs: string;
+};
+type SlackPendingDelivery = {
+  text: string;
+  blocks: SlackBlock[];
 };
 
 type SlackExecApprovalConfig = NonNullable<
@@ -96,6 +101,8 @@ function buildSlackPendingApprovalBlocks(request: ExecApprovalRequest): SlackBlo
       text: "",
       interactive: buildApprovalInteractiveReply({
         approvalId: request.id,
+        ask: request.request.ask,
+        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(request.request),
       }),
     }) ?? [];
   return [
@@ -219,21 +226,68 @@ export class SlackExecApprovalHandler {
 
   constructor(opts: SlackExecApprovalHandlerOpts) {
     this.opts = opts;
-    this.runtime = createExecApprovalChannelRuntime<SlackPendingApproval>({
+    this.runtime = createChannelNativeApprovalRuntime<
+      SlackPendingApproval,
+      { to: string; threadTs?: string },
+      SlackPendingDelivery,
+      ExecApprovalRequest,
+      ExecApprovalResolved
+    >({
       label: "slack/exec-approvals",
       clientDisplayName: "Slack Exec Approvals",
       cfg: opts.cfg,
+      accountId: opts.accountId,
       gatewayUrl: opts.gatewayUrl,
+      nativeAdapter: slackNativeApprovalAdapter.native,
       isConfigured: () =>
-        Boolean(
-          opts.config.enabled &&
-          getSlackExecApprovalApprovers({
-            cfg: opts.cfg,
-            accountId: opts.accountId,
-          }).length > 0,
-        ),
+        isSlackExecApprovalClientEnabled({
+          cfg: opts.cfg,
+          accountId: opts.accountId,
+        }),
       shouldHandle: (request) => this.shouldHandle(request),
-      deliverRequested: async (request) => await this.deliverRequested(request),
+      buildPendingContent: ({ request }) => ({
+        text: buildSlackPendingApprovalText(request),
+        blocks: buildSlackPendingApprovalBlocks(request),
+      }),
+      sendOriginNotice: async ({ originTarget }) => {
+        await sendMessageSlack(originTarget.to, getExecApprovalApproverDmNoticeText(), {
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          threadTs: originTarget.threadId != null ? String(originTarget.threadId) : undefined,
+          client: this.opts.app.client,
+        });
+      },
+      prepareTarget: ({ plannedTarget }) => ({
+        dedupeKey: `${plannedTarget.target.to}:${plannedTarget.target.threadId == null ? "" : String(plannedTarget.target.threadId)}`,
+        target: {
+          to: plannedTarget.target.to,
+          threadTs:
+            plannedTarget.target.threadId != null
+              ? String(plannedTarget.target.threadId)
+              : undefined,
+        },
+      }),
+      deliverTarget: async ({ preparedTarget, pendingContent, request }) => {
+        const message = await sendMessageSlack(preparedTarget.to, pendingContent.text, {
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          threadTs: preparedTarget.threadTs,
+          blocks: pendingContent.blocks,
+          client: this.opts.app.client,
+        });
+        return {
+          channelId: message.channelId,
+          messageTs: message.messageId,
+        };
+      },
+      onOriginNoticeError: ({ error }) => {
+        logError(`slack exec approvals: failed to send DM redirect notice: ${String(error)}`);
+      },
+      onDeliveryError: ({ error, request }) => {
+        logError(
+          `slack exec approvals: failed to deliver approval ${request.id}: ${String(error)}`,
+        );
+      },
       finalizeResolved: async ({ request, resolved, entries }) => {
         await this.finalizeResolved(request, resolved, entries);
       },
@@ -248,7 +302,14 @@ export class SlackExecApprovalHandler {
       cfg: this.opts.cfg,
       accountId: this.opts.accountId,
       request,
-    });
+    })
+      ? slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
+          cfg: this.opts.cfg,
+          accountId: this.opts.accountId,
+          approvalKind: "exec",
+          request,
+        }).enabled === true
+      : false;
   }
 
   async start(): Promise<void> {
@@ -269,57 +330,6 @@ export class SlackExecApprovalHandler {
 
   async handleApprovalTimeout(approvalId: string): Promise<void> {
     await this.runtime.handleExpired(approvalId);
-  }
-
-  private async deliverRequested(request: ExecApprovalRequest): Promise<SlackPendingApproval[]> {
-    const text = buildSlackPendingApprovalText(request);
-    const blocks = buildSlackPendingApprovalBlocks(request);
-    return await deliverApprovalRequestViaChannelNativePlan({
-      cfg: this.opts.cfg,
-      accountId: this.opts.accountId,
-      approvalKind: "exec",
-      request,
-      adapter: slackNativeApprovalAdapter.native,
-      sendOriginNotice: async ({ originTarget }) => {
-        await sendMessageSlack(originTarget.to, getExecApprovalApproverDmNoticeText(), {
-          cfg: this.opts.cfg,
-          accountId: this.opts.accountId,
-          threadTs: originTarget.threadId != null ? String(originTarget.threadId) : undefined,
-          client: this.opts.app.client,
-        });
-      },
-      prepareTarget: ({ plannedTarget }) => ({
-        dedupeKey: `${plannedTarget.target.to}:${plannedTarget.target.threadId == null ? "" : String(plannedTarget.target.threadId)}`,
-        target: {
-          to: plannedTarget.target.to,
-          threadTs:
-            plannedTarget.target.threadId != null
-              ? String(plannedTarget.target.threadId)
-              : undefined,
-        },
-      }),
-      deliverTarget: async ({ preparedTarget }) => {
-        const message = await sendMessageSlack(preparedTarget.to, text, {
-          cfg: this.opts.cfg,
-          accountId: this.opts.accountId,
-          threadTs: preparedTarget.threadTs,
-          blocks,
-          client: this.opts.app.client,
-        });
-        return {
-          channelId: message.channelId,
-          messageTs: message.messageId,
-        };
-      },
-      onOriginNoticeError: ({ error }) => {
-        logError(`slack exec approvals: failed to send DM redirect notice: ${String(error)}`);
-      },
-      onDeliveryError: ({ error }) => {
-        logError(
-          `slack exec approvals: failed to deliver approval ${request.id}: ${String(error)}`,
-        );
-      },
-    });
   }
 
   private async finalizeResolved(

@@ -130,11 +130,25 @@ class ChatController(
     thinkingLevel: String,
     attachments: List<OutgoingAttachment>,
   ) {
+    scope.launch {
+      sendMessageAwaitAcceptance(
+        message = message,
+        thinkingLevel = thinkingLevel,
+        attachments = attachments,
+      )
+    }
+  }
+
+  suspend fun sendMessageAwaitAcceptance(
+    message: String,
+    thinkingLevel: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
     val trimmed = message.trim()
-    if (trimmed.isEmpty() && attachments.isEmpty()) return
+    if (trimmed.isEmpty() && attachments.isEmpty()) return false
     if (!_healthOk.value) {
       _errorText.value = "Gateway health not OK; cannot send"
-      return
+      return false
     }
 
     val runId = UUID.randomUUID().toString()
@@ -177,45 +191,45 @@ class ChatController(
     pendingToolCallsById.clear()
     publishPendingToolCalls()
 
-    scope.launch {
-      try {
-        val params =
-          buildJsonObject {
-            put("sessionKey", JsonPrimitive(sessionKey))
-            put("message", JsonPrimitive(text))
-            put("thinking", JsonPrimitive(thinking))
-            put("timeoutMs", JsonPrimitive(30_000))
-            put("idempotencyKey", JsonPrimitive(runId))
-            if (attachments.isNotEmpty()) {
-              put(
-                "attachments",
-                JsonArray(
-                  attachments.map { att ->
-                    buildJsonObject {
-                      put("type", JsonPrimitive(att.type))
-                      put("mimeType", JsonPrimitive(att.mimeType))
-                      put("fileName", JsonPrimitive(att.fileName))
-                      put("content", JsonPrimitive(att.base64))
-                    }
-                  },
-                ),
-              )
-            }
-          }
-        val res = session.request("chat.send", params.toString())
-        val actualRunId = parseRunId(res) ?: runId
-        if (actualRunId != runId) {
-          clearPendingRun(runId)
-          armPendingRunTimeout(actualRunId)
-          synchronized(pendingRuns) {
-            pendingRuns.add(actualRunId)
-            _pendingRunCount.value = pendingRuns.size
+    return try {
+      val params =
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(sessionKey))
+          put("message", JsonPrimitive(text))
+          put("thinking", JsonPrimitive(thinking))
+          put("timeoutMs", JsonPrimitive(30_000))
+          put("idempotencyKey", JsonPrimitive(runId))
+          if (attachments.isNotEmpty()) {
+            put(
+              "attachments",
+              JsonArray(
+                attachments.map { att ->
+                  buildJsonObject {
+                    put("type", JsonPrimitive(att.type))
+                    put("mimeType", JsonPrimitive(att.mimeType))
+                    put("fileName", JsonPrimitive(att.fileName))
+                    put("content", JsonPrimitive(att.base64))
+                  }
+                },
+              ),
+            )
           }
         }
-      } catch (err: Throwable) {
+      val res = session.request("chat.send", params.toString())
+      val actualRunId = parseRunId(res) ?: runId
+      if (actualRunId != runId) {
         clearPendingRun(runId)
-        _errorText.value = err.message
+        armPendingRunTimeout(actualRunId)
+        synchronized(pendingRuns) {
+          pendingRuns.add(actualRunId)
+          _pendingRunCount.value = pendingRuns.size
+        }
       }
+      true
+    } catch (err: Throwable) {
+      clearPendingRun(runId)
+      _errorText.value = err.message
+      false
     }
   }
 

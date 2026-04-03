@@ -34,6 +34,40 @@ function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
 }
 
 export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+  const taskFlow = {
+    bindSession: vi.fn(() => ({
+      sessionKey: "agent:main:main",
+      createManaged: vi.fn(),
+      get: vi.fn(),
+      list: vi.fn(() => []),
+      findLatest: vi.fn(),
+      resolve: vi.fn(),
+      getTaskSummary: vi.fn(),
+      setWaiting: vi.fn(),
+      resume: vi.fn(),
+      finish: vi.fn(),
+      fail: vi.fn(),
+      requestCancel: vi.fn(),
+      cancel: vi.fn(),
+      runTask: vi.fn(),
+    })) as unknown as PluginRuntime["taskFlow"]["bindSession"],
+    fromToolContext: vi.fn(() => ({
+      sessionKey: "agent:main:main",
+      createManaged: vi.fn(),
+      get: vi.fn(),
+      list: vi.fn(() => []),
+      findLatest: vi.fn(),
+      resolve: vi.fn(),
+      getTaskSummary: vi.fn(),
+      setWaiting: vi.fn(),
+      resume: vi.fn(),
+      finish: vi.fn(),
+      fail: vi.fn(),
+      requestCancel: vi.fn(),
+      cancel: vi.fn(),
+      runTask: vi.fn(),
+    })) as unknown as PluginRuntime["taskFlow"]["fromToolContext"],
+  };
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
@@ -299,12 +333,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         setMaxAgeBySessionKey:
           vi.fn() as unknown as PluginRuntime["channel"]["threadBindings"]["setMaxAgeBySessionKey"],
       },
-      discord: {} as PluginRuntime["channel"]["discord"],
       activity: {} as PluginRuntime["channel"]["activity"],
-      line: {} as PluginRuntime["channel"]["line"],
-      slack: {} as PluginRuntime["channel"]["slack"],
-      matrix: {} as PluginRuntime["channel"]["matrix"],
-      signal: {} as PluginRuntime["channel"]["signal"],
     },
     events: {
       onAgentEvent: vi.fn(() => () => {}) as unknown as PluginRuntime["events"]["onAgentEvent"],
@@ -324,6 +353,18 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
     },
+    tasks: {
+      runs: {
+        bindSession: vi.fn(),
+        fromToolContext: vi.fn(),
+      } as PluginRuntime["tasks"]["runs"],
+      flows: {
+        bindSession: vi.fn(),
+        fromToolContext: vi.fn(),
+      } as PluginRuntime["tasks"]["flows"],
+      flow: taskFlow,
+    },
+    taskFlow,
     modelAuth: {
       getApiKeyForModel: vi.fn() as unknown as PluginRuntime["modelAuth"]["getApiKeyForModel"],
       resolveApiKeyForProvider:

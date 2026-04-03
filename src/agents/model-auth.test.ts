@@ -10,6 +10,7 @@ import {
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
 import {
+  applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   hasUsableCustomProviderApiKey,
   requireApiKey,
@@ -21,6 +22,10 @@ import {
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+    provider: string;
+    context: { resolvedApiKey?: string };
+  }) => params.provider === "ollama" && params.context.resolvedApiKey?.trim() === "ollama-local",
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
     config?: {
@@ -707,5 +712,178 @@ describe("applyLocalNoAuthHeaderOverride", () => {
 
     expect(capturedAuthorization).toBeNull();
     expect(capturedXTest).toBe("1");
+  });
+});
+
+describe("applyAuthHeaderOverride", () => {
+  const baseModel: Model<"openai-completions"> = {
+    id: "gemini-3.1-flash-lite-preview",
+    name: "gemini-3.1-flash-lite-preview",
+    api: "openai-completions" as const,
+    provider: "google",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    reasoning: false,
+    input: ["text"] as ("text" | "image")[],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 131072,
+    maxTokens: 8192,
+  };
+
+  it("injects Authorization Bearer header when authHeader is true", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.headers).toEqual({ Authorization: "Bearer test-api-key" });
+  });
+
+  it("preserves existing model headers when injecting Authorization", () => {
+    const result = applyAuthHeaderOverride(
+      { ...baseModel, headers: { "X-Custom": "value" } },
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.headers).toEqual({
+      "X-Custom": "value",
+      Authorization: "Bearer test-api-key",
+    });
+  });
+
+  it("returns model unchanged when authHeader is not set", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("returns model unchanged when authHeader is false", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: false,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("returns model unchanged when no API key is available", () => {
+    const result = applyAuthHeaderOverride(baseModel, null, {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            api: "openai-completions",
+            authHeader: true,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("returns model unchanged when provider config is missing", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      undefined,
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("rejects synthetic marker API keys", () => {
+    const result = applyAuthHeaderOverride(
+      baseModel,
+      { apiKey: CUSTOM_LOCAL_AUTH_MARKER, source: "synthetic", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result).toBe(baseModel);
+  });
+
+  it("strips existing authorization header case-insensitively before injection", () => {
+    const result = applyAuthHeaderOverride(
+      { ...baseModel, headers: { authorization: "old-value", "X-Custom": "keep" } },
+      { apiKey: "test-api-key", source: "env", mode: "api-key" },
+      {
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              api: "openai-completions",
+              authHeader: true,
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(result.headers).toEqual({
+      "X-Custom": "keep",
+      Authorization: "Bearer test-api-key",
+    });
   });
 });

@@ -7,7 +7,17 @@ import * as probeModule from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
 
-const handleSlackActionMock = vi.fn();
+const { handleSlackActionMock } = vi.hoisted(() => ({
+  handleSlackActionMock: vi.fn(),
+}));
+
+vi.mock("./action-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./action-runtime.js")>();
+  return {
+    ...actual,
+    handleSlackAction: handleSlackActionMock,
+  };
+});
 
 beforeEach(async () => {
   handleSlackActionMock.mockReset();

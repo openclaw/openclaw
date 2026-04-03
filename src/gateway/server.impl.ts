@@ -373,6 +373,10 @@ export type GatewayServerOptions = {
     runtime: import("../runtime.js").RuntimeEnv,
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
+  /**
+   * Optional startup timestamp used for concise readiness logging.
+   */
+  startupStartedAt?: number;
 };
 
 export async function startGatewayServer(
@@ -726,6 +730,7 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
   });
+  log.info("starting HTTP server...");
   const {
     canvasHost,
     releasePluginRouteRegistry,
@@ -1337,8 +1342,10 @@ export async function startGatewayServer(
       bindHosts: httpBindHosts,
       port,
       tlsEnabled: gatewayTls.enabled,
+      pluginCount: pluginRegistry.plugins.length,
       log,
       isNixMode,
+      startupStartedAt: opts.startupStartedAt,
     });
     stopGatewayUpdateCheck = minimalTestGateway
       ? () => {}
@@ -1373,6 +1380,7 @@ export async function startGatewayServer(
           logDiagnostics: false,
         }));
       }
+      log.info("starting channels and sidecars...");
       ({ pluginServices } = await startGatewaySidecars({
         cfg: gatewayPluginConfigAtStart,
         pluginRegistry,

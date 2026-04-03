@@ -87,6 +87,7 @@
     "PHP_INI_SCAN_DIR",
     "DENO_DIR",
     "BUN_CONFIG_REGISTRY",
+    "YARN_RC_FILENAME",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "ALL_PROXY",
@@ -147,6 +148,6 @@
     "XDG_CONFIG_HOME",
     "AWS_CONFIG_FILE"
   ],
-  "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_"],
+  "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_", "CARGO_REGISTRIES_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
 }

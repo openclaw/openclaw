@@ -259,12 +259,12 @@ Events are not replayed. On sequence gaps, refresh state (`health`, `system-pres
 
 ## Common failure signatures
 
-| Signature                                                      | Likely issue                             |
-| -------------------------------------------------------------- | ---------------------------------------- |
-| `refusing to bind gateway ... without auth`                    | Non-loopback bind without token/password |
-| `another gateway instance is already listening` / `EADDRINUSE` | Port conflict                            |
-| `Gateway start blocked: set gateway.mode=local`                | Config set to remote mode                |
-| `unauthorized` during connect                                  | Auth mismatch between client and gateway |
+| Signature                                                      | Likely issue                                                                    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `refusing to bind gateway ... without auth`                    | Non-loopback bind without token/password                                        |
+| `another gateway instance is already listening` / `EADDRINUSE` | Port conflict                                                                   |
+| `Gateway start blocked: set gateway.mode=local`                | Config set to remote mode, or local-mode stamp is missing from a damaged config |
+| `unauthorized` during connect                                  | Auth mismatch between client and gateway                                        |
 
 For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooting).
 

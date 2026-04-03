@@ -720,31 +720,13 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.maxCharsCap":
     "Hard cap for web_fetch maxChars (applies to config and tool calls).",
   "tools.web.fetch.maxResponseBytes": "Max download size before truncation.",
+  "tools.web.fetch.provider": "Web fetch fallback provider id.",
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
-  "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl fallback for web_fetch (if configured).",
-  "tools.web.fetch.firecrawl.apiKey": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
-  "tools.web.fetch.firecrawl.baseUrl":
-    "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
-  "tools.web.fetch.firecrawl.onlyMainContent":
-    "When true, Firecrawl returns only the main content (default: true).",
-  "tools.web.fetch.firecrawl.maxAgeMs":
-    "Firecrawl maxAge (ms) for cached results when supported by the API.",
-  "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
-  "tools.web.x_search.enabled":
-    "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
-  "tools.web.x_search.apiKey": "xAI API key for X search (fallback: XAI_API_KEY env var).",
-  "tools.web.x_search.model": 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
-  "tools.web.x_search.inlineCitations":
-    "Keep inline citations from xAI in x_search responses when available (default: false).",
-  "tools.web.x_search.maxTurns":
-    "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
-  "tools.web.x_search.timeoutSeconds": "Timeout in seconds for x_search requests.",
-  "tools.web.x_search.cacheTtlMinutes": "Cache TTL in minutes for x_search results.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
@@ -765,6 +747,22 @@ export const FIELD_HELP: Record<string, string> = {
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
+  "models.providers.*.request":
+    "Optional request overrides for model-provider requests. Use this only for header and auth overrides today; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+  "models.providers.*.request.headers":
+    "Extra headers merged into provider requests after default attribution and auth resolution.",
+  "models.providers.*.request.auth":
+    "Override provider request authentication behavior for this provider.",
+  "models.providers.*.request.auth.mode":
+    'Auth override mode: "provider-default", "authorization-bearer", or "header".',
+  "models.providers.*.request.auth.token":
+    "Bearer token used when auth mode is authorization-bearer.",
+  "models.providers.*.request.auth.headerName":
+    "Custom auth header name used when auth mode is header.",
+  "models.providers.*.request.auth.value":
+    "Custom auth header value used when auth mode is header.",
+  "models.providers.*.request.auth.prefix":
+    "Optional prefix prepended to request.auth.value when auth mode is header.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.bedrockDiscovery":
@@ -1116,6 +1114,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+  "agents.defaults.compaction.notifyUser":
+    "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
@@ -1459,6 +1459,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default channel behavior applied across providers when provider-specific settings are not set. Use this to enforce consistent baseline policy before per-provider tuning.",
   "channels.defaults.groupPolicy":
     'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
+  "channels.defaults.contextVisibility":
+    'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
   "channels.defaults.heartbeat":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
   "channels.defaults.heartbeat.showOk":

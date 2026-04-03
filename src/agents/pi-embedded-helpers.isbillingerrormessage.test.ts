@@ -656,6 +656,18 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
+  it("matches AbortError / stream-abort messages as timeout (#58315)", () => {
+    expectTimeoutFailoverSamples([
+      "The operation was aborted",
+      "This operation was aborted",
+      "the operation was aborted",
+      "stream closed",
+      "stream was closed",
+      "stream aborted",
+      "stream was aborted",
+    ]);
+  });
+
   it("matches Gemini MALFORMED_RESPONSE stop reason as timeout (#42149)", () => {
     expectTimeoutFailoverSamples([
       "Unhandled stop reason: MALFORMED_RESPONSE",

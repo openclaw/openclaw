@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -72,17 +72,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
 }
 
 describe("runCapability image skip", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../agents/model-catalog.js", async () => {
-      const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
-        "../agents/model-catalog.js",
-      );
-      return {
-        ...actual,
-        loadModelCatalog,
-      };
-    });
+  beforeAll(async () => {
     ({
       buildProviderRegistry,
       createMediaAttachmentCache,
@@ -90,7 +80,12 @@ describe("runCapability image skip", () => {
       resolveAutoImageModel,
       runCapability,
     } = await import("./runner.js"));
+  });
+
+  beforeEach(() => {
     loadModelCatalog.mockClear();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    vi.unstubAllEnvs();
   });
 
   it("skips image understanding when the active model supports vision", async () => {

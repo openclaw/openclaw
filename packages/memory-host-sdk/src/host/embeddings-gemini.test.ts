@@ -71,7 +71,6 @@ let resolveGeminiOutputDimensionality: typeof import("./embeddings-gemini.js").r
 
 beforeAll(async () => {
   vi.doUnmock("undici");
-  vi.resetModules();
   ({
     buildGeminiEmbeddingRequest,
     buildGeminiTextEmbeddingRequest,
