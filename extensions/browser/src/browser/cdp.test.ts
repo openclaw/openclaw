@@ -244,6 +244,19 @@ describe("cdp", () => {
     ).rejects.toBeInstanceOf(SsrFBlockedError);
   });
 
+  it("blocks the initial /json/version fetch when the cdpUrl host is outside strict SSRF policy", async () => {
+    await expect(
+      createTargetViaCdp({
+        cdpUrl: "http://169.254.169.254:9222",
+        url: "https://example.com",
+        ssrfPolicy: {
+          dangerouslyAllowPrivateNetwork: false,
+          allowedHostnames: ["127.0.0.1"],
+        },
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
   it("evaluates javascript via CDP", async () => {
     const wsPort = await startWsServerWithMessages((msg, socket) => {
       if (msg.method === "Runtime.enable") {
