@@ -21,9 +21,20 @@
 
 gboolean systemd_is_gateway_unit_name(const gchar *unit_name) {
     if (!unit_name) return FALSE;
-    return ((g_str_has_prefix(unit_name, "openclaw-gateway.") || g_str_has_prefix(unit_name, "openclaw-gateway-")) ||
-            (g_str_has_prefix(unit_name, "clawdbot-gateway.") || g_str_has_prefix(unit_name, "clawdbot-gateway-")) ||
-            (g_str_has_prefix(unit_name, "moltbot-gateway.") || g_str_has_prefix(unit_name, "moltbot-gateway-")));
+    
+    /* Match exact patterns: openclaw-gateway.service or openclaw-gateway-*.service */
+    if (g_strcmp0(unit_name, "openclaw-gateway.service") == 0) return TRUE;
+    if (g_str_has_prefix(unit_name, "openclaw-gateway-") && g_str_has_suffix(unit_name, ".service")) return TRUE;
+    
+    /* Legacy: clawdbot-gateway.service or clawdbot-gateway-*.service */
+    if (g_strcmp0(unit_name, "clawdbot-gateway.service") == 0) return TRUE;
+    if (g_str_has_prefix(unit_name, "clawdbot-gateway-") && g_str_has_suffix(unit_name, ".service")) return TRUE;
+    
+    /* Legacy: moltbot-gateway.service or moltbot-gateway-*.service */
+    if (g_strcmp0(unit_name, "moltbot-gateway.service") == 0) return TRUE;
+    if (g_str_has_prefix(unit_name, "moltbot-gateway-") && g_str_has_suffix(unit_name, ".service")) return TRUE;
+    
+    return FALSE;
 }
 
 gboolean systemd_is_gateway_unit(const gchar *filename, const gchar *contents) {
@@ -68,12 +79,35 @@ gchar* systemd_normalize_profile(const gchar *raw_profile) {
 
 GPtrArray* systemd_helpers_get_user_unit_paths(const gchar *home_dir) {
     GPtrArray *paths = g_ptr_array_new_with_free_func(g_free);
-    if (home_dir) {
-        g_ptr_array_add(paths, g_build_filename(home_dir, ".config", "systemd", "user", NULL));
-        g_ptr_array_add(paths, g_build_filename(home_dir, ".local", "share", "systemd", "user", NULL));
+
+    /* 1. XDG_RUNTIME_DIR/systemd/user if present */
+    const gchar *user_runtime = g_getenv("XDG_RUNTIME_DIR");
+    if (user_runtime && user_runtime[0] != '\0') {
+        gchar *runtime_path = g_build_filename(user_runtime, "systemd", "user", NULL);
+        g_ptr_array_add(paths, runtime_path);
     }
+
+    /* 2. XDG_CONFIG_HOME/systemd/user if present, otherwise ~/.config/systemd/user */
+    const gchar *user_config = g_getenv("XDG_CONFIG_HOME");
+    if (user_config && user_config[0] != '\0') {
+        gchar *config_path = g_build_filename(user_config, "systemd", "user", NULL);
+        g_ptr_array_add(paths, config_path);
+    } else if (home_dir) {
+        gchar *config_path = g_build_filename(home_dir, ".config", "systemd", "user", NULL);
+        g_ptr_array_add(paths, config_path);
+    }
+
+    /* 3. /etc/systemd/user before ~/.local/share/systemd/user */
     g_ptr_array_add(paths, g_strdup("/etc/systemd/user"));
     g_ptr_array_add(paths, g_strdup("/etc/xdg/systemd/user"));
+
+    /* 4. ~/.local/share/systemd/user */
+    if (home_dir) {
+        gchar *local_share_path = g_build_filename(home_dir, ".local", "share", "systemd", "user", NULL);
+        g_ptr_array_add(paths, local_share_path);
+    }
+
+    /* 5. System library paths */
     g_ptr_array_add(paths, g_strdup("/usr/lib/systemd/user"));
     g_ptr_array_add(paths, g_strdup("/usr/local/lib/systemd/user"));
     g_ptr_array_add(paths, g_strdup("/usr/share/systemd/user"));

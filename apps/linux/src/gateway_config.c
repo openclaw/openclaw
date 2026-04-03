@@ -25,6 +25,15 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 
+/* E10: Helper to securely clear sensitive strings before freeing */
+static void secure_clear_free(gchar *s) {
+    if (s) {
+        volatile gchar *p = s;
+        while (*p) *p++ = '\0';
+    }
+    g_free(s);
+}
+
 static gchar* resolve_config_path(const GatewayConfigContext *ctx) {
     const gchar *override = g_getenv("OPENCLAW_CONFIG_PATH");
     if (override && override[0] != '\0') {
@@ -57,9 +66,9 @@ static gchar* resolve_config_path(const GatewayConfigContext *ctx) {
     }
     g_free(primary);
 
-    /* Legacy fallback candidates */
-    static const gchar *legacy_dirs[] = { ".clawdbot", ".moldbot", NULL };
-    static const gchar *legacy_names[] = { "openclaw.json", "clawdbot.json", "moldbot.json", NULL };
+    /* E7: Correct legacy moltbot fallback names */
+    static const gchar *legacy_dirs[] = { ".clawdbot", ".moltbot", NULL };
+    static const gchar *legacy_names[] = { "openclaw.json", "clawdbot.json", "moltbot.json", NULL };
 
     for (gint d = 0; legacy_dirs[d]; d++) {
         for (gint n = 0; legacy_names[n]; n++) {
@@ -73,6 +82,20 @@ static gchar* resolve_config_path(const GatewayConfigContext *ctx) {
 
     /* Default (may not exist yet) */
     return g_build_filename(home, ".openclaw", "openclaw.json", NULL);
+}
+
+/* E6: Validate port member is numeric */
+static gboolean is_valid_port_member(JsonObject *gateway_obj) {
+    if (!gateway_obj || !json_object_has_member(gateway_obj, "port")) {
+        return TRUE; /* Not present is OK - will use default */
+    }
+    JsonNode *port_node = json_object_get_member(gateway_obj, "port");
+    /* Accept int, uint, or int64; reject non-numeric */
+    GType node_type = json_node_get_value_type(port_node);
+    if (node_type != G_TYPE_INT64 && node_type != G_TYPE_INT && node_type != G_TYPE_UINT) {
+        return FALSE;
+    }
+    return TRUE;
 }
 
 static gint resolve_port(JsonObject *gateway_obj) {
@@ -283,9 +306,32 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
     }
 
     JsonObject *root_obj = json_node_get_object(root);
+
+    /* E1: Reject malformed-present gateway node (must be object if present) */
+    if (json_object_has_member(root_obj, "gateway")) {
+        JsonNode *gw_node = json_object_get_member(root_obj, "gateway");
+        if (!JSON_NODE_HOLDS_OBJECT(gw_node)) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_GATEWAY_NOT_OBJECT;
+            config->error = g_strdup("gateway exists but is not a JSON object");
+            return config;
+        }
+    }
+
     JsonObject *gateway_obj = NULL;
     if (json_object_has_member(root_obj, "gateway")) {
         gateway_obj = json_object_get_object_member(root_obj, "gateway");
+    }
+
+    /* E2: Reject malformed-present gateway.mode (must be string if present) */
+    if (gateway_obj && json_object_has_member(gateway_obj, "mode")) {
+        JsonNode *mode_node = json_object_get_member(gateway_obj, "mode");
+        if (!JSON_NODE_HOLDS_VALUE(mode_node) || json_node_get_value_type(mode_node) != G_TYPE_STRING) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_MODE_INVALID;
+            config->error = g_strdup("gateway.mode exists but is not a string");
+            return config;
+        }
     }
 
     /* Resolve mode */
@@ -306,18 +352,154 @@ GatewayConfig* gateway_config_load(const GatewayConfigContext *ctx) {
         return config;
     }
 
+    /* E6: Reject malformed-present port */
+    if (!is_valid_port_member(gateway_obj)) {
+        config->valid = FALSE;
+        config->error_code = GW_CFG_ERR_PORT_INVALID;
+        config->error = g_strdup("gateway.port exists but is not a valid integer");
+        return config;
+    }
+
     /* Resolve port */
     config->port = resolve_port(gateway_obj);
 
-    /* Resolve host (local mode always binds to loopback for MVP) */
+    /* L6: Resolve TLS enablement from gateway.tls or gateway.security.tls */
+    if (gateway_obj) {
+        if (json_object_has_member(gateway_obj, "tls")) {
+            JsonNode *tls_node = json_object_get_member(gateway_obj, "tls");
+            if (JSON_NODE_HOLDS_VALUE(tls_node)) {
+                GType tls_type = json_node_get_value_type(tls_node);
+                if (tls_type == G_TYPE_BOOLEAN) {
+                    config->tls_enabled = json_node_get_boolean(tls_node);
+                } else if (tls_type == G_TYPE_STRING) {
+                    const gchar *tls_str = json_node_get_string(tls_node);
+                    config->tls_enabled = (tls_str && g_strcmp0(tls_str, "true") == 0);
+                }
+            } else if (JSON_NODE_HOLDS_OBJECT(tls_node)) {
+                /* gateway.tls = { enabled: true } */
+                JsonObject *tls_obj = json_node_get_object(tls_node);
+                if (json_object_has_member(tls_obj, "enabled")) {
+                    JsonNode *enabled_node = json_object_get_member(tls_obj, "enabled");
+                    if (JSON_NODE_HOLDS_VALUE(enabled_node)) {
+                        GType enabled_type = json_node_get_value_type(enabled_node);
+                        if (enabled_type == G_TYPE_BOOLEAN) {
+                            config->tls_enabled = json_node_get_boolean(enabled_node);
+                        } else if (enabled_type == G_TYPE_STRING) {
+                            const gchar *enabled_str = json_node_get_string(enabled_node);
+                            config->tls_enabled = (enabled_str && g_strcmp0(enabled_str, "true") == 0);
+                        }
+                    }
+                }
+            }
+        }
+        /* Also check gateway.security.tls */
+        if (!config->tls_enabled && json_object_has_member(gateway_obj, "security")) {
+            JsonNode *sec_node = json_object_get_member(gateway_obj, "security");
+            if (JSON_NODE_HOLDS_OBJECT(sec_node)) {
+                JsonObject *sec_obj = json_node_get_object(sec_node);
+                if (json_object_has_member(sec_obj, "tls")) {
+                    JsonNode *tls_node = json_object_get_member(sec_obj, "tls");
+                    if (JSON_NODE_HOLDS_VALUE(tls_node)) {
+                        GType tls_type = json_node_get_value_type(tls_node);
+                        if (tls_type == G_TYPE_BOOLEAN) {
+                            config->tls_enabled = json_node_get_boolean(tls_node);
+                        } else if (tls_type == G_TYPE_STRING) {
+                            const gchar *tls_str = json_node_get_string(tls_node);
+                            config->tls_enabled = (tls_str && g_strcmp0(tls_str, "true") == 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* L6: Resolve host from config, not always loopback */
     g_free(config->host);
-    config->host = g_strdup(GATEWAY_DEFAULT_HOST);
+    config->host = NULL;
+    if (gateway_obj && json_object_has_member(gateway_obj, "host")) {
+        JsonNode *host_node = json_object_get_member(gateway_obj, "host");
+        if (JSON_NODE_HOLDS_VALUE(host_node) && json_node_get_value_type(host_node) == G_TYPE_STRING) {
+            const gchar *host_str = json_node_get_string(host_node);
+            if (host_str && host_str[0] != '\0') {
+                config->host = g_strdup(host_str);
+            }
+        }
+    }
+    /* Fallback: check gateway.bind as alternative host source */
+    if (!config->host && gateway_obj && json_object_has_member(gateway_obj, "bind")) {
+        JsonNode *bind_node = json_object_get_member(gateway_obj, "bind");
+        if (JSON_NODE_HOLDS_VALUE(bind_node) && json_node_get_value_type(bind_node) == G_TYPE_STRING) {
+            const gchar *bind_str = json_node_get_string(bind_node);
+            /* Reject wildcards and unspecified addresses - they are not valid client endpoints */
+            gboolean is_wildcard = (g_strcmp0(bind_str, "0.0.0.0") == 0 ||
+                                    g_strcmp0(bind_str, "::") == 0 ||
+                                    g_strcmp0(bind_str, "::0") == 0);
+            if (bind_str && bind_str[0] != '\0' && !is_wildcard) {
+                config->host = g_strdup(bind_str);
+            }
+        }
+    }
+    /* Final fallback to default loopback */
+    if (!config->host) {
+        config->host = g_strdup(GATEWAY_DEFAULT_HOST);
+    }
+
+    /* E3: Reject malformed-present gateway.auth (must be object if present) */
+    if (gateway_obj && json_object_has_member(gateway_obj, "auth")) {
+        JsonNode *auth_node = json_object_get_member(gateway_obj, "auth");
+        if (!JSON_NODE_HOLDS_OBJECT(auth_node)) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_AUTH_NOT_OBJECT;
+            config->error = g_strdup("gateway.auth exists but is not a JSON object");
+            return config;
+        }
+    }
 
     /* Resolve auth from gateway.auth.* + env overrides */
     JsonObject *auth_obj = NULL;
     if (gateway_obj && json_object_has_member(gateway_obj, "auth")) {
         auth_obj = json_object_get_object_member(gateway_obj, "auth");
     }
+    /* E4: Reject malformed-present gateway.auth.mode (must be string if present) */
+    if (auth_obj && json_object_has_member(auth_obj, "mode")) {
+        JsonNode *mode_node = json_object_get_member(auth_obj, "mode");
+        if (!JSON_NODE_HOLDS_VALUE(mode_node) || json_node_get_value_type(mode_node) != G_TYPE_STRING) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_AUTH_MODE_INVALID;
+            config->error = g_strdup("gateway.auth.mode exists but is not a string");
+            return config;
+        }
+    }
+
+    /* E5: Reject ambiguous auth when both token and password present with no explicit mode */
+    if (auth_obj) {
+        gboolean has_token = FALSE;
+        gboolean has_password = FALSE;
+        gboolean has_explicit_mode = json_object_has_member(auth_obj, "mode") &&
+            JSON_NODE_HOLDS_VALUE(json_object_get_member(auth_obj, "mode")) &&
+            json_node_get_value_type(json_object_get_member(auth_obj, "mode")) == G_TYPE_STRING;
+
+        if (json_object_has_member(auth_obj, "token")) {
+            JsonNode *tok_node = json_object_get_member(auth_obj, "token");
+            if (JSON_NODE_HOLDS_OBJECT(tok_node) || json_node_get_value_type(tok_node) == G_TYPE_STRING) {
+                has_token = TRUE;
+            }
+        }
+        if (json_object_has_member(auth_obj, "password")) {
+            JsonNode *pw_node = json_object_get_member(auth_obj, "password");
+            if (JSON_NODE_HOLDS_OBJECT(pw_node) || json_node_get_value_type(pw_node) == G_TYPE_STRING) {
+                has_password = TRUE;
+            }
+        }
+
+        if (has_token && has_password && !has_explicit_mode) {
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_AUTH_AMBIGUOUS;
+            config->error = g_strdup("Both token and password are configured but auth mode is not explicitly set. Set gateway.auth.mode to 'token' or 'password'");
+            return config;
+        }
+    }
+
     resolve_auth(auth_obj, config);
     if (!validate_auth(config)) return config;
 
@@ -346,8 +528,9 @@ void gateway_config_free(GatewayConfig *config) {
     g_free(config->mode);
     g_free(config->host);
     g_free(config->auth_mode);
-    g_free(config->token);
-    g_free(config->password);
+    /* E10: Zero sensitive credentials before free */
+    secure_clear_free(config->token);
+    secure_clear_free(config->password);
     g_free(config->control_ui_base_path);
     g_free(config->config_path);
     g_free(config->error);
@@ -361,12 +544,14 @@ gboolean gateway_config_is_local(const GatewayConfig *config) {
 
 gchar* gateway_config_http_url(const GatewayConfig *config) {
     if (!config) return NULL;
-    return g_strdup_printf("http://%s:%d", config->host, config->port);
+    const gchar *scheme = config->tls_enabled ? "https" : "http";
+    return g_strdup_printf("%s://%s:%d", scheme, config->host, config->port);
 }
 
 gchar* gateway_config_ws_url(const GatewayConfig *config) {
     if (!config) return NULL;
-    return g_strdup_printf("ws://%s:%d", config->host, config->port);
+    const gchar *scheme = config->tls_enabled ? "wss" : "ws";
+    return g_strdup_printf("%s://%s:%d", scheme, config->host, config->port);
 }
 
 gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *b) {
@@ -385,6 +570,9 @@ gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *
     /* host + port */
     if (g_strcmp0(a->host, b->host) != 0) return FALSE;
     if (a->port != b->port) return FALSE;
+
+    /* tls_enabled - TLS changes must trigger config reload */
+    if (a->tls_enabled != b->tls_enabled) return FALSE;
 
     /* auth_mode */
     if (g_strcmp0(a->auth_mode, b->auth_mode) != 0) return FALSE;
@@ -445,9 +633,10 @@ gchar* gateway_config_dashboard_url(const GatewayConfig *config) {
         }
     }
 
-    /* Build base URL */
-    g_autofree gchar *base = g_strdup_printf("http://%s:%d%s",
-        config->host, config->port,
+    /* Build base URL with correct scheme based on TLS */
+    const gchar *scheme = config->tls_enabled ? "https" : "http";
+    g_autofree gchar *base = g_strdup_printf("%s://%s:%d%s",
+        scheme, config->host, config->port,
         g_strcmp0(normalized, "/") == 0 ? "/" : normalized);
 
     /* Append token fragment if available and not a SecretRef */

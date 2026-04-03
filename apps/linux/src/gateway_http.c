@@ -17,10 +17,17 @@
 
 static SoupSession *http_session = NULL;
 
+/* C1: Finite timeout for health probes (seconds) */
+#define HEALTH_PROBE_TIMEOUT_S 10
+
 void gateway_http_init(void) {
-    if (!http_session) {
-        http_session = soup_session_new();
-    }
+    if (http_session) return;
+    http_session = soup_session_new();
+    /* C1: Set finite timeout for health probes to prevent indefinite hangs */
+    g_object_set(G_OBJECT(http_session),
+                 "timeout", HEALTH_PROBE_TIMEOUT_S,
+                 "idle-timeout", HEALTH_PROBE_TIMEOUT_S,
+                 NULL);
 }
 
 void gateway_http_shutdown(void) {
@@ -87,11 +94,11 @@ static void on_network_event(SoupMessage *msg, GSocketClientEvent event,
     }
 }
 
-static void on_health_response(GObject *source, GAsyncResult *res, gpointer user_data) {
+static void on_health_response(GObject *source_object, GAsyncResult *res, gpointer user_data) {
     HealthCheckContext *ctx = (HealthCheckContext *)user_data;
     g_autoptr(GError) error = NULL;
 
-    GBytes *body = soup_session_send_and_read_finish(SOUP_SESSION(source), res, &error);
+    GBytes *body = soup_session_send_and_read_finish(SOUP_SESSION(source_object), res, &error);
 
     GatewayHealthResult result = {0};
 

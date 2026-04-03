@@ -329,6 +329,9 @@ void gateway_client_refresh(void) {
 
     if (equivalent) {
         if (new_config->valid) {
+            /* F1: Preserve/update metadata fields that matter operationally */
+            g_free(current_config->config_path);
+            current_config->config_path = g_strdup(new_config->config_path);
             /* Unchanged valid config — lightweight health refresh */
             gateway_config_free(new_config);
             do_health_check();

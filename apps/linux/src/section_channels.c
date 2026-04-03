@@ -153,7 +153,8 @@ static void on_config_dialog_response(GObject *source, GAsyncResult *result, gpo
     }
     
     /* Get the edited channel subtree */
-    JsonObject *edited_channel_obj = json_node_get_object(json_node_copy(parsed_root));
+    /* I1: Properly manage JsonNode ownership - copy root for later transfer */
+    JsonNode *edited_channel_node = json_node_copy(parsed_root);
     g_object_unref(parser);
 
     if (channels_status_label)
@@ -211,18 +212,17 @@ static void on_config_dialog_response(GObject *source, GAsyncResult *result, gpo
     /* Create channels object if it doesn't exist or isn't an object */
     if (!channels_obj) {
         channels_obj = json_object_new();
-        json_object_set_member(root_obj, "channels", json_node_new(JSON_NODE_OBJECT));
-        json_node_set_object(json_object_get_member(root_obj, "channels"), channels_obj);
+        JsonNode *channels_node = json_node_new(JSON_NODE_OBJECT);
+        json_node_set_object(channels_node, channels_obj);
+        json_object_set_member(root_obj, "channels", channels_node);
     }
     
     /* Replace the specific channel with edited subtree */
     if (json_object_has_member(channels_obj, session->channel_id)) {
         json_object_remove_member(channels_obj, session->channel_id);
     }
-    json_object_set_member(channels_obj, session->channel_id, 
-                           json_node_new(JSON_NODE_OBJECT));
-    json_node_set_object(json_object_get_member(channels_obj, session->channel_id),
-                        edited_channel_obj);
+    /* I1: Transfer ownership of edited_channel_node to the channels object */
+    json_object_set_member(channels_obj, session->channel_id, edited_channel_node);
 
     /* Serialize the FULL updated config document */
     g_autofree gchar *full_raw_json = json_to_string(full_config_copy, FALSE);

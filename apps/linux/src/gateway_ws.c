@@ -95,6 +95,15 @@ static void ws_set_state(GatewayWsState new_state) {
     ws_publish_status();
 }
 
+static void secure_clear_free(gchar *str) {
+    if (!str) return;
+    volatile gchar *p = str;
+    while (*p) {
+        *p++ = '\0';
+    }
+    g_free(str);
+}
+
 static void ws_set_error(const gchar *error) {
     if (!ws_client) return;
     g_free(ws_client->last_error);
@@ -168,6 +177,17 @@ static void ws_schedule_reconnect(void) {
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws scheduling reconnect in %u ms", delay_ms);
     if (ws_client->reconnect_timer_id) g_source_remove(ws_client->reconnect_timer_id);
     ws_client->reconnect_timer_id = g_timeout_add(delay_ms, ws_on_reconnect_timer, NULL);
+}
+
+/* B3: Clamp tick interval to sane range */
+#define TICK_INTERVAL_MIN_MS   1000.0
+#define TICK_INTERVAL_MAX_MS   300000.0
+
+static gdouble clamp_tick_interval(gdouble tick_ms) {
+    if (tick_ms <= 0) return DEFAULT_TICK_INTERVAL_MS;
+    if (tick_ms < TICK_INTERVAL_MIN_MS) return TICK_INTERVAL_MIN_MS;
+    if (tick_ms > TICK_INTERVAL_MAX_MS) return TICK_INTERVAL_MAX_MS;
+    return tick_ms;
 }
 
 static void ws_start_keepalive(void) {
@@ -281,10 +301,11 @@ static void ws_handle_frame(const gchar *text) {
             if (frame->error) {
                 OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws auth rejected: code=%s msg=%s",
                           frame->code ? frame->code : "(none)", frame->error);
-                ws_client->reconnect_paused_for_auth = TRUE;
+                /* B2: Set error and status but don't pause reconnect permanently */
                 ws_set_error(frame->error);
                 ws_set_state(GATEWAY_WS_AUTH_FAILED);
                 ws_cleanup_connection();
+                /* Note: reconnect_paused_for_auth remains FALSE so refresh can recover */
             } else {
                 /* connect-ok */
                 gchar *auth_src = NULL;
@@ -298,7 +319,8 @@ static void ws_handle_frame(const gchar *text) {
                 } else {
                     g_free(ws_client->auth_source);
                     ws_client->auth_source = auth_src;
-                    ws_client->tick_interval_ms = tick_ms;
+                    /* B3: Clamp tick interval before use */
+                    ws_client->tick_interval_ms = clamp_tick_interval(tick_ms);
                     ws_client->rpc_ok = TRUE;
                     ws_client->backoff_ms = BACKOFF_INITIAL_MS;
                     ws_client->reconnect_paused_for_auth = FALSE;
@@ -336,8 +358,12 @@ static void ws_handle_frame(const gchar *text) {
 
 static void ws_handle_message(SoupWebsocketConnection *conn, SoupWebsocketDataType type,
                               GBytes *message, gpointer user_data) {
-    (void)conn;
     (void)user_data;
+    
+    /* B1: Ignore stale socket callbacks */
+    if (!ws_client) return;
+    if (conn != ws_client->ws_conn) return;
+    
     if (type != SOUP_WEBSOCKET_DATA_TEXT) return;
 
     gsize size = 0;
@@ -351,7 +377,10 @@ static void ws_handle_message(SoupWebsocketConnection *conn, SoupWebsocketDataTy
 static void ws_on_closed(SoupWebsocketConnection *conn, gpointer user_data) {
     (void)conn;
     (void)user_data;
+    
+    /* B1: Ignore stale socket callbacks */
     if (!ws_client) return;
+    if (conn != ws_client->ws_conn) return;
 
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws connection closed");
     ws_client->rpc_ok = FALSE;
@@ -367,9 +396,12 @@ static void ws_on_closed(SoupWebsocketConnection *conn, gpointer user_data) {
 }
 
 static void ws_on_error(SoupWebsocketConnection *conn, GError *error, gpointer user_data) {
-    (void)conn;
     (void)user_data;
+    
+    /* B1: Ignore stale socket callbacks */
     if (!ws_client) return;
+    if (conn != ws_client->ws_conn) return;
+    
     OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws error: %s", error ? error->message : "unknown");
     ws_set_error(error ? error->message : "Unknown WebSocket error");
 }
@@ -470,8 +502,8 @@ void gateway_ws_connect(const gchar *ws_url, const gchar *auth_mode,
 
     g_free(ws_client->url);
     g_free(ws_client->auth_mode);
-    g_free(ws_client->token);
-    g_free(ws_client->password);
+    secure_clear_free(ws_client->token);
+    secure_clear_free(ws_client->password);
     ws_client->url = g_strdup(ws_url);
     ws_client->auth_mode = g_strdup(auth_mode);
     ws_client->token = g_strdup(token);
@@ -503,8 +535,8 @@ void gateway_ws_shutdown(void) {
     g_clear_object(&ws_client->session);
     g_free(ws_client->url);
     g_free(ws_client->auth_mode);
-    g_free(ws_client->token);
-    g_free(ws_client->password);
+    secure_clear_free(ws_client->token);
+    secure_clear_free(ws_client->password);
     g_free(ws_client->auth_source);
     g_free(ws_client->last_error);
     g_free(ws_client);

@@ -576,7 +576,20 @@ static void test_protocol_parse_event(void) {
 }
 
 static void test_protocol_parse_response_ok(void) {
-    const gchar *json = "{\"type\":\"res\",\"id\":\"req-1\",\"payload\":{\"auth\":{\"source\":\"token\"},\"policy\":{\"tickIntervalMs\":25000}}}";
+    /* Valid hello-ok response per HelloOkSchema */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"auth\":{\"source\":\"token\"},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
     GatewayFrame *frame = gateway_protocol_parse_frame(json);
     g_assert_nonnull(frame);
     g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
@@ -595,8 +608,19 @@ static void test_protocol_parse_response_ok(void) {
 }
 
 static void test_protocol_parse_response_ok_no_auth(void) {
-    /* Valid hello-ok but missing auth block entirely */
-    const gchar *json = "{\"type\":\"res\",\"id\":\"req-1\",\"payload\":{\"policy\":{\"tickIntervalMs\":25000}}}";
+    /* Valid hello-ok but missing auth block entirely - auth is optional per schema */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
     GatewayFrame *frame = gateway_protocol_parse_frame(json);
     g_assert_nonnull(frame);
     g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
@@ -613,8 +637,19 @@ static void test_protocol_parse_response_ok_no_auth(void) {
 }
 
 static void test_protocol_parse_response_malformed_policy(void) {
-    /* Valid JSON, but policy is not an object */
-    const gchar *json = "{\"type\":\"res\",\"id\":\"req-1\",\"payload\":{\"policy\":\"invalid\"}}";
+    /* Valid JSON frame, but policy is not an object - missing required schema fields too */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":\"invalid\""
+        "}"
+        "}";
     GatewayFrame *frame = gateway_protocol_parse_frame(json);
     g_assert_nonnull(frame);
     
@@ -625,8 +660,20 @@ static void test_protocol_parse_response_malformed_policy(void) {
 }
 
 static void test_protocol_parse_response_malformed_auth(void) {
-    /* Valid JSON, but auth is not an object */
-    const gchar *json = "{\"type\":\"res\",\"id\":\"req-1\",\"payload\":{\"auth\":\"invalid\",\"policy\":{\"tickIntervalMs\":25000}}}";
+    /* Valid JSON frame, but auth is not an object */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"auth\":\"invalid\","
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
     GatewayFrame *frame = gateway_protocol_parse_frame(json);
     g_assert_nonnull(frame);
     
@@ -822,6 +869,784 @@ static void test_protocol_build_connect_version_platform_always_present(void) {
     g_free(json);
 }
 
+/* ── Regression tests for L6: TLS and host correctness ── */
+
+static void test_config_tls_disabled_uses_http_ws(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"tls\":false}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_false(config->tls_enabled);
+    
+    g_autofree gchar *http_url = gateway_config_http_url(config);
+    g_autofree gchar *ws_url = gateway_config_ws_url(config);
+    g_assert_cmpstr(http_url, ==, "http://127.0.0.1:18789");
+    g_assert_cmpstr(ws_url, ==, "ws://127.0.0.1:18789");
+    
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_tls_enabled_uses_https_wss(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"tls\":true}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_true(config->tls_enabled);
+    
+    g_autofree gchar *http_url = gateway_config_http_url(config);
+    g_autofree gchar *ws_url = gateway_config_ws_url(config);
+    g_autofree gchar *dash_url = gateway_config_dashboard_url(config);
+    g_assert_cmpstr(http_url, ==, "https://127.0.0.1:18789");
+    g_assert_cmpstr(ws_url, ==, "wss://127.0.0.1:18789");
+    g_assert_cmpstr(dash_url, ==, "https://127.0.0.1:18789/#token=tok");
+    
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_host_from_config(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"host\":\"192.168.1.100\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_cmpstr(config->host, ==, "192.168.1.100");
+    
+    g_autofree gchar *http_url = gateway_config_http_url(config);
+    g_assert_cmpstr(http_url, ==, "http://192.168.1.100:18789");
+    
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_fallback_ignores_0_0_0_0(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    /* 0.0.0.0 should be ignored and fall back to loopback */
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"0.0.0.0\"}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    /* 0.0.0.0 should fall back to default loopback */
+    g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_tls_object_form(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    /* gateway.tls = { enabled: true } */
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"tls\":{\"enabled\":true}}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_true(config->tls_enabled);
+    
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_tls_from_security_block(void) {
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    /* gateway.security.tls = true */
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"security\":{\"tls\":true}}}", -1, NULL);
+
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    g_assert_true(config->tls_enabled);
+    
+    gateway_config_free(config);
+
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+/* ── Regression tests for hello-ok validation (BLOCKER B) ── */
+
+static void test_protocol_parse_hello_ok_valid(void) {
+    /* Valid hello-ok response per HelloOkSchema - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":30000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    gchar *auth_source = NULL;
+    gdouble tick_interval_ms = 0;
+    g_assert_true(gateway_protocol_parse_hello_ok(frame, &auth_source, &tick_interval_ms));
+    g_assert_cmpfloat(tick_interval_ms, ==, 30000.0);
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_missing_type(void) {
+    /* hello-ok without type field should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":30000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_wrong_type(void) {
+    /* hello-ok with wrong type value should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"goodbye\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":30000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_zero_tick_interval(void) {
+    /* hello-ok with tickIntervalMs=0 should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":0}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_negative_tick_interval(void) {
+    /* hello-ok with negative tickIntervalMs should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":-1000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_missing_tick_interval(void) {
+    /* hello-ok without tickIntervalMs should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_missing_server_version(void) {
+    /* hello-ok missing server.version should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_missing_server_conn_id(void) {
+    /* hello-ok missing server.connId should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_features_methods_not_array(void) {
+    /* hello-ok with features.methods not an array should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":\"bad\",\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_features_events_not_array(void) {
+    /* hello-ok with features.events not an array should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":{}},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_tick_interval_wrong_type(void) {
+    /* hello-ok with tickIntervalMs as string should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":\"30000\"}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_max_payload_wrong_type(void) {
+    /* hello-ok with maxPayload as string should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":\"1000000\",\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_max_buffered_wrong_type(void) {
+    /* hello-ok with maxBufferedBytes as string should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":\"5000000\",\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_protocol_string_rejected(void) {
+    /* hello-ok with protocol as string should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":\"1\","
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_protocol_double_rejected(void) {
+    /* hello-ok with protocol as double should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1.5,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_max_payload_double_rejected(void) {
+    /* hello-ok with maxPayload as double should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000.5,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_max_buffered_double_rejected(void) {
+    /* hello-ok with maxBufferedBytes as double should fail - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000.5,\"tickIntervalMs\":25000}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    g_assert_false(gateway_protocol_parse_hello_ok(frame, NULL, NULL));
+    
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_hello_ok_tick_interval_double_accepted(void) {
+    /* hello-ok with tickIntervalMs as double should succeed and preserve value - wrapped in res frame */
+    const gchar *json = "{"
+        "\"type\":\"res\","
+        "\"id\":\"req-1\","
+        "\"payload\":{"
+            "\"type\":\"hello-ok\","
+            "\"protocol\":1,"
+            "\"server\":{\"version\":\"1.0.0\",\"connId\":\"abc123\"},"
+            "\"features\":{\"methods\":[],\"events\":[]},"
+            "\"snapshot\":{},"
+            "\"policy\":{\"maxPayload\":1000000,\"maxBufferedBytes\":5000000,\"tickIntervalMs\":25000.5}"
+        "}"
+        "}";
+    
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->error);
+
+    gdouble tick_interval_ms = 0;
+    g_assert_true(gateway_protocol_parse_hello_ok(frame, NULL, &tick_interval_ms));
+    g_assert_cmpfloat(tick_interval_ms, ==, 25000.5);
+    
+    gateway_frame_free(frame);
+}
+
+/* ── Regression tests for URL route fragment preservation ── */
+
+/* Helper that mirrors dashboard_url_with_route logic from section_sessions.c */
+static gchar* test_dashboard_url_with_route(const gchar *base_url, const gchar *route) {
+    if (!base_url || !route) return NULL;
+    
+    const gchar *fragment = strchr(base_url, '#');
+    if (fragment) {
+        gsize base_len = fragment - base_url;
+        gboolean needs_slash = (base_len == 0 || base_url[base_len - 1] != '/');
+        return g_strdup_printf("%.*s%s%s%s",
+                              (int)base_len, base_url,
+                              needs_slash ? "/" : "",
+                              route, fragment);
+    } else {
+        gboolean needs_slash = base_url[strlen(base_url) - 1] != '/';
+        return g_strdup_printf("%s%s%s",
+                              base_url,
+                              needs_slash ? "/" : "",
+                              route);
+    }
+}
+
+static void test_dashboard_url_with_route_preserves_fragment(void) {
+    /* Base URL with token fragment */
+    g_autofree gchar *url1 = test_dashboard_url_with_route(
+        "http://127.0.0.1:18789/#token=abc123", "chat/session-1");
+    g_assert_cmpstr(url1, ==, "http://127.0.0.1:18789/chat/session-1#token=abc123");
+    
+    /* Base URL with path and fragment */
+    g_autofree gchar *url2 = test_dashboard_url_with_route(
+        "http://127.0.0.1:18789/ui/#token=xyz789", "chat/session-2");
+    g_assert_cmpstr(url2, ==, "http://127.0.0.1:18789/ui/chat/session-2#token=xyz789");
+}
+
+static void test_dashboard_url_with_route_without_fragment(void) {
+    /* Base URL with trailing slash, no fragment */
+    g_autofree gchar *url1 = test_dashboard_url_with_route(
+        "http://127.0.0.1:18789/", "chat/session-1");
+    g_assert_cmpstr(url1, ==, "http://127.0.0.1:18789/chat/session-1");
+    
+    /* Base URL without trailing slash, no fragment */
+    g_autofree gchar *url2 = test_dashboard_url_with_route(
+        "http://127.0.0.1:18789", "chat/session-1");
+    g_assert_cmpstr(url2, ==, "http://127.0.0.1:18789/chat/session-1");
+}
+
+/* ── Regression tests for config equivalence with TLS ── */
+
+static void test_config_equivalent_tls_differs(void) {
+    /* Two configs identical except TLS setting should NOT be equivalent */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path1 = g_build_filename(tmpdir, "config1.json", NULL);
+    g_autofree gchar *config_path2 = g_build_filename(tmpdir, "config2.json", NULL);
+    
+    g_file_set_contents(config_path1,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"host\":\"127.0.0.1\",\"port\":18789,\"tls\":false}}", -1, NULL);
+    g_file_set_contents(config_path2,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"host\":\"127.0.0.1\",\"port\":18789,\"tls\":true}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path1, TRUE);
+    GatewayConfig *cfg1 = gateway_config_load(NULL);
+    g_assert_nonnull(cfg1);
+    g_assert_true(cfg1->valid);
+    g_assert_false(cfg1->tls_enabled);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path2, TRUE);
+    GatewayConfig *cfg2 = gateway_config_load(NULL);
+    g_assert_nonnull(cfg2);
+    g_assert_true(cfg2->valid);
+    g_assert_true(cfg2->tls_enabled);
+    
+    /* TLS differs, should NOT be equivalent */
+    g_assert_false(gateway_config_equivalent(cfg1, cfg2));
+    
+    gateway_config_free(cfg1);
+    gateway_config_free(cfg2);
+    g_unlink(config_path1);
+    g_unlink(config_path2);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_equivalent_tls_same(void) {
+    /* Two identical configs including TLS should be equivalent */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path1 = g_build_filename(tmpdir, "config1.json", NULL);
+    g_autofree gchar *config_path2 = g_build_filename(tmpdir, "config2.json", NULL);
+    
+    g_file_set_contents(config_path1,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"host\":\"127.0.0.1\",\"port\":18789,\"tls\":true}}", -1, NULL);
+    g_file_set_contents(config_path2,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"host\":\"127.0.0.1\",\"port\":18789,\"tls\":true}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path1, TRUE);
+    GatewayConfig *cfg1 = gateway_config_load(NULL);
+    g_assert_nonnull(cfg1);
+    g_assert_true(cfg1->valid);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path2, TRUE);
+    GatewayConfig *cfg2 = gateway_config_load(NULL);
+    g_assert_nonnull(cfg2);
+    g_assert_true(cfg2->valid);
+    
+    /* Identical configs should be equivalent */
+    g_assert_true(gateway_config_equivalent(cfg1, cfg2));
+    
+    gateway_config_free(cfg1);
+    gateway_config_free(cfg2);
+    g_unlink(config_path1);
+    g_unlink(config_path2);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+/* ── Regression tests for gateway.bind safety ── */
+
+static void test_config_bind_ipv4_literal_used(void) {
+    /* A specific IPv4 bind address should be usable as host fallback */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"192.168.1.50\"}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+    
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    /* bind = specific IPv4 should be used as host */
+    g_assert_cmpstr(config->host, ==, "192.168.1.50");
+    
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
+static void test_config_bind_ipv6_unspecified_rejected(void) {
+    /* IPv6 unspecified address :: should be rejected and fall back to loopback */
+    g_autofree gchar *tmpdir = g_dir_make_tmp("openclaw-test-XXXXXX", NULL);
+    g_assert_nonnull(tmpdir);
+    g_autofree gchar *config_path = g_build_filename(tmpdir, "openclaw.json", NULL);
+    g_file_set_contents(config_path,
+        "{\"gateway\":{\"auth\":{\"token\":\"tok\"},\"bind\":\"::\"}}", -1, NULL);
+    
+    clear_env();
+    g_setenv("OPENCLAW_CONFIG_PATH", config_path, TRUE);
+    
+    GatewayConfig *config = gateway_config_load(NULL);
+    g_assert_nonnull(config);
+    g_assert_true(config->valid);
+    /* :: should fall back to default loopback */
+    g_assert_cmpstr(config->host, ==, "127.0.0.1");
+    
+    gateway_config_free(config);
+    g_unlink(config_path);
+    g_rmdir(tmpdir);
+    clear_env();
+}
+
 int main(int argc, char **argv) {
     g_test_init(&argc, &argv, NULL);
 
@@ -868,6 +1693,50 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/protocol/build_connect_password_mode", test_protocol_build_connect_password_mode);
     g_test_add_func("/gateway/protocol/build_connect_none_mode", test_protocol_build_connect_none_mode);
     g_test_add_func("/gateway/protocol/build_connect_version_platform_always_present", test_protocol_build_connect_version_platform_always_present);
+
+    /* hello-ok validation tests (BLOCKER B) */
+    g_test_add_func("/gateway/protocol/parse_hello_ok_valid", test_protocol_parse_hello_ok_valid);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_missing_type", test_protocol_parse_hello_ok_missing_type);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_wrong_type", test_protocol_parse_hello_ok_wrong_type);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_zero_tick_interval", test_protocol_parse_hello_ok_zero_tick_interval);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_negative_tick_interval", test_protocol_parse_hello_ok_negative_tick_interval);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_missing_tick_interval", test_protocol_parse_hello_ok_missing_tick_interval);
+
+    /* hello-ok strict type validation tests (BLOCKER 2) */
+    g_test_add_func("/gateway/protocol/parse_hello_ok_missing_server_version", test_protocol_parse_hello_ok_missing_server_version);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_missing_server_conn_id", test_protocol_parse_hello_ok_missing_server_conn_id);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_features_methods_not_array", test_protocol_parse_hello_ok_features_methods_not_array);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_features_events_not_array", test_protocol_parse_hello_ok_features_events_not_array);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_tick_interval_wrong_type", test_protocol_parse_hello_ok_tick_interval_wrong_type);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_max_payload_wrong_type", test_protocol_parse_hello_ok_max_payload_wrong_type);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_max_buffered_wrong_type", test_protocol_parse_hello_ok_max_buffered_wrong_type);
+
+    /* hello-ok integer-only validation tests */
+    g_test_add_func("/gateway/protocol/parse_hello_ok_protocol_string_rejected", test_protocol_parse_hello_ok_protocol_string_rejected);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_protocol_double_rejected", test_protocol_parse_hello_ok_protocol_double_rejected);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_max_payload_double_rejected", test_protocol_parse_hello_ok_max_payload_double_rejected);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_max_buffered_double_rejected", test_protocol_parse_hello_ok_max_buffered_double_rejected);
+    g_test_add_func("/gateway/protocol/parse_hello_ok_tick_interval_double_accepted", test_protocol_parse_hello_ok_tick_interval_double_accepted);
+
+    /* L6: TLS and host correctness regression tests */
+    g_test_add_func("/gateway/config/tls_disabled_uses_http_ws", test_config_tls_disabled_uses_http_ws);
+    g_test_add_func("/gateway/config/tls_enabled_uses_https_wss", test_config_tls_enabled_uses_https_wss);
+    g_test_add_func("/gateway/config/host_from_config", test_config_host_from_config);
+    g_test_add_func("/gateway/config/bind_fallback_ignores_0_0_0_0", test_config_bind_fallback_ignores_0_0_0_0);
+    g_test_add_func("/gateway/config/tls_object_form", test_config_tls_object_form);
+    g_test_add_func("/gateway/config/tls_from_security_block", test_config_tls_from_security_block);
+
+    /* URL route fragment preservation tests */
+    g_test_add_func("/gateway/url_route/preserves_fragment", test_dashboard_url_with_route_preserves_fragment);
+    g_test_add_func("/gateway/url_route/without_fragment", test_dashboard_url_with_route_without_fragment);
+
+    /* Config equivalence TLS tests */
+    g_test_add_func("/gateway/config/equiv_tls_differs", test_config_equivalent_tls_differs);
+    g_test_add_func("/gateway/config/equiv_tls_same", test_config_equivalent_tls_same);
+
+    /* gateway.bind safety tests */
+    g_test_add_func("/gateway/config/bind_ipv4_literal_used", test_config_bind_ipv4_literal_used);
+    g_test_add_func("/gateway/config/bind_ipv6_unspecified_rejected", test_config_bind_ipv6_unspecified_rejected);
 
     return g_test_run();
 }

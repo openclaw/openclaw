@@ -230,47 +230,70 @@ void tray_init(void) {
     g_subprocess_wait_async(helper_process, NULL, on_helper_exited, NULL);
 }
 
-static void send_to_helper(const gchar *cmd) {
-    if (!helper_stdin || !helper_process) {
-        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "send_to_helper skip stdin=%p process=%p",
-                  (void *)helper_stdin, (void *)helper_process);
-        return;
-    }
+static gboolean send_line_to_helper(const gchar *line, const gchar *log_line) {
+    if (!helper_stdin || !line) return FALSE;
+
     g_autoptr(GError) write_err = NULL;
     g_autoptr(GError) flush_err = NULL;
     gsize bytes_written = 0;
-    gboolean write_ok = g_output_stream_write_all(helper_stdin, cmd, strlen(cmd), &bytes_written, NULL, &write_err);
+    gboolean write_ok = g_output_stream_write_all(helper_stdin, line, strlen(line), &bytes_written, NULL, &write_err);
     gboolean flush_ok = g_output_stream_flush(helper_stdin, NULL, &flush_err);
     if (!write_ok || !flush_ok) {
-        OC_LOG_WARN(OPENCLAW_LOG_CAT_TRAY, "send_to_helper error write_ok=%d flush_ok=%d write_err=%s flush_err=%s stdin=%p",
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_TRAY, "send_line_to_helper error write_ok=%d flush_ok=%d write_err=%s flush_err=%s stdin=%p",
                   write_ok, flush_ok,
                   write_err ? write_err->message : "(none)",
                   flush_err ? flush_err->message : "(none)",
                   (void *)helper_stdin);
     } else {
-        OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "send_to_helper ok bytes=%zu stdin=%p cmd='%.80s'",
-                  bytes_written, (void *)helper_stdin, cmd);
+        const gchar *log_str = log_line ? log_line : line;
+        OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "send_line_to_helper ok bytes=%zu stdin=%p line='%s'",
+                  bytes_written, (void *)helper_stdin, log_str);
     }
+    return TRUE;
 }
 
-void tray_update_from_state(AppState state) {
-    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state entry state=%d helper_stdin=%p helper_process=%p",
-              state, (void *)helper_stdin, (void *)helper_process);
+static gchar* redact_dashboard_line_for_log(const gchar *line) {
+    if (!line) return NULL;
+    
+    /* Look for # fragment in DASHBOARD_URL line */
+    const gchar *hash = strchr(line, '#');
+    if (!hash) return NULL;  /* No fragment to redact - use original line */
+    
+    /* Build redacted version safely with g_strdup_printf */
+    return g_strdup_printf("%.*s#<redacted>\n", (int)(hash - line), line);
+}
 
-    if (!helper_stdin) {
-        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state skip (no stdin)");
-        return;
-    }
+void tray_update_from_state(const AppState state) {
+    if (!helper_stdin) return;
     
-    const char *status_str = state_get_current_string();
-    g_autofree gchar *cmd = g_strdup_printf("STATE:%s\n", status_str);
-    OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state pre-send-state cmd='%.80s'", cmd);
-    send_to_helper(cmd);
+    /* Get systemd state via correct API */
+    SystemdState *sys = state_get_systemd();
     
-    // Determine action sensitivities based on strict 8-case state
+    /* A1: Compute service controllability - required for correct Stop/Restart gating.
+     * A service is controllable only if:
+     * - The unit is installed (we found a unit file)
+     * - Systemd is available (not in container/no D-Bus scenarios)
+     * - User has permission (implied by unit being in user unit path)
+     */
+    gboolean service_controllable = sys && sys->installed && !sys->systemd_unavailable;
+    
+    /* A2: Single authoritative STATE emission showing human-readable status.
+     * tray_helper.c uses this for the status menu item label.
+     */
+    const gchar *status_str = state_get_current_string();
+    g_autofree gchar *status_line = g_strdup_printf("STATE:%s\n", status_str);
+    send_line_to_helper(status_line, NULL);
+    
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state state=%s controllable=%d", 
+                 status_str, service_controllable);
+    
+    /* A3: Compute action sensitivities from BOTH app state AND service controllability.
+     * Stop/Restart are only sensitive if the service is actually controllable.
+     */
     gboolean can_start = FALSE;
     gboolean can_stop = FALSE;
     gboolean can_restart = FALSE;
+    gboolean can_open_dashboard = FALSE;
     
     switch (state) {
         case STATE_NEEDS_SETUP:
@@ -278,57 +301,68 @@ void tray_update_from_state(AppState state) {
         case STATE_USER_SYSTEMD_UNAVAILABLE:
         case STATE_SYSTEM_UNSUPPORTED:
         case STATE_CONFIG_INVALID:
+            /* No actions possible in these states */
             break;
         case STATE_STOPPED:
         case STATE_ERROR:
-            can_start = TRUE;
+            can_start = service_controllable;
             break;
         case STATE_STARTING:
-            can_stop = TRUE;
+            can_stop = service_controllable;
             break;
         case STATE_STOPPING:
+            /* In stopping state, no actions until settled */
             break;
         case STATE_RUNNING:
         case STATE_RUNNING_WITH_WARNING:
         case STATE_DEGRADED:
-            can_stop = TRUE;
-            can_restart = TRUE;
+            can_stop = service_controllable;
+            can_restart = service_controllable;
+            can_open_dashboard = TRUE;
             break;
     }
     
-    g_autofree gchar *cmd_start = g_strdup_printf("SENSITIVE:START:%d\n", can_start ? 1 : 0);
-    g_autofree gchar *cmd_stop = g_strdup_printf("SENSITIVE:STOP:%d\n", can_stop ? 1 : 0);
-    g_autofree gchar *cmd_restart = g_strdup_printf("SENSITIVE:RESTART:%d\n", can_restart ? 1 : 0);
+    /* A4: Send DASHBOARD_URL first (if available) with redacted logging.
+     * Send real URL to helper but redact token fragment in logs.
+     */
+    if (can_open_dashboard) {
+        GatewayConfig *cfg = gateway_client_get_config();
+        if (cfg) {
+            g_autofree gchar *url = gateway_config_dashboard_url(cfg);
+            if (url) {
+                g_autofree gchar *dashboard_line = g_strdup_printf("DASHBOARD_URL:%s\n", url);
+                gchar *redacted_for_log = redact_dashboard_line_for_log(dashboard_line);
+                send_line_to_helper(dashboard_line, redacted_for_log);
+                g_free(redacted_for_log);
+            }
+        }
+    }
     
-    OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state pre-send-sensitive");
-    send_to_helper(cmd_start);
-    send_to_helper(cmd_stop);
-    send_to_helper(cmd_restart);
+    /* A5: Send SENSITIVE commands in exact format expected by tray_helper.c.
+     * Format: SENSITIVE:ACTION:0|1 (tray_helper.c parses with g_strsplit(line, ":", 3))
+     * Supported actions: START, STOP, RESTART, OPEN_DASHBOARD
+     */
+    g_autofree gchar *sensitive_start = g_strdup_printf("SENSITIVE:START:%d\n", can_start ? 1 : 0);
+    g_autofree gchar *sensitive_stop = g_strdup_printf("SENSITIVE:STOP:%d\n", can_stop ? 1 : 0);
+    g_autofree gchar *sensitive_restart = g_strdup_printf("SENSITIVE:RESTART:%d\n", can_restart ? 1 : 0);
+    g_autofree gchar *sensitive_dashboard = g_strdup_printf("SENSITIVE:OPEN_DASHBOARD:%d\n", can_open_dashboard ? 1 : 0);
+    
+    send_line_to_helper(sensitive_start, NULL);
+    send_line_to_helper(sensitive_stop, NULL);
+    send_line_to_helper(sensitive_restart, NULL);
+    send_line_to_helper(sensitive_dashboard, NULL);
 
-    /* Send runtime mode label */
+    /* A6: Send runtime mode label if available.
+     * tray_helper.c supports RUNTIME:<label> for the runtime menu item.
+     */
     RuntimeMode rm = state_get_runtime_mode();
     TrayDisplayModel tdm;
     HealthState *health = state_get_health();
     tray_display_model_build(state, rm, health, &tdm);
     if (tdm.runtime_label) {
-        g_autofree gchar *cmd_runtime = g_strdup_printf("RUNTIME:%s\n", tdm.runtime_label);
-        send_to_helper(cmd_runtime);
+        g_autofree gchar *runtime_line = g_strdup_printf("RUNTIME:%s\n", tdm.runtime_label);
+        send_line_to_helper(runtime_line, NULL);
     }
-
-    /* Send dashboard URL availability */
-    GatewayConfig *cfg = gateway_client_get_config();
-    if (cfg) {
-        g_autofree gchar *url = gateway_config_dashboard_url(cfg);
-        if (url) {
-            g_autofree gchar *cmd_url = g_strdup_printf("DASHBOARD_URL:%s\n", url);
-            send_to_helper(cmd_url);
-        }
-    }
-
-    /* Send Open Dashboard sensitivity */
-    g_autofree gchar *cmd_dash = g_strdup_printf("SENSITIVE:OPEN_DASHBOARD:%d\n",
-        tdm.open_dashboard_sensitive ? 1 : 0);
-    send_to_helper(cmd_dash);
 
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state exit");
 }

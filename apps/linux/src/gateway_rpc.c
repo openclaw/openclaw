@@ -29,7 +29,7 @@ static GHashTable *pending_requests = NULL;
 /* Forward declarations */
 static void pending_rpc_request_free(PendingRpcRequest *req);
 static gboolean on_request_timeout(gpointer user_data);
-static void ws_send_rpc_frame(const gchar *request_id, const gchar *method,
+static gboolean ws_send_rpc_frame(const gchar *request_id, const gchar *method,
                               JsonNode *params_json);
 
 static void ensure_registry(void) {
@@ -86,7 +86,12 @@ gchar* gateway_rpc_request(const gchar *method,
                  "rpc request sent id=%s method=%s timeout=%u ms",
                  request_id, method, effective_timeout);
 
-    ws_send_rpc_frame(request_id, method, params_json);
+    /* D1: If send fails, remove pending request immediately and return NULL */
+    if (!ws_send_rpc_frame(request_id, method, params_json)) {
+        g_hash_table_remove(pending_requests, request_id);
+        g_free(request_id);
+        return NULL;
+    }
 
     return request_id;
 }
@@ -237,7 +242,8 @@ static gboolean on_request_timeout(gpointer user_data) {
     return G_SOURCE_REMOVE;
 }
 
-static void ws_send_rpc_frame(const gchar *request_id, const gchar *method,
+/* D1: Returns TRUE if the frame was successfully sent */
+static gboolean ws_send_rpc_frame(const gchar *request_id, const gchar *method,
                               JsonNode *params_json) {
     g_autoptr(JsonBuilder) builder = json_builder_new();
 
@@ -269,6 +275,9 @@ static void ws_send_rpc_frame(const gchar *request_id, const gchar *method,
     json_node_unref(root);
 
     if (json_str) {
-        gateway_ws_send_text(json_str);
+        if (!gateway_ws_send_text(json_str)) {
+            return FALSE;
+        }
     }
+    return TRUE;
 }
