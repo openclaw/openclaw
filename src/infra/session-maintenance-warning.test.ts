@@ -45,7 +45,6 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevNodeEnv: string | undefined;
 
   beforeAll(async () => {
-    vi.resetModules();
     vi.doMock("../agents/agent-scope.js", () => ({
       resolveSessionAgentId: mocks.resolveSessionAgentId,
     }));

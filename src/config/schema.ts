@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { CHANNEL_IDS } from "../channels/registry.js";
+import { CHANNEL_IDS } from "../channels/ids.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
