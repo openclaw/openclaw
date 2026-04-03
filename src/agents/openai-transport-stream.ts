@@ -1398,7 +1398,7 @@ function detectCompat(model: OpenAIModeModel) {
         : "openai",
     openRouterRouting: {},
     vercelGatewayRouting: {},
-    supportsStrictMode: !usesConfiguredNonOpenAIEndpoint,
+    supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };
 }
 

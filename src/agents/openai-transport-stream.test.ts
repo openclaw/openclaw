@@ -445,6 +445,37 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
+  it("omits strict tool shaping for Z.ai default-route completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "glm-5",
+        name: "GLM 5",
+        api: "openai-completions",
+        provider: "zai",
+        baseUrl: "",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
+
+    expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
