@@ -524,25 +524,28 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
-  it("routes targeted boundary inventories through the lean boundary config", () => {
-    const artifacts = createExecutionArtifacts({});
-    const plan = buildExecutionPlan(
-      {
-        mode: "local",
-        surfaces: [],
-        passthroughArgs: ["test/web-search-provider-boundary.test.ts"],
-      },
-      {
-        env: {},
-        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
-      },
-    );
+  it.each(["test/extension-test-boundary.test.ts", "test/web-search-provider-boundary.test.ts"])(
+    "routes targeted boundary inventories through the lean boundary config: %s",
+    (file) => {
+      const artifacts = createExecutionArtifacts({});
+      const plan = buildExecutionPlan(
+        {
+          mode: "local",
+          surfaces: [],
+          passthroughArgs: [file],
+        },
+        {
+          env: {},
+          writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+        },
+      );
 
-    expect(plan.targetedUnits).toHaveLength(1);
-    expect(plan.targetedUnits[0]?.surface).toBe("unit");
-    expect(plan.targetedUnits[0]?.args).toContain("vitest.boundary.config.ts");
-    artifacts.cleanupTempArtifacts();
-  });
+      expect(plan.targetedUnits).toHaveLength(1);
+      expect(plan.targetedUnits[0]?.surface).toBe("unit");
+      expect(plan.targetedUnits[0]?.args).toContain("vitest.boundary.config.ts");
+      artifacts.cleanupTempArtifacts();
+    },
+  );
 
   it("normalizes --bail=0 into collect-all failure policy", () => {
     const artifacts = createExecutionArtifacts({});
