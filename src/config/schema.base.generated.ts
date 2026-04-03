@@ -1056,6 +1056,52 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     "azure-openai-responses",
                   ],
                 },
+                safetySettings: {
+                  type: "object",
+                  properties: {
+                    harassment: {
+                      type: "string",
+                      enum: [
+                        "OFF",
+                        "BLOCK_NONE",
+                        "BLOCK_ONLY_HIGH",
+                        "BLOCK_MEDIUM_AND_ABOVE",
+                        "BLOCK_LOW_AND_ABOVE",
+                      ],
+                    },
+                    hateSpeech: {
+                      type: "string",
+                      enum: [
+                        "OFF",
+                        "BLOCK_NONE",
+                        "BLOCK_ONLY_HIGH",
+                        "BLOCK_MEDIUM_AND_ABOVE",
+                        "BLOCK_LOW_AND_ABOVE",
+                      ],
+                    },
+                    sexuallyExplicit: {
+                      type: "string",
+                      enum: [
+                        "OFF",
+                        "BLOCK_NONE",
+                        "BLOCK_ONLY_HIGH",
+                        "BLOCK_MEDIUM_AND_ABOVE",
+                        "BLOCK_LOW_AND_ABOVE",
+                      ],
+                    },
+                    dangerousContent: {
+                      type: "string",
+                      enum: [
+                        "OFF",
+                        "BLOCK_NONE",
+                        "BLOCK_ONLY_HIGH",
+                        "BLOCK_MEDIUM_AND_ABOVE",
+                        "BLOCK_LOW_AND_ABOVE",
+                      ],
+                    },
+                  },
+                  additionalProperties: false,
+                },
                 injectNumCtxForOpenAICompat: {
                   type: "boolean",
                 },
@@ -13484,6 +13530,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "models.providers.*.api": {
       label: "Model Provider API Adapter",
       help: "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+      tags: ["models"],
+    },
+    "models.providers.*.safetySettings": {
+      label: "Model Provider Safety Settings",
+      help: 'Google Gemini safety threshold overrides keyed by content category. Use this on the provider entry that serves Gemini traffic through the `google-generative-ai` adapter and prefer explicit thresholds such as "BLOCK_NONE" or "BLOCK_ONLY_HIGH" over the default safety policy.',
       tags: ["models"],
     },
     "models.providers.*.injectNumCtxForOpenAICompat": {

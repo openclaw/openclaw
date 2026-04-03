@@ -46804,6 +46804,88 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.safetySettings",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Safety Settings",
+      "help": "Google Gemini safety threshold overrides keyed by content category. Use this on the provider entry that serves Gemini traffic through the `google-generative-ai` adapter and prefer explicit thresholds such as \"BLOCK_NONE\" or \"BLOCK_ONLY_HIGH\" over the default safety policy.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.safetySettings.dangerousContent",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "OFF",
+        "BLOCK_NONE",
+        "BLOCK_ONLY_HIGH",
+        "BLOCK_MEDIUM_AND_ABOVE",
+        "BLOCK_LOW_AND_ABOVE"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.safetySettings.harassment",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "OFF",
+        "BLOCK_NONE",
+        "BLOCK_ONLY_HIGH",
+        "BLOCK_MEDIUM_AND_ABOVE",
+        "BLOCK_LOW_AND_ABOVE"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.safetySettings.hateSpeech",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "OFF",
+        "BLOCK_NONE",
+        "BLOCK_ONLY_HIGH",
+        "BLOCK_MEDIUM_AND_ABOVE",
+        "BLOCK_LOW_AND_ABOVE"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.safetySettings.sexuallyExplicit",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "OFF",
+        "BLOCK_NONE",
+        "BLOCK_ONLY_HIGH",
+        "BLOCK_MEDIUM_AND_ABOVE",
+        "BLOCK_LOW_AND_ABOVE"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "nodeHost",
       "kind": "core",
       "type": "object",

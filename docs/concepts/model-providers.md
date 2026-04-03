@@ -216,6 +216,32 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
 
+Optional per-provider safety overrides use the same `models.providers.<provider>` block as other custom provider settings. Apply them on the provider entry that serves Gemini traffic through the `google-generative-ai` adapter:
+
+```json5
+{
+  models: {
+    providers: {
+      google: {
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        safetySettings: {
+          harassment: "BLOCK_NONE",
+          hateSpeech: "BLOCK_ONLY_HIGH",
+          sexuallyExplicit: "BLOCK_MEDIUM_AND_ABOVE",
+          dangerousContent: "OFF",
+        },
+        models: [{ id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" }],
+      },
+    },
+  },
+}
+```
+
+- Supported categories: `harassment`, `hateSpeech`, `sexuallyExplicit`, `dangerousContent`
+- Supported thresholds: `OFF`, `BLOCK_NONE`, `BLOCK_ONLY_HIGH`, `BLOCK_MEDIUM_AND_ABOVE`, `BLOCK_LOW_AND_ABOVE`
+- OpenClaw injects these only for `google-generative-ai` requests and preserves any explicit per-request `config.safetySettings`
+
 ### Google Vertex and Gemini CLI
 
 - Providers: `google-vertex`, `google-gemini-cli`

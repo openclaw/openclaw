@@ -741,6 +741,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+  "models.providers.*.safetySettings":
+    'Google Gemini safety threshold overrides keyed by content category. Use this on the provider entry that serves Gemini traffic through the `google-generative-ai` adapter and prefer explicit thresholds such as "BLOCK_NONE" or "BLOCK_ONLY_HIGH" over the default safety policy.',
   "models.providers.*.injectNumCtxForOpenAICompat":
     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
   "models.providers.*.headers":

@@ -9,6 +9,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/types.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./anthropic-family-tool-payload-compat.js";
 import { createBedrockNoCacheWrapper, isAnthropicBedrockModel } from "./bedrock-stream-wrappers.js";
@@ -36,6 +37,27 @@ import {
   resolveOpenAITextVerbosity,
 } from "./openai-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
+import { createZaiToolStreamWrapper } from "./zai-stream-wrappers.js";
+
+const GOOGLE_SAFETY_CATEGORY_MAP = {
+  harassment: "HARM_CATEGORY_HARASSMENT",
+  hateSpeech: "HARM_CATEGORY_HATE_SPEECH",
+  sexuallyExplicit: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+  dangerousContent: "HARM_CATEGORY_DANGEROUS_CONTENT",
+} as const;
+
+type GoogleSafetySetting = {
+  category: (typeof GOOGLE_SAFETY_CATEGORY_MAP)[keyof typeof GOOGLE_SAFETY_CATEGORY_MAP];
+  threshold: string;
+};
+
+const GOOGLE_SAFETY_WRAPPER_MARKER = Symbol("openclaw.googleSafetyWrapper");
+const GOOGLE_SAFETY_WRAPPER_BASE_STREAM = Symbol("openclaw.googleSafetyWrapperBaseStream");
+
+type GoogleSafetyWrappedStreamFn = StreamFn & {
+  [GOOGLE_SAFETY_WRAPPER_MARKER]?: true;
+  [GOOGLE_SAFETY_WRAPPER_BASE_STREAM]?: StreamFn | undefined;
+};
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -246,6 +268,75 @@ function createStreamFnWithExtraParams(
   return wrappedStreamFn;
 }
 
+function resolveConfiguredGoogleSafetySettings(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): GoogleSafetySetting[] | undefined {
+  const configured = findNormalizedProviderValue(cfg?.models?.providers, provider)?.safetySettings;
+  if (!configured) {
+    return undefined;
+  }
+  const settings = Object.entries(configured).flatMap(([key, threshold]) => {
+    if (typeof threshold !== "string") {
+      return [];
+    }
+    const category = GOOGLE_SAFETY_CATEGORY_MAP[key as keyof typeof GOOGLE_SAFETY_CATEGORY_MAP];
+    if (!category) {
+      return [];
+    }
+    return [{ category, threshold } satisfies GoogleSafetySetting];
+  });
+  return settings.length > 0 ? settings : undefined;
+}
+
+function createGoogleSafetySettingsWrapper(
+  baseStreamFn: StreamFn | undefined,
+  installedProvider: string,
+  safetySettings?: GoogleSafetySetting[],
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  const normalizedInstalledProvider = normalizeProviderId(installedProvider);
+  const wrapped: GoogleSafetyWrappedStreamFn = (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (
+          safetySettings &&
+          normalizeProviderId(model.provider) === normalizedInstalledProvider &&
+          model.api === "google-generative-ai" &&
+          payload &&
+          typeof payload === "object"
+        ) {
+          const payloadObj = payload as Record<string, unknown>;
+          const existingConfig = payloadObj.config;
+          if (existingConfig === undefined) {
+            payloadObj.config = {};
+          }
+          const configObj = payloadObj.config;
+          if (configObj && typeof configObj === "object" && !Array.isArray(configObj)) {
+            const googleConfig = configObj as Record<string, unknown>;
+            if (googleConfig.safetySettings === undefined) {
+              googleConfig.safetySettings = safetySettings.map((setting) => ({ ...setting }));
+            }
+          }
+        }
+        return onPayload?.(payload, model);
+      },
+    });
+  };
+  wrapped[GOOGLE_SAFETY_WRAPPER_MARKER] = true;
+  wrapped[GOOGLE_SAFETY_WRAPPER_BASE_STREAM] = baseStreamFn;
+  return wrapped;
+}
+
+function stripGoogleSafetySettingsWrapper(streamFn: StreamFn | undefined): StreamFn | undefined {
+  const wrapped = streamFn as GoogleSafetyWrappedStreamFn | undefined;
+  if (wrapped?.[GOOGLE_SAFETY_WRAPPER_MARKER]) {
+    return wrapped[GOOGLE_SAFETY_WRAPPER_BASE_STREAM];
+  }
+  return streamFn;
+}
 function resolveAliasedParamValue(
   sources: Array<Record<string, unknown> | undefined>,
   snakeCaseKey: string,
@@ -368,6 +459,16 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createBedrockNoCacheWrapper(ctx.agent.streamFn);
   }
 
+  // Enable Z.AI tool_stream for real-time tool call streaming.
+  // Enabled by default for Z.AI provider, can be disabled via params.tool_stream: false
+  if (normalizeProviderId(ctx.provider) === "zai") {
+    const toolStreamEnabled = ctx.effectiveExtraParams?.tool_stream !== false;
+    if (toolStreamEnabled) {
+      log.debug(`enabling Z.AI tool_stream for ${ctx.provider}/${ctx.modelId}`);
+      ctx.agent.streamFn = createZaiToolStreamWrapper(ctx.agent.streamFn, true);
+    }
+  }
+
   // Guard Google payloads against invalid negative thinking budgets emitted by
   // upstream model-ID heuristics for Gemini 3.1 variants.
   ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
@@ -447,20 +548,25 @@ function applyPostPluginStreamWrappers(
     "parallel_tool_calls",
     "parallelToolCalls",
   );
-  if (rawParallelToolCalls === undefined) {
-    return;
-  }
   if (typeof rawParallelToolCalls === "boolean") {
     ctx.agent.streamFn = createParallelToolCallsWrapper(ctx.agent.streamFn, rawParallelToolCalls);
-    return;
-  }
-  if (rawParallelToolCalls === null) {
+  } else if (rawParallelToolCalls === null) {
     log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-    return;
+  } else if (rawParallelToolCalls !== undefined) {
+    const summary =
+      typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
+    log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
   }
-  const summary =
-    typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
-  log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+
+  const googleSafetySettings = resolveConfiguredGoogleSafetySettings(ctx.cfg, ctx.provider);
+  if (googleSafetySettings) {
+    log.debug(`applying Google safety settings for ${ctx.provider}/${ctx.modelId}`);
+    ctx.agent.streamFn = createGoogleSafetySettingsWrapper(
+      ctx.agent.streamFn,
+      ctx.provider,
+      googleSafetySettings,
+    );
+  }
 }
 
 /**
@@ -481,6 +587,8 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
 ): { effectiveExtraParams: Record<string, unknown> } {
+  agent.streamFn = stripGoogleSafetySettingsWrapper(agent.streamFn);
+
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,

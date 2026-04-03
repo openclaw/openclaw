@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 658,
+            "line": 659,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -136,7 +136,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 663,
+            "line": 664,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -145,7 +145,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 679,
+            "line": 680,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -271,7 +271,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1837,
+            "line": 1844,
             "path": "src/plugins/types.ts"
           }
         },
@@ -433,7 +433,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1881,
+            "line": 1888,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1114,7 +1114,7 @@
           "exportName": "BlockStreamingCoalesceSchema",
           "kind": "const",
           "source": {
-            "line": 341,
+            "line": 350,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1123,7 +1123,7 @@
           "exportName": "ContextVisibilityModeSchema",
           "kind": "const",
           "source": {
-            "line": 339,
+            "line": 348,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1141,7 +1141,7 @@
           "exportName": "DmConfigSchema",
           "kind": "const",
           "source": {
-            "line": 294,
+            "line": 303,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1150,7 +1150,7 @@
           "exportName": "DmPolicySchema",
           "kind": "const",
           "source": {
-            "line": 338,
+            "line": 347,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1168,7 +1168,7 @@
           "exportName": "GroupPolicySchema",
           "kind": "const",
           "source": {
-            "line": 336,
+            "line": 345,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1186,7 +1186,7 @@
           "exportName": "MarkdownConfigSchema",
           "kind": "const",
           "source": {
-            "line": 374,
+            "line": 383,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1204,7 +1204,7 @@
           "exportName": "ReplyRuntimeConfigSchemaShape",
           "kind": "const",
           "source": {
-            "line": 349,
+            "line": 358,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1213,7 +1213,7 @@
           "exportName": "requireOpenAllowFrom",
           "kind": "const",
           "source": {
-            "line": 489,
+            "line": 498,
             "path": "src/config/zod-schema.core.ts"
           }
         },
@@ -1314,7 +1314,7 @@
           "exportName": "ChannelApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 596,
+            "line": 597,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1323,7 +1323,7 @@
           "exportName": "ChannelApprovalCapability",
           "kind": "type",
           "source": {
-            "line": 591,
+            "line": 592,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1332,7 +1332,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 667,
+            "line": 668,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1530,7 +1530,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"../auto-reply/reply/response-prefix-template.ts\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -1950,7 +1950,7 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 602,
+            "line": 603,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1959,7 +1959,7 @@
           "exportName": "ChannelApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 596,
+            "line": 597,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1968,7 +1968,7 @@
           "exportName": "ChannelApprovalCapability",
           "kind": "type",
           "source": {
-            "line": 591,
+            "line": 592,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2049,7 +2049,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 667,
+            "line": 668,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2067,7 +2067,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 658,
+            "line": 659,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2076,7 +2076,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 663,
+            "line": 664,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2085,7 +2085,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 679,
+            "line": 680,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2094,7 +2094,7 @@
           "exportName": "ChannelConversationBindingSupport",
           "kind": "type",
           "source": {
-            "line": 695,
+            "line": 696,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2454,7 +2454,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 726,
+            "line": 727,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3914,7 +3914,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"../channels/plugins/types.core.js\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
@@ -3972,7 +3972,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1881,
+            "line": 1888,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3999,7 +3999,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1863,
+            "line": 1870,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4008,7 +4008,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1830,
+            "line": 1837,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4017,7 +4017,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1822,
+            "line": 1829,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4053,7 +4053,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1628,
+            "line": 1635,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4631,7 +4631,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1881,
+            "line": 1888,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4658,7 +4658,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1863,
+            "line": 1870,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4667,7 +4667,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1830,
+            "line": 1837,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4676,7 +4676,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1822,
+            "line": 1829,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4712,7 +4712,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1628,
+            "line": 1635,
             "path": "src/plugins/types.ts"
           }
         },
@@ -5254,7 +5254,7 @@
           "exportName": "ModelDefinitionConfig",
           "kind": "type",
           "source": {
-            "line": 49,
+            "line": 66,
             "path": "src/config/types.models.ts"
           }
         },
@@ -5263,7 +5263,7 @@
           "exportName": "ModelProviderConfig",
           "kind": "type",
           "source": {
-            "line": 67,
+            "line": 84,
             "path": "src/config/types.models.ts"
           }
         },
@@ -5681,7 +5681,7 @@
           }
         },
         {
-          "declaration": "export function createAuthCaptureJsonFetch(responseBody: unknown): { fetchFn: ((_input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getAuthHeader: () => string | null; };",
+          "declaration": "export function createAuthCaptureJsonFetch(responseBody: unknown): { fetchFn: ((_input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect & typeof fetch; getAuthHeader: () => string | null; };",
           "exportName": "createAuthCaptureJsonFetch",
           "kind": "function",
           "source": {
@@ -5708,7 +5708,7 @@
           }
         },
         {
-          "declaration": "export function createRequestCaptureJsonFetch(responseBody: unknown): { fetchFn: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect; getRequest: () => { ...; }; };",
+          "declaration": "export function createRequestCaptureJsonFetch(responseBody: unknown): { fetchFn: ((input: RequestInfo | URL, init?: RequestInit | undefined) => Promise<Response>) & FetchWithPreconnect & typeof fetch; getRequest: () => { ...; }; };",
           "exportName": "createRequestCaptureJsonFetch",
           "kind": "function",
           "source": {
