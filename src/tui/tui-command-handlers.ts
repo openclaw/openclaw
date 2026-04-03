@@ -243,6 +243,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   };
 
   const openContextViz = () => {
+    if (!state.isConnected) {
+      chatLog.addSystem("not connected to gateway — cannot open context visualizer");
+      tui.requestRender();
+      return;
+    }
     const overlay = new ContextVizOverlay({
       fetchReport: async () => {
         return await client.getContextReport(state.currentSessionKey);

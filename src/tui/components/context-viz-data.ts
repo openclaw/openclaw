@@ -156,15 +156,28 @@ export function getCategoryDetail(
           chars: s.blockChars,
           tokens: estimateTokensFromChars(s.blockChars),
         }));
-    case "tools":
-      return report.tools.entries
-        .toSorted((a, b) => b.schemaChars + b.summaryChars - (a.schemaChars + a.summaryChars))
+    case "tools": {
+      // The category total is listChars + schemaChars. listChars is extracted
+      // from the system prompt tool-list block (names, formatting, summaries)
+      // and isn't decomposable per tool, so show it as a dedicated row.
+      // Per-tool rows use schemaChars which is individually attributable.
+      const perTool = report.tools.entries
+        .toSorted((a, b) => b.schemaChars - a.schemaChars)
         .map((t) => ({
           name: t.name,
-          chars: t.schemaChars + t.summaryChars,
-          tokens: estimateTokensFromChars(t.schemaChars + t.summaryChars),
+          chars: t.schemaChars,
+          tokens: estimateTokensFromChars(t.schemaChars),
           extra: t.propertiesCount != null ? `${t.propertiesCount} params` : undefined,
         }));
+      return [
+        {
+          name: "(tool list text)",
+          chars: report.tools.listChars,
+          tokens: estimateTokensFromChars(report.tools.listChars),
+        },
+        ...perTool,
+      ];
+    }
   }
 }
 
