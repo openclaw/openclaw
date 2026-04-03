@@ -2916,6 +2916,10 @@ td.data-table-key-col {
   border-radius: var(--radius-lg);
   padding: 20px;
   animation: scale-in 0.2s var(--ease-out);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  overflow: hidden;
 }
 
 .exec-approval-header {
@@ -2943,6 +2947,12 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 4px 10px;
+}
+
+.exec-approval-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .exec-approval-command {
@@ -2987,6 +2997,7 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ===========================================

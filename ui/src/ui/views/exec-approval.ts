@@ -78,10 +78,12 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
             : nothing}
         </div>
-        ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
-        ${state.execApprovalError
-          ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-          : nothing}
+        <div class="exec-approval-body">
+          ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
+          ${state.execApprovalError
+            ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
+            : nothing}
+        </div>
         <div class="exec-approval-actions">
           <button
             class="btn primary"
