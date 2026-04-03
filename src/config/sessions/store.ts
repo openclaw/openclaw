@@ -36,12 +36,14 @@ import {
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
+import { SESSION_STORE_SERIALIZATION_REPLACER } from "./store-serialization.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   normalizeSessionRuntimeModelFields,
   type SessionEntry,
 } from "./types.js";
+export { SESSION_STORE_SERIALIZATION_REPLACER } from "./store-serialization.js";
 
 const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
@@ -541,7 +543,7 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  const json = JSON.stringify(store, SESSION_STORE_SERIALIZATION_REPLACER, 2);
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({ storePath, store, serialized: json });
     return;
