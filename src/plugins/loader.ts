@@ -15,10 +15,12 @@ import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import {
   applyTestPluginDefaults,
+  createPluginActivationSource,
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
+  type PluginActivationConfigSource,
   type NormalizedPluginsConfig,
   type PluginActivationState,
 } from "./config-state.js";
@@ -315,12 +317,11 @@ function resolveRuntimeSubagentMode(
 }
 
 function buildActivationMetadataHash(params: {
-  sourcePlugins: NormalizedPluginsConfig;
-  sourceConfig?: OpenClawConfig;
+  activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
 }): string {
   const enabledSourceChannels = Object.entries(
-    (params.sourceConfig?.channels as Record<string, unknown>) ?? {},
+    (params.activationSource.rootConfig?.channels as Record<string, unknown>) ?? {},
   )
     .filter(([, value]) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -330,7 +331,7 @@ function buildActivationMetadataHash(params: {
     })
     .map(([channelId]) => channelId)
     .toSorted((left, right) => left.localeCompare(right));
-  const pluginEntryStates = Object.entries(params.sourcePlugins.entries)
+  const pluginEntryStates = Object.entries(params.activationSource.plugins.entries)
     .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
   const autoEnableReasonEntries = Object.entries(params.autoEnabledReasons)
@@ -340,10 +341,10 @@ function buildActivationMetadataHash(params: {
   return createHash("sha256")
     .update(
       JSON.stringify({
-        enabled: params.sourcePlugins.enabled,
-        allow: params.sourcePlugins.allow,
-        deny: params.sourcePlugins.deny,
-        memorySlot: params.sourcePlugins.slots.memory,
+        enabled: params.activationSource.plugins.enabled,
+        allow: params.activationSource.plugins.allow,
+        deny: params.activationSource.plugins.deny,
+        memorySlot: params.activationSource.plugins.slots.memory,
         entries: pluginEntryStates,
         enabledChannels: enabledSourceChannels,
         autoEnabledReasons: autoEnableReasonEntries,
@@ -374,7 +375,9 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const cfg = applyTestPluginDefaults(options.config ?? {}, env);
   const activationSourceConfig = options.activationSourceConfig ?? options.config ?? {};
   const normalized = normalizePluginsConfig(cfg.plugins);
-  const activationSourceNormalized = normalizePluginsConfig(activationSourceConfig.plugins);
+  const activationSource = createPluginActivationSource({
+    config: activationSourceConfig,
+  });
   const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
@@ -383,8 +386,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     workspaceDir: options.workspaceDir,
     plugins: normalized,
     activationMetadataKey: buildActivationMetadataHash({
-      sourcePlugins: activationSourceNormalized,
-      sourceConfig: activationSourceConfig,
+      activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
     }),
     installs: cfg.plugins?.installs,
@@ -402,7 +404,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     cfg,
     normalized,
     activationSourceConfig,
-    activationSourceNormalized,
+    activationSource,
     autoEnabledReasons: options.autoEnabledReasons ?? {},
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
@@ -950,8 +952,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     env,
     cfg,
     normalized,
-    activationSourceConfig,
-    activationSourceNormalized,
+    activationSource,
     autoEnabledReasons,
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
@@ -1148,8 +1149,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
-      sourceConfig: activationSourceNormalized,
-      sourceRootConfig: activationSourceConfig,
+      activationSource,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
     const existingOrigin = seenIds.get(pluginId);
@@ -1183,8 +1183,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
-      sourceConfig: activationSourceNormalized,
-      sourceRootConfig: activationSourceConfig,
+      activationSource,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -1622,20 +1621,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 export async function loadOpenClawPluginCliRegistry(
   options: PluginLoadOptions = {},
 ): Promise<PluginRegistry> {
-  const {
-    env,
-    cfg,
-    normalized,
-    activationSourceConfig,
-    activationSourceNormalized,
-    autoEnabledReasons,
-    onlyPluginIds,
-    cacheKey,
-  } = resolvePluginLoadCacheContext({
-    ...options,
-    activate: false,
-    cache: false,
-  });
+  const { env, cfg, normalized, activationSource, autoEnabledReasons, onlyPluginIds, cacheKey } =
+    resolvePluginLoadCacheContext({
+      ...options,
+      activate: false,
+      cache: false,
+    });
   const logger = options.logger ?? defaultLogger();
   const onlyPluginIdSet = onlyPluginIds ? new Set(onlyPluginIds) : null;
   const getJiti = createPluginJitiLoader(options);
@@ -1716,8 +1707,7 @@ export async function loadOpenClawPluginCliRegistry(
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
-      sourceConfig: activationSourceNormalized,
-      sourceRootConfig: activationSourceConfig,
+      activationSource,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
     const existingOrigin = seenIds.get(pluginId);
@@ -1751,8 +1741,7 @@ export async function loadOpenClawPluginCliRegistry(
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: manifestRecord.enabledByDefault,
-      sourceConfig: activationSourceNormalized,
-      sourceRootConfig: activationSourceConfig,
+      activationSource,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({

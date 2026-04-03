@@ -1,6 +1,10 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "./config-state.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { hasKind } from "./slots.js";
 
@@ -83,9 +87,12 @@ export function resolveGatewayStartupPluginIds(params: {
     listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
   );
   const pluginsConfig = normalizePluginsConfig(params.config.plugins);
-  const sourcePluginsConfig = normalizePluginsConfig(
-    (params.activationSourceConfig ?? params.config).plugins,
-  );
+  // Startup must classify allowlist exceptions against the raw config snapshot,
+  // not the auto-enabled effective snapshot, or configured-only channels can be
+  // misclassified as explicit enablement.
+  const activationSource = createPluginActivationSource({
+    config: params.activationSourceConfig ?? params.config,
+  });
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -104,8 +111,7 @@ export function resolveGatewayStartupPluginIds(params: {
         config: pluginsConfig,
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
-        sourceConfig: sourcePluginsConfig,
-        sourceRootConfig: params.activationSourceConfig ?? params.config,
+        activationSource,
       });
       if (!activationState.enabled) {
         return false;
