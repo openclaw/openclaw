@@ -5,6 +5,7 @@ import {
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
+  runSetupWizardFinalize,
   type WizardPrompter,
 } from "../../../test/helpers/plugins/setup-wizard.js";
 
@@ -208,7 +209,11 @@ describe("feishu setup wizard", () => {
       note: vi.fn(async () => {}),
     });
 
-    const result = await feishuPlugin.setupWizard?.finalize?.({
+    const result = await runSetupWizardFinalize({
+      finalize:
+        feishuPlugin.setupWizard && "finalize" in feishuPlugin.setupWizard
+          ? feishuPlugin.setupWizard.finalize
+          : undefined,
       cfg: {
         channels: {
           feishu: {
@@ -229,9 +234,12 @@ describe("feishu setup wizard", () => {
       options: {},
     });
 
-    expect(result?.cfg.channels?.feishu?.appId).toBe("top-level-app");
-    expect(result?.cfg.channels?.feishu?.appSecret).toBe("top-level-secret");
-    expect(result?.cfg.channels?.feishu?.accounts?.work).toMatchObject({
+    expect(result).toBeDefined();
+    expect(result?.cfg).toBeDefined();
+    const nextCfg = result!.cfg!;
+    expect(nextCfg.channels?.feishu?.appId).toBe("top-level-app");
+    expect(nextCfg.channels?.feishu?.appSecret).toBe("top-level-secret");
+    expect(nextCfg.channels?.feishu?.accounts?.work).toMatchObject({
       enabled: true,
       appId: "work-app",
       appSecret: "work-secret",

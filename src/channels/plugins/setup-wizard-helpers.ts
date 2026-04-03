@@ -1362,7 +1362,8 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     section: params.section,
     ...(params.enabled ? { enabled: true } : {}),
   });
-  const sharedParams = {
+  return createPromptParsedAllowFromForAccount({
+    defaultAccountId: params.defaultAccountId,
     ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
     ...(params.noteLines ? { noteLines: params.noteLines } : {}),
     message: params.message,
@@ -1379,19 +1380,6 @@ export function createNestedChannelParsedAllowFromPrompt(params: {
     ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
     applyAllowFrom: ({ cfg, allowFrom }: { cfg: OpenClawConfig; allowFrom: string[] }) =>
       setAllowFrom(cfg, allowFrom),
-  };
-
-  if (typeof params.defaultAccountId === "function") {
-    return createPromptParsedAllowFromForAccount({
-      defaultAccountId: params.defaultAccountId,
-      ...sharedParams,
-    });
-  }
-
-  const defaultAccountId = params.defaultAccountId;
-  return createPromptParsedAllowFromForAccount({
-    defaultAccountId: () => defaultAccountId,
-    ...sharedParams,
   });
 }
 
