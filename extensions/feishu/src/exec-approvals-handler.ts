@@ -113,8 +113,8 @@ export class FeishuExecApprovalHandler {
       finalizeResolved: async ({ request, resolved, entries }) => {
         await this.finalizeResolved(request, resolved, entries);
       },
-      finalizeExpired: async ({ entries }) => {
-        await this.finalizeExpired(entries);
+      finalizeExpired: async ({ request, entries }) => {
+        await this.finalizeExpired(request.id, entries);
       },
     });
   }
@@ -163,12 +163,12 @@ export class FeishuExecApprovalHandler {
     );
   }
 
-  private async finalizeExpired(messages: PendingMessage[]): Promise<void> {
+  private async finalizeExpired(approvalId: string, messages: PendingMessage[]): Promise<void> {
     await Promise.allSettled(
       messages.map(async (message) => {
         try {
           const expiredCard = createExecApprovalResolvedCard({
-            approvalId: "",
+            approvalId,
             decision: "expired",
           });
           await updateCardFeishu({
