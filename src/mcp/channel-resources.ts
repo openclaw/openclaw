@@ -70,17 +70,20 @@ export function registerChannelMcpResources(
     },
     async () => {
       let conversations: unknown[] = [];
+      let error: string | undefined;
       try {
         conversations = await bridge.listConversations({ limit: 50, includeLastMessage: true });
-      } catch {
-        // Bridge may not be connected yet
+      } catch (err) {
+        // Bridge may not be connected yet — surface the error so clients can
+        // distinguish "no conversations" from "backend unavailable".
+        error = err instanceof Error ? err.message : String(err);
       }
       return {
         contents: [
           {
             uri: "openclaw://conversations",
             mimeType: "application/json",
-            text: JSON.stringify({ conversations }, null, 2),
+            text: JSON.stringify({ conversations, ...(error ? { error } : {}) }, null, 2),
           },
         ],
       };
