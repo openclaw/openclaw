@@ -117,7 +117,7 @@ class GatewayBootstrapAuthTest {
     )
 
     assertEquals(
-      "Failed: remote mobile nodes require wss:// or Tailscale Serve. No TLS endpoint detected for this host.",
+      "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       waitForStatusText(runtime),
     )
     assertNull(runtime.pendingGatewayTrust.value)

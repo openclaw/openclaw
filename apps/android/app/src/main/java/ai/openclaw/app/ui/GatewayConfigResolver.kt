@@ -1,6 +1,6 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
+import ai.openclaw.app.gateway.isPrivateLanGatewayHost
 import java.util.Base64
 import java.util.Locale
 import java.net.URI
@@ -56,9 +56,9 @@ internal data class GatewayScannedSetupCodeResult(
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 private const val remoteGatewaySecurityRule =
-  "Remote mobile nodes require wss:// or Tailscale Serve. ws:// is only for localhost or the Android emulator."
+  "Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed for private LAN, localhost, and the Android emulator."
 private const val remoteGatewaySecurityFix =
-  "Enable Tailscale Serve or expose a wss:// gateway URL."
+  "Use a private LAN host/address, or enable Tailscale Serve / expose a wss:// gateway URL."
 
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
@@ -128,6 +128,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
 internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
   val raw = rawInput.trim()
   if (raw.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
+  if (raw.contains('%')) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
   val normalized = if (raw.contains("://")) raw else "https://$raw"
   val uri =
@@ -143,7 +144,7 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
       "wss", "https" -> true
       else -> true
     }
-  if (!tls && !isLoopbackGatewayHost(host)) {
+  if (!tls && !isPrivateLanGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
   val defaultPort =

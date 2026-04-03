@@ -29,11 +29,11 @@ Android node app ⇄ (mDNS/NSD + WebSocket) ⇄ **Gateway**
 
 Android connects directly to the Gateway WebSocket and uses device pairing (`role: node`).
 
-For remote hosts, Android requires a secure endpoint:
+For Tailscale or public hosts, Android requires a secure endpoint:
 
 - Preferred: Tailscale Serve / Funnel with `https://<magicdns>` / `wss://<magicdns>`
 - Also supported: any other `wss://` Gateway URL with a real TLS endpoint
-- Local debugging only: `ws://` on `localhost`, `127.0.0.1`, or the Android emulator bridge (`10.0.2.2`)
+- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`)
 
 ### Prerequisites
 
@@ -42,7 +42,7 @@ For remote hosts, Android requires a secure endpoint:
   - Same LAN with mDNS/NSD, **or**
   - Same Tailscale tailnet using Wide-Area Bonjour / unicast DNS-SD (see below), **or**
   - Manual gateway host/port (fallback)
-- Remote mobile pairing does **not** use raw tailnet IP `ws://` endpoints. Use Tailscale Serve or another `wss://` URL instead.
+- Tailnet/public mobile pairing does **not** use raw tailnet IP `ws://` endpoints. Use Tailscale Serve or another `wss://` URL instead.
 - You can run the CLI (`openclaw`) on the gateway machine (or via SSH).
 
 ### 1) Start the Gateway
@@ -77,7 +77,7 @@ More debugging notes: [Bonjour](/gateway/bonjour).
 
 Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead.
 
-Discovery alone is not sufficient for remote Android pairing. The discovered route still needs a secure endpoint (`wss://` or Tailscale Serve):
+Discovery alone is not sufficient for tailnet/public Android pairing. The discovered route still needs a secure endpoint (`wss://` or Tailscale Serve):
 
 1. Set up a DNS-SD zone (example `openclaw.internal.`) on the gateway host and publish `_openclaw-gw._tcp` records.
 2. Configure Tailscale split DNS for your chosen domain pointing at that DNS server.
@@ -91,7 +91,7 @@ In the Android app:
 - The app keeps its gateway connection alive via a **foreground service** (persistent notification).
 - Open the **Connect** tab.
 - Use **Setup Code** or **Manual** mode.
-- If discovery is blocked, use manual host/port in **Advanced controls**. For remote hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
+- If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
 
 After the first successful pairing, Android auto-reconnects on launch:
 
