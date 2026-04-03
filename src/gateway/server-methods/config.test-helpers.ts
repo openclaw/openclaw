@@ -1,8 +1,22 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-function createGatewayLog() {
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type GatewayLogMocks = {
+  error: UnknownMock;
+  warn: UnknownMock;
+  info: UnknownMock;
+  debug: UnknownMock;
+};
+type ConfigHandlerHarness = {
+  options: GatewayRequestHandlerOptions;
+  respond: UnknownMock;
+  logGateway: GatewayLogMocks;
+  disconnectClientsUsingSharedGatewayAuth: UnknownMock;
+};
+
+function createGatewayLog(): GatewayLogMocks {
   return {
     error: vi.fn(),
     warn: vi.fn(),
@@ -37,7 +51,7 @@ export function createConfigHandlerHarness(args?: {
   params?: unknown;
   overrides?: Partial<GatewayRequestHandlerOptions>;
   contextOverrides?: Partial<GatewayRequestHandlerOptions["context"]>;
-}) {
+}): ConfigHandlerHarness {
   const logGateway = createGatewayLog();
   const disconnectClientsUsingSharedGatewayAuth = vi.fn();
   const respond = vi.fn();
