@@ -106,7 +106,7 @@ Current bundled examples:
   policy, binary-thinking/live-model policy, and usage auth + quota fetching
 - `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
-  `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
+  `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
@@ -265,6 +265,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
+- StepFun: `stepfun` / `stepfun-plan` (`STEPFUN_API_KEY`)
+- Example models: `stepfun/step-3.5-flash`, `stepfun-plan/step-3.5-flash-2603`
 - Together: `together` (`TOGETHER_API_KEY`)
 - Venice: `venice` (`VENICE_API_KEY`)
 - Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
