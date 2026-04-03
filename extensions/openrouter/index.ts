@@ -74,6 +74,23 @@ function isOpenRouterCacheTtlModel(modelId: string): boolean {
   return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+function buildOpenRouterReplayPolicy(modelId?: string) {
+  const normalizedModelId = modelId?.toLowerCase() ?? "";
+  return {
+    applyAssistantFirstOrderingFix: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    ...(normalizedModelId.includes("gemini")
+      ? {
+          sanitizeThoughtSignatures: {
+            allowBase64Only: true,
+            includeCamelCase: true,
+          },
+        }
+      : {}),
+  };
+}
+
 export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
@@ -125,11 +142,7 @@ export default definePluginEntry({
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);
       },
-      capabilities: {
-        openAiCompatTurnValidation: false,
-        geminiThoughtSignatureSanitization: true,
-        geminiThoughtSignatureModelHints: ["gemini"],
-      },
+      buildReplayPolicy: ({ modelId }) => buildOpenRouterReplayPolicy(modelId),
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;

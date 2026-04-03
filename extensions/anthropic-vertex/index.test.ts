@@ -56,4 +56,25 @@ describe("anthropic-vertex provider plugin", () => {
       },
     });
   });
+
+  it("owns Anthropic-style replay policy", () => {
+    const provider = registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "anthropic-vertex",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never),
+    ).toEqual({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+      dropThinkingBlocks: true,
+    });
+  });
 });

@@ -502,9 +502,7 @@ if (sandboxRoot) {
 
 ### Google/Gemini
 
-- Turn ordering fixes (`applyGoogleTurnOrderingFix`)
-- Tool schema sanitization (`sanitizeToolsForGoogle`)
-- Session history sanitization (`sanitizeSessionHistory`)
+- Plugin-owned tool schema sanitization
 
 ### OpenAI
 

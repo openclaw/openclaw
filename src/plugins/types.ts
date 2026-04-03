@@ -11,7 +11,6 @@ import type {
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -547,6 +546,16 @@ export type ProviderReplayToolCallIdMode = "strict" | "strict9";
 export type ProviderReasoningOutputMode = "native" | "tagged";
 
 /**
+ * @deprecated Legacy static provider capability bag.
+ *
+ * Core replay/runtime ownership now lives on explicit provider hooks such as
+ * `buildReplayPolicy`, `normalizeToolSchemas`, and `wrapStreamFn`. OpenClaw no
+ * longer reads this bag at runtime, but the field remains typed so existing
+ * third-party plugins do not fail to compile immediately.
+ */
+export type ProviderCapabilities = Record<string, unknown>;
+
+/**
  * Provider-owned replay/compaction transcript policy.
  *
  * These values are consumed by shared history replay and compaction logic.
@@ -565,6 +574,8 @@ export type ProviderReplayPolicy = {
   dropThinkingBlocks?: boolean;
   repairToolUseResultPairing?: boolean;
   applyAssistantFirstOrderingFix?: boolean;
+  validateGeminiTurns?: boolean;
+  validateAnthropicTurns?: boolean;
   allowSyntheticToolResults?: boolean;
 };
 
@@ -585,6 +596,16 @@ export type ProviderReplayPolicyContext = {
   model?: ProviderRuntimeModel;
 };
 
+export type ProviderReplaySessionEntry = {
+  customType: string;
+  data?: unknown;
+};
+
+export type ProviderReplaySessionState = {
+  getCustomEntries(): ProviderReplaySessionEntry[];
+  appendCustomEntry(customType: string, data: unknown): void;
+};
+
 /**
  * Provider-owned replay-history sanitization input.
  *
@@ -595,6 +616,7 @@ export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext &
   sessionId: string;
   messages: AgentMessage[];
   allowedToolNames?: Iterable<string>;
+  sessionState?: ProviderReplaySessionState;
 };
 
 /**
@@ -606,6 +628,7 @@ export type ProviderSanitizeReplayHistoryContext = ProviderReplayPolicyContext &
 export type ProviderValidateReplayTurnsContext = ProviderReplayPolicyContext & {
   sessionId?: string;
   messages: AgentMessage[];
+  sessionState?: ProviderReplaySessionState;
 };
 
 /**
@@ -616,6 +639,12 @@ export type ProviderValidateReplayTurnsContext = ProviderReplayPolicyContext & {
  */
 export type ProviderNormalizeToolSchemasContext = ProviderReplayPolicyContext & {
   tools: AnyAgentTool[];
+};
+
+export type ProviderToolSchemaDiagnostic = {
+  toolName: string;
+  toolIndex?: number;
+  violations: string[];
 };
 
 /**
@@ -1036,13 +1065,12 @@ export type ProviderPlugin = {
    */
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
   /**
-   * Static provider capability overrides consumed by shared transcript/tooling
-   * logic.
+   * @deprecated Legacy static capability bag kept only for compatibility.
    *
-   * Use this when the provider behaves like OpenAI/Anthropic, needs transcript
-   * sanitization quirks, or requires provider-family hints.
+   * New provider behavior should use explicit hooks instead. Core replay and
+   * stream/runtime logic no longer consumes this field.
    */
-  capabilities?: Partial<ProviderCapabilities>;
+  capabilities?: ProviderCapabilities;
   /**
    * Provider-owned replay/compaction policy override.
    *
@@ -1079,6 +1107,15 @@ export type ProviderPlugin = {
   normalizeToolSchemas?: (
     ctx: ProviderNormalizeToolSchemasContext,
   ) => AnyAgentTool[] | null | undefined;
+  /**
+   * Provider-owned tool-schema diagnostics after normalization.
+   *
+   * Use this when a provider wants to surface transport-specific schema
+   * warnings without teaching core about provider-specific keyword rules.
+   */
+  inspectToolSchemas?: (
+    ctx: ProviderNormalizeToolSchemasContext,
+  ) => ProviderToolSchemaDiagnostic[] | null | undefined;
   /**
    * Provider-owned reasoning output mode.
    *

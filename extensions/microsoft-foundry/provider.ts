@@ -26,9 +26,6 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
     docsPath: "/providers/models",
     envVars: ["AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
     auth: [entraIdAuthMethod, apiKeyAuthMethod],
-    capabilities: {
-      providerFamily: "openai" as const,
-    },
     onModelSelected: async (ctx) => {
       const providerConfig = ctx.config.models?.providers?.[PROVIDER_ID];
       if (!providerConfig || !ctx.model.startsWith(`${PROVIDER_ID}/`)) {

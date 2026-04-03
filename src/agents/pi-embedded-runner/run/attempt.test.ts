@@ -11,11 +11,12 @@ import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
+  decodeHtmlEntitiesInObject,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveEmbeddedAgentStreamFn,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  decodeHtmlEntitiesInObject,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -218,6 +219,33 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("resolveEmbeddedAgentStreamFn", () => {
+  it("injects authStorage api keys into provider-owned stream functions", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+      authStorage: {
+        getApiKey: vi.fn(async () => "demo-runtime-key"),
+      },
+    });
+
+    await expect(
+      streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {}),
+    ).resolves.toMatchObject({
+      apiKey: "demo-runtime-key",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 });
 

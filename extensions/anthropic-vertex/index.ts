@@ -7,6 +7,19 @@ import {
 
 const PROVIDER_ID = "anthropic-vertex";
 
+function buildAnthropicVertexReplayPolicy(modelId?: string) {
+  return {
+    sanitizeMode: "full" as const,
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict" as const,
+    preserveSignatures: true,
+    repairToolUseResultPairing: true,
+    validateAnthropicTurns: true,
+    allowSyntheticToolResults: true,
+    ...((modelId?.toLowerCase() ?? "").includes("claude") ? { dropThinkingBlocks: true } : {}),
+  };
+}
+
 export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Anthropic Vertex Provider",
@@ -35,10 +48,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      capabilities: {
-        providerFamily: "anthropic",
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      buildReplayPolicy: ({ modelId }) => buildAnthropicVertexReplayPolicy(modelId),
     });
   },
 });

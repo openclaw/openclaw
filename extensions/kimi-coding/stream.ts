@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { createAnthropicToolPayloadCompatibilityWrapper } from "openclaw/plugin-sdk/provider-stream";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -178,4 +179,13 @@ export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefin
     }
     return wrapKimiTaggedToolCalls(maybeStream);
   };
+}
+
+export function wrapKimiProviderStream(baseStreamFn: StreamFn | undefined): StreamFn {
+  return createKimiToolCallMarkupWrapper(
+    createAnthropicToolPayloadCompatibilityWrapper(baseStreamFn, {
+      toolSchemaMode: "openai-functions",
+      toolChoiceMode: "openai-string-modes",
+    }),
+  );
 }

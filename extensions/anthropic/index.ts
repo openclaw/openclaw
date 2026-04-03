@@ -30,6 +30,7 @@ import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
@@ -446,10 +447,7 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
-      capabilities: {
-        providerFamily: "anthropic",
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;

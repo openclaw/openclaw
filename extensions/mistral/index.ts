@@ -47,6 +47,13 @@ function shouldContributeMistralCompat(params: {
   return isMistralBaseUrl(params.model.baseUrl) || isMistralModelHint(params.modelId);
 }
 
+function buildMistralReplayPolicy() {
+  return {
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict9" as const,
+  };
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Mistral Provider",
@@ -77,18 +84,7 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
     contributeResolvedModelCompat: ({ modelId, model }) =>
       shouldContributeMistralCompat({ modelId, model }) ? MISTRAL_MODEL_COMPAT_PATCH : undefined,
-    capabilities: {
-      transcriptToolCallIdMode: "strict9",
-      transcriptToolCallIdModelHints: [
-        "mistral",
-        "mixtral",
-        "codestral",
-        "pixtral",
-        "devstral",
-        "ministral",
-        "mistralai",
-      ],
-    },
+    buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
