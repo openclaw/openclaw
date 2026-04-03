@@ -107,6 +107,10 @@
       "types": "./dist/plugin-sdk/reply-dispatch-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-dispatch-runtime.js"
     },
+    "./plugin-sdk/reply-reference": {
+      "types": "./dist/plugin-sdk/reply-reference.d.ts",
+      "default": "./dist/plugin-sdk/reply-reference.js"
+    },
     "./plugin-sdk/reply-chunking": {
       "types": "./dist/plugin-sdk/reply-chunking.d.ts",
       "default": "./dist/plugin-sdk/reply-chunking.js"
@@ -126,6 +130,10 @@
     "./plugin-sdk/interactive-runtime": {
       "types": "./dist/plugin-sdk/interactive-runtime.d.ts",
       "default": "./dist/plugin-sdk/interactive-runtime.js"
+    },
+    "./plugin-sdk/outbound-media": {
+      "types": "./dist/plugin-sdk/outbound-media.d.ts",
+      "default": "./dist/plugin-sdk/outbound-media.js"
     },
     "./plugin-sdk/outbound-runtime": {
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
@@ -382,38 +390,6 @@
     "./plugin-sdk/diffs": {
       "types": "./dist/plugin-sdk/diffs.d.ts",
       "default": "./dist/plugin-sdk/diffs.js"
-    },
-    "./plugin-sdk/discord": {
-      "types": "./dist/plugin-sdk/discord.d.ts",
-      "default": "./dist/plugin-sdk/discord.js"
-    },
-    "./plugin-sdk/discord-account": {
-      "types": "./dist/plugin-sdk/discord-account.d.ts",
-      "default": "./dist/plugin-sdk/discord-account.js"
-    },
-    "./plugin-sdk/discord-core": {
-      "types": "./dist/plugin-sdk/discord-core.d.ts",
-      "default": "./dist/plugin-sdk/discord-core.js"
-    },
-    "./plugin-sdk/discord-runtime-surface": {
-      "types": "./dist/plugin-sdk/discord-runtime-surface.d.ts",
-      "default": "./dist/plugin-sdk/discord-runtime-surface.js"
-    },
-    "./plugin-sdk/discord-session-key": {
-      "types": "./dist/plugin-sdk/discord-session-key.d.ts",
-      "default": "./dist/plugin-sdk/discord-session-key.js"
-    },
-    "./plugin-sdk/discord-surface": {
-      "types": "./dist/plugin-sdk/discord-surface.d.ts",
-      "default": "./dist/plugin-sdk/discord-surface.js"
-    },
-    "./plugin-sdk/discord-thread-bindings": {
-      "types": "./dist/plugin-sdk/discord-thread-bindings.d.ts",
-      "default": "./dist/plugin-sdk/discord-thread-bindings.js"
-    },
-    "./plugin-sdk/discord-timeouts": {
-      "types": "./dist/plugin-sdk/discord-timeouts.d.ts",
-      "default": "./dist/plugin-sdk/discord-timeouts.js"
     },
     "./plugin-sdk/error-runtime": {
       "types": "./dist/plugin-sdk/error-runtime.d.ts",
@@ -831,49 +807,9 @@
       "types": "./dist/plugin-sdk/secret-input.d.ts",
       "default": "./dist/plugin-sdk/secret-input.js"
     },
-    "./plugin-sdk/signal": {
-      "types": "./dist/plugin-sdk/signal.d.ts",
-      "default": "./dist/plugin-sdk/signal.js"
-    },
-    "./plugin-sdk/signal-account": {
-      "types": "./dist/plugin-sdk/signal-account.d.ts",
-      "default": "./dist/plugin-sdk/signal-account.js"
-    },
-    "./plugin-sdk/signal-surface": {
-      "types": "./dist/plugin-sdk/signal-surface.d.ts",
-      "default": "./dist/plugin-sdk/signal-surface.js"
-    },
     "./plugin-sdk/channel-status": {
       "types": "./dist/plugin-sdk/channel-status.d.ts",
       "default": "./dist/plugin-sdk/channel-status.js"
-    },
-    "./plugin-sdk/slack": {
-      "types": "./dist/plugin-sdk/slack.d.ts",
-      "default": "./dist/plugin-sdk/slack.js"
-    },
-    "./plugin-sdk/slack-account": {
-      "types": "./dist/plugin-sdk/slack-account.d.ts",
-      "default": "./dist/plugin-sdk/slack-account.js"
-    },
-    "./plugin-sdk/slack-core": {
-      "types": "./dist/plugin-sdk/slack-core.d.ts",
-      "default": "./dist/plugin-sdk/slack-core.js"
-    },
-    "./plugin-sdk/slack-runtime-surface": {
-      "types": "./dist/plugin-sdk/slack-runtime-surface.d.ts",
-      "default": "./dist/plugin-sdk/slack-runtime-surface.js"
-    },
-    "./plugin-sdk/slack-surface": {
-      "types": "./dist/plugin-sdk/slack-surface.d.ts",
-      "default": "./dist/plugin-sdk/slack-surface.js"
-    },
-    "./plugin-sdk/slack-target-parser": {
-      "types": "./dist/plugin-sdk/slack-target-parser.d.ts",
-      "default": "./dist/plugin-sdk/slack-target-parser.js"
-    },
-    "./plugin-sdk/slack-targets": {
-      "types": "./dist/plugin-sdk/slack-targets.d.ts",
-      "default": "./dist/plugin-sdk/slack-targets.js"
     },
     "./plugin-sdk/status-helpers": {
       "types": "./dist/plugin-sdk/status-helpers.d.ts",
@@ -902,26 +838,6 @@
     "./plugin-sdk/synthetic": {
       "types": "./dist/plugin-sdk/synthetic.d.ts",
       "default": "./dist/plugin-sdk/synthetic.js"
-    },
-    "./plugin-sdk/telegram-account": {
-      "types": "./dist/plugin-sdk/telegram-account.d.ts",
-      "default": "./dist/plugin-sdk/telegram-account.js"
-    },
-    "./plugin-sdk/telegram-command-config": {
-      "types": "./dist/plugin-sdk/telegram-command-config.d.ts",
-      "default": "./dist/plugin-sdk/telegram-command-config.js"
-    },
-    "./plugin-sdk/telegram-allow-from": {
-      "types": "./dist/plugin-sdk/telegram-allow-from.d.ts",
-      "default": "./dist/plugin-sdk/telegram-allow-from.js"
-    },
-    "./plugin-sdk/telegram-core": {
-      "types": "./dist/plugin-sdk/telegram-core.d.ts",
-      "default": "./dist/plugin-sdk/telegram-core.js"
-    },
-    "./plugin-sdk/telegram-surface": {
-      "types": "./dist/plugin-sdk/telegram-surface.d.ts",
-      "default": "./dist/plugin-sdk/telegram-surface.js"
     },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
@@ -974,26 +890,6 @@
     "./plugin-sdk/volcengine": {
       "types": "./dist/plugin-sdk/volcengine.d.ts",
       "default": "./dist/plugin-sdk/volcengine.js"
-    },
-    "./plugin-sdk/whatsapp-auth-presence": {
-      "types": "./dist/plugin-sdk/whatsapp-auth-presence.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-auth-presence.js"
-    },
-    "./plugin-sdk/whatsapp-core": {
-      "types": "./dist/plugin-sdk/whatsapp-core.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-core.js"
-    },
-    "./plugin-sdk/whatsapp-shared": {
-      "types": "./dist/plugin-sdk/whatsapp-shared.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-shared.js"
-    },
-    "./plugin-sdk/whatsapp-surface": {
-      "types": "./dist/plugin-sdk/whatsapp-surface.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-surface.js"
-    },
-    "./plugin-sdk/whatsapp-targets": {
-      "types": "./dist/plugin-sdk/whatsapp-targets.d.ts",
-      "default": "./dist/plugin-sdk/whatsapp-targets.js"
     },
     "./plugin-sdk/zalo": {
       "types": "./dist/plugin-sdk/zalo.d.ts",
