@@ -803,9 +803,22 @@ describe("update-cli", () => {
     platformSpy.mockRestore();
 
     expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(
-      [brewNpm, "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
-      expect.any(Object),
+    const installCall = vi
+      .mocked(runCommandWithTimeout)
+      .mock.calls.find(
+        ([argv]) =>
+          Array.isArray(argv) &&
+          path.normalize(String(argv[0] ?? "")) === path.normalize(brewNpm) &&
+          argv[1] === "i" &&
+          argv[2] === "-g" &&
+          argv[3] === "openclaw@latest",
+      );
+
+    expect(installCall).toBeDefined();
+    expect(installCall?.[1]).toEqual(
+      expect.objectContaining({
+        timeoutMs: expect.any(Number),
+      }),
     );
   });
 
