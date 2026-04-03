@@ -1,34 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { parseBooleanValue } from "./boolean.js";
 import { splitShellArgs } from "./shell-argv.js";
-
-const resolveProviderReasoningOutputModeWithPluginMock = vi.fn((params: { provider: string }) => {
-  switch (params.provider.toLowerCase()) {
-    case "google":
-    case "google-gemini-cli":
-    case "google-generative-ai":
-    case "minimax":
-    case "minimax-cn":
-      return "tagged" as const;
-    default:
-      return undefined;
-  }
-});
-
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderReasoningOutputModeWithPlugin: (params: { provider: string }) =>
-    resolveProviderReasoningOutputModeWithPluginMock(params),
-}));
-
-let isReasoningTagProvider: typeof import("./provider-utils.js").isReasoningTagProvider;
-
-beforeAll(async () => {
-  ({ isReasoningTagProvider } = await import("./provider-utils.js"));
-});
-
-beforeEach(() => {
-  resolveProviderReasoningOutputModeWithPluginMock.mockClear();
-});
 
 describe("parseBooleanValue", () => {
   it("handles boolean inputs", () => {
