@@ -366,6 +366,11 @@ const workspaceMutationLocks = new Map<string, Promise<void>>();
 const WORKSPACE_MUTATION_LOCK_TIMEOUT_MS = 120_000;
 const WORKSPACE_MUTATION_LOCK_TTL_MS = 60_000;
 
+// Serialize the async "resolve lock key → read map → insert into map" section
+// so two concurrent calls that map to the same canonical path cannot both see
+// an empty map and proceed in parallel.
+let _lockKeyEnqueueChain: Promise<void> = Promise.resolve();
+
 export function wrapToolMutationLock(
   tool: AnyAgentTool,
   root: string,
@@ -391,17 +396,32 @@ export function wrapToolMutationLock(
         containerWorkdir: options?.containerWorkdir,
         bindMounts: options?.bindMounts,
       });
-      const lockKey = await canonicalizeMutationLockKey(path.resolve(root, resolvedPath));
-      // Also wait on any in-flight apply_patch for this workspace root so
-      // per-file writes and apply_patch never overlap.
-      const applyPatchQueueKey = `${APPLY_PATCH_WORKSPACE_LOCK_PREFIX}${path.resolve(root)}`;
-      const applyPatchPrevious = workspaceMutationLocks.get(applyPatchQueueKey);
-      const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
-      let release: (() => void) | undefined;
-      const current = new Promise<void>((resolve) => {
-        release = resolve;
+
+      // Serialize key resolution + map lookup/insert so concurrent calls
+      // targeting the same canonical path always queue behind each other.
+      type EnqueueResult = {
+        lockKey: string;
+        applyPatchPrevious: Promise<void> | undefined;
+        previous: Promise<void>;
+        release: (() => void) | undefined;
+        current: Promise<void>;
+      };
+      const enqueued = await new Promise<EnqueueResult>((resolveEnqueue) => {
+        _lockKeyEnqueueChain = _lockKeyEnqueueChain.then(async () => {
+          const lockKey = await canonicalizeMutationLockKey(path.resolve(root, resolvedPath));
+          const applyPatchQueueKey = `${APPLY_PATCH_WORKSPACE_LOCK_PREFIX}${path.resolve(root)}`;
+          const applyPatchPrevious = workspaceMutationLocks.get(applyPatchQueueKey);
+          const previous = workspaceMutationLocks.get(lockKey) ?? Promise.resolve();
+          let release: (() => void) | undefined;
+          const current = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          workspaceMutationLocks.set(lockKey, current);
+          resolveEnqueue({ lockKey, applyPatchPrevious, previous, release, current });
+        });
       });
-      workspaceMutationLocks.set(lockKey, current);
+      const { lockKey, applyPatchPrevious, previous, current } = enqueued;
+      let { release } = enqueued;
 
       let ranMutation = false;
       try {

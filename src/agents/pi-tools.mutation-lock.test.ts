@@ -894,4 +894,71 @@ describe("wrapToolMemoryFlushAppendOnlyWrite", () => {
     expect(result).toContain("added");
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
+
+  it("serializes concurrent bind-mount calls that resolve to the same canonical key (race regression)", async () => {
+    // Regression: when two concurrent calls both enter wrapToolMutationLock and
+    // resolve to the same canonical lock key via async canonicalizeMutationLockKey,
+    // both could see an empty map and proceed in parallel. The fix serializes the
+    // key-resolution + map-insertion section so the second call always queues
+    // behind the first.
+    const hostShared = await fs.mkdtemp(path.join(os.tmpdir(), "oc-bindrace-"));
+    try {
+      const gate = deferred();
+      const events: string[] = [];
+
+      const base: AnyAgentTool = {
+        name: "write",
+        label: "write",
+        description: "race regression test",
+        parameters: {},
+        execute: async (_toolCallId, params) => {
+          const record = params as Record<string, unknown>;
+          const filePath = typeof record.path === "string" ? record.path : "";
+          events.push(`start:${filePath}`);
+          if (events.length === 1) {
+            // Block whichever call executes first.
+            await gate.promise;
+          }
+          events.push(`end:${filePath}`);
+          return textResult(filePath);
+        },
+      };
+
+      const wrapped = wrapToolMutationLock(base, process.cwd(), {
+        containerWorkdir: "/workspace",
+        bindMounts: [`${hostShared}:/mount:rw`],
+      });
+
+      // Fire both at once — one uses container path, other uses host path.
+      const p1 = wrapped.execute("race-1", { path: "/mount/file.txt", content: "a" });
+      const p2 = wrapped.execute("race-2", { path: `${hostShared}/file.txt`, content: "b" });
+
+      // Wait until the first call is blocked inside execute.
+      await waitUntil(() => {
+        expect(events.length).toBeGreaterThanOrEqual(1);
+        expect(events.filter((e) => e.startsWith("start:")).length).toBe(1);
+      });
+
+      // Only one start should be visible — the other is queued.
+      const starts = events.filter((e) => e.startsWith("start:"));
+      expect(starts).toHaveLength(1);
+
+      gate.resolve();
+      await Promise.all([p1, p2]);
+
+      // Both should have serialized: start→end then start→end.
+      const startIndices = events
+        .map((e, i) => (e.startsWith("start:") ? i : -1))
+        .filter((i) => i >= 0);
+      const endIndices = events
+        .map((e, i) => (e.startsWith("end:") ? i : -1))
+        .filter((i) => i >= 0);
+      expect(startIndices).toHaveLength(2);
+      expect(endIndices).toHaveLength(2);
+      // First call must end before second call starts.
+      expect(endIndices[0]).toBeLessThan(startIndices[1]);
+    } finally {
+      await fs.rm(hostShared, { recursive: true, force: true });
+    }
+  });
 });
