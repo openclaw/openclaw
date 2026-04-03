@@ -70,11 +70,33 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
 
-  // Always attempt capability loader when cfg is available so that speech-only
-  // plugins like elevenlabs are discovered even when the main registry already
-  // contains a different provider (e.g. openai registers both model + speech).
-  // cache: false prevents the loaded registry from replacing the active registry
-  // (activate:false requires cache:false per loadOpenClawPlugins contract).
+  // Only run the capability-specific plugin discovery when cfg is provided AND
+  // there might be additional capability-only plugins not yet in the active
+  // registry. When the active registry already has providers for this key we
+  // check whether the manifest registry declares more bundled capability
+  // plugins than the active set covers — if so, some speech-only (or similar)
+  // plugins were skipped and we need the loader pass. Otherwise return the
+  // active providers directly to avoid the per-call snapshot/module-load cost
+  // that the unconditional loader path caused (P1 regression).
+  if (activeProviders.length > 0 && params.cfg !== undefined) {
+    const bundledIds = resolveBundledCapabilityCompatPluginIds({
+      key: params.key,
+      cfg: params.cfg,
+    });
+    const activeIds = new Set(activeProviders.map((entry) => entry.provider?.id).filter(Boolean));
+    const allCovered = bundledIds.every((id) => activeIds.has(id));
+    if (allCovered) {
+      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+    }
+  }
+
+  if (activeProviders.length > 0 && params.cfg === undefined) {
+    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  }
+
+  // cfg is available and the active registry is either empty or missing some
+  // capability plugins — run the capability-specific loader. cache: false
+  // prevents the loaded registry from replacing the active registry.
   const loadOptions =
     params.cfg === undefined
       ? undefined

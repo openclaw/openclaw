@@ -209,15 +209,9 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["microsoft"]);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: { messages: { tts: { provider: "edge" } } },
-      env: process.env,
-    });
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
-      activate: false,
-      cache: false,
-      config: { messages: { tts: { provider: "edge" } } },
-    });
+    // No bundled speech plugins declared in the manifest, so the capability
+    // loader is skipped — all active providers are already covered.
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -233,6 +227,129 @@ describe("resolvePluginCapabilityProviders", () => {
       allowlistCompat,
       enablementCompat,
     });
+  });
+
+  it("runs capability loader when bundled speech-only plugin is missing from active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "openai",
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+
+    const capabilityRegistry = createEmptyPluginRegistry();
+    capabilityRegistry.speechProviders.push(
+      {
+        pluginId: "openai",
+        pluginName: "openai",
+        source: "test",
+        provider: {
+          id: "openai",
+          label: "openai",
+          isConfigured: () => true,
+          synthesize: async () => ({
+            audioBuffer: Buffer.from("x"),
+            outputFormat: "mp3",
+            voiceCompatible: false,
+            fileExtension: ".mp3",
+          }),
+        },
+      } as never,
+      {
+        pluginId: "elevenlabs",
+        pluginName: "elevenlabs",
+        source: "test",
+        provider: {
+          id: "elevenlabs",
+          label: "elevenlabs",
+          isConfigured: () => true,
+          synthesize: async () => ({
+            audioBuffer: Buffer.from("x"),
+            outputFormat: "mp3",
+            voiceCompatible: false,
+            fileExtension: ".mp3",
+          }),
+        },
+      } as never,
+    );
+
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : capabilityRegistry,
+    );
+
+    // Manifest declares both openai and elevenlabs as bundled speech plugins
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "openai", origin: "bundled", contracts: { speechProviders: ["openai"] } },
+        { id: "elevenlabs", origin: "bundled", contracts: { speechProviders: ["elevenlabs"] } },
+      ] as never,
+      diagnostics: [],
+    });
+
+    const cfg = {} as OpenClawConfig;
+    const providers = resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
+
+    // Both providers should be present: openai from active + elevenlabs from loader
+    expectResolvedCapabilityProviderIds(providers, ["openai", "elevenlabs"]);
+    // Loader should have been called because elevenlabs was missing from active
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({ activate: false, cache: false }),
+    );
+  });
+
+  it("skips capability loader when all bundled plugins are already in active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push(
+      {
+        pluginId: "openai",
+        pluginName: "openai",
+        source: "test",
+        provider: {
+          id: "openai",
+          label: "openai",
+          isConfigured: () => true,
+          synthesize: async () => ({}),
+        },
+      } as never,
+      {
+        pluginId: "elevenlabs",
+        pluginName: "elevenlabs",
+        source: "test",
+        provider: {
+          id: "elevenlabs",
+          label: "elevenlabs",
+          isConfigured: () => true,
+          synthesize: async () => ({}),
+        },
+      } as never,
+    );
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "openai", origin: "bundled", contracts: { speechProviders: ["openai"] } },
+        { id: "elevenlabs", origin: "bundled", contracts: { speechProviders: ["elevenlabs"] } },
+      ] as never,
+      diagnostics: [],
+    });
+
+    const cfg = {} as OpenClawConfig;
+    const providers = resolvePluginCapabilityProviders({ key: "speechProviders", cfg });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai", "elevenlabs"]);
+    // No loader call — only the initial resolveRuntimePluginRegistry() for active registry
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("reuses a compatible active registry even when the capability list is empty", () => {
