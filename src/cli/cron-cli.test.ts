@@ -654,6 +654,20 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects --thread-id with blank --channel on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--channel",
+      "   ",
+      "--to",
+      "-1001234567890",
+      "--thread-id",
+      "48",
+    ]);
+  });
+
   it("rejects --thread-id when combined with --system-event on cron edit", async () => {
     await expectCronCommandExit([
       "cron",
@@ -695,6 +709,20 @@ describe("cron cli", () => {
       "-1001234567890",
       "--thread-id",
       "   ",
+    ]);
+  });
+
+  it("rejects --thread-id with blank --to on cron edit", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "edit",
+      "job-1",
+      "--channel",
+      "telegram",
+      "--to",
+      "   ",
+      "--thread-id",
+      "48",
     ]);
   });
 

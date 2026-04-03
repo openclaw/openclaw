@@ -226,9 +226,15 @@ export function registerCronEditCommand(cron: Command) {
             : undefined;
           const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
-          const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
+          const explicitChannelRaw =
+            typeof opts.channel === "string" ? opts.channel.trim() : undefined;
+          const explicitToRaw = typeof opts.to === "string" ? opts.to.trim() : undefined;
+          const explicitThreadIdRaw =
+            typeof opts.threadId === "string" ? opts.threadId.trim() : undefined;
+          const hasDeliveryTarget =
+            typeof explicitChannelRaw === "string" || typeof explicitToRaw === "string";
           const hasDeliveryAccount = typeof opts.account === "string";
-          const hasThreadId = typeof opts.threadId === "string";
+          const hasThreadId = typeof explicitThreadIdRaw === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasExplicitAgentTurnPayloadPatch =
             typeof opts.message === "string" ||
@@ -308,12 +314,11 @@ export function registerCronEditCommand(cron: Command) {
               // Back-compat: toggling best-effort alone has historically implied announce mode.
               delivery.mode = "announce";
             }
-            if (typeof opts.channel === "string") {
-              const channel = opts.channel.trim();
-              delivery.channel = channel ? channel : undefined;
+            if (typeof explicitChannelRaw === "string") {
+              delivery.channel = explicitChannelRaw || undefined;
             }
-            if (typeof opts.to === "string" || hasThreadId) {
-              const threadId = typeof opts.threadId === "string" ? opts.threadId.trim() : "";
+            if (typeof explicitToRaw === "string" || hasThreadId) {
+              const threadId = explicitThreadIdRaw ?? "";
               if (hasThreadId && !threadId) {
                 throw new Error("--thread-id must be a non-empty numeric value");
               }
@@ -324,7 +329,7 @@ export function registerCronEditCommand(cron: Command) {
                 throw new Error("--thread-id is not supported with --no-deliver");
               }
               const explicitChannel =
-                typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
+                typeof explicitChannelRaw === "string" ? explicitChannelRaw.toLowerCase() : "";
               if (threadId && explicitChannel && explicitChannel !== "telegram") {
                 throw new Error("--thread-id requires --channel telegram");
               }
@@ -338,8 +343,8 @@ export function registerCronEditCommand(cron: Command) {
                   );
                 }
               }
-              let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
-              if (threadId && (!toRaw || typeof opts.channel !== "string")) {
+              let toRaw = explicitToRaw ?? "";
+              if (threadId && (!toRaw || typeof explicitChannelRaw !== "string" || !explicitChannelRaw)) {
                 const existing = await getExistingJob();
                 if (!existing) {
                   throw new Error(`Cron job ${id} not found`);
@@ -348,7 +353,7 @@ export function registerCronEditCommand(cron: Command) {
                   (existing.delivery as Record<string, string> | undefined)?.channel ?? "";
                 const existingMode =
                   (existing.delivery as Record<string, string> | undefined)?.mode ?? "";
-                if (typeof opts.channel !== "string") {
+                if (typeof explicitChannelRaw !== "string" || !explicitChannelRaw) {
                   if (existingMode === "webhook") {
                     throw new Error("--thread-id is not supported for webhook delivery jobs");
                   }
@@ -379,7 +384,7 @@ export function registerCronEditCommand(cron: Command) {
                 throw new Error(
                   "--thread-id requires a delivery target (use --to or ensure the job has one)",
                 );
-              } else if (typeof opts.to === "string") {
+              } else if (typeof explicitToRaw === "string") {
                 delivery.to = undefined;
               }
             }
