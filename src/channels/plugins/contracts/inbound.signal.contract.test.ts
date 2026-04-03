@@ -1,5 +1,5 @@
 import { describe } from "vitest";
-import { installSignalInboundContractSuite } from "../../../../test/helpers/channels/inbound-contract.js";
+import { installSignalInboundContractSuite } from "../../../../test/helpers/channels/inbound-contract.signal.js";
 
 describe("signal inbound contract", () => {
   installSignalInboundContractSuite();
