@@ -92,7 +92,7 @@ To use a registered provider, set the provider id in your config:
 }
 ```
 
-Setting a `provider` automatically forces `mode: "safeguard"`. If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization.
+Setting a `provider` automatically forces `mode: "safeguard"`. Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and OpenClaw still preserves recent-turn and split-turn suffix context after provider output. If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization.
 
 ## Auto-compaction (default on)
 

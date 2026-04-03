@@ -80,6 +80,11 @@ async function tryProviderSummarize(
   params: {
     messages: unknown[];
     signal?: AbortSignal;
+    customInstructions?: string;
+    summarizationInstructions?: {
+      identifierPolicy?: "strict" | "off" | "custom";
+      identifierInstructions?: string;
+    };
     previousSummary?: string;
   },
 ): Promise<string | undefined> {
@@ -596,11 +601,8 @@ function splitPreservedRecentTurns(params: {
   return { summarizableMessages: repairedSummarizableMessages, preservedMessages };
 }
 
-function formatPreservedTurnsSection(messages: AgentMessage[]): string {
-  if (messages.length === 0) {
-    return "";
-  }
-  const lines = messages
+function formatContextMessages(messages: AgentMessage[]): string[] {
+  return messages
     .map((message) => {
       let roleLabel: string;
       if (message.role === "assistant") {
@@ -630,10 +632,28 @@ function formatPreservedTurnsSection(messages: AgentMessage[]): string {
       return `- ${roleLabel}: ${trimmed}`;
     })
     .filter((line): line is string => Boolean(line));
+}
+
+function formatPreservedTurnsSection(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "";
+  }
+  const lines = formatContextMessages(messages);
   if (lines.length === 0) {
     return "";
   }
   return `\n\n## Recent turns preserved verbatim\n${lines.join("\n")}`;
+}
+
+function formatSplitTurnContextSection(messages: AgentMessage[]): string {
+  if (messages.length === 0) {
+    return "";
+  }
+  const lines = formatContextMessages(messages);
+  if (lines.length === 0) {
+    return "";
+  }
+  return `**Turn Context (split turn):**\n\n${lines.join("\n")}`;
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
@@ -757,6 +777,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
     const providerId = runtime?.provider;
+    const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
+    const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
+    const { preservedMessages: providerPreservedMessages } = splitPreservedRecentTurns({
+      messages: preparation.messagesToSummarize,
+      recentTurnsPreserve,
+    });
+    const preservedTurnsSection = formatPreservedTurnsSection(providerPreservedMessages);
+    const splitTurnSection = preparation.isSplitTurn
+      ? formatSplitTurnContextSection(turnPrefixMessages)
+      : "";
+    const structuredInstructions = buildCompactionStructureInstructions(
+      customInstructions,
+      summarizationInstructions,
+    );
 
     // -----------------------------------------------------------------------
     // Provider path — one call with all messages, no LLM-specific prep.
@@ -775,6 +809,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           const providerResult = await tryProviderSummarize(compactionProvider, {
             messages: allMessages,
             signal,
+            customInstructions: structuredInstructions,
+            summarizationInstructions,
             previousSummary: preparation.previousSummary,
           });
 
@@ -783,6 +819,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             // No quality guard: the provider is trusted.
             const workspaceContext = await readWorkspaceContextForSummary();
             const suffix = assembleSuffix({
+              splitTurnSection,
+              preservedTurnsSection,
               toolFailureSection,
               fileOpsSummary,
               workspaceContext,
@@ -847,15 +885,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     try {
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
-      const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
-      const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
       const qualityGuardEnabled = runtime?.qualityGuardEnabled ?? false;
       const qualityGuardMaxRetries = resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries);
-      const structuredInstructions = buildCompactionStructureInstructions(
-        customInstructions,
-        summarizationInstructions,
-      );
 
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
 
@@ -1105,6 +1137,7 @@ export const __testing = {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
+  formatSplitTurnContextSection,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
   appendSummarySection,

@@ -281,10 +281,12 @@ Plugins can register a compaction provider via `registerCompactionProvider()` on
 
 - `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization.
 - Setting a `provider` forces `mode: "safeguard"`.
+- Providers receive the same compaction instructions and identifier-preservation policy as the built-in path.
+- The safeguard still preserves recent-turn and split-turn suffix context after provider output.
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
 - Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
 
-Source: `src/plugins/compaction-provider.ts`, `src/agents/pi-extensions/compaction-safeguard.ts`.
+Source: `src/plugins/compaction-provider.ts`, `src/agents/pi-hooks/compaction-safeguard.ts`.
 
 ---
 

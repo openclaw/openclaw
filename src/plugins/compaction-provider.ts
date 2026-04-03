@@ -14,6 +14,11 @@
  * A pluggable compaction provider that can replace the built-in
  * summarizeInStages pipeline.
  */
+export type CompactionProviderSummarizationInstructions = {
+  identifierPolicy?: "strict" | "off" | "custom";
+  identifierInstructions?: string;
+};
+
 export interface CompactionProvider {
   id: string;
   label: string;
@@ -21,6 +26,8 @@ export interface CompactionProvider {
     messages: unknown[];
     signal?: AbortSignal;
     compressionRatio?: number;
+    customInstructions?: string;
+    summarizationInstructions?: CompactionProviderSummarizationInstructions;
     /** Summary from a prior compaction round, if re-compacting. */
     previousSummary?: string;
   }): Promise<string>;
