@@ -47,7 +47,9 @@ function resolveProfile(config: ZalouserAccountConfig, accountId: string): strin
 }
 
 function resolveZalouserAccountBase(params: { cfg: OpenClawConfig; accountId?: string | null }) {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultZalouserAccountId(params.cfg),
+  );
   const baseEnabled =
     (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
