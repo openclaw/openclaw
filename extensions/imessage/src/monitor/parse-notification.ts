@@ -72,6 +72,7 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalString(message.created_at) ||
     !isOptionalAttachments(message.attachments) ||
     !isOptionalString(message.chat_identifier) ||
+    !isOptionalString(message.destination_caller_id) ||
     !isOptionalString(message.chat_guid) ||
     !isOptionalString(message.chat_name) ||
     !isOptionalStringArray(message.participants) ||
