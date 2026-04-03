@@ -10431,6 +10431,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -12878,6 +12893,21 @@
       ],
       "label": "Discord Config Writes",
       "help": "Allow Discord to write config in response to channel events/commands (default: true).",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.discord.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -18566,6 +18596,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.imessage.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.imessage.accounts.*.dbPath",
       "kind": "channel",
       "type": "string",
@@ -19226,6 +19271,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.imessage.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.imessage.dbPath",
       "kind": "channel",
       "type": "string",
@@ -19879,6 +19939,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.irc.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -20601,6 +20676,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.irc.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -22288,6 +22378,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.defaultAccount",
       "kind": "channel",
       "type": "string",
@@ -22406,6 +22511,104 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -24494,6 +24697,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.msteams.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.msteams.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -25586,6 +25804,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.nextcloud-talk.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk.accounts.*.dmHistoryLimit",
       "kind": "channel",
       "type": "integer",
@@ -26194,6 +26427,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nextcloud-talk.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -27817,6 +28065,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.signal.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.signal.accounts.*.defaultTo",
       "kind": "channel",
       "type": "string",
@@ -27951,6 +28214,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.signal.accounts.*.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.signal.accounts.*.groups.*.requireMention",
@@ -28556,6 +28829,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.signal.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.signal.defaultAccount",
       "kind": "channel",
       "type": "string",
@@ -28706,6 +28994,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.signal.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.signal.groups.*.requireMention",
@@ -29803,6 +30101,21 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -31289,6 +31602,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.slack.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.slack.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -32643,6 +32971,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.customCommands",
       "kind": "channel",
       "type": "array",
@@ -33126,6 +33469,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.direct.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.direct.*.topics.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -33538,6 +33891,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.groups.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -33835,6 +34198,16 @@
         "disabled",
         "allowlist"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -34790,6 +35163,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.customCommands",
       "kind": "channel",
       "type": "array",
@@ -35288,6 +35676,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.direct.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.direct.*.topics.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -35737,6 +36135,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.groups.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -36034,6 +36442,16 @@
         "disabled",
         "allowlist"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -37696,6 +38114,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.accounts.*.debounceMs",
       "kind": "channel",
       "type": "integer",
@@ -38385,6 +38818,21 @@
       ],
       "label": "WhatsApp Config Writes",
       "help": "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
