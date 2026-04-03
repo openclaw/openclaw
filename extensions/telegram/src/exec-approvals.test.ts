@@ -292,6 +292,58 @@ describe("telegram exec approvals", () => {
     ).toBe(false);
   });
 
+  it("ignores disabled telegram accounts when checking foreign-channel ambiguity", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "tok-default",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+              },
+            },
+            ops: {
+              enabled: false,
+              botToken: "tok-ops",
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "req-5",
+      request: {
+        command: "echo hi",
+        sessionKey: "agent:ops:missing",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
   it("only injects approval buttons on eligible telegram targets", () => {
     const dmCfg = buildConfig({ enabled: true, approvers: ["123"], target: "dm" });
     const channelCfg = buildConfig({ enabled: true, approvers: ["123"], target: "channel" });

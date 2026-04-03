@@ -66,12 +66,16 @@ export function isTelegramExecApprovalTargetRecipient(params: {
 }
 
 function countTelegramExecApprovalHandlerAccounts(cfg: OpenClawConfig): number {
-  return listTelegramAccountIds(cfg).filter((accountId) =>
-    isChannelExecApprovalClientEnabledFromConfig({
+  return listTelegramAccountIds(cfg).filter((accountId) => {
+    const account = resolveTelegramAccount({ cfg, accountId });
+    if (!account.enabled || account.tokenSource === "none") {
+      return false;
+    }
+    return isChannelExecApprovalClientEnabledFromConfig({
       enabled: resolveTelegramExecApprovalConfig({ cfg, accountId })?.enabled,
       approverCount: getTelegramExecApprovalApprovers({ cfg, accountId }).length,
-    }),
-  ).length;
+    });
+  }).length;
 }
 
 function matchesTelegramRequestAccount(params: {

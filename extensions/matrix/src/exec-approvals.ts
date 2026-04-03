@@ -40,12 +40,16 @@ function resolveMatrixExecApprovalConfig(params: {
 }
 
 function countMatrixExecApprovalHandlerAccounts(cfg: OpenClawConfig): number {
-  return listMatrixAccountIds(cfg).filter((accountId) =>
-    isChannelExecApprovalClientEnabledFromConfig({
+  return listMatrixAccountIds(cfg).filter((accountId) => {
+    const account = resolveMatrixAccount({ cfg, accountId });
+    if (!account.enabled || !account.configured) {
+      return false;
+    }
+    return isChannelExecApprovalClientEnabledFromConfig({
       enabled: resolveMatrixExecApprovalConfig({ cfg, accountId }).enabled,
       approverCount: getMatrixExecApprovalApprovers({ cfg, accountId }).length,
-    }),
-  ).length;
+    });
+  }).length;
 }
 
 function matchesMatrixRequestAccount(params: {
