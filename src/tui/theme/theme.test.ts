@@ -85,7 +85,6 @@ describe("light background detection", () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
-    vi.resetModules();
   });
 
   async function importThemeWithEnv(env: Record<string, string | undefined>) {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DiscoveredModel = { id: string; contextWindow: number };
+type ContextModule = typeof import("./context.js");
 
 function mockContextDeps(params: {
   loadConfig: () => unknown;
@@ -56,23 +57,29 @@ async function flushAsyncWarmup() {
   await new Promise((r) => setTimeout(r, 0));
 }
 
-async function importResolveContextTokensForModel() {
-  const { resolveContextTokensForModel } = await import("./context.js");
+let lastContextModule: ContextModule | null = null;
+
+async function importContextModule(): Promise<ContextModule> {
+  const module = await import("./context.js");
+  lastContextModule = module;
   await flushAsyncWarmup();
+  return module;
+}
+
+async function importResolveContextTokensForModel() {
+  const { resolveContextTokensForModel } = await importContextModule();
   return resolveContextTokensForModel;
 }
 
 describe("lookupContextTokens", () => {
   beforeEach(() => {
     vi.resetModules();
+    lastContextModule = null;
   });
 
   afterEach(async () => {
-    try {
-      const { resetContextWindowCacheForTest } = await import("./context.js");
-      resetContextWindowCacheForTest();
-    } catch {
-      // Ignore reset failures when a test aborts before the module loads.
+    if (lastContextModule) {
+      lastContextModule.resetContextWindowCacheForTest();
     }
     await flushAsyncWarmup();
   });
@@ -88,7 +95,7 @@ describe("lookupContextTokens", () => {
       },
     }));
 
-    const { lookupContextTokens } = await import("./context.js");
+    const { lookupContextTokens } = await importContextModule();
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
@@ -103,7 +110,7 @@ describe("lookupContextTokens", () => {
       },
     }));
 
-    const { lookupContextTokens } = await import("./context.js");
+    const { lookupContextTokens } = await importContextModule();
     expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
       321_000,
     );
@@ -138,8 +145,7 @@ describe("lookupContextTokens", () => {
         const loadConfigMock = vi.fn(() => ({ models: {} }));
         const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
         process.argv = scenario.argv;
-        await import("./context.js");
-        await flushAsyncWarmup();
+        await importContextModule();
         expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
         expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(scenario.expectedCalls);
       }
@@ -168,7 +174,7 @@ describe("lookupContextTokens", () => {
     mockContextModuleDeps(loadConfigMock);
 
     try {
-      const { lookupContextTokens } = await import("./context.js");
+      const { lookupContextTokens } = await importContextModule();
       expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
       expect(loadConfigMock).toHaveBeenCalledTimes(1);
       expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
@@ -187,7 +193,7 @@ describe("lookupContextTokens", () => {
       { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
     ]);
 
-    const { lookupContextTokens } = await import("./context.js");
+    const { lookupContextTokens } = await importContextModule();
     lookupContextTokens("gemini-3.1-pro-preview");
     await flushAsyncWarmup();
     // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
@@ -203,7 +209,7 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
@@ -257,7 +263,7 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google/gemini-2.5-pro");
     await flushAsyncWarmup();
 
@@ -292,8 +298,7 @@ describe("lookupContextTokens", () => {
       },
     };
 
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await flushAsyncWarmup();
+    const { resolveContextTokensForModel } = await importContextModule();
 
     // Exact key "bedrock" wins over the alias-normalized match "amazon-bedrock".
     const bedrockResult = resolveContextTokensForModel({
@@ -321,7 +326,7 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google/gemini-2.5-pro");
     await flushAsyncWarmup();
 
@@ -354,7 +359,7 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
@@ -371,8 +376,7 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([]);
 
     const cfg = createContextOverrideConfig("z.ai", "glm-5", 256_000);
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await flushAsyncWarmup();
+    const { resolveContextTokensForModel } = await importContextModule();
 
     const result = resolveContextTokensForModel({
       cfg: cfg as never,

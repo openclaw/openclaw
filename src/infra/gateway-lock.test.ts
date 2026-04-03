@@ -273,6 +273,7 @@ describe("gateway lock", () => {
         staleMs: 10_000,
         platform: "darwin",
         port: 18789,
+        readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run"],
       });
       await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
     } finally {
@@ -308,5 +309,111 @@ describe("gateway lock", () => {
 
     await expect(acquireForTest(env)).rejects.toBeInstanceOf(GatewayLockError);
     openSpy.mockRestore();
+  });
+
+  it("clears stale lock on win32 when process cmdline is not a gateway", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    const lock = await acquireForTest(env, {
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+      staleMs: 10_000,
+      platform: "win32",
+      port: 18789,
+      readProcessCmdline: () => ["chrome.exe", "--no-sandbox"],
+    });
+    expect(lock).not.toBeNull();
+    await lock?.release();
+
+    connectSpy.mockRestore();
+  });
+
+  it("keeps lock on win32 when process cmdline is a gateway", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    const pending = acquireForTest(env, {
+      timeoutMs: 20,
+      pollIntervalMs: 2,
+      staleMs: 10_000,
+      platform: "win32",
+      port: 18789,
+      readProcessCmdline: () => [
+        "C:\\Users\\me\\AppData\\Roaming\\npm\\openclaw.cmd",
+        "gateway",
+        "run",
+      ],
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+
+    connectSpy.mockRestore();
+  });
+
+  it("falls back to unknown on win32 when cmdline reader returns null", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    const pending = acquireForTest(env, {
+      timeoutMs: 20,
+      pollIntervalMs: 2,
+      staleMs: 10_000,
+      platform: "win32",
+      port: 18789,
+      readProcessCmdline: () => null,
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+
+    connectSpy.mockRestore();
+  });
+
+  it("clears stale lock on darwin when process cmdline is not a gateway", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    const lock = await acquireForTest(env, {
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+      staleMs: 10_000,
+      platform: "darwin",
+      port: 18789,
+      readProcessCmdline: () => ["/Applications/Safari.app/Contents/MacOS/Safari"],
+    });
+    expect(lock).not.toBeNull();
+    await lock?.release();
+
+    connectSpy.mockRestore();
+  });
+
+  it("keeps lock on darwin when process cmdline is a gateway", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    const pending = acquireForTest(env, {
+      timeoutMs: 20,
+      pollIntervalMs: 2,
+      staleMs: 10_000,
+      platform: "darwin",
+      port: 18789,
+      readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "18789"],
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+
+    connectSpy.mockRestore();
   });
 });
