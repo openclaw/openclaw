@@ -267,6 +267,14 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
+     * Maximum estimated cost (USD) for a single heartbeat run. If the
+     * estimated cost exceeds this value, the run is skipped before calling
+     * the model. Estimation uses approximate token count and model pricing.
+     *
+     * Default: undefined (no cap).
+     */
+    maxCostPerRun?: number;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
