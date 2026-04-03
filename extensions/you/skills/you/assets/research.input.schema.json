@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "input": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The research question or complex query requiring in-depth investigation and multi-step reasoning. Maximum length: 40,000 characters."
+    },
+    "research_effort": {
+      "default": "standard",
+      "description": "Controls how much time and effort the Research API spends on your question. lite: fast answers, standard: balanced (default), deep: thorough, exhaustive: most comprehensive.",
+      "type": "string",
+      "enum": ["lite", "standard", "deep", "exhaustive"]
+    }
+  },
+  "required": ["input"],
+  "additionalProperties": false
+}

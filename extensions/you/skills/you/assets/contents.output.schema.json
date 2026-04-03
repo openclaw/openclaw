@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "URL"
+      },
+      "title": {
+        "description": "Title (optional in actual API responses)",
+        "type": "string"
+      },
+      "html": {
+        "description": "HTML content",
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "markdown": {
+        "description": "Markdown content",
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "metadata": {
+        "description": "Page metadata (only when metadata format requested)",
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "site_name": {
+                "description": "OpenGraph site name",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "favicon_url": {
+                "type": "string",
+                "description": "Favicon URL"
+              }
+            },
+            "required": ["favicon_url"],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": ["url"],
+    "additionalProperties": false
+  }
+}

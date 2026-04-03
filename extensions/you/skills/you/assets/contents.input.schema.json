@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "urls": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Array of webpage URLs to extract content from (e.g., [\"https://example.com\"])"
+    },
+    "formats": {
+      "description": "Output formats: array of \"markdown\" (text), \"html\" (layout), or \"metadata\" (structured data)",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["markdown", "html", "metadata"]
+      }
+    },
+    "format": {
+      "description": "(Deprecated) Output format - use formats array instead",
+      "type": "string",
+      "enum": ["markdown", "html"]
+    },
+    "crawl_timeout": {
+      "description": "Optional timeout in seconds (1-60) for page crawling",
+      "type": "number",
+      "minimum": 1,
+      "maximum": 60
+    }
+  },
+  "required": ["urls"],
+  "additionalProperties": false
+}

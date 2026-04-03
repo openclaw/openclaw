@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "output": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "Comprehensive response with inline citations, formatted in Markdown"
+        },
+        "content_type": {
+          "type": "string",
+          "enum": ["text"],
+          "description": "The format of the content field"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "Source webpage URL"
+              },
+              "title": {
+                "description": "Source webpage title",
+                "type": "string"
+              },
+              "snippets": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Relevant excerpts from the source page used in generating the answer"
+              }
+            },
+            "required": ["url", "snippets"],
+            "additionalProperties": false
+          },
+          "description": "List of web sources used to generate the answer"
+        }
+      },
+      "required": ["content", "content_type", "sources"],
+      "additionalProperties": false,
+      "description": "The research output containing the answer and sources"
+    }
+  },
+  "required": ["output"],
+  "additionalProperties": false
+}

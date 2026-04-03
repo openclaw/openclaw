@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Search query. Supports operators: site:domain.com (domain filter), filetype:pdf (file type), +term (include), -term (exclude), AND/OR/NOT (boolean logic), lang:en (language). Example: \"machine learning (Python OR PyTorch) -TensorFlow filetype:pdf\""
+    },
+    "count": {
+      "description": "Max results per section",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "freshness": {
+      "description": "day/week/month/year or YYYY-MM-DDtoYYYY-MM-DD",
+      "type": "string"
+    },
+    "offset": {
+      "description": "Pagination offset",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9
+    },
+    "country": {
+      "description": "Country code",
+      "type": "string",
+      "enum": [
+        "AR",
+        "AU",
+        "AT",
+        "BE",
+        "BR",
+        "CA",
+        "CL",
+        "DK",
+        "FI",
+        "FR",
+        "DE",
+        "HK",
+        "IN",
+        "ID",
+        "IT",
+        "JP",
+        "KR",
+        "MY",
+        "MX",
+        "NL",
+        "NZ",
+        "NO",
+        "CN",
+        "PL",
+        "PT",
+        "PH",
+        "RU",
+        "SA",
+        "ZA",
+        "ES",
+        "SE",
+        "CH",
+        "TW",
+        "TR",
+        "GB",
+        "US"
+      ]
+    },
+    "safesearch": {
+      "description": "Filter level",
+      "type": "string",
+      "enum": ["off", "moderate", "strict"]
+    },
+    "livecrawl": {
+      "description": "Live-crawl sections for full content",
+      "type": "string",
+      "enum": ["web", "news", "all"]
+    },
+    "livecrawl_formats": {
+      "description": "Format for crawled content",
+      "type": "string",
+      "enum": ["html", "markdown"]
+    }
+  },
+  "required": ["query"],
+  "additionalProperties": false
+}

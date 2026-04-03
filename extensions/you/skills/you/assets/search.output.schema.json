@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "results": {
+      "type": "object",
+      "properties": {
+        "web": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "URL"
+              },
+              "title": {
+                "type": "string",
+                "description": "Title"
+              },
+              "description": {
+                "type": "string",
+                "description": "Description"
+              },
+              "snippets": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Content snippets"
+              },
+              "page_age": {
+                "description": "Publication timestamp",
+                "type": "string"
+              },
+              "authors": {
+                "description": "Authors",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "thumbnail_url": {
+                "description": "Thumbnail image URL",
+                "type": "string"
+              },
+              "favicon_url": {
+                "description": "Favicon URL",
+                "type": "string"
+              },
+              "contents": {
+                "description": "Live-crawled page content",
+                "type": "object",
+                "properties": {
+                  "html": {
+                    "description": "Full HTML content",
+                    "type": "string"
+                  },
+                  "markdown": {
+                    "description": "Full Markdown content",
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": ["url", "title", "description", "snippets"],
+            "additionalProperties": false
+          }
+        },
+        "news": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "Title"
+              },
+              "description": {
+                "type": "string",
+                "description": "Description"
+              },
+              "page_age": {
+                "type": "string",
+                "description": "Publication timestamp"
+              },
+              "url": {
+                "type": "string",
+                "description": "URL"
+              },
+              "thumbnail_url": {
+                "description": "Thumbnail image URL",
+                "type": "string"
+              },
+              "contents": {
+                "description": "Live-crawled page content",
+                "type": "object",
+                "properties": {
+                  "html": {
+                    "description": "Full HTML content",
+                    "type": "string"
+                  },
+                  "markdown": {
+                    "description": "Full Markdown content",
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": ["title", "description", "page_age", "url"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "search_uuid": {
+          "description": "Unique search request ID",
+          "type": "string"
+        },
+        "query": {
+          "type": "string",
+          "description": "Query"
+        },
+        "latency": {
+          "type": "number",
+          "description": "Latency in seconds"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["results", "metadata"],
+  "additionalProperties": false
+}
