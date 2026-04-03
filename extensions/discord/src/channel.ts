@@ -5,6 +5,10 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-contract";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/channel-targets";
@@ -29,8 +33,6 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
-import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
-import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -78,8 +80,10 @@ let discordProviderRuntimePromise:
   | Promise<typeof import("./monitor/provider.runtime.js")>
   | undefined;
 let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | undefined;
+let discordAuditModulePromise: Promise<typeof import("./audit.js")> | undefined;
 let discordUiModuleCache: DiscordUiModule | null = null;
 let discordCarbonModuleCache: DiscordCarbonModule | null = null;
+let discordChannelActionsModuleCache: typeof import("./channel-actions.js") | null = null;
 
 const require = createRequire(import.meta.url);
 
@@ -93,9 +97,20 @@ async function loadDiscordProbeRuntime() {
   return await discordProbeRuntimePromise;
 }
 
+async function loadDiscordAuditModule() {
+  discordAuditModulePromise ??= import("./audit.js");
+  return await discordAuditModulePromise;
+}
+
 function loadDiscordCarbonModule() {
   discordCarbonModuleCache ??= require("@buape/carbon") as DiscordCarbonModule;
   return discordCarbonModuleCache;
+}
+
+function loadDiscordChannelActionsModule() {
+  discordChannelActionsModuleCache ??=
+    require("./channel-actions.js") as typeof import("./channel-actions.js");
+  return discordChannelActionsModuleCache;
 }
 
 function loadDiscordUiModule() {
@@ -133,24 +148,25 @@ function resolveDiscordSend(deps?: { [channelId: string]: unknown }): DiscordSen
 
 const discordMessageActions = {
   describeMessageTool: (
-    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.describeMessageTool>>[0],
-  ) =>
+    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
+  ): ChannelMessageToolDiscovery | null =>
     resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
-    discordMessageActionsImpl.describeMessageTool?.(ctx) ??
+    loadDiscordChannelActionsModule().discordMessageActions.describeMessageTool?.(ctx) ??
     null,
   extractToolSend: (
-    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.extractToolSend>>[0],
+    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["extractToolSend"]>>[0],
   ) =>
     resolveRuntimeDiscordMessageActions()?.extractToolSend?.(ctx) ??
-    discordMessageActionsImpl.extractToolSend?.(ctx) ??
+    loadDiscordChannelActionsModule().discordMessageActions.extractToolSend?.(ctx) ??
     null,
   handleAction: async (
-    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.handleAction>>[0],
+    ctx: Parameters<NonNullable<ChannelMessageActionAdapter["handleAction"]>>[0],
   ) => {
     const runtimeHandleAction = resolveRuntimeDiscordMessageActions()?.handleAction;
     if (runtimeHandleAction) {
       return await runtimeHandleAction(ctx);
     }
+    const discordMessageActionsImpl = loadDiscordChannelActionsModule().discordMessageActions;
     if (!discordMessageActionsImpl.handleAction) {
       throw new Error("Discord message actions not available");
     }
@@ -577,6 +593,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           }
         },
         auditAccount: async ({ account, timeoutMs, cfg }) => {
+          const { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } =
+            await loadDiscordAuditModule();
           const { channelIds, unresolvedChannels } = collectDiscordAuditChannelIds({
             cfg,
             accountId: account.accountId,
