@@ -123,8 +123,11 @@ Example for account `ops`:
 
 For normalized account ID `ops-bot`, use:
 
-- `MATRIX_OPS_BOT_HOMESERVER`
-- `MATRIX_OPS_BOT_ACCESS_TOKEN`
+- `MATRIX_OPS_X2D_BOT_HOMESERVER`
+- `MATRIX_OPS_X2D_BOT_ACCESS_TOKEN`
+
+Matrix escapes punctuation in account IDs to keep scoped env vars collision-free.
+For example, `-` becomes `_X2D_`, so `ops-prod` maps to `MATRIX_OPS_X2D_PROD_*`.
 
 The interactive wizard only offers the env-var shortcut when those auth env vars are already present and the selected account does not already have Matrix auth saved in config.
 
@@ -189,6 +192,9 @@ done:
 - If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
 - Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
+
+`blockStreaming` does not enable draft previews by itself.
+Use `streaming: "partial"` for preview edits; then add `blockStreaming: true` only if you also want completed assistant blocks to remain visible as separate progress messages.
 
 ## Encryption and verification
 
@@ -590,8 +596,17 @@ Current behavior:
 - Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
 - Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.
-- Fetched room context (including reply and thread context lookups) is filtered by sender allowlists (`groupAllowFrom`), so non-allowlisted messages are excluded from agent context.
-- This filtering is channel-level hardening behavior. Other channels may still expose supplemental context as received.
+
+## Context visibility
+
+Matrix supports the shared `contextVisibility` control for supplemental room context such as fetched reply text, thread roots, and pending history.
+
+- `contextVisibility: "all"` is the default. Supplemental context is kept as received.
+- `contextVisibility: "allowlist"` filters supplemental context to senders allowed by the active room/user allowlist checks.
+- `contextVisibility: "allowlist_quote"` behaves like `allowlist`, but still keeps one explicit quoted reply.
+
+This setting affects supplemental context visibility, not whether the inbound message itself can trigger a reply.
+Trigger authorization still comes from `groupPolicy`, `groups`, `groupAllowFrom`, and DM policy settings.
 
 ## DM and room policy example
 
@@ -780,13 +795,16 @@ Live directory lookup uses the logged-in Matrix account:
 - `initialSyncLimit`: startup sync event limit.
 - `encryption`: enable E2EE.
 - `allowlistOnly`: force allowlist-only behavior for DMs and rooms.
+- `allowBots`: allow messages from other configured OpenClaw Matrix accounts (`true` or `"mentions"`).
 - `groupPolicy`: `open`, `allowlist`, or `disabled`.
+- `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, or `all`.
-- `streaming`: `off` (default) or `partial`. `partial` enables single-message draft previews with edit-in-place updates.
-- `blockStreaming`: `true` enables separate progress messages; when unset, Matrix keeps `streaming: "off"` as final-only delivery.
+- `markdown`: optional Markdown rendering configuration for outbound Matrix text.
+- `streaming`: `off` (default), `partial`, `true`, or `false`. `partial` and `true` enable single-message draft previews with edit-in-place updates.
+- `blockStreaming`: `true` enables separate progress messages for completed assistant blocks while draft preview streaming is active.
 - `threadReplies`: `off`, `inbound`, or `always`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
 - `startupVerification`: automatic self-verification request mode on startup (`if-unverified`, `off`).
@@ -808,6 +826,13 @@ Live directory lookup uses the logged-in Matrix account:
 - `execApprovals.target`: `dm | channel | both` (default: `dm`).
 - `accounts`: named per-account overrides. Top-level `channels.matrix` values act as defaults for these entries.
 - `groups`: per-room policy map. Prefer room IDs or aliases; unresolved room names are ignored at runtime. Session/group identity uses the stable room ID after resolution, while human-readable labels still come from room names.
+- `groups.<room>.account`: restrict one inherited room entry to a specific Matrix account in multi-account setups.
+- `groups.<room>.allowBots`: room-level override for configured-bot senders (`true` or `"mentions"`).
+- `groups.<room>.users`: per-room sender allowlist.
+- `groups.<room>.tools`: per-room tool allow/deny overrides.
+- `groups.<room>.autoReply`: room-level mention-gating override. `true` disables mention requirements for that room; `false` forces them back on.
+- `groups.<room>.skills`: optional room-level skill filter.
+- `groups.<room>.systemPrompt`: optional room-level system prompt snippet.
 - `rooms`: legacy alias for `groups`.
 - `actions`: per-action tool gating (`messages`, `reactions`, `pins`, `profile`, `memberInfo`, `channelInfo`, `verification`).
 
