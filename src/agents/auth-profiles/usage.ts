@@ -516,6 +516,8 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
 type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
+  authPermanentBackoffMs: number;
+  authPermanentMaxMs: number;
   failureWindowMs: number;
 };
 
@@ -556,9 +558,17 @@ function resolveAuthCooldownConfig(params: {
     defaults.failureWindowHours,
   );
 
+  const resolveMinutes = (value: unknown, fallback: number) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+
+  const authPermanentBackoffMinutes = resolveMinutes(cooldowns?.authPermanentBackoffMinutes, 10);
+  const authPermanentMaxMinutes = resolveMinutes(cooldowns?.authPermanentMaxMinutes, 60);
+
   return {
     billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
     billingMaxMs: billingMaxHours * 60 * 60 * 1000,
+    authPermanentBackoffMs: authPermanentBackoffMinutes * 60 * 1000,
+    authPermanentMaxMs: authPermanentMaxMinutes * 60 * 1000,
     failureWindowMs: failureWindowHours * 60 * 60 * 1000,
   };
 }
@@ -662,7 +672,7 @@ function computeNextProfileUsageStats(params: {
     lastFailureAt: params.now,
   };
 
-  if (params.reason === "billing" || params.reason === "auth_permanent") {
+  if (params.reason === "billing") {
     const billingCount = failureCounts[params.reason] ?? 1;
     const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
       errorCount: billingCount,
@@ -671,6 +681,23 @@ function computeNextProfileUsageStats(params: {
     });
     // Keep active disable windows immutable so retries within the window cannot
     // extend recovery time indefinitely.
+    updatedStats.disabledUntil = keepActiveWindowOrRecompute({
+      existingUntil: params.existing.disabledUntil,
+      now: params.now,
+      recomputedUntil: params.now + backoffMs,
+    });
+    updatedStats.disabledReason = params.reason;
+  } else if (params.reason === "auth_permanent") {
+    // auth_permanent errors can be caused by transient provider outages (e.g.
+    // GCP returning API_KEY_INVALID during an incident). Use a much shorter
+    // backoff than billing so the provider recovers automatically once the
+    // upstream issue resolves.
+    const authPermCount = failureCounts[params.reason] ?? 1;
+    const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
+      errorCount: authPermCount,
+      baseMs: params.cfgResolved.authPermanentBackoffMs,
+      maxMs: params.cfgResolved.authPermanentMaxMs,
+    });
     updatedStats.disabledUntil = keepActiveWindowOrRecompute({
       existingUntil: params.existing.disabledUntil,
       now: params.now,
