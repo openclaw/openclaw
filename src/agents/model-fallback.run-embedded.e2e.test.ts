@@ -310,6 +310,35 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
   });
 }
 
+function mockPrimaryRunLoopRateLimitThenFallbackSuccess(errorMessage: string) {
+  runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+    const attemptParams = params as { provider: string };
+    if (attemptParams.provider === "openai") {
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "openai",
+          model: "mock-1",
+          stopReason: "length",
+          errorMessage,
+        }),
+      });
+    }
+    if (attemptParams.provider === "groq") {
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["fallback ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "groq",
+          model: "mock-2",
+          stopReason: "stop",
+          content: [{ type: "text", text: "fallback ok" }],
+        }),
+      });
+    }
+    throw new Error(`Unexpected provider ${attemptParams.provider}`);
+  });
+}
+
 function expectOpenAiThenGroqAttemptOrder(params?: { expectOpenAiAuthProfileId?: string }) {
   expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
   const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as
@@ -693,6 +722,39 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
         (call) => (call[0] as { provider?: string })?.provider === "groq",
       );
       expect(openaiAttempts.length).toBe(2);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("falls back on classified rate limits even when stopReason is not error", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+
+      mockPrimaryRunLoopRateLimitThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:rate-limit-retry-limit-fallback",
+        runId: "run:rate-limit-retry-limit-fallback",
+        config: {
+          ...makeConfig(),
+          auth: { cooldowns: { rateLimitedProfileRotations: 999 } },
+        },
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(3);
       expect(groqAttempts.length).toBe(1);
     });
   });

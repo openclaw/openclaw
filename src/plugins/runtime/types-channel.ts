@@ -9,9 +9,9 @@ type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
-type DiscordRuntimeSurface = typeof import("../../plugin-sdk/discord-runtime-surface.js");
-type DiscordThreadBindings = typeof import("../../plugin-sdk/discord-thread-bindings.js");
-type MatrixThreadBindings = typeof import("../../plugin-sdk/matrix-thread-bindings.js");
+type DiscordRuntimeSurface = typeof import("../../../extensions/discord/runtime-api.js");
+type DiscordThreadBindings = typeof import("../../../extensions/discord/runtime-api.js");
+type MatrixThreadBindings = typeof import("../../../extensions/matrix/api.js");
 
 type ReadChannelAllowFromStoreForAccount = (params: {
   channel: Parameters<ReadChannelAllowFromStore>[0];
@@ -166,14 +166,14 @@ export type PluginRuntimeChannel = {
     };
   };
   slack: {
-    listDirectoryGroupsLive: typeof import("../../plugin-sdk/slack.js").listSlackDirectoryGroupsLive;
-    listDirectoryPeersLive: typeof import("../../plugin-sdk/slack.js").listSlackDirectoryPeersLive;
-    probeSlack: typeof import("../../plugin-sdk/slack.js").probeSlack;
-    resolveChannelAllowlist: typeof import("../../plugin-sdk/slack.js").resolveSlackChannelAllowlist;
-    resolveUserAllowlist: typeof import("../../plugin-sdk/slack.js").resolveSlackUserAllowlist;
-    sendMessageSlack: typeof import("../../plugin-sdk/slack.js").sendMessageSlack;
-    monitorSlackProvider: typeof import("../../plugin-sdk/slack.js").monitorSlackProvider;
-    handleSlackAction: typeof import("../../plugin-sdk/slack.js").handleSlackAction;
+    listDirectoryGroupsLive: typeof import("../../../extensions/slack/runtime-api.js").listSlackDirectoryGroupsLive;
+    listDirectoryPeersLive: typeof import("../../../extensions/slack/runtime-api.js").listSlackDirectoryPeersLive;
+    probeSlack: typeof import("../../../extensions/slack/runtime-api.js").probeSlack;
+    resolveChannelAllowlist: typeof import("../../../extensions/slack/runtime-api.js").resolveSlackChannelAllowlist;
+    resolveUserAllowlist: typeof import("../../../extensions/slack/runtime-api.js").resolveSlackUserAllowlist;
+    sendMessageSlack: typeof import("../../../extensions/slack/runtime-api.js").sendMessageSlack;
+    monitorSlackProvider: typeof import("../../../extensions/slack/runtime-api.js").monitorSlackProvider;
+    handleSlackAction: typeof import("../../../extensions/slack/runtime-api.js").handleSlackAction;
   };
   matrix: {
     threadBindings: {
@@ -182,10 +182,10 @@ export type PluginRuntimeChannel = {
     };
   };
   signal: {
-    probeSignal: typeof import("../../plugin-sdk/signal.js").probeSignal;
-    sendMessageSignal: typeof import("../../plugin-sdk/signal.js").sendMessageSignal;
-    monitorSignalProvider: typeof import("../../plugin-sdk/signal.js").monitorSignalProvider;
-    messageActions: typeof import("../../plugin-sdk/signal.js").signalMessageActions;
+    probeSignal: typeof import("../../../extensions/signal/runtime-api.js").probeSignal;
+    sendMessageSignal: typeof import("../../../extensions/signal/runtime-api.js").sendMessageSignal;
+    monitorSignalProvider: typeof import("../../../extensions/signal/runtime-api.js").monitorSignalProvider;
+    messageActions: typeof import("../../../extensions/signal/runtime-api.js").signalMessageActions;
   };
   line: {
     listLineAccountIds: typeof import("../../plugin-sdk/line.js").listLineAccountIds;

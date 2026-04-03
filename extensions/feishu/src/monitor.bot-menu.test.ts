@@ -1,10 +1,4 @@
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -19,6 +13,24 @@ const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ sto
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+
+const hasControlCommand = () => false;
+const resolveInboundDebounceMs = () => 0;
+const createInboundDebouncer = () => ({
+  run: async <T>(fn: () => Promise<T>) => await fn(),
+});
+const createMonitorRuntime = () =>
+  ({
+    channel: {
+      debounce: {
+        createInboundDebouncer,
+        resolveInboundDebounceMs,
+      },
+      text: {
+        hasControlCommand,
+      },
+    },
+  }) as never;
 
 vi.mock("./client.js", () => ({
   createEventDispatcher: createEventDispatcherMock,
@@ -79,19 +91,7 @@ function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
 }
 
 async function registerHandlers() {
-  setFeishuRuntime(
-    createPluginRuntimeMock({
-      channel: {
-        debounce: {
-          createInboundDebouncer,
-          resolveInboundDebounceMs,
-        },
-        text: {
-          hasControlCommand,
-        },
-      },
-    }),
-  );
+  setFeishuRuntime(createMonitorRuntime());
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
   });

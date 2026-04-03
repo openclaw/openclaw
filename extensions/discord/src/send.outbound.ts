@@ -3,19 +3,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
+import { resolveDiscordProxyFetch } from "./client.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
 import {
   buildDiscordMessagePayload,
@@ -369,8 +370,9 @@ export async function sendWebhookMessageDiscord(
   });
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const fetchImpl = resolveDiscordProxyFetch({ cfg: opts.cfg, accountId: opts.accountId });
 
-  const response = await fetch(
+  const response = await (fetchImpl ?? fetch)(
     resolveWebhookExecutionUrl({
       webhookId,
       webhookToken,

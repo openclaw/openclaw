@@ -139,7 +139,7 @@ if (rawCli.showHelp) {
       "  --plan                 Print the resolved execution plan and exit",
       "  --ci-manifest          Print the planner-backed CI execution manifest as JSON and exit",
       "  --explain <file>       Explain how a file is classified and run, then exit",
-      "  --surface <name>       Select a surface: unit, extensions, channels, contracts, gateway",
+      "  --surface <name>       Select a surface: unit, bundled, extensions, channels, contracts, gateway",
       "  --files <pattern>      Add targeted files or path patterns (repeatable)",
       "  --mode <ci|local>      Override runtime mode",
       "  --profile <name>       Override execution intent: normal, max, serial",

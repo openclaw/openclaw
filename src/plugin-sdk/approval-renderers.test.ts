@@ -89,9 +89,12 @@ describe("plugin-sdk/approval-renderers", () => {
       },
       channelDataExpected: {
         execApproval: {
+          agentId: undefined,
           approvalId: "plugin-approval-123",
+          approvalKind: "plugin",
           approvalSlug: "custom-slug",
           allowedDecisions: ["allow-once", "allow-always", "deny"],
+          sessionKey: undefined,
           state: "pending",
         },
         telegram: {

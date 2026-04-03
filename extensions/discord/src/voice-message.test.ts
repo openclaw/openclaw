@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
@@ -36,12 +36,6 @@ describe("ensureOggOpus", () => {
     runFfprobeMock.mockReset();
     runFfmpegMock.mockReset();
   });
-
-  afterEach(() => {
-    runFfprobeMock.mockReset();
-    runFfmpegMock.mockReset();
-  });
-
   it("rejects URL/protocol input paths", async () => {
     await expect(ensureOggOpus("https://example.com/audio.ogg")).rejects.toThrow(
       /local file path/i,
