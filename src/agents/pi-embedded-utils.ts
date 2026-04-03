@@ -233,7 +233,7 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
-export function extractAssistantText(msg: AssistantMessage): string {
+export function extractAssistantText(msg: AssistantMessage | undefined): string {
   if (!msg) {
     return "";
   }

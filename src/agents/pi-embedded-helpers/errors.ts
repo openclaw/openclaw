@@ -853,7 +853,7 @@ function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
 }
 
 export function formatAssistantErrorText(
-  msg: AssistantMessage,
+  msg: AssistantMessage | undefined,
   opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
 ): string | undefined {
   if (!msg) {
