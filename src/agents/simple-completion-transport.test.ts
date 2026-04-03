@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "../config/config.js";
 const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
+const buildTransportAwareSimpleStreamFn = vi.fn();
+const prepareTransportAwareSimpleModel = vi.fn();
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
   createAnthropicVertexStreamFnForModel,
@@ -12,6 +14,11 @@ vi.mock("./anthropic-vertex-stream.js", () => ({
 
 vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered,
+}));
+
+vi.mock("./openai-transport-stream.js", () => ({
+  buildTransportAwareSimpleStreamFn,
+  prepareTransportAwareSimpleModel,
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -29,8 +36,12 @@ describe("prepareModelForSimpleCompletion", () => {
     createAnthropicVertexStreamFnForModel.mockReset();
     ensureCustomApiRegistered.mockReset();
     resolveProviderStreamFn.mockReset();
+    buildTransportAwareSimpleStreamFn.mockReset();
+    prepareTransportAwareSimpleModel.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
+    buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
+    prepareTransportAwareSimpleModel.mockImplementation((model) => model);
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {
@@ -104,6 +115,41 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(result).toEqual({
       ...model,
       api: "openclaw-anthropic-vertex-simple:https%3A%2F%2Fus-central1-aiplatform.googleapis.com",
+    });
+  });
+
+  it("uses a transport-aware custom api alias when llm request transport overrides are present", () => {
+    const model: Model<"openai-responses"> = {
+      id: "gpt-5",
+      name: "GPT-5",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    };
+
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+    buildTransportAwareSimpleStreamFn.mockReturnValueOnce("transport-stream");
+    prepareTransportAwareSimpleModel.mockReturnValueOnce({
+      ...model,
+      api: "openclaw-openai-responses-transport",
+    });
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(prepareTransportAwareSimpleModel).toHaveBeenCalledWith(model);
+    expect(buildTransportAwareSimpleStreamFn).toHaveBeenCalledWith(model);
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+      "openclaw-openai-responses-transport",
+      "transport-stream",
+    );
+    expect(result).toEqual({
+      ...model,
+      api: "openclaw-openai-responses-transport",
     });
   });
 });

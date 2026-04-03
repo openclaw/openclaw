@@ -20,7 +20,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
   }) => {
-    if (params.provider !== "ollama") {
+    if (params.provider !== "ollama" && params.provider !== "demo-local") {
       return undefined;
     }
     const providerConfig = params.context.providerConfig;
@@ -32,10 +32,22 @@ vi.mock("../plugins/provider-runtime.js", () => ({
       return undefined;
     }
     return {
-      apiKey: "ollama-local",
-      source: "models.providers.ollama (synthetic local key)",
+      apiKey: params.provider === "ollama" ? "ollama-local" : "demo-local",
+      source: `models.providers.${params.provider} (synthetic local key)`,
       mode: "api-key" as const,
     };
+  },
+  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
+    provider: string;
+    context: { resolvedApiKey?: string };
+  }) => {
+    const expectedMarker =
+      params.provider === "ollama"
+        ? "ollama-local"
+        : params.provider === "demo-local"
+          ? "demo-local"
+          : undefined;
+    return Boolean(expectedMarker && params.context.resolvedApiKey?.trim() === expectedMarker);
   },
 }));
 
@@ -528,6 +540,37 @@ describe("getApiKeyForModel", () => {
       expect(resolved.source).toContain("OLLAMA_API_KEY");
       expect(resolved.profileId).toBeUndefined();
     });
+  });
+
+  it("defers plugin-owned synthetic profile markers without core provider branching", async () => {
+    const resolved = await resolveApiKeyForProvider({
+      provider: "demo-local",
+      store: {
+        version: 1,
+        profiles: {
+          "demo-local:default": {
+            type: "api_key",
+            provider: "demo-local",
+            key: "demo-local",
+          },
+        },
+      },
+      cfg: {
+        models: {
+          providers: {
+            "demo-local": {
+              baseUrl: "http://localhost:11434",
+              api: "openai-completions",
+              apiKey: "config-demo-key",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+    expect(resolved.apiKey).toBe("config-demo-key");
+    expect(resolved.source).toBe("models.json");
+    expect(resolved.profileId).toBeUndefined();
   });
 
   it("still throws for ollama when no env/profile/config provider is available", async () => {

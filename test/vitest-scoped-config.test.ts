@@ -27,6 +27,7 @@ describe("createScopedVitestConfig", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], { env: {} });
     expect(config.test?.isolate).toBe(false);
     expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
+    expect(config.test?.setupFiles).toEqual(["test/setup.ts", "test/setup-openclaw-runtime.ts"]);
   });
 
   it("passes through a scoped root dir when provided", () => {
@@ -47,6 +48,15 @@ describe("createScopedVitestConfig", () => {
 
     expect(config.test?.include).toEqual(["**/*.test.ts"]);
     expect(config.test?.exclude).toEqual(expect.arrayContaining(["channel/**", "dist/**"]));
+  });
+
+  it("overrides setup files when a scoped config requests them", () => {
+    const config = createScopedVitestConfig(["src/example.test.ts"], {
+      env: {},
+      setupFiles: ["test/setup.extensions.ts"],
+    });
+
+    expect(config.test?.setupFiles).toEqual(["test/setup.extensions.ts"]);
   });
 });
 
@@ -95,6 +105,23 @@ describe("scoped vitest configs", () => {
   it("normalizes extension include patterns relative to the scoped dir", () => {
     expect(defaultExtensionsConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("keeps telegram plugin tests in extensions while excluding channel-surface plugin roots", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) => path.matchesGlob("telegram/src/fetch.test.ts", pattern)),
+    ).toBe(false);
+    expect(
+      extensionExcludes.some((pattern) =>
+        path.matchesGlob("telegram/src/bot/delivery.resolve-media-retry.test.ts", pattern),
+      ),
+    ).toBe(false);
+    expect(defaultChannelsConfig.test?.include).not.toContain("extensions/telegram/**/*.test.ts");
+    expect(defaultChannelsConfig.test?.exclude).not.toContain(
+      bundledPluginFile("telegram", "src/fetch.test.ts"),
+    );
+    expect(defaultExtensionsConfig.test?.setupFiles).toEqual(["test/setup.extensions.ts"]);
   });
 
   it("normalizes gateway include patterns relative to the scoped dir", () => {

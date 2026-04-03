@@ -21,9 +21,19 @@ afterEach(() => {
 
 async function withTaskRegistryTempDir<T>(run: () => Promise<T> | T): Promise<T> {
   return await withTempDir({ prefix: "openclaw-task-owner-access-" }, async (root) => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = root;
     resetTaskRegistryForTests({ persist: false });
-    return await run();
+    try {
+      return await run();
+    } finally {
+      resetTaskRegistryForTests({ persist: false });
+      if (previousStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
   });
 }
 

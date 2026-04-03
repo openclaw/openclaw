@@ -1,7 +1,7 @@
 import * as http from "http";
 import crypto from "node:crypto";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
+import { createFeishuWSClient } from "./client.js";
 import {
   applyBasicWebhookRequestGuards,
   isRequestBodyLimitError,
@@ -9,8 +9,8 @@ import {
   installRequestBodyLimitGuard,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "../runtime-api.js";
-import { createFeishuWSClient } from "./client.js";
+  safeEqualSecret,
+} from "./monitor-transport-runtime-api.js";
 import {
   botNames,
   botOpenIds,
