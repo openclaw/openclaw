@@ -12,6 +12,7 @@ import { withTempHome } from "../config/home-env.test-harness.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   asConfig,
+  EMPTY_LOADABLE_PLUGIN_ORIGINS,
   loadAuthStoreWithProfiles,
   SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS,
 } from "./runtime.integration.test-helpers.js";
@@ -70,6 +71,7 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
             }),
             env: {},
             agentDirs: ["/tmp/openclaw-agent-main"],
+            loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
             loadAuthStore: () => ({ version: 1, profiles: {} }),
           }),
         ).rejects.toThrow(/MISSING_GATEWAY_AUTH_TOKEN/i);
@@ -105,6 +107,7 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
             GATEWAY_AUTH_TOKEN: "gateway-runtime-token",
           },
           agentDirs: ["/tmp/openclaw-agent-main"],
+          loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
           loadAuthStore: () => loadAuthStoreWithProfiles({}),
         });
 
