@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { enqueueAnnounce, resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 
+type SentItem = {
+  execution: { agentPrompt: string };
+  display: { text?: string; summaryLine?: string };
+};
+
 function createRetryingSend() {
   const prompts: string[] = [];
   let attempts = 0;
@@ -10,11 +15,7 @@ function createRetryingSend() {
     resolveSecondAttempt = resolve;
   });
 
-  const send = vi.fn(
-    async (item: {
-      execution: { agentPrompt: string };
-      display: { text?: string; summaryLine?: string };
-    }) => {
+  const send = vi.fn(async (item: SentItem) => {
       attempts += 1;
       prompts.push(item.display.text ?? item.display.summaryLine ?? item.execution.agentPrompt);
       if (attempts >= 2 && !resolved) {
@@ -30,7 +31,7 @@ function createRetryingSend() {
   return { send, prompts, waitForSecondAttempt };
 }
 
-function getSentItem<T>(send: { mock: { calls: T[][] } }, index: number): T {
+function getSentItem(send: { mock: { calls: SentItem[][] } }, index: number): SentItem {
   const call = send.mock.calls.at(index);
   expect(call).toBeDefined();
   if (!call) {
