@@ -61,6 +61,7 @@ export {
   loadBundledPluginTestApiSync,
   resolveRelativeBundledPluginPublicModuleId,
 } from "../test-utils/bundled-plugin-public-surface.js";
+export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";
 export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
