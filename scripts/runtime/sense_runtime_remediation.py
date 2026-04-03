@@ -40,6 +40,9 @@ PRIORITIZED_REQUIREMENT_STEPS = [
     ('API key missing', 'check_api_key_config'),
     ('API key may be required', 'check_api_key_config'),
     ('provider configuration missing', 'check_provider_config'),
+    ('default model configuration missing', 'check_default_model_config'),
+    ('selected model configuration missing', 'check_selected_model_config'),
+    ('runtime not recognizing selected model', 'check_selected_model_config'),
     ('model configuration missing', 'check_model_config'),
     ('nim is not running', 'start_nim_runtime'),
     ('gpu runtime not enabled', 'enable_gpu_runtime'),
@@ -163,6 +166,8 @@ def infer_provider_and_model_from_config(config: dict) -> dict:
     provider_source = None
     model = 'unknown'
     model_source = None
+    default_model = 'unknown'
+    default_model_source = None
 
     models_cfg = config.get('models') if isinstance(config.get('models'), dict) else {}
     providers_cfg = models_cfg.get('providers') if isinstance(models_cfg.get('providers'), dict) else {}
@@ -180,9 +185,13 @@ def infer_provider_and_model_from_config(config: dict) -> dict:
             if model_part:
                 model = model_part
                 model_source = 'config'
+                default_model = model_part
+                default_model_source = 'config'
         else:
             model = primary_model
             model_source = 'config'
+            default_model = primary_model
+            default_model_source = 'config'
 
     if provider == 'unknown' and providers_cfg:
         provider = next(iter(providers_cfg.keys()))
@@ -205,6 +214,8 @@ def infer_provider_and_model_from_config(config: dict) -> dict:
         'provider_source': provider_source,
         'model': model,
         'model_source': model_source,
+        'default_model': default_model,
+        'default_model_source': default_model_source,
     }
 
 
@@ -306,6 +317,8 @@ def merge_provider_model_sources(runtime_signals: dict, config: dict, start_resu
     merged['provider_runtime_source'] = runtime_provider_signals.get('provider_runtime_source')
     merged['model_runtime_recognized'] = runtime_model_signals.get('model_runtime_recognized', False)
     merged['model_runtime_source'] = runtime_model_signals.get('model_runtime_source')
+    merged['default_model'] = config_signals.get('default_model', 'unknown')
+    merged['default_model_source'] = config_signals.get('default_model_source')
     if runtime_provider not in {'', 'unknown'}:
         merged['provider'] = runtime_provider
         merged['provider_source'] = runtime_provider_signals.get('provider_runtime_source') or 'runtime'
@@ -435,17 +448,21 @@ def infer_missing_requirements(provider_status: dict, start_result: dict | None)
     missing: list[str] = []
     provider = str(provider_status.get('provider') or 'unknown')
     model = str(provider_status.get('model') or 'unknown')
+    default_model = str(provider_status.get('default_model') or 'unknown')
 
     if provider in {'', 'unknown'}:
         missing.append('provider configuration missing')
         missing.append('provider source unknown')
     elif provider_status.get('provider_runtime_recognized') is False:
         missing.append('provider runtime not recognizing configured provider')
+    if default_model in {'', 'unknown'}:
+        missing.append('default model configuration missing')
     if model in {'', 'unknown'}:
         missing.append('model configuration missing')
+        missing.append('selected model configuration missing')
         missing.append('model source unknown')
     elif provider_status.get('model_runtime_recognized') is False:
-        missing.append('runtime not recognizing configured model')
+        missing.append('runtime not recognizing selected model')
 
     api_key_names = provider_status.get('required_api_keys')
     if not isinstance(api_key_names, list):
@@ -475,6 +492,8 @@ def build_provider_status(provider_status: dict, start_result: dict | None, runt
     model = str(status.get('model') or 'unknown')
     status['provider_config_present'] = provider not in {'', 'unknown'}
     status['model_config_present'] = model not in {'', 'unknown'}
+    status['default_model_present'] = str(status.get('default_model') or 'unknown') not in {'', 'unknown'}
+    status['selected_model_present'] = status['model_config_present']
     if status.get('provider_runtime_recognized') is None:
         status['provider_runtime_recognized'] = False
     if status.get('model_runtime_recognized') is None:
@@ -490,29 +509,37 @@ def build_provider_status(provider_status: dict, start_result: dict | None, runt
     )
     status['missing_requirements'] = missing
     status['model_ready'] = (
-        status.get('model_config_present') is True
+        status.get('default_model_present') is True
+        and status.get('selected_model_present') is True
         and status.get('model_runtime_recognized') is True
     )
     return status
 
 
 def build_model_status(provider_status: dict) -> dict:
-    model = str(provider_status.get('model') or 'unknown')
+    default_model = str(provider_status.get('default_model') or 'unknown')
+    selected_model = str(provider_status.get('model') or 'unknown')
     model_status = {
-        'model': model,
-        'model_source': provider_status.get('model_source'),
-        'model_runtime_source': provider_status.get('model_runtime_source'),
-        'model_config_present': provider_status.get('model_config_present'),
-        'model_runtime_recognized': provider_status.get('model_runtime_recognized'),
+        'default_model': default_model,
+        'default_model_source': provider_status.get('default_model_source'),
+        'default_model_present': provider_status.get('default_model_present'),
+        'selected_model': selected_model,
+        'selected_model_source': provider_status.get('model_source'),
+        'selected_model_present': provider_status.get('selected_model_present'),
+        'selected_model_runtime_recognized': provider_status.get('model_runtime_recognized'),
+        'selected_model_runtime_source': provider_status.get('model_runtime_source'),
         'model_ready': provider_status.get('model_ready'),
         'missing_requirements': [],
     }
     missing: list[str] = []
-    if model in {'', 'unknown'}:
-        missing.append('model configuration missing')
-        missing.append('model source unknown')
+    if default_model in {'', 'unknown'}:
+        missing.append('default model configuration missing')
+        missing.append('default model source unknown')
+    if selected_model in {'', 'unknown'}:
+        missing.append('selected model configuration missing')
+        missing.append('selected model source unknown')
     elif provider_status.get('model_runtime_recognized') is False:
-        missing.append('runtime not recognizing configured model')
+        missing.append('runtime not recognizing selected model')
     model_status['missing_requirements'] = missing
     return model_status
 
@@ -717,16 +744,63 @@ def main() -> int:
         response['provider_status'] = provider_status
         response['model_status'] = model_status
         response['missing_requirements'] = model_status.get('missing_requirements') or []
-        if provider_status.get('model_config_present') is False:
-            response['resolved_next_step'] = 'configure_provider'
-        elif provider_status.get('model_runtime_recognized') is False:
-            response['resolved_next_step'] = 'check_model_config'
+        if model_status.get('default_model_present') is False:
+            response['resolved_next_step'] = 'check_default_model_config'
+        elif model_status.get('selected_model_present') is False:
+            response['resolved_next_step'] = 'check_selected_model_config'
+        elif model_status.get('selected_model_runtime_recognized') is False:
+            response['resolved_next_step'] = 'check_selected_model_config'
         else:
             response['resolved_next_step'] = 'run_runtime_task'
         response['initial_provider_status'] = provider_probe['initial_provider_status']
         response['start_result'] = provider_probe['start_result']
         response['runtime_status'] = provider_probe['runtime_status']
         response['followup_status'] = model_status
+        response['next_step'] = response['resolved_next_step']
+    elif recommended_action == 'check_default_model_config':
+        provider_probe = run_provider_signal_check(script_dir, args, start_attempted=True)
+        provider_status = dict(provider_probe['provider_status'])
+        model_status = build_model_status(provider_status)
+        response['remediation_result'] = 'checked default model configuration from config signals'
+        response['provider_status'] = provider_status
+        response['model_status'] = model_status
+        response['missing_requirements'] = model_status.get('missing_requirements') or []
+        response['resolved_next_step'] = 'check_selected_model_config' if model_status.get('default_model_present') else 'check_default_model_config'
+        response['initial_provider_status'] = provider_probe['initial_provider_status']
+        response['start_result'] = provider_probe['start_result']
+        response['runtime_status'] = provider_probe['runtime_status']
+        response['followup_status'] = {
+            'default_model': model_status.get('default_model'),
+            'default_model_source': model_status.get('default_model_source'),
+            'default_model_present': model_status.get('default_model_present'),
+            'missing_requirements': [item for item in (model_status.get('missing_requirements') or []) if 'default model' in item],
+        }
+        response['next_step'] = response['resolved_next_step']
+    elif recommended_action == 'check_selected_model_config':
+        provider_probe = run_provider_signal_check(script_dir, args, start_attempted=True)
+        provider_status = dict(provider_probe['provider_status'])
+        model_status = build_model_status(provider_status)
+        response['remediation_result'] = 'checked selected model configuration using runtime and config signals'
+        response['provider_status'] = provider_status
+        response['model_status'] = model_status
+        response['missing_requirements'] = model_status.get('missing_requirements') or []
+        if model_status.get('selected_model_present') is False:
+            response['resolved_next_step'] = 'check_selected_model_config'
+        elif model_status.get('selected_model_runtime_recognized') is False:
+            response['resolved_next_step'] = 'check_selected_model_config'
+        else:
+            response['resolved_next_step'] = 'run_runtime_task'
+        response['initial_provider_status'] = provider_probe['initial_provider_status']
+        response['start_result'] = provider_probe['start_result']
+        response['runtime_status'] = provider_probe['runtime_status']
+        response['followup_status'] = {
+            'selected_model': model_status.get('selected_model'),
+            'selected_model_source': model_status.get('selected_model_source'),
+            'selected_model_present': model_status.get('selected_model_present'),
+            'selected_model_runtime_recognized': model_status.get('selected_model_runtime_recognized'),
+            'selected_model_runtime_source': model_status.get('selected_model_runtime_source'),
+            'missing_requirements': [item for item in (model_status.get('missing_requirements') or []) if 'selected model' in item or 'runtime not recognizing selected model' == item],
+        }
         response['next_step'] = response['resolved_next_step']
     elif recommended_action == 'configure_provider':
         provider_probe = run_provider_signal_check(script_dir, args, start_attempted=True)

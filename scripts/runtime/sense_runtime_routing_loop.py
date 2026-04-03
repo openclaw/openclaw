@@ -188,12 +188,52 @@ def main() -> int:
             next_step = str(model_cfg_result.get('resolved_next_step') or model_cfg_result.get('next_step') or next_step)
             provider_status = model_cfg_result.get('provider_status') if isinstance(model_cfg_result, dict) else None
             model_status = model_cfg_result.get('model_status') if isinstance(model_cfg_result, dict) else None
-            if next_step == 'configure_provider':
+            if next_step == 'check_default_model_config':
+                pass
+            elif next_step == 'check_selected_model_config':
+                pass
+            elif next_step == 'configure_provider':
                 final_state = 'provider_model_missing'
                 break
-            if isinstance(model_status, dict) and model_status.get('model_config_present') is True and model_status.get('model_runtime_recognized') is False:
+            if isinstance(model_status, dict) and model_status.get('selected_model_present') is True and model_status.get('selected_model_runtime_recognized') is False:
                 final_state = 'model_not_ready'
                 next_step = 'check_model_config'
+                break
+            if next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
+                break
+
+        if next_step == 'check_default_model_config' and remediation_action != 'check_default_model_config':
+            default_model_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'check_default_model_config']
+            default_model_result = run_json(default_model_cmd)
+            last_remediation = default_model_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'check_default_model_config', 'result': default_model_result})
+            next_step = str(default_model_result.get('resolved_next_step') or default_model_result.get('next_step') or next_step)
+            model_status = default_model_result.get('model_status') if isinstance(default_model_result, dict) else None
+            if isinstance(model_status, dict) and model_status.get('default_model_present') is False:
+                final_state = 'default_model_missing'
+                next_step = 'check_default_model_config'
+                break
+            if next_step == 'check_selected_model_config':
+                pass
+            elif next_step == 'run_runtime_task':
+                final_state = 'ready_for_runtime_task'
+                break
+
+        if next_step == 'check_selected_model_config' and remediation_action != 'check_selected_model_config':
+            selected_model_cmd = [str(remediation_tool), *base_args(args), '--recommended-action', 'check_selected_model_config']
+            selected_model_result = run_json(selected_model_cmd)
+            last_remediation = selected_model_result
+            executed_steps.append({'step': 'runtime_task', 'attempt': attempts, 'action': 'check_selected_model_config', 'result': selected_model_result})
+            next_step = str(selected_model_result.get('resolved_next_step') or selected_model_result.get('next_step') or next_step)
+            model_status = selected_model_result.get('model_status') if isinstance(selected_model_result, dict) else None
+            if isinstance(model_status, dict) and model_status.get('selected_model_present') is False:
+                final_state = 'selected_model_missing'
+                next_step = 'check_selected_model_config'
+                break
+            if isinstance(model_status, dict) and model_status.get('selected_model_present') is True and model_status.get('selected_model_runtime_recognized') is False:
+                final_state = 'selected_model_not_ready'
+                next_step = 'check_selected_model_config'
                 break
             if next_step == 'run_runtime_task':
                 final_state = 'ready_for_runtime_task'
@@ -260,6 +300,12 @@ def main() -> int:
             break
         if next_step == 'check_model_config':
             final_state = 'provider_model_missing'
+            break
+        if next_step == 'check_default_model_config':
+            final_state = 'default_model_missing'
+            break
+        if next_step == 'check_selected_model_config':
+            final_state = 'selected_model_missing'
             break
         if next_step == 'configure_provider':
             final_state = 'provider_not_ready'

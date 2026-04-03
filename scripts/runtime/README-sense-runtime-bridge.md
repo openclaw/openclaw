@@ -222,6 +222,9 @@ Missing-requirements routing priority:
 - `API key may be required` -> `check_api_key_config`
 - `provider configuration missing` -> `check_provider_config`
 - `model configuration missing` -> `check_model_config`
+- `default model configuration missing` -> `check_default_model_config`
+- `selected model configuration missing` -> `check_selected_model_config`
+- `runtime not recognizing selected model` -> `check_selected_model_config`
 - `nim is not running` -> `start_nim_runtime`
 - `gpu runtime not enabled` -> `enable_gpu_runtime`
 - `nvidia policy missing` -> `review_runtime_capabilities`
@@ -327,6 +330,31 @@ If config contains a model but runtime signals do not recognize it yet, remediat
 - `model_config_present = true`
 - `model_runtime_recognized = false`
 - `missing_requirements` including `runtime not recognizing configured model`
+
+Model remediation is now split into:
+
+- `check_default_model_config`
+  - verifies whether a default model exists in config
+- `check_selected_model_config`
+  - verifies whether the currently selected model exists and whether runtime recognizes it
+
+Current `model_status` includes:
+
+- `default_model`
+- `default_model_source`
+- `default_model_present`
+- `selected_model`
+- `selected_model_source`
+- `selected_model_present`
+- `selected_model_runtime_recognized`
+- `selected_model_runtime_source`
+- `model_ready`
+
+Routing loop can now stop more specifically as:
+
+- `default_model_missing`
+- `selected_model_missing`
+- `selected_model_not_ready`
 
 Provider-specific API key mapping is intentionally minimal:
 
