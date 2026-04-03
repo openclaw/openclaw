@@ -248,6 +248,45 @@ describe("whatsapp setup wizard", () => {
     );
   });
 
+  it("uses configured defaultAccount for omitted-account finalize writes", async () => {
+    hoisted.pathExists.mockResolvedValue(true);
+    const harness = createSeparatePhoneHarness({
+      selectValues: ["separate", "open"],
+    });
+
+    const result = expectFinalizeResult(
+      await runFinalizeWithHarness({
+        harness,
+        accountId: "",
+        cfg: {
+          channels: {
+            whatsapp: {
+              defaultAccount: "work",
+              dmPolicy: "disabled",
+              allowFrom: ["+15555550123"],
+              accounts: {
+                work: {
+                  authDir: "/tmp/work",
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
+    expect(result.cfg.channels?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+    expect(result.cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
+    expect(result.cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual(["*", "+15555550123"]);
+    expect(harness.note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
+      ),
+      "WhatsApp DM access",
+    );
+  });
+
   it("normalizes allowFrom entries when list mode is selected", async () => {
     const { result } = await runSeparatePhoneFlow({
       selectValues: ["separate", "allowlist", "list"],
