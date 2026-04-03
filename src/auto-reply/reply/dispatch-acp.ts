@@ -10,6 +10,7 @@ import {
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { updateSessionStore } from "../../config/sessions/store.runtime.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -231,6 +232,48 @@ async function maybeUnbindStaleBoundConversations(params: {
   } catch (error) {
     logVerbose(
       `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  try {
+    const sessionEntry = readAcpSessionEntry({
+      sessionKey: params.targetSessionKey,
+    });
+    if (!sessionEntry?.entry || !sessionEntry.storeSessionKey) {
+      return;
+    }
+    const routeFieldsPresent =
+      sessionEntry.entry.deliveryContext !== undefined ||
+      sessionEntry.entry.origin !== undefined ||
+      sessionEntry.entry.lastChannel !== undefined ||
+      sessionEntry.entry.lastTo !== undefined ||
+      sessionEntry.entry.lastAccountId !== undefined ||
+      sessionEntry.entry.lastThreadId !== undefined;
+    if (!routeFieldsPresent) {
+      return;
+    }
+    await updateSessionStore(sessionEntry.storePath, (store) => {
+      const existing = store[sessionEntry.storeSessionKey];
+      if (!existing) {
+        return null;
+      }
+      store[sessionEntry.storeSessionKey] = {
+        ...existing,
+        deliveryContext: undefined,
+        origin: undefined,
+        lastChannel: undefined,
+        lastTo: undefined,
+        lastAccountId: undefined,
+        lastThreadId: undefined,
+      };
+      return store[sessionEntry.storeSessionKey];
+    });
+    logVerbose(
+      `dispatch-acp: scrubbed stale session routing fields for ${params.targetSessionKey}`,
+    );
+  } catch (error) {
+    logVerbose(
+      `dispatch-acp: failed to scrub stale session routing for ${params.targetSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }

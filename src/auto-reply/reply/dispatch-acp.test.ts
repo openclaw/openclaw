@@ -53,6 +53,12 @@ const sessionMetaMocks = vi.hoisted(() => ({
   >(() => null),
 }));
 
+const sessionStoreMocks = vi.hoisted(() => ({
+  updateSessionStore: vi.fn(
+    async (_storePath: string, updater: (store: Record<string, unknown>) => unknown) => updater({}),
+  ),
+}));
+
 const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
@@ -249,6 +255,12 @@ describe("tryDispatchAcpReply", () => {
       readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
         sessionMetaMocks.readAcpSessionEntry(params),
     }));
+    vi.doMock("../../config/sessions/store.runtime.js", () => ({
+      updateSessionStore: (
+        storePath: string,
+        updater: (store: Record<string, unknown>) => unknown,
+      ) => sessionStoreMocks.updateSessionStore(storePath, updater),
+    }));
     vi.doMock("../../infra/outbound/session-binding-service.js", () => ({
       getSessionBindingService: () => ({
         listBySession: (targetSessionKey: string) =>
@@ -279,6 +291,11 @@ describe("tryDispatchAcpReply", () => {
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
+    sessionStoreMocks.updateSessionStore.mockReset();
+    sessionStoreMocks.updateSessionStore.mockImplementation(
+      async (_storePath: string, updater: (store: Record<string, unknown>) => unknown) =>
+        updater({}),
+    );
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
@@ -653,6 +670,7 @@ describe("tryDispatchAcpReply", () => {
       targetSessionKey: canonicalSessionKey,
       reason: "acp-session-init-failed",
     });
+    expect(sessionStoreMocks.updateSessionStore).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
         isError: true,
@@ -729,12 +747,95 @@ describe("tryDispatchAcpReply", () => {
       targetSessionKey: canonicalSessionKey,
       reason: "acp-session-init-failed",
     });
+    expect(sessionStoreMocks.updateSessionStore).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
         isError: true,
         text: expect.stringContaining("ACP metadata is missing"),
       }),
     );
+  });
+
+  it("scrubs stale session routing fields after missing-metadata failures", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "stale",
+      sessionKey: canonicalSessionKey,
+      error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
+    });
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      cfg: createAcpTestConfig(),
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: canonicalSessionKey,
+      storeSessionKey: canonicalSessionKey,
+      entry: {
+        sessionId: "sess-1",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:12345",
+          accountId: "default",
+          threadId: "77",
+        },
+        origin: {
+          provider: "telegram",
+          to: "telegram:12345",
+          accountId: "default",
+          threadId: "77",
+        },
+        lastChannel: "telegram",
+        lastTo: "telegram:12345",
+        lastAccountId: "default",
+        lastThreadId: "77",
+      },
+      acp: undefined,
+    });
+    const persistedStore = {
+      [canonicalSessionKey]: {
+        sessionId: "sess-1",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:12345",
+          accountId: "default",
+          threadId: "77",
+        },
+        origin: {
+          provider: "telegram",
+          to: "telegram:12345",
+          accountId: "default",
+          threadId: "77",
+        },
+        lastChannel: "telegram",
+        lastTo: "telegram:12345",
+        lastAccountId: "default",
+        lastThreadId: "77",
+      },
+    };
+    sessionStoreMocks.updateSessionStore.mockImplementation(
+      async (_storePath: string, updater: (store: typeof persistedStore) => unknown) =>
+        updater(persistedStore),
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      sessionKeyOverride: "main",
+    });
+
+    expect(sessionStoreMocks.updateSessionStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-session-store.json",
+      expect.any(Function),
+    );
+    expect(persistedStore[canonicalSessionKey]).toMatchObject({
+      deliveryContext: undefined,
+      origin: undefined,
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+      lastThreadId: undefined,
+    });
   });
 
   it("uses canonical session keys for bound-session identity notices", async () => {
