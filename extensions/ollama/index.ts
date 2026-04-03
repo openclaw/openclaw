@@ -6,6 +6,7 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   buildProviderReplayFamilyHooks,
@@ -250,9 +251,13 @@ export default definePluginEntry({
         const configApiKey = typeof rawApiKey === "string" ? rawApiKey : undefined;
         let resolvedKey: string | undefined;
         if (configApiKey && configApiKey !== DEFAULT_API_KEY && configApiKey !== "custom-local") {
-          // Try env-var resolution first (handles markers like "OLLAMA_API_KEY"),
-          // then fall back to the raw config value as an inline key.
-          resolvedKey = resolveEnvApiKey(PROVIDER_ID)?.apiKey ?? configApiKey;
+          // Try env-var resolution first (handles markers like "OLLAMA_API_KEY").
+          // Only fall back to the raw config value if it's a real inline key,
+          // not an unresolved env-var marker (which would send a literal
+          // "Authorization: Bearer OLLAMA_API_KEY" header).
+          const envResolved = resolveEnvApiKey(PROVIDER_ID)?.apiKey;
+          resolvedKey =
+            envResolved ?? (isNonSecretApiKeyMarker(configApiKey) ? undefined : configApiKey);
         }
         if (!resolvedKey) {
           return innerStreamFn;

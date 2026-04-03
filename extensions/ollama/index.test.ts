@@ -18,8 +18,14 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
   })),
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
+<<<<<<< HEAD
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
 const innerStreamFnMock = vi.hoisted(() => vi.fn(() => ({}) as never));
+=======
+const innerStreamFnMock = vi.hoisted(() =>
+  vi.fn((_m: unknown, _ctx: unknown, _opts?: { apiKey?: string }) => ({}) as never),
+);
+>>>>>>> dd707789e (fix: skip unresolved env-var markers in createStreamFn key injection)
 const resolveEnvApiKeyMock = vi.hoisted(() => vi.fn(() => null as { apiKey: string } | null));
 
 vi.mock("./api.js", () => ({
@@ -35,6 +41,11 @@ vi.mock("./src/stream.js", async (importOriginal) => {
     ...actual,
     createConfiguredOllamaStreamFn: () => innerStreamFnMock,
   };
+});
+
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+  const orig = await importOriginal<Record<string, unknown>>();
+  return { ...orig };
 });
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
@@ -666,6 +677,23 @@ describe("ollama plugin", () => {
       expect(innerStreamFnMock).toHaveBeenCalledTimes(1);
       const passedOpts = innerStreamFnMock.mock.calls[0]?.[2];
       expect(passedOpts?.apiKey).toBe("sk-my-inline-token");
+    });
+
+    it("does not inject unresolved env-var marker as a literal key", () => {
+      resolveEnvApiKeyMock.mockReturnValue(null);
+      const provider = registerProvider();
+      const streamFn = provider.createStreamFn?.({
+        config: {
+          models: {
+            providers: {
+              ollama: { baseUrl: "https://ollama.com", apiKey: "OLLAMA_API_KEY" },
+            },
+          },
+        },
+        model: { id: "test", provider: "ollama", api: "ollama" },
+      });
+      // Env var unset + config is a known marker → should NOT inject the marker string
+      expect(streamFn).toBe(innerStreamFnMock);
     });
 
     it("does not override an existing apiKey in options", () => {
