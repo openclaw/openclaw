@@ -112,6 +112,41 @@ describe("test planner", () => {
     artifacts.cleanupTempArtifacts();
   });
 
+  it("runs boundary inventory suites on the lean boundary config", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "10",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "64",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const boundaryUnit = plan.selectedUnits.find((unit) => unit.id === "unit-boundary");
+
+    expect(boundaryUnit).toBeTruthy();
+    expect(boundaryUnit?.args).toContain("vitest.boundary.config.ts");
+    expect(boundaryUnit?.env?.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBe("1");
+    expect(
+      plan.selectedUnits
+        .filter((unit) => unit.id.startsWith("unit-fast"))
+        .every((unit) => !unit.includeFiles?.includes("test/web-search-provider-boundary.test.ts")),
+    ).toBe(true);
+    artifacts.cleanupTempArtifacts();
+  });
+
   it("uses smaller shared extension batches on constrained local hosts", () => {
     const env = {
       RUNNER_OS: "macOS",
@@ -486,6 +521,26 @@ describe("test planner", () => {
         .map((unit) => unit.surface)
         .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["base", "channels"]);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("routes targeted boundary inventories through the lean boundary config", () => {
+    const artifacts = createExecutionArtifacts({});
+    const plan = buildExecutionPlan(
+      {
+        mode: "local",
+        surfaces: [],
+        passthroughArgs: ["test/web-search-provider-boundary.test.ts"],
+      },
+      {
+        env: {},
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    expect(plan.targetedUnits).toHaveLength(1);
+    expect(plan.targetedUnits[0]?.surface).toBe("unit");
+    expect(plan.targetedUnits[0]?.args).toContain("vitest.boundary.config.ts");
     artifacts.cleanupTempArtifacts();
   });
 

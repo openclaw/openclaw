@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { channelTestPrefixes } from "../../vitest.channel-paths.mjs";
 import {
+  isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
 } from "../../vitest.unit-paths.mjs";
@@ -116,6 +117,8 @@ export function loadTestCatalog() {
     let surface = "base";
     if (isBundledPluginDependentUnitTestFile(normalizedFile)) {
       surface = "bundled";
+    } else if (isBoundaryTestFile(normalizedFile)) {
+      surface = "unit";
     } else if (isUnitConfigTestFile(normalizedFile)) {
       surface = "unit";
     } else if (contractTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {

@@ -1,5 +1,7 @@
 import path from "node:path";
 import {
+  boundaryTestFiles,
+  isBoundaryTestFile,
   bundledPluginDependentUnitTestFiles,
   isBundledPluginDependentUnitTestFile,
   isUnitConfigTestFile,
@@ -274,6 +276,11 @@ const resolveEntryTimingEstimator = (entry, context) => {
   const configIndex = entry.args.findIndex((arg) => arg === "--config");
   const config = configIndex >= 0 ? (entry.args[configIndex + 1] ?? "") : "";
   if (config === "vitest.unit.config.ts") {
+    return (file) =>
+      context.unitTimingManifest.files[file]?.durationMs ??
+      context.unitTimingManifest.defaultDurationMs;
+  }
+  if (config === "vitest.boundary.config.ts") {
     return (file) =>
       context.unitTimingManifest.files[file]?.durationMs ??
       context.unitTimingManifest.defaultDurationMs;
@@ -572,6 +579,7 @@ const buildDefaultUnits = (context, request) => {
     ...new Set([
       ...unitSchedulingOverrideSet,
       ...timedHeavyUnitFiles,
+      ...boundaryTestFiles,
       ...catalog.channelIsolatedFiles,
     ]),
   ];
@@ -633,6 +641,35 @@ const buildDefaultUnits = (context, request) => {
   const units = [];
 
   if (selectedSurfaceSet.has("unit")) {
+    if (boundaryTestFiles.length > 0) {
+      units.push(
+        createExecutionUnit(context, {
+          id: "unit-boundary",
+          surface: "unit",
+          isolate: false,
+          serialPhase: unitOnlyRun ? undefined : "unit-fast",
+          includeFiles: boundaryTestFiles,
+          estimatedDurationMs: estimateEntryFilesDurationMs(
+            { args: ["vitest", "run", "--config", "vitest.boundary.config.ts"] },
+            boundaryTestFiles,
+            context,
+          ),
+          env: withBundledPluginsDisabled(
+            withIncludeFileEnv(context, "vitest-boundary-include", boundaryTestFiles),
+          ),
+          args: [
+            "vitest",
+            "run",
+            "--config",
+            "vitest.boundary.config.ts",
+            "--pool=forks",
+            ...noIsolateArgs,
+          ],
+          reasons: ["unit-boundary-shared"],
+        }),
+      );
+    }
+
     for (const [laneIndex, files] of unitFastBuckets.entries()) {
       const laneName =
         unitFastBuckets.length === 1 ? "unit-fast" : `unit-fast-${String(laneIndex + 1)}`;
@@ -992,11 +1029,14 @@ const createTargetedUnit = (context, classification, filters) => {
         : owner;
   const args = (() => {
     if (owner === "unit") {
+      const config = filters.every((file) => isBoundaryTestFile(file))
+        ? "vitest.boundary.config.ts"
+        : "vitest.unit.config.ts";
       return [
         "vitest",
         "run",
         "--config",
-        "vitest.unit.config.ts",
+        config,
         "--pool=forks",
         ...context.noIsolateArgs,
         ...filters,
