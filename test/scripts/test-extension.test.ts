@@ -5,7 +5,6 @@ import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
   listChangedExtensionIds,
-  partitionExtensionTestFiles,
   resolveExtensionTestPlan,
 } from "../../scripts/test-extension.mjs";
 import { bundledPluginFile, bundledPluginRoot } from "../helpers/bundled-plugin-paths.js";
@@ -49,19 +48,6 @@ describe("scripts/test-extension.mjs", () => {
     );
   });
 
-  it("splits channel monitor files into isolated runs", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "discord", cwd: process.cwd() });
-
-    expect(plan.config).toBe("vitest.channels.config.ts");
-    expect(plan.isolatedTestFiles).toContain(
-      bundledPluginFile("discord", "src/monitor/provider.test.ts"),
-    );
-    expect(plan.sharedTestFiles).toContain(bundledPluginFile("discord", "src/channel.test.ts"));
-    expect(plan.sharedTestFiles).not.toContain(
-      bundledPluginFile("discord", "src/monitor/provider.test.ts"),
-    );
-  });
-
   it("resolves provider extensions onto the extensions vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() });
 
@@ -70,21 +56,6 @@ describe("scripts/test-extension.mjs", () => {
     expect(
       plan.testFiles.some((file) => file.startsWith(`${bundledPluginRoot("firecrawl")}/`)),
     ).toBe(true);
-  });
-
-  it("applies exact isolated files for non-channel extensions", () => {
-    const { isolatedTestFiles, sharedTestFiles } = partitionExtensionTestFiles({
-      config: "vitest.extensions.config.ts",
-      testFiles: [
-        bundledPluginFile("firecrawl", "src/firecrawl-scrape-tool.test.ts"),
-        bundledPluginFile("firecrawl", "src/index.test.ts"),
-      ],
-    });
-
-    expect(isolatedTestFiles).toEqual([
-      bundledPluginFile("firecrawl", "src/firecrawl-scrape-tool.test.ts"),
-    ]);
-    expect(sharedTestFiles).toEqual([bundledPluginFile("firecrawl", "src/index.test.ts")]);
   });
 
   it("includes paired src roots when they contain tests", () => {
