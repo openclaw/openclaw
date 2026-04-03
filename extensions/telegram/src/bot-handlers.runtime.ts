@@ -347,6 +347,10 @@ export const registerTelegramHandlers = ({
       sessionEntry: entry,
       sessionStore: store,
       sessionKey,
+      defaultProvider: resolveDefaultModelForAgent({
+        cfg: runtimeCfg,
+        agentId: route.agentId,
+      }).provider,
     });
     if (storedOverride) {
       return {
