@@ -5,8 +5,8 @@ import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
   listChangedExtensionIds,
-  resolveExtensionTestPlan,
-} from "../../scripts/test-extension.mjs";
+} from "../../scripts/lib/changed-extensions.mjs";
+import { resolveExtensionTestPlan } from "../../scripts/lib/extension-test-plan.mjs";
 import { bundledPluginFile, bundledPluginRoot } from "../helpers/bundled-plugin-paths.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mjs");
@@ -55,7 +55,7 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("keeps extension-root plans lean when there is no paired core test root", () => {
+  it("omits src/<extension> when no paired core root exists", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "line", cwd: process.cwd() });
 
     expect(plan.roots).toContain(bundledPluginRoot("line"));
