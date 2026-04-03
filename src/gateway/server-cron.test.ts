@@ -202,4 +202,36 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
     }
   });
+
+  it("preserves resolved current session targets for isolated cron runs", async () => {
+    const cfg = createCronConfig("server-cron-resolved-session");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "resolved-current-session",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:agent:main:discord:group:ops",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          job: expect.objectContaining({ id: job.id }),
+          sessionKey: "agent:main:discord:group:ops",
+        }),
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
 });

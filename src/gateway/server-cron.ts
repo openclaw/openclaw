@@ -11,6 +11,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
+import { normalizeCronCustomSessionId } from "../cron/normalize.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
@@ -27,7 +28,11 @@ import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
 export type GatewayCronState = {
@@ -286,9 +291,14 @@ export function buildGatewayCronService(params: {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       let sessionKey = `cron:${job.id}`;
       if (job.sessionTarget.startsWith("session:")) {
-        const customSessionId = job.sessionTarget.slice(8).trim();
-        if (customSessionId) {
-          sessionKey = customSessionId;
+        const requestedSessionKey = job.sessionTarget.slice(8);
+        if (parseAgentSessionKey(requestedSessionKey)) {
+          sessionKey = requestedSessionKey;
+        } else {
+          const customSessionId = normalizeCronCustomSessionId(requestedSessionKey);
+          if (customSessionId) {
+            sessionKey = customSessionId;
+          }
         }
       }
       return await runCronIsolatedAgentTurn({

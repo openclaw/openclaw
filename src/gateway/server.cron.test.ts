@@ -678,6 +678,56 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("falls back to the cron session key for stored jobs with invalid custom session ids", async () => {
+    const now = Date.now();
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-run-invalid-session-",
+      jobs: [
+        {
+          id: "invalid-session-job",
+          name: "invalid session job",
+          enabled: true,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "at", at: new Date(now + 60_000).toISOString() },
+          sessionTarget: "session:../../escape",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "still isolated" },
+          delivery: { mode: "none" },
+          state: {
+            nextRunAtMs: now + 60_000,
+          },
+        },
+      ],
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const finishedRun = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === "invalid-session-job" && payload?.action === "finished",
+      );
+      const runRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: "invalid-session-job", mode: "force" },
+        1_000,
+      );
+      expect(runRes.ok).toBe(true);
+      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      await finishedRun;
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(cronIsolatedRun.mock.calls[0]?.[0]).toMatchObject({
+        job: { id: "invalid-session-job" },
+        sessionKey: "cron:invalid-session-job",
+      });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("returns not-due without starting background work", async () => {
     const now = Date.now();
     const { prevSkipCron } = await setupCronTestRun({
