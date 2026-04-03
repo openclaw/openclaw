@@ -1359,7 +1359,7 @@ description: test skill
         },
       },
       {
-        name: "does not warn for workspace skills that stay inside workspace root",
+        name: "does not warn for workspace skills that stay inside skills directory",
         supported: true,
         setup: async () => {
           const tmp = await makeTmpDir("workspace-skill-in-root");
@@ -1376,6 +1376,35 @@ description: test skill
         },
         assert: (res: SecurityAuditReport) => {
           expectNoFinding(res, "skills.workspace.symlink_escape");
+        },
+      },
+      {
+        name: "warns when skill symlink resolves inside workspace but outside skills directory",
+        supported: !isWindows,
+        setup: async () => {
+          const tmp = await makeTmpDir("workspace-skill-inside-ws-outside-skills");
+          const stateDir = path.join(tmp, "state");
+          const workspaceDir = path.join(tmp, "workspace");
+          const sharedSkillDir = path.join(workspaceDir, "shared", "skills", "my-skill");
+          await fs.mkdir(stateDir, { recursive: true, mode: 0o700 });
+          await fs.mkdir(path.join(workspaceDir, "skills", "linked-skill"), { recursive: true });
+          await fs.mkdir(sharedSkillDir, { recursive: true });
+          await fs.writeFile(
+            path.join(sharedSkillDir, "SKILL.md"),
+            "# inside workspace, outside skills dir\n",
+            "utf-8",
+          );
+          // Symlink: skills/linked-skill/SKILL.md -> ../../shared/skills/my-skill/SKILL.md
+          await fs.symlink(
+            path.join(sharedSkillDir, "SKILL.md"),
+            path.join(workspaceDir, "skills", "linked-skill", "SKILL.md"),
+          );
+          return { stateDir, workspaceDir };
+        },
+        assert: (res: SecurityAuditReport) => {
+          const finding = res.findings.find((f) => f.checkId === "skills.workspace.symlink_escape");
+          expect(finding).toBeDefined();
+          expect(finding!.severity).toBe("warn");
         },
       },
     ] as const;

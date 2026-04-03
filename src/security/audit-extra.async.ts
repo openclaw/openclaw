@@ -847,7 +847,9 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
 
   for (const workspaceDir of workspaceDirs) {
     const workspacePath = path.resolve(workspaceDir);
-    const workspaceRealPath = await fs.realpath(workspacePath).catch(() => workspacePath);
+    // Match the skill loader boundary (resolveContainedSkillPath): skills dir root, not workspace root.
+    const skillsDir = path.join(workspacePath, "skills");
+    const skillsDirRealPath = await fs.realpath(skillsDir).catch(() => skillsDir);
     const skillFilePaths = await listWorkspaceSkillMarkdownFiles(workspacePath);
 
     for (const skillFilePath of skillFilePaths) {
@@ -861,7 +863,7 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
       if (!skillRealPath) {
         continue;
       }
-      if (isPathInside(workspaceRealPath, skillRealPath)) {
+      if (isPathInside(skillsDirRealPath, skillRealPath)) {
         continue;
       }
       escapedSkillFiles.push({
@@ -879,9 +881,9 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
   findings.push({
     checkId: "skills.workspace.symlink_escape",
     severity: "warn",
-    title: "Workspace skill files resolve outside the workspace root",
+    title: "Workspace skill files resolve outside the skills directory",
     detail:
-      "Detected workspace `skills/**/SKILL.md` paths whose realpath escapes their workspace root:\n" +
+      "Detected workspace `skills/**/SKILL.md` paths whose realpath escapes the skills directory root:\n" +
       escapedSkillFiles
         .slice(0, MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS)
         .map(
@@ -895,7 +897,7 @@ export async function collectWorkspaceSkillSymlinkEscapeFindings(params: {
         ? `\n- +${escapedSkillFiles.length - MAX_WORKSPACE_SKILL_ESCAPE_DETAIL_ROWS} more`
         : ""),
     remediation:
-      "Keep workspace skills inside the workspace root (replace symlinked escapes with real in-workspace files), or move trusted shared skills to managed/bundled skill locations.",
+      "Keep workspace skills inside the skills directory (replace symlinked escapes with real in-workspace files), or move trusted shared skills to managed/bundled skill locations or `skills.load.extraDirs`.",
   });
 
   return findings;
