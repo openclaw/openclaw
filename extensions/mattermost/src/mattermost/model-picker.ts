@@ -231,6 +231,7 @@ export function resolveMattermostModelPickerCurrentModel(params: {
       sessionEntry,
       sessionStore,
       sessionKey: params.route.sessionKey,
+      defaultProvider: params.data.resolvedDefault.provider,
     });
     if (!override?.model) {
       return fallback;

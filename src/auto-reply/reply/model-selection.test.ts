@@ -405,6 +405,17 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
   });
 
+  it("splits legacy combined modelOverride when providerOverride is missing", async () => {
+    const state = await resolveState(
+      makeEntry({
+        modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+      }),
+    );
+
+    expect(state.provider).toBe("ollama-beelink2");
+    expect(state.model).toBe("qwen2.5-coder:7b");
+  });
+
   it("normalizes deprecated xai beta session overrides before allowlist checks", async () => {
     const cfg = {
       agents: {
@@ -477,6 +488,44 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.resetModelOverride).toBe(true);
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
+
+  it("keeps allowed legacy combined session overrides after normalization", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "ollama-beelink2/qwen2.5-coder:7b": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:2";
+    const sessionEntry = makeEntry({
+      modelOverride: "ollama-beelink2/qwen2.5-coder:7b",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("ollama-beelink2");
+    expect(state.model).toBe("qwen2.5-coder:7b");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("ollama-beelink2/qwen2.5-coder:7b");
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
 });

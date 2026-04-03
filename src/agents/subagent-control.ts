@@ -24,6 +24,7 @@ import {
 } from "../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { abortEmbeddedPiRun } from "./pi-embedded.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import {
@@ -236,46 +237,24 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
   return status;
 }
 
-function resolveModelRef(entry?: SessionEntry) {
-  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  if (model.includes("/")) {
-    return model;
-  }
-  if (model && provider) {
-    return `${provider}/${model}`;
-  }
-  if (model) {
-    return model;
-  }
-  if (provider) {
-    return provider;
-  }
-  const overrideModel = typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
-  const overrideProvider =
-    typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
-  if (overrideModel.includes("/")) {
-    return overrideModel;
-  }
-  if (overrideModel && overrideProvider) {
-    return `${overrideProvider}/${overrideModel}`;
-  }
-  if (overrideModel) {
-    return overrideModel;
-  }
-  return overrideProvider || undefined;
+function resolveModelRef(entry?: SessionEntry, fallbackModel?: string) {
+  return resolveModelDisplayRef({
+    runtimeProvider: entry?.modelProvider,
+    runtimeModel: entry?.model,
+    overrideProvider: entry?.providerOverride,
+    overrideModel: entry?.modelOverride,
+    fallbackModel,
+  });
 }
 
 function resolveModelDisplay(entry?: SessionEntry, fallbackModel?: string) {
-  const modelRef = resolveModelRef(entry) || fallbackModel || undefined;
-  if (!modelRef) {
-    return "model n/a";
-  }
-  const slash = modelRef.lastIndexOf("/");
-  if (slash >= 0 && slash < modelRef.length - 1) {
-    return modelRef.slice(slash + 1);
-  }
-  return modelRef;
+  return resolveModelDisplayName({
+    runtimeProvider: entry?.modelProvider,
+    runtimeModel: entry?.model,
+    overrideProvider: entry?.providerOverride,
+    overrideModel: entry?.modelOverride,
+    fallbackModel,
+  });
 }
 
 function buildListText(params: {
@@ -361,7 +340,7 @@ export function buildSubagentList(params: {
       runtime,
       runtimeMs,
       ...(childSessions.length > 0 ? { childSessions } : {}),
-      model: resolveModelRef(sessionEntry) || entry.model,
+      model: resolveModelRef(sessionEntry, entry.model),
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),

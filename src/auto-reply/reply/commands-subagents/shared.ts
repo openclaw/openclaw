@@ -1,3 +1,4 @@
+import { resolveModelDisplayName } from "../../../agents/model-selection-display.js";
 import { resolveStoredSubagentCapabilities } from "../../../agents/subagent-capabilities.js";
 import type { ResolvedSubagentController } from "../../../agents/subagent-control.js";
 import {
@@ -89,42 +90,6 @@ function formatTaskPreview(value: string) {
   return truncateLine(compactLine(value), SUBAGENT_TASK_PREVIEW_MAX);
 }
 
-function resolveModelDisplay(
-  entry?: {
-    model?: unknown;
-    modelProvider?: unknown;
-    modelOverride?: unknown;
-    providerOverride?: unknown;
-  },
-  fallbackModel?: string,
-) {
-  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  let combined = model.includes("/") ? model : model && provider ? `${provider}/${model}` : model;
-  if (!combined) {
-    const overrideModel =
-      typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
-    const overrideProvider =
-      typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
-    combined = overrideModel.includes("/")
-      ? overrideModel
-      : overrideModel && overrideProvider
-        ? `${overrideProvider}/${overrideModel}`
-        : overrideModel;
-  }
-  if (!combined) {
-    combined = fallbackModel?.trim() || "";
-  }
-  if (!combined) {
-    return "model n/a";
-  }
-  const slash = combined.lastIndexOf("/");
-  if (slash >= 0 && slash < combined.length - 1) {
-    return combined.slice(slash + 1);
-  }
-  return combined;
-}
-
 export function resolveDisplayStatus(
   entry: SubagentRunRecord,
   options?: { pendingDescendants?: number },
@@ -152,7 +117,22 @@ export function formatSubagentListLine(params: {
   const status = resolveDisplayStatus(params.entry, {
     pendingDescendants: params.pendingDescendants,
   });
-  return `${params.index}. ${label} (${resolveModelDisplay(params.sessionEntry, params.entry.model)}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
+  return `${params.index}. ${label} (${resolveModelDisplayName({
+    runtimeProvider:
+      typeof params.sessionEntry?.modelProvider === "string"
+        ? params.sessionEntry.modelProvider
+        : null,
+    runtimeModel: typeof params.sessionEntry?.model === "string" ? params.sessionEntry.model : null,
+    overrideProvider:
+      typeof params.sessionEntry?.providerOverride === "string"
+        ? params.sessionEntry.providerOverride
+        : null,
+    overrideModel:
+      typeof params.sessionEntry?.modelOverride === "string"
+        ? params.sessionEntry.modelOverride
+        : null,
+    fallbackModel: params.entry.model,
+  })}, ${runtime}${usageText ? `, ${usageText}` : ""}) ${status}${task.toLowerCase() !== label.toLowerCase() ? ` - ${task}` : ""}`;
 }
 
 function formatTimestamp(valueMs?: number) {
