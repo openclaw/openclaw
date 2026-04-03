@@ -23,6 +23,7 @@ import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
+import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 
@@ -81,12 +82,7 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-export function sanitizeTransportPayloadText(text: string): string {
-  return text.replace(
-    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
-    "",
-  );
-}
+export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {

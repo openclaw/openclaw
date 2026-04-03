@@ -1,7 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   calculateCost,
-  createAssistantMessageEventStream,
   getEnvApiKey,
   type Context,
   type Model,
@@ -10,9 +9,17 @@ import {
 } from "@mariozechner/pi-ai";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
-import { sanitizeTransportPayloadText } from "./openai-transport-stream.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
+import {
+  createEmptyTransportUsage,
+  createWritableTransportEventStream,
+  failTransportStream,
+  finalizeTransportStream,
+  mergeTransportHeaders,
+  sanitizeTransportPayloadText,
+  type WritableTransportStream,
+} from "./transport-stream-shared.js";
 
 type GoogleTransportModel = Model<"google-generative-ai"> & {
   headers?: Record<string, string>;
@@ -100,10 +107,6 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
-
-function sanitizeGoogleTransportText(text: string): string {
-  return sanitizeTransportPayloadText(text);
-}
 
 function isGemini3ProModel(modelId: string): boolean {
   return /gemini-3(?:\.\d+)?-pro/.test(modelId.toLowerCase());
@@ -277,14 +280,14 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       if (typeof msg.content === "string") {
         contents.push({
           role: "user",
-          parts: [{ text: sanitizeGoogleTransportText(msg.content) }],
+          parts: [{ text: sanitizeTransportPayloadText(msg.content) }],
         });
         continue;
       }
       const parts = msg.content
         .map((item) =>
           item.type === "text"
-            ? { text: sanitizeGoogleTransportText(item.text) }
+            ? { text: sanitizeTransportPayloadText(item.text) }
             : {
                 inlineData: {
                   mimeType: item.mimeType,
@@ -308,7 +311,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
             continue;
           }
           parts.push({
-            text: sanitizeGoogleTransportText(block.text),
+            text: sanitizeTransportPayloadText(block.text),
             ...(isSameProviderAndModel && block.textSignature
               ? { thoughtSignature: block.textSignature }
               : {}),
@@ -322,11 +325,11 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           if (isSameProviderAndModel) {
             parts.push({
               thought: true,
-              text: sanitizeGoogleTransportText(block.thinking),
+              text: sanitizeTransportPayloadText(block.thinking),
               ...(block.thinkingSignature ? { thoughtSignature: block.thinkingSignature } : {}),
             });
           } else {
-            parts.push({ text: sanitizeGoogleTransportText(block.thinking) });
+            parts.push({ text: sanitizeTransportPayloadText(block.thinking) });
           }
           continue;
         }
@@ -364,7 +367,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           )
         : [];
       const responseValue = textResult
-        ? sanitizeGoogleTransportText(textResult)
+        ? sanitizeTransportPayloadText(textResult)
         : imageContent.length > 0
           ? "(see attached image)"
           : "";
@@ -442,7 +445,7 @@ export function buildGoogleGenerativeAiParams(
   }
   if (context.systemPrompt) {
     params.systemInstruction = {
-      parts: [{ text: sanitizeGoogleTransportText(context.systemPrompt) }],
+      parts: [{ text: sanitizeTransportPayloadText(context.systemPrompt) }],
     };
   }
   if (context.tools?.length) {
@@ -463,12 +466,18 @@ function buildGoogleHeaders(
   optionHeaders: Record<string, string> | undefined,
 ): Record<string, string> {
   const authHeaders = apiKey ? parseGeminiAuth(apiKey).headers : undefined;
-  return {
-    accept: "text/event-stream",
-    ...authHeaders,
-    ...model.headers,
-    ...optionHeaders,
-  };
+  return (
+    mergeTransportHeaders(
+      {
+        accept: "text/event-stream",
+      },
+      authHeaders,
+      model.headers,
+      optionHeaders,
+    ) ?? {
+      accept: "text/event-stream",
+    }
+  );
 }
 
 async function* parseGoogleSseChunks(
@@ -539,7 +548,7 @@ function updateUsage(
 }
 
 function pushTextBlockEnd(
-  stream: { push(event: unknown): void },
+  stream: WritableTransportStream,
   output: MutableAssistantOutput,
   blockIndex: number,
 ) {
@@ -570,8 +579,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as GoogleTransportModel;
     const options = rawOptions as GoogleTransportOptions | undefined;
-    const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+    const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant",
@@ -579,14 +587,7 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
         api: "google-generative-ai",
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createEmptyTransportUsage(),
         stopReason: "stop",
         timestamp: Date.now(),
       };
@@ -724,19 +725,9 @@ export function createGoogleGenerativeAiTransportStreamFn(): StreamFn {
         if (currentBlockIndex >= 0) {
           pushTextBlockEnd(stream, output, currentBlockIndex);
         }
-        if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;

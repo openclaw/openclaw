@@ -2,7 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   calculateCost,
-  createAssistantMessageEventStream,
   getEnvApiKey,
   parseStreamingJson,
   type AnthropicOptions,
@@ -12,9 +11,16 @@ import {
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
-import { sanitizeTransportPayloadText } from "./openai-transport-stream.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
+import {
+  createEmptyTransportUsage,
+  createWritableTransportEventStream,
+  failTransportStream,
+  finalizeTransportStream,
+  mergeTransportHeaders,
+  sanitizeTransportPayloadText,
+} from "./transport-stream-shared.js";
 
 const CLAUDE_CODE_VERSION = "2.1.75";
 const CLAUDE_CODE_TOOLS = [
@@ -86,10 +92,6 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-function sanitizeAnthropicText(text: string): string {
-  return sanitizeTransportPayloadText(text);
-}
-
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
     modelId.includes("opus-4-6") ||
@@ -143,18 +145,6 @@ function adjustMaxTokensForThinking(params: {
   return { maxTokens, thinkingBudget };
 }
 
-function mergeHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  const merged: Record<string, string> = {};
-  for (const headers of headerSources) {
-    if (headers) {
-      Object.assign(merged, headers);
-    }
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
 }
@@ -197,7 +187,7 @@ function convertContentBlocks(
 ) {
   const hasImages = content.some((item) => item.type === "image");
   if (!hasImages) {
-    return sanitizeAnthropicText(
+    return sanitizeTransportPayloadText(
       content.map((item) => ("text" in item ? item.text : "")).join("\n"),
     );
   }
@@ -205,7 +195,7 @@ function convertContentBlocks(
     if (block.type === "text") {
       return {
         type: "text",
-        text: sanitizeAnthropicText(block.text),
+        text: sanitizeTransportPayloadText(block.text),
       };
     }
     return {
@@ -245,7 +235,7 @@ function convertAnthropicMessages(
         if (msg.content.trim().length > 0) {
           params.push({
             role: "user",
-            content: sanitizeAnthropicText(msg.content),
+            content: sanitizeTransportPayloadText(msg.content),
           });
         }
         continue;
@@ -260,7 +250,7 @@ function convertAnthropicMessages(
         item.type === "text"
           ? {
               type: "text",
-              text: sanitizeAnthropicText(item.text),
+              text: sanitizeTransportPayloadText(item.text),
             }
           : {
               type: "image",
@@ -293,7 +283,7 @@ function convertAnthropicMessages(
           if (block.text.trim().length > 0) {
             blocks.push({
               type: "text",
-              text: sanitizeAnthropicText(block.text),
+              text: sanitizeTransportPayloadText(block.text),
             });
           }
           continue;
@@ -312,12 +302,12 @@ function convertAnthropicMessages(
           if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
             blocks.push({
               type: "text",
-              text: sanitizeAnthropicText(block.thinking),
+              text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
             blocks.push({
               type: "thinking",
-              thinking: sanitizeAnthropicText(block.thinking),
+              thinking: sanitizeTransportPayloadText(block.thinking),
               signature: block.thinkingSignature,
             });
           }
@@ -454,7 +444,7 @@ function createAnthropicTransportClient(params: {
         authToken: apiKey,
         baseURL: model.baseUrl,
         dangerouslyAllowBrowser: true,
-        defaultHeaders: mergeHeaders(
+        defaultHeaders: mergeTransportHeaders(
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
@@ -483,7 +473,7 @@ function createAnthropicTransportClient(params: {
         authToken: apiKey,
         baseURL: model.baseUrl,
         dangerouslyAllowBrowser: true,
-        defaultHeaders: mergeHeaders(
+        defaultHeaders: mergeTransportHeaders(
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
@@ -504,7 +494,7 @@ function createAnthropicTransportClient(params: {
       apiKey,
       baseURL: model.baseUrl,
       dangerouslyAllowBrowser: true,
-      defaultHeaders: mergeHeaders(
+      defaultHeaders: mergeTransportHeaders(
         {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
@@ -544,7 +534,7 @@ function buildAnthropicParams(
         ? [
             {
               type: "text",
-              text: sanitizeAnthropicText(context.systemPrompt),
+              text: sanitizeTransportPayloadText(context.systemPrompt),
               ...(cacheControl ? { cache_control: cacheControl } : {}),
             },
           ]
@@ -554,7 +544,7 @@ function buildAnthropicParams(
     params.system = [
       {
         type: "text",
-        text: sanitizeAnthropicText(context.systemPrompt),
+        text: sanitizeTransportPayloadText(context.systemPrompt),
         ...(cacheControl ? { cache_control: cacheControl } : {}),
       },
     ];
@@ -639,7 +629,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as AnthropicTransportModel;
     const options = rawOptions as AnthropicTransportOptions | undefined;
-    const stream = createAssistantMessageEventStream();
+    const { eventStream, stream } = createWritableTransportEventStream();
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant",
@@ -647,14 +637,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         api: "anthropic-messages",
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: createEmptyTransportUsage(),
         stopReason: "stop",
         timestamp: Date.now(),
       };
@@ -895,24 +878,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
-        if (transportOptions.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        if (output.stopReason === "aborted" || output.stopReason === "error") {
-          throw new Error("An unknown error occurred");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: transportOptions.signal });
       } catch (error) {
-        for (const block of output.content) {
-          delete block.index;
-        }
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({
+          stream,
+          output,
+          signal: options?.signal,
+          error,
+          cleanup: () => {
+            for (const block of output.content) {
+              delete block.index;
+            }
+          },
+        });
       }
     })();
-    return stream as ReturnType<StreamFn>;
+    return eventStream as ReturnType<StreamFn>;
   };
 }
