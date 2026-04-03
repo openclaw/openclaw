@@ -68,5 +68,7 @@ openclaw models set github-copilot/gpt-4o
 - Requires an interactive TTY; run it directly in a terminal.
 - Copilot model availability depends on your plan; if a model is rejected, try
   another ID (for example `github-copilot/gpt-4.1`).
+- Claude model IDs use the Anthropic Messages transport automatically; GPT, o-series,
+  and Gemini models keep the OpenAI Responses transport.
 - The login stores a GitHub token in the auth profile store and exchanges it for a
   Copilot API token when OpenClaw runs.

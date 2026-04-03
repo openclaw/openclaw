@@ -171,7 +171,7 @@ function buildDynamicModel(
         id: modelId,
         name: modelId,
         provider: "github-copilot",
-        api: "openai-responses",
+        api: lower.includes("claude") ? "anthropic-messages" : "openai-responses",
         reasoning: /^o[13](\b|$)/.test(lower),
         input: ["text", "image"],
         cost: OPENROUTER_FALLBACK_COST,
