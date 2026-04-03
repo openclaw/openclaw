@@ -5,7 +5,7 @@ import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
-import { getLogger, type LoggerSettings } from "./logger.js";
+import { getLogger, isFileLogLevelEnabled, type LoggerSettings } from "./logger.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
@@ -251,20 +251,22 @@ export function enableConsoleCapture(): void {
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
       try {
-        const resolvedLogger = getLoggerLazy();
-        // Map console levels to file logger
-        if (level === "trace") {
-          resolvedLogger.trace(formatted);
-        } else if (level === "debug") {
-          resolvedLogger.debug(formatted);
-        } else if (level === "info") {
-          resolvedLogger.info(formatted);
-        } else if (level === "warn") {
-          resolvedLogger.warn(formatted);
-        } else if (level === "error" || level === "fatal") {
-          resolvedLogger.error(formatted);
-        } else {
-          resolvedLogger.info(formatted);
+        if (isFileLogLevelEnabled(level as LogLevel)) {
+          const resolvedLogger = getLoggerLazy();
+          // Map console levels to file logger
+          if (level === "trace") {
+            resolvedLogger.trace(formatted);
+          } else if (level === "debug") {
+            resolvedLogger.debug(formatted);
+          } else if (level === "info") {
+            resolvedLogger.info(formatted);
+          } else if (level === "warn") {
+            resolvedLogger.warn(formatted);
+          } else if (level === "error" || level === "fatal") {
+            resolvedLogger.error(formatted);
+          } else {
+            resolvedLogger.info(formatted);
+          }
         }
       } catch {
         // never block console output on logging failures
