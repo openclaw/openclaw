@@ -14,6 +14,7 @@ import {
   withNormalizedTimestamp,
   readBooleanParam,
 } from "../runtime-api.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
 import {
   createThreadDiscord,
   deleteMessageDiscord,
@@ -29,7 +30,6 @@ import {
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   searchMessagesDiscord,
-  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,

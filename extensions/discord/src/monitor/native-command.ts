@@ -17,6 +17,10 @@ import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -31,21 +35,19 @@ import {
   type CommandArgs,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
-import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  dispatchReplyWithDispatcher,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
-import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
@@ -87,7 +89,7 @@ const log = createSubsystemLogger("discord/native-command");
 const DISCORD_COMMAND_DESCRIPTION_MAX = 100;
 let matchPluginCommandImpl = pluginRuntime.matchPluginCommand;
 let executePluginCommandImpl = pluginRuntime.executePluginCommand;
-let dispatchReplyWithDispatcherImpl = replyRuntime.dispatchReplyWithDispatcher;
+let dispatchReplyWithDispatcherImpl = dispatchReplyWithDispatcher;
 let resolveDiscordNativeInteractionRouteStateImpl = resolveDiscordNativeInteractionRouteState;
 
 export const __testing = {
@@ -106,8 +108,8 @@ export const __testing = {
     return previous;
   },
   setDispatchReplyWithDispatcher(
-    next: typeof replyRuntime.dispatchReplyWithDispatcher,
-  ): typeof replyRuntime.dispatchReplyWithDispatcher {
+    next: typeof dispatchReplyWithDispatcher,
+  ): typeof dispatchReplyWithDispatcher {
     const previous = dispatchReplyWithDispatcherImpl;
     dispatchReplyWithDispatcherImpl = next;
     return previous;

@@ -16,38 +16,6 @@
     "reason": "imports another extension via relative path outside the extension package"
   },
   {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 7,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/discord.js",
-    "resolvedPath": "src/plugin-sdk/discord.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 22,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/discord-core.js",
-    "resolvedPath": "src/plugin-sdk/discord-core.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 23,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/discord-core.js",
-    "resolvedPath": "src/plugin-sdk/discord-core.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/discord/src/runtime-api.ts",
-    "line": 30,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/discord-core.js",
-    "resolvedPath": "src/plugin-sdk/discord-core.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/feishu/runtime-api.ts",
     "line": 4,
     "kind": "export",
@@ -160,30 +128,6 @@
     "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
   },
   {
-    "file": "extensions/signal/src/runtime-api.ts",
-    "line": 4,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/signal.js",
-    "resolvedPath": "src/plugin-sdk/signal.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/slack/src/runtime-api.ts",
-    "line": 12,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/slack.js",
-    "resolvedPath": "src/plugin-sdk/slack.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/slack/src/runtime-api.ts",
-    "line": 28,
-    "kind": "export",
-    "specifier": "../../../src/plugin-sdk/slack-core.js",
-    "resolvedPath": "src/plugin-sdk/slack-core.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
     "file": "extensions/telegram/runtime-api.ts",
     "line": 10,
     "kind": "export",
@@ -197,14 +141,6 @@
     "kind": "export",
     "specifier": "../../src/plugin-sdk/telegram.js",
     "resolvedPath": "src/plugin-sdk/telegram.js",
-    "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
-  },
-  {
-    "file": "extensions/telegram/runtime-api.ts",
-    "line": 52,
-    "kind": "export",
-    "specifier": "../../src/plugin-sdk/telegram-core.js",
-    "resolvedPath": "src/plugin-sdk/telegram-core.js",
     "reason": "re-exports plugin-sdk via relative path; use openclaw/plugin-sdk/<subpath>"
   },
   {

@@ -28,7 +28,7 @@ vi.mock("../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStoreSync: vi.fn(() => []),
 }));
 
-vi.mock("../../plugin-sdk/whatsapp.js", () => ({
+vi.mock("../../../extensions/whatsapp/api.js", () => ({
   resolveWhatsAppAccount: whatsappAccountMocks.resolveWhatsAppAccount,
 }));
 
@@ -37,7 +37,7 @@ const mockedModuleIds = [
   "../../infra/outbound/channel-selection.js",
   "../../infra/outbound/target-resolver.js",
   "../../pairing/pairing-store.js",
-  "../../plugin-sdk/whatsapp.js",
+  "../../../extensions/whatsapp/api.js",
 ];
 
 import { loadSessionStore } from "../../config/sessions.js";

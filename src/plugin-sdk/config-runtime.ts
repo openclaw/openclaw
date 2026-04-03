@@ -63,6 +63,7 @@ export type {
   DiscordAccountConfig,
   DiscordActionConfig,
   DiscordAutoPresenceConfig,
+  DiscordConfig,
   DiscordExecApprovalConfig,
   DiscordGuildChannelConfig,
   DiscordGuildEntry,

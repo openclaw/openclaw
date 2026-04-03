@@ -16,6 +16,7 @@ export function createDiscordOutboundHoisted() {
 }
 
 type DiscordSendModule = typeof import("./send.js");
+type DiscordSendComponentsModule = typeof import("./send.components.js");
 type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
 
 export const DEFAULT_DISCORD_SEND_RESULT = {
@@ -34,11 +35,21 @@ export async function createDiscordSendModuleMock(
   return {
     ...actual,
     sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscordMock(...args),
-    sendDiscordComponentMessage: (...args: unknown[]) =>
-      hoisted.sendDiscordComponentMessageMock(...args),
     sendPollDiscord: (...args: unknown[]) => hoisted.sendPollDiscordMock(...args),
     sendWebhookMessageDiscord: (...args: unknown[]) =>
       hoisted.sendWebhookMessageDiscordMock(...args),
+  };
+}
+
+export async function createDiscordSendComponentsModuleMock(
+  hoisted: DiscordOutboundHoisted,
+  importOriginal: () => Promise<DiscordSendComponentsModule>,
+) {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    sendDiscordComponentMessage: (...args: unknown[]) =>
+      hoisted.sendDiscordComponentMessageMock(...args),
   };
 }
 
@@ -59,12 +70,18 @@ export async function installDiscordOutboundModuleSpies(hoisted: DiscordOutbound
   vi.spyOn(sendModule, "sendMessageDiscord").mockImplementation(
     mockedSendModule.sendMessageDiscord,
   );
-  vi.spyOn(sendModule, "sendDiscordComponentMessage").mockImplementation(
-    mockedSendModule.sendDiscordComponentMessage,
-  );
   vi.spyOn(sendModule, "sendPollDiscord").mockImplementation(mockedSendModule.sendPollDiscord);
   vi.spyOn(sendModule, "sendWebhookMessageDiscord").mockImplementation(
     mockedSendModule.sendWebhookMessageDiscord,
+  );
+
+  const sendComponentsModule = await import("./send.components.js");
+  const mockedSendComponentsModule = await createDiscordSendComponentsModuleMock(
+    hoisted,
+    async () => sendComponentsModule,
+  );
+  vi.spyOn(sendComponentsModule, "sendDiscordComponentMessage").mockImplementation(
+    mockedSendComponentsModule.sendDiscordComponentMessage,
   );
 
   const threadBindingsModule = await import("./monitor/thread-bindings.js");

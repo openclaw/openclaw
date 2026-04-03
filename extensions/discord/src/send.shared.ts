@@ -17,8 +17,8 @@ import {
   normalizePollInput,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
-import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";

@@ -1,6 +1,6 @@
+import type { DiscordSendResult } from "../../extensions/discord/api.js";
 import type { OutboundMediaAccess } from "../media/load-options.js";
 import { attachChannelToResult } from "./channel-send-result.js";
-import type { DiscordSendResult } from "./discord.js";
 
 type DiscordSendOptionInput = {
   replyToId?: string | null;

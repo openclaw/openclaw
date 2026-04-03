@@ -189,13 +189,6 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
-    expectSourceMentions("telegram-core", [
-      "ChannelMessageActionAdapter",
-      "TelegramAccountConfig",
-      "buildChannelConfigSchema",
-      "buildTokenChannelStatusSummary",
-      "resolveConfiguredFromCredentialStatuses",
-    ]);
     expectSourceMentions("bluebubbles", [
       "normalizeBlueBubblesAcpConversationId",
       "matchBlueBubblesAcpConversation",
@@ -235,7 +228,6 @@ describe("plugin-sdk subpath exports", () => {
     ]) {
       expectSourceMentions(subpath, ["chunkTextForOutbound"]);
     }
-    expectSourceMentions("signal", ["chunkText"]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
@@ -284,12 +276,6 @@ describe("plugin-sdk subpath exports", () => {
       ],
     });
     expectSourceMentions("runtime", ["createLoggerBackedRuntime"]);
-    expectSourceMentions("discord", [
-      "buildDiscordComponentMessage",
-      "editDiscordComponentMessage",
-      "registerBuiltDiscordComponentMessage",
-      "resolveDiscordAccount",
-    ]);
     expectSourceMentions("huggingface", [
       "buildHuggingfaceModelDefinition",
       "buildHuggingfaceProvider",

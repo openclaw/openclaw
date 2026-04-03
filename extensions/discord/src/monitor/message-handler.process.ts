@@ -23,12 +23,12 @@ import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";

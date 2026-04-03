@@ -1,6 +1,7 @@
 import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -8,7 +9,6 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/telegram-core";
 import {
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
