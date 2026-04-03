@@ -23,6 +23,9 @@ describe("resolveLlmIdleTimeoutMs", () => {
 
   it("disables the default idle timeout for cron triggers when not explicitly configured", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg: undefined, trigger: "cron" })).toBe(0);
+
+    const cfgNoTimeout = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg: cfgNoTimeout, trigger: "cron" })).toBe(0);
   });
 
   it("returns 0 when idleTimeoutSeconds is 0 (disabled)", () => {
