@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/allowlists: let explicit bundled chat channel enablement bypass `plugins.allow`, while keeping auto-enabled channel activation and startup sidecars behind restrictive allowlists. (#60233) Thanks @dorukardahan.
 - Allowlist/commands: require owner access for `/allowlist add` and `/allowlist remove` so command-authorized non-owners cannot mutate persisted allowlists. (#59836) Thanks @eleqtrizit.
 - Control UI/skills: clear stale ClawHub results immediately when the search query changes, so debounced searches cannot keep outdated install targets visible. Related #60134.
+- Fetch/redirects: normalize guarded redirect method rewriting and loop detection so SSRF-guarded requests match platform redirect behavior without missing loops back to the original URL. (#59121) Thanks @eleqtrizit.
 - Discord/ack reactions: keep automatic ACK reaction auth on the active hydrated Discord account so SecretRef-backed and non-default-account reactions stop falling back to stale default config resolution. (#60081) Thanks @FunJim.
 - Telegram/model switching: render non-default `/model` callback confirmations with HTML formatting so Telegram shows the selected model in bold instead of raw `**...**` markers. (#60042) Thanks @GitZhangChi.
 - Plugins/update: allow `openclaw plugins update` to use `--dangerously-force-unsafe-install` for built-in dangerous-code false positives during plugin updates. (#60066) Thanks @huntharo.
