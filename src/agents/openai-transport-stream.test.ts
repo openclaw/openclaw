@@ -23,8 +23,8 @@ describe("openai transport stream", () => {
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
     const model = attachModelProviderRequestTransport(
       {
-        id: "gpt-5",
-        name: "GPT-5",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
         api: "openai-responses",
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
@@ -48,7 +48,7 @@ describe("openai transport stream", () => {
     expect(prepared).toMatchObject({
       api: "openclaw-openai-responses-transport",
       provider: "openai",
-      id: "gpt-5",
+      id: "gpt-5.4",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
   });
@@ -283,8 +283,8 @@ describe("openai transport stream", () => {
   it("keeps developer role for native OpenAI reasoning responses models", () => {
     const params = buildOpenAIResponsesParams(
       {
-        id: "gpt-5",
-        name: "GPT-5",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
         api: "openai-responses",
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
