@@ -196,14 +196,14 @@ async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<Provide
         envVarPlaceholder: "ANTHROPIC_SETUP_TOKEN",
       },
     });
-    token = resolved.resolvedValue.trim();
+    token = resolved.resolvedValue.replace(/\s+/g, "");
     tokenRef = resolved.ref;
   } else {
     const tokenRaw = await ctx.prompter.text({
       message: "Paste Anthropic setup-token",
       validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
     });
-    token = String(tokenRaw ?? "").trim();
+    token = String(tokenRaw ?? "").replace(/\s+/g, "");
   }
   const tokenError = validateAnthropicSetupToken(token);
   if (tokenError) {
@@ -256,7 +256,7 @@ async function runAnthropicSetupTokenNonInteractive(ctx: {
     return null;
   }
 
-  const token = normalizeSecretInput(ctx.opts.token);
+  const token = normalizeSecretInput(ctx.opts.token).replace(/\s+/g, "");
   if (!token) {
     ctx.runtime.error("Missing --token for --auth-choice token.");
     ctx.runtime.exit(1);
