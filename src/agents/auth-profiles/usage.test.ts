@@ -17,8 +17,8 @@ const storeMocks = vi.hoisted(() => ({
 }));
 const fetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./store.js")>();
+vi.mock("./store.js", async () => {
+  const original = await vi.importActual<typeof import("./store.js")>("./store.js");
   return {
     ...original,
     updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
@@ -653,7 +653,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       label: "disabledUntil(auth_permanent)",
       reason: "auth_permanent" as const,
       buildUsageStats: (now: number): WindowStats => ({
-        disabledUntil: now + 20 * 60 * 60 * 1000,
+        disabledUntil: now + 50 * 60 * 1000,
         disabledReason: "auth_permanent",
         errorCount: 5,
         failureCounts: { auth_permanent: 5 },
@@ -709,7 +709,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, billing count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
+      // calculateDisabledLaneBackoffMs(1, 5h, 24h) = 5h
       expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
@@ -724,8 +724,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, auth_permanent count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
-      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
+      // calculateDisabledLaneBackoffMs(1, 10m, 60m) = 10m
+      expectedUntil: (now: number) => now + 10 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
   ];

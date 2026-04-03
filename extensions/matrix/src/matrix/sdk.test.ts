@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -175,8 +176,10 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
 let matrixJsClient = createMatrixJsClientStub();
 let lastCreateClientOpts: Record<string, unknown> | null = null;
 
-vi.mock("matrix-js-sdk/lib/matrix.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("matrix-js-sdk/lib/matrix.js")>();
+vi.mock("matrix-js-sdk/lib/matrix.js", async () => {
+  const actual = await vi.importActual<typeof import("matrix-js-sdk/lib/matrix.js")>(
+    "matrix-js-sdk/lib/matrix.js",
+  );
   return {
     ...actual,
     ClientEvent: { Event: "event", Room: "Room" },
@@ -1034,6 +1037,11 @@ describe("MatrixClient crypto bootstrapping", () => {
         crossSigningPublished: true,
         ownDeviceVerified: true,
       });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
     (
       client as unknown as {
         cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
@@ -1045,6 +1053,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(bootstrapSpy).toHaveBeenCalledTimes(2);
     expect((bootstrapSpy.mock.calls as unknown[][])[1]?.[1] ?? {}).toEqual({
       forceResetCrossSigning: true,
+      allowSecretStorageRecreateWithoutRecoveryKey: true,
       strict: true,
     });
   });
@@ -1060,6 +1069,11 @@ describe("MatrixClient crypto bootstrapping", () => {
       crossSigningPublished: false,
       ownDeviceVerified: true,
     });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
     (
       client as unknown as {
         cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
@@ -1106,6 +1120,11 @@ describe("MatrixClient crypto bootstrapping", () => {
       crossSigningPublished: false,
       ownDeviceVerified: false,
     });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
     (
       client as unknown as {
         cryptoBootstrapper: { bootstrap: typeof bootstrapSpy };
@@ -1178,7 +1197,9 @@ describe("MatrixClient crypto bootstrapping", () => {
     const callsAfterStart = databasesSpy.mock.calls.length;
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(databasesSpy.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    await vi.waitFor(() => {
+      expect(databasesSpy.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    });
 
     client.stop();
     const callsAfterStop = databasesSpy.mock.calls.length;

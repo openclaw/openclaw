@@ -1,3 +1,4 @@
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
 
@@ -71,7 +72,10 @@ export function getPluginCommandSpecs(provider?: string): Array<{
   acceptsArgs: boolean;
 }> {
   const providerName = provider?.trim().toLowerCase();
-  if (providerName && providerName !== "telegram" && providerName !== "discord") {
+  if (
+    providerName &&
+    getChannelPlugin(providerName)?.commands?.nativeCommandsAutoEnabled !== true
+  ) {
     return [];
   }
   return Array.from(pluginCommands.values()).map((cmd) => ({

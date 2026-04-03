@@ -25,18 +25,66 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderCapabilitiesWithPlugin: ({ provider }: { provider?: string }) =>
-    provider === "openrouter"
+  resolveProviderRuntimePlugin: ({ provider }: { provider?: string }) =>
+    provider === "openrouter" || provider === "github-copilot"
       ? {
-          openAiCompatTurnValidation: false,
-          geminiThoughtSignatureSanitization: true,
-          geminiThoughtSignatureModelHints: ["gemini"],
+          buildReplayPolicy: (context?: { modelId?: string | null }) => {
+            const modelId = String(context?.modelId ?? "").toLowerCase();
+            if (provider === "openrouter") {
+              return {
+                applyAssistantFirstOrderingFix: false,
+                validateGeminiTurns: false,
+                validateAnthropicTurns: false,
+                ...(modelId.includes("gemini")
+                  ? {
+                      sanitizeThoughtSignatures: {
+                        allowBase64Only: true,
+                        includeCamelCase: true,
+                      },
+                    }
+                  : {}),
+              };
+            }
+            if (provider === "github-copilot" && modelId.includes("claude")) {
+              return {
+                dropThinkingBlocks: true,
+              };
+            }
+            return undefined;
+          },
         }
-      : provider === "github-copilot"
-        ? {
-            dropThinkingBlockModelHints: ["claude"],
-          }
-        : undefined,
+      : undefined,
+  sanitizeProviderReplayHistoryWithPlugin: vi.fn(
+    async ({
+      provider,
+      context,
+    }: {
+      provider?: string;
+      context: {
+        messages: AgentMessage[];
+        sessionState?: {
+          appendCustomEntry(customType: string, data: unknown): void;
+        };
+      };
+    }) => {
+      if (
+        provider &&
+        provider.startsWith("google") &&
+        context.messages[0]?.role === "assistant" &&
+        context.sessionState
+      ) {
+        context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
+          timestamp: Date.now(),
+        });
+        return [
+          { role: "user", content: "(session bootstrap)" } as AgentMessage,
+          ...context.messages,
+        ];
+      }
+      return context.messages;
+    },
+  ),
+  validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
 }));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
@@ -221,6 +269,33 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toEqual(mockMessages);
+  });
+
+  it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
+    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+
+    const result = await sanitizeSessionHistory({
+      messages: castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "hello from previous turn" }],
+        },
+      ]),
+      modelApi: "google-generative-ai",
+      provider: "google-vertex",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[0]).toMatchObject({
+      role: "user",
+      content: "(session bootstrap)",
+    });
+    expect(
+      sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
+    ).toBe(true);
   });
 
   it("passes simple user-only history through for Mistral models", async () => {

@@ -1,14 +1,14 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
+import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 import {
   createChannelPairingController,
   type ClawdbotConfig,
   type RuntimeEnv,
-} from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
-import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
+} from "./comment-handler-runtime-api.js";
 import { buildFeishuCommentTarget } from "./comment-target.js";
-import { replyComment } from "./drive.js";
+import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import {
   resolveDriveCommentEventTurn,
@@ -108,11 +108,12 @@ export async function handleFeishuCommentEvent(
           );
         },
         sendPairingReply: async (text) => {
-          await replyComment(client, {
+          await deliverCommentThreadText(client, {
             file_token: turn.fileToken,
             file_type: turn.fileType,
             comment_id: turn.commentId,
             content: text,
+            is_whole_comment: turn.isWholeComment,
           });
         },
         onReplyError: (err) => {
@@ -221,6 +222,7 @@ export async function handleFeishuCommentEvent(
     fileToken: turn.fileToken,
     fileType: turn.fileType,
     commentId: turn.commentId,
+    isWholeComment: turn.isWholeComment,
   });
 
   log(

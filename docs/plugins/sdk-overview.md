@@ -32,6 +32,13 @@ import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 Each subpath is a small, self-contained module. This keeps startup fast and
 prevents circular dependency issues.
 
+Do not add or depend on provider-named convenience seams such as
+`openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
+`openclaw/plugin-sdk/signal`, or `openclaw/plugin-sdk/whatsapp`. Bundled plugins should compose generic SDK
+subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
+either use those plugin-local barrels or add a narrow generic SDK contract when
+the need is truly cross-channel.
+
 ## Subpath reference
 
 The most commonly used subpaths, grouped by purpose. The full list of 100+
@@ -91,7 +98,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | --- | --- |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
-    | `plugin-sdk/approval-runtime` | Exec and plugin approval helpers |
+    | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |

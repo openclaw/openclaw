@@ -163,23 +163,6 @@ function assertMainSessionAgentId(
   }
 }
 
-const TELEGRAM_TME_URL_REGEX = /^https?:\/\/t\.me\/|t\.me\//i;
-const TELEGRAM_SLASH_TOPIC_REGEX = /^-?\d+\/\d+$/;
-
-function validateTelegramDeliveryTarget(to: string | undefined): string | undefined {
-  if (!to) {
-    return undefined;
-  }
-  const trimmed = to.trim();
-  if (TELEGRAM_TME_URL_REGEX.test(trimmed)) {
-    return undefined;
-  }
-  if (TELEGRAM_SLASH_TOPIC_REGEX.test(trimmed)) {
-    return `Invalid Telegram delivery target "${to}". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username`;
-  }
-  return undefined;
-}
-
 function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   // No delivery object or mode is "none" -- nothing to validate.
   if (!job.delivery || job.delivery.mode === "none") {
@@ -200,12 +183,6 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.sessionTarget.startsWith("session:");
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
-  }
-  if (job.delivery.channel === "telegram") {
-    const telegramError = validateTelegramDeliveryTarget(job.delivery.to);
-    if (telegramError) {
-      throw new Error(telegramError);
-    }
   }
 }
 
@@ -687,6 +664,14 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.model === "string") {
     next.model = patch.model;
   }
+  if (Array.isArray(patch.fallbacks)) {
+    next.fallbacks = patch.fallbacks;
+  }
+  if (Array.isArray(patch.toolsAllow)) {
+    next.toolsAllow = patch.toolsAllow;
+  } else if (patch.toolsAllow === null) {
+    delete next.toolsAllow;
+  }
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
@@ -718,6 +703,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     kind: "agentTurn",
     message: patch.message,
     model: patch.model,
+    fallbacks: patch.fallbacks,
+    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,

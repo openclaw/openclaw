@@ -5,7 +5,10 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
+  type ProviderReplayPolicy,
+  type ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
@@ -22,9 +25,16 @@ import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
 } from "./src/stream.js";
+import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
+
+function buildOllamaReplayPolicy(
+  ctx: ProviderReplayPolicyContext,
+): ProviderReplayPolicy | undefined {
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
+}
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
@@ -35,6 +45,7 @@ export default definePluginEntry({
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
+    api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({
       id: PROVIDER_ID,
       label: "Ollama",
@@ -149,6 +160,7 @@ export default definePluginEntry({
           providerBaseUrl: config?.models?.providers?.ollama?.baseUrl,
         });
       },
+      buildReplayPolicy: (ctx) => buildOllamaReplayPolicy(ctx),
       wrapStreamFn: (ctx) => {
         return createConfiguredOllamaCompatStreamWrapper(ctx);
       },
@@ -177,6 +189,8 @@ export default definePluginEntry({
           mode: "api-key",
         };
       },
+      shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
+        resolvedApiKey?.trim() === DEFAULT_API_KEY,
       buildUnknownModelHint: () =>
         "Ollama requires authentication to be registered as a provider. " +
         'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +

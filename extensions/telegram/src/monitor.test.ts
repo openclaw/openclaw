@@ -261,11 +261,11 @@ async function monitorWithAutoAbort(opts: Omit<MonitorTelegramOpts, "abortSignal
   });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   return {
-    ...actual,
     loadConfig,
+    resolveAgentMaxConcurrent: (cfg: { agents?: { defaults?: { maxConcurrent?: number } } }) =>
+      cfg.agents?.defaults?.maxConcurrent ?? 1,
   };
 });
 
@@ -306,8 +306,10 @@ vi.mock("@grammyjs/runner", () => ({
   run: runSpy,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     computeBackoff,
@@ -329,27 +331,10 @@ vi.mock("./update-offset-store.js", () => ({
   writeTelegramUpdateOffset: vi.fn(async () => undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    getReplyFromConfig: async (ctx: { Body?: string }) => ({
-      text: `echo:${ctx.Body}`,
-    }),
-  };
-});
-
-vi.mock("../../../src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: async (ctx: { Body?: string }) => ({
-    text: `echo:${ctx.Body}`,
-  }),
-}));
-
 describe("monitorTelegramProvider (grammY)", () => {
   let consoleErrorSpy: { mockRestore: () => void } | undefined;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ monitorTelegramProvider } = await import("./monitor.js"));
   });
 

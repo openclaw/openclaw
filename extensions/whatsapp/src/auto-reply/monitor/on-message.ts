@@ -1,4 +1,3 @@
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -6,6 +5,7 @@ import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
+import { loadConfig } from "../config.runtime.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
@@ -29,7 +29,7 @@ export function createWebOnMessageHandler(params: {
   replyResolver: typeof getReplyFromConfig;
   replyLogger: ReturnType<(typeof import("openclaw/plugin-sdk/runtime-env"))["getChildLogger"]>;
   baseMentionConfig: MentionConfig;
-  account: { authDir?: string; accountId?: string };
+  account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
 }) {
   const processForRoute = async (
     msg: WebInboundMsg,
@@ -135,6 +135,7 @@ export function createWebOnMessageHandler(params: {
         sessionKey: route.sessionKey,
         baseMentionConfig: params.baseMentionConfig,
         authDir: params.account.authDir,
+        selfChatMode: params.account.selfChatMode,
         groupHistories: params.groupHistories,
         groupHistoryLimit: params.groupHistoryLimit,
         groupMemberNames: params.groupMemberNames,

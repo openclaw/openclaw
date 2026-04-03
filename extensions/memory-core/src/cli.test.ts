@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "openclaw/plugin-sdk/testing";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+} from "../../../src/cli/test-runtime-capture.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -20,30 +20,15 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => {
+vi.mock("./cli.host.runtime.js", async () => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveDefaultAgentId,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>();
-  return {
-    ...actual,
-    resolveCommandSecretRefsViaGateway,
-  };
-});
-
-vi.mock("./memory/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./memory/index.js")>();
+    await vi.importActual<typeof import("./cli.host.runtime.js")>("./cli.host.runtime.js");
   return {
     ...actual,
     getMemorySearchManager,
+    loadConfig,
+    resolveCommandSecretRefsViaGateway,
+    resolveDefaultAgentId,
   };
 });
 

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+export { buildCommandsPaginationKeyboard } from "../../extensions/telegram/api.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
@@ -71,7 +72,6 @@ export {
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
-export { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
 export {
   buildModelsProviderData,
   formatModelsAvailableHeader,

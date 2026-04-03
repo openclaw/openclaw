@@ -355,6 +355,15 @@ describe("convertTools", () => {
     expect(result[0]?.name).toBe("ping");
   });
 
+  it("normalizes truly empty parameter schemas for parameter-free tools", () => {
+    const tools = [{ name: "ping", description: "No params", parameters: {} }];
+    const result = convertTools(tools as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+
   it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
     const tools = [
       { name: "list_regions", description: "List AWS regions", parameters: { type: "object" } },
@@ -418,6 +427,22 @@ describe("convertTools", () => {
       },
       required: ["action"],
       additionalProperties: true,
+    });
+  });
+
+  it("leaves top-level allOf schemas unchanged", () => {
+    const tools = [
+      {
+        name: "conditional",
+        description: "Conditional schema",
+        parameters: {
+          allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      allOf: [{ type: "object", properties: { id: { type: "string" } } }],
     });
   });
 
@@ -1142,6 +1167,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
+    releaseWsSession("sess-runtime-fallback");
+    releaseWsSession("sess-drop");
     openAIWsStreamTesting.setDepsForTest();
   });
 
@@ -1267,6 +1294,42 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent).not.toHaveProperty("store");
   });
 
+  it("keeps store=false for proxied openai-responses routes when store is still supported", async () => {
+    releaseWsSession("sess-store-proxy");
+    const proxiedModel = {
+      ...modelStub,
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-proxy");
+    const stream = streamFn(
+      proxiedModel as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_store_proxy", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.store).toBe(false);
+  });
+
   it("emits an AssistantMessage on response.completed", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-2");
     const stream = streamFn(
@@ -1361,6 +1424,35 @@ describe("createOpenAIWebSocketStreamFn", () => {
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
+  });
+
+  it("falls back to HTTP when WebSocket errors before any output in auto mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "error",
+      message: "temporary upstream glitch",
+      code: "ws_runtime_error",
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+    expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
   });
 
   it("tracks previous_response_id across turns (incremental send)", async () => {
@@ -1863,12 +1955,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.tool_choice).toBe("auto");
   });
 
-  it("rejects promise when WebSocket drops mid-request", async () => {
+  it("keeps explicit websocket mode surfacing mid-request drops", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-drop");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
       contextStub as Parameters<typeof streamFn>[1],
-      {} as Parameters<typeof streamFn>[2],
+      { transport: "websocket" } as Parameters<typeof streamFn>[2],
     );
     // Let the send go through, then simulate connection drop before response.completed
     await new Promise<void>((resolve) => {

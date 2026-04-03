@@ -37,6 +37,7 @@ import {
   showLoadingAnimation,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import { resolveDefaultLineAccountId } from "./accounts.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
@@ -140,7 +141,7 @@ export async function monitorLineProvider(
     abortSignal,
     webhookPath,
   } = opts;
-  const resolvedAccountId = accountId ?? "default";
+  const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
   const secret = channelSecret.trim();
 

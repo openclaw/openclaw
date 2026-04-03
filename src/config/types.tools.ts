@@ -2,6 +2,7 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 import type { MemoryQmdIndexPath } from "./types.memory.js";
+import type { ConfiguredProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -44,6 +45,8 @@ type MediaProviderRequestConfig = {
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
   headers?: Record<string, string>;
+  /** Optional request transport overrides for provider HTTP calls. */
+  request?: ConfiguredProviderRequest;
 };
 
 export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
@@ -461,23 +464,6 @@ export type MemorySearchConfig = {
   };
 };
 
-type XSearchToolConfig = {
-  /** Enable X search tool (default: true when an xAI API key is available). */
-  enabled?: boolean;
-  /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
-  apiKey?: SecretInput;
-  /** Model id to use for X search. */
-  model?: string;
-  /** Keep inline citations in the xAI response payload when available. */
-  inlineCitations?: boolean;
-  /** Optional max search/tool turns for xAI to use internally. */
-  maxTurns?: number;
-  /** Timeout in seconds for X search requests. */
-  timeoutSeconds?: number;
-  /** Cache TTL in minutes for X search results. */
-  cacheTtlMinutes?: number;
-};
-
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -521,10 +507,25 @@ export type ToolsConfig = {
       };
     } & Record<string, unknown>;
     /** X (formerly Twitter) search tool configuration using xAI Grok. */
-    x_search?: XSearchToolConfig;
+    x_search?: {
+      /** Enable X search tool (default: true when xAI auth is available via plugin config or XAI_API_KEY). */
+      enabled?: boolean;
+      /** Model id to use for X search. */
+      model?: string;
+      /** Keep inline citations in the xAI response payload when available. */
+      inlineCitations?: boolean;
+      /** Optional max search/tool turns for xAI to use internally. */
+      maxTurns?: number;
+      /** Timeout in seconds for X search requests. */
+      timeoutSeconds?: number;
+      /** Cache TTL in minutes for X search results. */
+      cacheTtlMinutes?: number;
+    };
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
+      /** Web fetch fallback provider id. */
+      provider?: string;
       /** Max characters to return from fetched content. */
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
@@ -541,20 +542,6 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
-      firecrawl?: {
-        /** Enable Firecrawl fallback (default: true when apiKey is set). */
-        enabled?: boolean;
-        /** Firecrawl API key (optional; defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Firecrawl base URL (default: https://api.firecrawl.dev). */
-        baseUrl?: string;
-        /** Whether to keep only main content (default: true). */
-        onlyMainContent?: boolean;
-        /** Max age (ms) for cached Firecrawl content. */
-        maxAgeMs?: number;
-        /** Timeout in seconds for Firecrawl requests. */
-        timeoutSeconds?: number;
-      };
     };
   };
   media?: MediaToolsConfig;

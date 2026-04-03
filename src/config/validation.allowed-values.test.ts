@@ -49,14 +49,7 @@ describe("config validation allowed-values metadata", () => {
     if (!result.ok) {
       const issue = result.issues.find((entry) => entry.path === "channels.telegram.streaming");
       expect(issue).toBeDefined();
-      expect(issue?.allowedValues).toEqual([
-        "true",
-        "false",
-        "off",
-        "partial",
-        "block",
-        "progress",
-      ]);
+      expect(issue?.allowedValues).toEqual(["off", "partial", "block", "progress"]);
     }
   });
 
