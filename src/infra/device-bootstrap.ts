@@ -6,6 +6,7 @@ import {
   type DeviceBootstrapProfileInput,
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 import {
   createAsyncLock,
@@ -73,6 +74,17 @@ function bootstrapProfileAllowsRequest(params: {
       allowedScopes: params.allowedProfile.scopes,
     })
   );
+}
+
+function normalizeBootstrapPublicKey(publicKey: string): string {
+  const trimmed = publicKey.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.includes("BEGIN") || /[+/=]/.test(trimmed)) {
+    return normalizeDevicePublicKeyBase64Url(trimmed) ?? trimmed;
+  }
+  return trimmed;
 }
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
@@ -192,7 +204,7 @@ export async function verifyDeviceBootstrapToken(params: {
     const [tokenKey, record] = found;
 
     const deviceId = params.deviceId.trim();
-    const publicKey = params.publicKey.trim();
+    const publicKey = normalizeBootstrapPublicKey(params.publicKey);
     const role = params.role.trim();
     if (!deviceId || !publicKey || !role) {
       return { ok: false, reason: "bootstrap_token_invalid" };
@@ -212,7 +224,10 @@ export async function verifyDeviceBootstrapToken(params: {
     }
 
     const boundDeviceId = record.deviceId?.trim();
-    const boundPublicKey = record.publicKey?.trim();
+    const boundPublicKey =
+      typeof record.publicKey === "string"
+        ? normalizeBootstrapPublicKey(record.publicKey)
+        : undefined;
     if (boundDeviceId || boundPublicKey) {
       if (boundDeviceId !== deviceId || boundPublicKey !== publicKey) {
         return { ok: false, reason: "bootstrap_token_invalid" };
@@ -260,11 +275,15 @@ export async function getBoundDeviceBootstrapProfile(params: {
     }
     const [, record] = found;
     const deviceId = params.deviceId.trim();
-    const publicKey = params.publicKey.trim();
+    const publicKey = normalizeBootstrapPublicKey(params.publicKey);
     if (!deviceId || !publicKey) {
       return null;
     }
-    if (record.deviceId?.trim() !== deviceId || record.publicKey?.trim() !== publicKey) {
+    const recordPublicKey =
+      typeof record.publicKey === "string"
+        ? normalizeBootstrapPublicKey(record.publicKey)
+        : undefined;
+    if (record.deviceId?.trim() !== deviceId || recordPublicKey !== publicKey) {
       return null;
     }
     return resolvePersistedBootstrapProfile(record);

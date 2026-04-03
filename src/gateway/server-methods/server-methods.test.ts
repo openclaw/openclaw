@@ -1013,7 +1013,7 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
   });
 
-  it("rejects ambiguous short approval id prefixes", async () => {
+  it("rejects ambiguous short approval id prefixes without leaking candidate ids", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const respond = vi.fn();
@@ -1041,7 +1041,7 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
-        message: expect.stringContaining("ambiguous approval id prefix"),
+        message: "ambiguous approval id prefix; use the full id",
       }),
     );
   });

@@ -146,4 +146,82 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(loadApnsRegistrationMock).toHaveBeenCalledWith("ios-device-1");
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
   });
+
+  it("skips cleanup pushes when the original request target set is unknown", async () => {
+    const debug = vi.fn();
+    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
+    const delivery = createExecApprovalIosPushDelivery({ log: { debug } });
+
+    await delivery.handleResolved({
+      id: "approval-missing-targets",
+      decision: "allow-once",
+      ts: 1,
+    });
+
+    expect(debug).toHaveBeenCalledWith(
+      "exec approvals: iOS cleanup push skipped approvalId=approval-missing-targets reason=missing-targets",
+    );
+    expect(listDevicePairingMock).not.toHaveBeenCalled();
+    expect(loadApnsRegistrationMock).not.toHaveBeenCalled();
+    expect(sendApnsExecApprovalResolvedWakeMock).not.toHaveBeenCalled();
+  });
+
+  it("sends cleanup pushes only to the original request targets", async () => {
+    listDevicePairingMock.mockResolvedValue({
+      pending: [],
+      paired: [
+        {
+          deviceId: "ios-device-1",
+          publicKey: "pub",
+          platform: "iOS 18",
+          role: "operator",
+          roles: ["operator"],
+          createdAtMs: 1,
+          approvedAtMs: 1,
+          tokens: {
+            operator: {
+              token: "operator-token",
+              role: "operator",
+              scopes: ["operator.approvals", "operator.read"],
+              createdAtMs: 1,
+            },
+          },
+        },
+      ],
+    });
+
+    const { createExecApprovalIosPushDelivery } = await import("./exec-approval-ios-push.js");
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+
+    await delivery.handleRequested({
+      id: "approval-cleanup",
+      request: { command: "echo ok", host: "gateway", allowedDecisions: ["allow-once"] },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+    await Promise.resolve();
+    vi.clearAllMocks();
+    loadApnsRegistrationMock.mockResolvedValue({
+      nodeId: "ios-device-1",
+      transport: "direct",
+      token: "apns-token",
+      topic: "ai.openclaw.ios.test",
+      environment: "sandbox",
+      updatedAtMs: 1,
+    });
+    resolveApnsAuthConfigFromEnvMock.mockResolvedValue({
+      ok: true,
+      value: { teamId: "team", keyId: "key", privateKey: "private-key" },
+    });
+
+    await delivery.handleResolved({
+      id: "approval-cleanup",
+      decision: "allow-once",
+      ts: 1,
+    });
+
+    expect(listDevicePairingMock).not.toHaveBeenCalled();
+    expect(loadApnsRegistrationMock).toHaveBeenCalledWith("ios-device-1");
+    expect(sendApnsExecApprovalResolvedWakeMock).toHaveBeenCalledTimes(1);
+  });
 });

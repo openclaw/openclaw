@@ -288,6 +288,12 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
     async handleResolved(resolved: ExecApprovalResolved): Promise<void> {
       const explicitNodeIds = approvalTargetsById.get(resolved.id);
       approvalTargetsById.delete(resolved.id);
+      if (!explicitNodeIds?.length) {
+        params.log.debug?.(
+          `exec approvals: iOS cleanup push skipped approvalId=${resolved.id} reason=missing-targets`,
+        );
+        return;
+      }
       const plan = await resolveDeliveryPlan({
         requireApprovalScope: false,
         explicitNodeIds,
@@ -306,6 +312,12 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
     async handleExpired(request: ExecApprovalRequest): Promise<void> {
       const explicitNodeIds = approvalTargetsById.get(request.id);
       approvalTargetsById.delete(request.id);
+      if (!explicitNodeIds?.length) {
+        params.log.debug?.(
+          `exec approvals: iOS cleanup push skipped approvalId=${request.id} reason=missing-targets`,
+        );
+        return;
+      }
       const plan = await resolveDeliveryPlan({
         requireApprovalScope: false,
         explicitNodeIds,

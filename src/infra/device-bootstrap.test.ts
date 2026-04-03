@@ -5,10 +5,12 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+  getBoundDeviceBootstrapProfile,
   issueDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "./device-bootstrap.js";
+import { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } from "./device-identity.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-device-bootstrap-test-");
@@ -291,6 +293,37 @@ describe("device bootstrap tokens", () => {
 
     expect(Object.keys(parsed)).toEqual([issued.token]);
     expect(parsed[issued.token]?.token).toBe(issued.token);
+  });
+
+  it("accepts equivalent public key encodings after binding the bootstrap token", async () => {
+    const baseDir = await createTempDir();
+    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "device.json"));
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const rawPublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: identity.deviceId,
+        publicKey: identity.publicKeyPem,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: identity.deviceId,
+        publicKey: rawPublicKey,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      getBoundDeviceBootstrapProfile({
+        token: issued.token,
+        deviceId: identity.deviceId,
+        publicKey: rawPublicKey,
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      roles: ["node", "operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+    });
   });
 
   it("rejects a second device identity after the first verification binds the token", async () => {

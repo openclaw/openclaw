@@ -44,13 +44,11 @@ function resolvePendingApprovalRecord(manager: ExecApprovalManager, inputId: str
     return { ok: false as const, response: "missing" as const };
   }
   if (resolvedId.kind === "ambiguous") {
-    const candidates = resolvedId.ids.slice(0, 3).join(", ");
-    const remainder = resolvedId.ids.length > 3 ? ` (+${resolvedId.ids.length - 3} more)` : "";
     return {
       ok: false as const,
       response: {
         code: ErrorCodes.INVALID_REQUEST,
-        message: `ambiguous approval id prefix; matches: ${candidates}${remainder}. Use the full id.`,
+        message: "ambiguous approval id prefix; use the full id",
       },
     };
   }
