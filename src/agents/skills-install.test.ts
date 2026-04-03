@@ -19,8 +19,10 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+vi.mock("../security/skill-scanner.js", async () => ({
+  ...(await vi.importActual<typeof import("../security/skill-scanner.js")>(
+    "../security/skill-scanner.js",
+  )),
   scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
 }));
 

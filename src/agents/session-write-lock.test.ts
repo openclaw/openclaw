@@ -10,8 +10,9 @@ let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLock
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 
-vi.mock("../shared/pid-alive.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../shared/pid-alive.js")>();
+vi.mock("../shared/pid-alive.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../shared/pid-alive.js")>("../shared/pid-alive.js");
   return {
     ...original,
     // Keep liveness checks real; only pin process start time for PID recycle coverage.
