@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
+import { createGoogleGenerativeAiTransportStreamFn } from "./google-transport-stream.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAICompletionsTransportStreamFn,
@@ -13,6 +14,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-completions",
   "azure-openai-responses",
   "anthropic-messages",
+  "google-generative-ai",
 ]);
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
@@ -20,6 +22,7 @@ const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-completions": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
+  "google-generative-ai": "openclaw-google-generative-ai-transport",
 };
 
 function hasTransportOverrides(model: Model<Api>): boolean {
@@ -53,6 +56,8 @@ export function createTransportAwareStreamFnForModel(model: Model<Api>): StreamF
       return createAzureOpenAIResponsesTransportStreamFn();
     case "anthropic-messages":
       return createAnthropicMessagesTransportStreamFn();
+    case "google-generative-ai":
+      return createGoogleGenerativeAiTransportStreamFn();
     default:
       return undefined;
   }
