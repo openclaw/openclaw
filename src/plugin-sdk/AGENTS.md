@@ -28,10 +28,10 @@ can affect bundled plugins and third-party plugins.
   intentionally promoting a supported public contract.
 - Prefer `api.runtime` or a focused SDK facade over telling extensions to reach
   into host internals directly.
-- When core or tests need bundled plugin helpers, expose them through
-  the plugin package `api.ts` and a matching `src/plugin-sdk/<id>.ts` facade
-  instead of importing plugin-private `src/**` files or `onboard.js`
-  directly.
+- When core or tests need bundled plugin helpers, prefer the plugin package
+  `api.ts` or `runtime-api.ts` plus generic SDK capabilities. Do not add a
+  provider-named `src/plugin-sdk/<id>.ts` seam just to make core aware of a
+  bundled channel's private helpers.
 
 ## Expanding The Boundary
 
@@ -42,7 +42,7 @@ can affect bundled plugins and third-party plugins.
   - `src/plugin-sdk/entrypoints.ts`
   - `package.json` exports
   - API baseline and export checks
-- If the seam is for bundled-provider onboarding/config helpers, update the
-  generated plugin facades instead of teaching core tests or commands to reach
-  into private extension files.
+- If a bundled channel/helper need crosses package boundaries, first ask
+  whether the need is truly generic. If yes, add a narrow generic subpath. If
+  not, keep it plugin-local through `api.ts` / `runtime-api.ts`.
 - Breaking removals or renames are major-version work, not drive-by cleanup.
