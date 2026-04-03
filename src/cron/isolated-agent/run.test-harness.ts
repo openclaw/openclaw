@@ -87,15 +87,19 @@ vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn().mockResolvedValue({ models: [] }),
 }));
 
-vi.mock("../../agents/model-selection.js", () => ({
-  getModelRefStatus: getModelRefStatusMock,
-  isCliProvider: isCliProviderMock,
-  normalizeModelSelection: normalizeModelSelectionForTest,
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
-  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
-  resolveHooksGmailModel: resolveHooksGmailModelMock,
-  resolveThinkingDefault: resolveThinkingDefaultMock,
-}));
+vi.mock("../../agents/model-selection.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/model-selection.js")>();
+  return {
+    ...actual,
+    getModelRefStatus: getModelRefStatusMock,
+    isCliProvider: isCliProviderMock,
+    normalizeModelSelection: normalizeModelSelectionForTest,
+    resolveAllowedModelRef: resolveAllowedModelRefMock,
+    resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+    resolveHooksGmailModel: resolveHooksGmailModelMock,
+    resolveThinkingDefault: resolveThinkingDefaultMock,
+  };
+});
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: runWithModelFallbackMock,
