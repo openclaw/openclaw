@@ -15,6 +15,7 @@ import {
   asConfig,
   createOpenAIFileRuntimeConfig,
   createOpenAIFileRuntimeFixture,
+  EMPTY_LOADABLE_PLUGIN_ORIGINS,
   expectResolvedOpenAIRuntime,
   loadAuthStoreWithProfiles,
   OPENAI_ENV_KEY_REF,
@@ -73,6 +74,7 @@ describe("secrets runtime snapshot auth integration", () => {
           }),
           env: { OPENAI_API_KEY: "sk-runtime" },
           agentDirs: ["/tmp/openclaw-agent-main"],
+          loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
           loadAuthStore: () =>
             loadAuthStoreWithProfiles({
               "openai:default": {
@@ -106,6 +108,7 @@ describe("secrets runtime snapshot auth integration", () => {
       const prepared = await prepareSecretsRuntimeSnapshot({
         config: createOpenAIFileRuntimeConfig(secretFile),
         agentDirs: [agentDir],
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
 
       activateSecretsRuntimeSnapshot(prepared);
@@ -147,6 +150,7 @@ describe("secrets runtime snapshot auth integration", () => {
       const prepared = await prepareSecretsRuntimeSnapshot({
         config: createOpenAIFileRuntimeConfig(secretFile),
         agentDirs: [agentDir],
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
         loadAuthStore,
       });
 
@@ -220,6 +224,7 @@ describe("secrets runtime snapshot auth integration", () => {
           OPENAI_API_KEY: "sk-main-runtime",
           ANTHROPIC_API_KEY: "sk-ops-runtime",
         },
+        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       });
 
       activateSecretsRuntimeSnapshot(prepared);

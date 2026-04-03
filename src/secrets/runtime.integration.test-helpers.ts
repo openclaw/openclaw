@@ -4,6 +4,7 @@ import { expect } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import type { PluginOrigin } from "../plugins/types.js";
 
 export const OPENAI_ENV_KEY_REF = {
   source: "env",
@@ -18,6 +19,7 @@ export const OPENAI_FILE_KEY_REF = {
 } as const;
 
 export const SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS = 300_000;
+export const EMPTY_LOADABLE_PLUGIN_ORIGINS: ReadonlyMap<string, PluginOrigin> = new Map();
 
 const allowInsecureTempSecretFile = process.platform === "win32";
 
