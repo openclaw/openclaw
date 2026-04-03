@@ -206,6 +206,33 @@ describe("device pairing tokens", () => {
       status: "approved",
       requestId: request.request.requestId,
     });
+
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired && listEffectivePairedDeviceRoles(paired)).toEqual(["node", "operator"]);
+    expect(paired?.tokens?.node?.scopes).toEqual([]);
+    expect(paired?.tokens?.operator?.scopes).toEqual([
+      "operator.read",
+      "operator.talk.secrets",
+      "operator.write",
+    ]);
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(paired?.tokens?.node?.token),
+        role: "node",
+        scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(paired?.tokens?.operator?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
   });
 
   test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
