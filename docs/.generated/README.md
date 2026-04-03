@@ -3,7 +3,9 @@
 These baseline artifacts are generated from the repo-owned OpenClaw config schema and bundled channel/plugin metadata.
 
 - Do not edit `config-baseline.json` by hand.
-- Do not edit `config-baseline.jsonl` by hand.
+- Do not edit `config-baseline.core.json` by hand.
+- Do not edit `config-baseline.channel.json` by hand.
+- Do not edit `config-baseline.plugin.json` by hand.
 - Do not edit `plugin-sdk-api-baseline.json` by hand.
 - Do not edit `plugin-sdk-api-baseline.jsonl` by hand.
 - Regenerate config baseline artifacts with `pnpm config:docs:gen`.

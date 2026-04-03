@@ -36,9 +36,11 @@ describe("scripts/check-file-utils collectFilesSync", () => {
     const rootDir = makeTempDir();
     fs.mkdirSync(path.join(rootDir, "src", "nested"), { recursive: true });
     fs.mkdirSync(path.join(rootDir, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(rootDir, "docs", ".generated"), { recursive: true });
     fs.writeFileSync(path.join(rootDir, "src", "keep.ts"), "");
     fs.writeFileSync(path.join(rootDir, "src", "nested", "keep.test.ts"), "");
     fs.writeFileSync(path.join(rootDir, "dist", "skip.ts"), "");
+    fs.writeFileSync(path.join(rootDir, "docs", ".generated", "skip.ts"), "");
 
     const files = collectFilesSync(rootDir, {
       includeFile: (filePath) => filePath.endsWith(".ts"),
