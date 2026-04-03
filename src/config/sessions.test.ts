@@ -761,4 +761,31 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.providerOverride).toBe("anthropic");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
+
+  it("loadSessionStore skipCache returns a fresh mutable store without tainting cached reads", async () => {
+    const mainSessionKey = "agent:main:main";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "loadSessionStore-skip-cache-fresh",
+      entries: {
+        [mainSessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: 123,
+          thinkingLevel: "low",
+        },
+      },
+    });
+
+    const fresh = loadSessionStore(storePath, { skipCache: true });
+    expect(fresh[mainSessionKey]?.thinkingLevel).toBe("low");
+
+    fresh[mainSessionKey] = {
+      ...fresh[mainSessionKey],
+      thinkingLevel: "high",
+    };
+
+    expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
+    expect(loadSessionStore(storePath, { skipCache: true })[mainSessionKey]?.thinkingLevel).toBe(
+      "low",
+    );
+  });
 });
