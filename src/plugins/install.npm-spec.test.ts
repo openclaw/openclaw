@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectIntegrityDriftRejected,
@@ -10,8 +9,10 @@ import {
 } from "../test-utils/npm-spec-install-test-helpers.js";
 import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 
+const runCommandWithTimeoutMock = vi.fn();
+
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: vi.fn(),
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
 let suiteTempRoot = "";
@@ -127,7 +128,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  runCommandWithTimeoutMock.mockReset();
   vi.unstubAllEnvs();
 });
 
@@ -137,7 +138,7 @@ describe("installPluginFromNpmSpec", () => {
     const extensionsDir = path.join(stateDir, "extensions");
     fs.mkdirSync(extensionsDir, { recursive: true });
 
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     const voiceCallArchiveBuffer = readVoiceCallArchiveBuffer("0.0.1");
 
     let packTmpDir = "";
@@ -180,7 +181,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(result.npmResolution?.integrity).toBe("sha512-plugin-test");
 
     expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls,
+      calls: run.mock.calls as Array<[unknown, unknown]>,
       expectedSpec: "@openclaw/voice-call@0.0.1",
     });
 
@@ -205,7 +206,7 @@ describe("installPluginFromNpmSpec", () => {
     });
     const archiveBuffer = fs.readFileSync(archivePath);
 
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     let packTmpDir = "";
     const packedName = "dangerous-plugin-1.0.0.tgz";
     run.mockImplementation(async (argv, opts) => {
@@ -253,7 +254,7 @@ describe("installPluginFromNpmSpec", () => {
       ),
     ).toBe(true);
     expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls,
+      calls: run.mock.calls as Array<[unknown, unknown]>,
       expectedSpec: "dangerous-plugin@1.0.0",
     });
     expect(packTmpDir).not.toBe("");
@@ -270,7 +271,7 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     mockNpmPackMetadataResult(run, {
       id: "@openclaw/voice-call@0.0.1",
       name: "@openclaw/voice-call",
@@ -295,7 +296,7 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("classifies npm package-not-found errors with a stable error code", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
+    const run = runCommandWithTimeoutMock;
     run.mockResolvedValue({
       code: 1,
       stdout: "",
@@ -326,7 +327,7 @@ describe("installPluginFromNpmSpec", () => {
     };
 
     {
-      const run = vi.mocked(runCommandWithTimeout);
+      const run = runCommandWithTimeoutMock;
       mockNpmPackMetadataResult(run, prereleaseMetadata);
 
       const result = await installPluginFromNpmSpec({
@@ -340,10 +341,10 @@ describe("installPluginFromNpmSpec", () => {
       }
     }
 
-    vi.clearAllMocks();
+    runCommandWithTimeoutMock.mockReset();
 
     {
-      const run = vi.mocked(runCommandWithTimeout);
+      const run = runCommandWithTimeoutMock;
       let packTmpDir = "";
       const packedName = "voice-call-0.0.2-beta.1.tgz";
       const voiceCallArchiveBuffer = readVoiceCallArchiveBuffer("0.0.1");
@@ -378,7 +379,7 @@ describe("installPluginFromNpmSpec", () => {
       expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
       expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
       expectSingleNpmPackIgnoreScriptsCall({
-        calls: run.mock.calls,
+        calls: run.mock.calls as Array<[unknown, unknown]>,
         expectedSpec: "@openclaw/voice-call@beta",
       });
       expect(packTmpDir).not.toBe("");

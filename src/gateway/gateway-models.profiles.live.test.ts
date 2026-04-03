@@ -76,6 +76,7 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite-preview",
 ]);
+const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
 const QUIET_LIVE_LOGS = process.env.OPENCLAW_LIVE_TEST_QUIET !== "0";
@@ -594,28 +595,43 @@ function isPromptProbeMiss(error: string): boolean {
   return msg.includes("not meaningful:") || msg.includes("missing required keywords:");
 }
 
-function shouldSkipToolNonceProbeMiss(provider: string): boolean {
-  return (
+function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
+  if (!modelKey) {
+    return false;
+  }
+  if (GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(modelKey)) {
+    return true;
+  }
+  const [provider, ...rest] = modelKey.split("/");
+  if (
     provider === "anthropic" ||
     provider === "minimax" ||
     provider === "opencode" ||
     provider === "opencode-go" ||
     provider === "xai" ||
     provider === "zai"
-  );
+  ) {
+    return true;
+  }
+  if (provider !== "google" || rest.length === 0) {
+    return false;
+  }
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
-describe("shouldSkipToolNonceProbeMiss", () => {
+describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
   it.each([
-    { provider: "anthropic", expected: true },
-    { provider: "minimax", expected: true },
-    { provider: "opencode", expected: true },
-    { provider: "opencode-go", expected: true },
-    { provider: "xai", expected: true },
-    { provider: "zai", expected: true },
-    { provider: "openai", expected: false },
-  ])("returns $expected for $provider", ({ provider, expected }) => {
-    expect(shouldSkipToolNonceProbeMiss(provider)).toBe(expected);
+    { modelKey: "anthropic/claude-opus-4-6", expected: true },
+    { modelKey: "minimax/minimax-m1", expected: true },
+    { modelKey: "opencode/big-pickle", expected: true },
+    { modelKey: "opencode-go/glm-5", expected: true },
+    { modelKey: "xai/grok-4.1-fast", expected: true },
+    { modelKey: "zai/glm-4.7", expected: true },
+    { modelKey: "google/gemini-3-flash-preview", expected: true },
+    { modelKey: "openai/gpt-5.2", expected: false },
+  ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
+    expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
   });
 });
 
@@ -1724,9 +1740,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (exec/read workspace isolation)`);
             break;
           }
-          if (shouldSkipToolNonceProbeMiss(model.provider) && isToolNonceProbeMiss(message)) {
+          if (shouldSkipToolNonceProbeMissForLiveModel(modelKey) && isToolNonceProbeMiss(message)) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (${model.provider} tool probe nonce miss)`);
+            logProgress(`${progressLabel}: skip (${modelKey} tool probe nonce miss)`);
             break;
           }
           if (isMissingProfileError(message)) {

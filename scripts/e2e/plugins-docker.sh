@@ -45,7 +45,9 @@ start_gateway() {
   gateway_pid=$!
 
   for _ in $(seq 1 120); do
-    if grep -q "listening on ws://" "$log_file"; then
+    # Gateway startup logs changed; accept both the legacy listener line and the
+    # current structured ready line so this smoke stays stable across formats.
+    if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
       return 0
     fi
     if ! kill -0 "$gateway_pid" 2>/dev/null; then
