@@ -406,6 +406,18 @@ export const actionContractRegistry: ActionsContractEntry[] = [
         expectedActions: ["send", "react", "poll"],
         expectedCapabilities: ["interactive", "components"],
         beforeTest: () => {
+          // Some contract suites reset the plugin runtime store globally.
+          // Re-apply the runtime-backed Discord message action surface for each case.
+          setBundledChannelRuntime("discord", {
+            channel: {
+              discord: {
+                messageActions: {
+                  describeMessageTool: discordDescribeMessageToolMock,
+                },
+              },
+            },
+          } as never);
+
           discordDescribeMessageToolMock.mockReset();
           discordDescribeMessageToolMock.mockReturnValue({
             actions: ["send", "react", "poll"],
