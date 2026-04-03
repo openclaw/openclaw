@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
@@ -38,10 +39,12 @@ import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import { createDiscordRuntimeAccountContext } from "../client.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
+import type { DiscordReactionRuntimeContext } from "../send.types.js";
 import { normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
@@ -76,6 +79,65 @@ let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtim
 async function loadReplyRuntime() {
   replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
   return await replyRuntimePromise;
+}
+
+function createDiscordAckReactionContext(params: {
+  rest: RequestClient;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): DiscordReactionRuntimeContext {
+  return {
+    rest: params.rest,
+    ...createDiscordRuntimeAccountContext({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    }),
+  };
+}
+
+function createDiscordAckReactionAdapter(params: {
+  channelId: string;
+  messageId: string;
+  reactionContext: DiscordReactionRuntimeContext;
+}): StatusReactionAdapter {
+  return {
+    setReaction: async (emoji) => {
+      await reactMessageDiscord(params.channelId, params.messageId, emoji, params.reactionContext);
+    },
+    removeReaction: async (emoji) => {
+      await removeReactionDiscord(
+        params.channelId,
+        params.messageId,
+        emoji,
+        params.reactionContext,
+      );
+    },
+  };
+}
+
+function queueInitialDiscordAckReaction(params: {
+  enabled: boolean;
+  shouldSendAckReaction: boolean;
+  ackReaction: string | undefined;
+  statusReactions: ReturnType<typeof createStatusReactionController>;
+  reactionAdapter: StatusReactionAdapter;
+  target: string;
+}) {
+  if (params.enabled) {
+    void params.statusReactions.setQueued();
+    return;
+  }
+  if (!params.shouldSendAckReaction || !params.ackReaction) {
+    return;
+  }
+  void params.reactionAdapter.setReaction(params.ackReaction).catch((err) => {
+    logAckFailure({
+      log: logVerbose,
+      channel: "discord",
+      target: params.target,
+      error: err,
+    });
+  });
 }
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
@@ -197,23 +259,16 @@ export async function processDiscordMessage(
   const statusReactionsEnabled =
     shouldSendAckReaction && cfg.messages?.statusReactions?.enabled !== false;
   // Discord outbound helpers expect Carbon's request client shape explicitly.
-  const discordRest = client.rest as unknown as RequestClient;
-  const discordAdapter: StatusReactionAdapter = {
-    setReaction: async (emoji) => {
-      await reactMessageDiscord(messageChannelId, message.id, emoji, {
-        rest: discordRest,
-        cfg,
-        accountId,
-      });
-    },
-    removeReaction: async (emoji) => {
-      await removeReactionDiscord(messageChannelId, message.id, emoji, {
-        rest: discordRest,
-        cfg,
-        accountId,
-      });
-    },
-  };
+  const ackReactionContext = createDiscordAckReactionContext({
+    rest: client.rest as unknown as RequestClient,
+    cfg,
+    accountId,
+  });
+  const discordAdapter = createDiscordAckReactionAdapter({
+    channelId: messageChannelId,
+    messageId: message.id,
+    reactionContext: ackReactionContext,
+  });
   const statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
@@ -229,18 +284,14 @@ export async function processDiscordMessage(
       });
     },
   });
-  if (statusReactionsEnabled) {
-    void statusReactions.setQueued();
-  } else if (shouldSendAckReaction && ackReaction) {
-    void discordAdapter.setReaction(ackReaction).catch((err) => {
-      logAckFailure({
-        log: logVerbose,
-        channel: "discord",
-        target: `${messageChannelId}/${message.id}`,
-        error: err,
-      });
-    });
-  }
+  queueInitialDiscordAckReaction({
+    enabled: statusReactionsEnabled,
+    shouldSendAckReaction,
+    ackReaction,
+    statusReactions,
+    reactionAdapter: discordAdapter,
+    target: `${messageChannelId}/${message.id}`,
+  });
   const { createReplyDispatcherWithTyping, dispatchInboundMessage } = await loadReplyRuntime();
 
   const fromLabel = isDirectMessage

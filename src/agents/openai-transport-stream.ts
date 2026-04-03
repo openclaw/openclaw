@@ -964,11 +964,13 @@ export function buildOpenAIResponsesParams(
   options: OpenAIResponsesOptions | undefined,
 ) {
   const compat = getCompat(model as OpenAIModeModel);
+  const supportsDeveloperRole =
+    typeof compat.supportsDeveloperRole === "boolean" ? compat.supportsDeveloperRole : undefined;
   const messages = convertResponsesMessages(
     model,
     context,
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
-    { supportsDeveloperRole: compat.supportsDeveloperRole },
+    { supportsDeveloperRole },
   );
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: OpenAIResponsesRequestParams = {

@@ -50,7 +50,6 @@ function mergeWhatsAppConfig(
       },
     };
   }
-
   const accounts = {
     ...((channelConfig.accounts as Record<string, WhatsAppAccountConfig> | undefined) ?? {}),
   };
@@ -65,7 +64,7 @@ function mergeWhatsAppConfig(
     }
     mutableNextAccount[key] = value;
   }
-  accounts[accountId] = nextAccount;
+  accounts[accountId] = nextAccount as WhatsAppAccountConfig;
   return {
     ...cfg,
     channels: {
