@@ -2,6 +2,7 @@ import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowli
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
@@ -134,6 +135,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
       },
+      doctor: {
+        groupAllowFromFallbackToAllowFrom: false,
+      },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
         createManager: ({ cfg, accountId }) =>
@@ -193,8 +197,14 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             cliPath: snapshot.cliPath ?? null,
             dbPath: snapshot.dbPath ?? null,
           }),
-        probeAccount: async ({ timeoutMs }) =>
-          await (await loadIMessageChannelRuntime()).probeIMessageAccount(timeoutMs),
+        probeAccount: async ({ account, timeoutMs }) =>
+          await (
+            await loadIMessageChannelRuntime()
+          ).probeIMessageAccount({
+            timeoutMs,
+            cliPath: account.config.cliPath,
+            dbPath: account.config.dbPath,
+          }),
         resolveAccountSnapshot: ({ account, runtime }) => ({
           accountId: account.accountId,
           name: account.name,
@@ -236,6 +246,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         chunker: chunkTextForOutbound,
         chunkerMode: "text",
         textChunkLimit: 4000,
+        sanitizeText: ({ text }) => sanitizeForPlainText(text),
       },
       attachedResults: {
         channel: "imessage",

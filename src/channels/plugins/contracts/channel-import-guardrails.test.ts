@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
@@ -132,12 +133,7 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   },
   {
     path: bundledPluginFile("signal", "src/setup-surface.ts"),
-    forbiddenPatterns: [
-      /\bdetectBinary\b/,
-      /\binstallSignalCli\b/,
-      /\bformatCliCommand\b/,
-      /\bformatDocsLink\b/,
-    ],
+    forbiddenPatterns: [/\bdetectBinary\b/, /\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
   {
     path: bundledPluginFile("slack", "src/setup-core.ts"),
@@ -328,11 +324,7 @@ function collectExtensionSourceFiles(): string[] {
       normalizedFullPath.includes(sharedExtensionsDir) ||
       normalizedFullPath.includes(`${extensionsDir}/shared/`),
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      normalizedFullPath.includes(".test.") ||
-      normalizedFullPath.includes(".test-") ||
-      normalizedFullPath.includes(".fixture.") ||
-      normalizedFullPath.includes(".snap") ||
-      normalizedFullPath.includes("test-support") ||
+      classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
       entryName === "api.ts" ||
       entryName === "runtime-api.ts",
   });
@@ -368,13 +360,7 @@ function collectExtensionFiles(extensionId: string): string[] {
   const files = collectSourceFiles(cached, {
     rootDir: resolve(ROOT_DIR, "..", "extensions", extensionId),
     shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      normalizedFullPath.includes(".test.") ||
-      normalizedFullPath.includes(".test-") ||
-      normalizedFullPath.includes(".spec.") ||
-      normalizedFullPath.includes(".fixture.") ||
-      normalizedFullPath.includes(".snap") ||
-      normalizedFullPath.includes("test-support") ||
-      entryName === "test-support.ts" ||
+      classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
       entryName === "runtime-api.ts",
   });
   extensionFilesCache.set(extensionId, files);

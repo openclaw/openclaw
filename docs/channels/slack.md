@@ -392,7 +392,7 @@ Notes:
 ## Manifest and scope checklist
 
 <AccordionGroup>
-  <Accordion title="Slack app manifest example">
+  <Accordion title="Slack app manifest example" defaultOpen>
 
 ```json
 {
@@ -403,7 +403,7 @@ Notes:
   "features": {
     "bot_user": {
       "display_name": "OpenClaw",
-      "always_online": false
+      "always_online": true
     },
     "app_home": {
       "messages_tab_enabled": true,
@@ -420,27 +420,28 @@ Notes:
   "oauth_config": {
     "scopes": {
       "bot": [
-        "chat:write",
+        "app_mentions:read",
+        "assistant:write",
         "channels:history",
         "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
         "groups:history",
+        "groups:read",
         "im:history",
         "im:read",
         "im:write",
         "mpim:history",
         "mpim:read",
         "mpim:write",
-        "users:read",
-        "app_mentions:read",
-        "assistant:write",
-        "reactions:read",
-        "reactions:write",
         "pins:read",
         "pins:write",
-        "emoji:read",
-        "commands",
-        "files:read",
-        "files:write"
+        "reactions:read",
+        "reactions:write",
+        "users:read"
       ]
     }
   },
@@ -449,17 +450,17 @@ Notes:
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
         "message.channels",
         "message.groups",
         "message.im",
         "message.mpim",
-        "reaction_added",
-        "reaction_removed",
-        "member_joined_channel",
-        "member_left_channel",
-        "channel_rename",
         "pin_added",
-        "pin_removed"
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     }
   }

@@ -32,8 +32,10 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable,
 }));
 
-vi.mock("../channels/plugins/binding-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/binding-registry.js")>();
+vi.mock("../channels/plugins/binding-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/binding-registry.js")>(
+    "../channels/plugins/binding-registry.js",
+  );
   return {
     ...actual,
     primeConfiguredBindingRegistry,
@@ -252,6 +254,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
       config: {},
+      activationSourceConfig: undefined,
       workspaceDir: "/tmp",
       env: process.env,
     });
@@ -273,6 +276,44 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["browser"],
+      }),
+    );
+  });
+
+  test("keeps the raw activation source when a precomputed startup scope is reused", async () => {
+    const rawConfig = { channels: { slack: { botToken: "x" } } };
+    const resolvedConfig = {
+      channels: { slack: { botToken: "x", enabled: true } },
+      autoEnabled: true,
+    };
+    applyPluginAutoEnable.mockReturnValue({
+      config: resolvedConfig,
+      changes: [],
+      autoEnabledReasons: {
+        slack: ["slack configured"],
+      },
+    });
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayStartupPluginsForTest({
+      cfg: resolvedConfig,
+      activationSourceConfig: rawConfig,
+      pluginIds: ["slack"],
+    });
+
+    expect(resolveGatewayStartupPluginIds).not.toHaveBeenCalled();
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: resolvedConfig,
+        activationSourceConfig: rawConfig,
+        onlyPluginIds: ["slack"],
+        autoEnabledReasons: {
+          slack: ["slack configured"],
+        },
       }),
     );
   });
@@ -308,6 +349,7 @@ describe("loadGatewayPlugins", () => {
 
     expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
       config: autoEnabledConfig,
+      activationSourceConfig: undefined,
       workspaceDir: "/tmp",
       env: process.env,
     });
@@ -341,6 +383,12 @@ describe("loadGatewayPlugins", () => {
 
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: rawConfig,
+      env: process.env,
+    });
+    expect(resolveGatewayStartupPluginIds).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      activationSourceConfig: rawConfig,
+      workspaceDir: "/tmp",
       env: process.env,
     });
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(

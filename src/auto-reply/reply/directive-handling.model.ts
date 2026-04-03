@@ -6,13 +6,13 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveSelectedAndActiveModel } from "../model-runtime.js";
 import type { ReplyPayload } from "../types.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
-import { buildBrowseProvidersButton } from "./commands-models.telegram.js";
 import {
   formatAuthLabel,
   type ModelAuthDetailMode,
@@ -241,13 +241,12 @@ export async function maybeHandleModelDirectiveInfo(params: {
       sessionEntry: params.sessionEntry,
     });
     const current = modelRefs.selected.label;
-    const isTelegram = params.surface === "telegram";
     const activeRuntimeLine = modelRefs.activeDiffers
       ? `Active: ${modelRefs.active.label} (runtime)`
       : null;
-
-    if (isTelegram) {
-      const buttons = buildBrowseProvidersButton();
+    const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
+    const channelData = commandPlugin?.commands?.buildModelBrowseChannelData?.();
+    if (channelData) {
       return {
         text: [
           `Current: ${current}${modelRefs.activeDiffers ? " (selected)" : ""}`,
@@ -259,7 +258,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
         ]
           .filter(Boolean)
           .join("\n"),
-        channelData: { telegram: { buttons } },
+        channelData,
       };
     }
 

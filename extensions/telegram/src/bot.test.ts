@@ -1,12 +1,12 @@
 import { rm } from "node:fs/promises";
-import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "./test-support/inbound-context-contract.js";
 const {
   answerCallbackQuerySpy,
   commandSpy,
@@ -29,10 +29,7 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
-let listNativeCommandSpecsForConfig: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecsForConfig;
 let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
-let normalizeTelegramCommandName: typeof import("openclaw/plugin-sdk/config-runtime").normalizeTelegramCommandName;
 let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
 let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
@@ -59,15 +56,6 @@ function createSignal() {
   return { promise, resolve };
 }
 
-function waitForNextSetMyCommands() {
-  const synced = createSignal();
-  setMyCommandsSpy.mockImplementationOnce(async () => {
-    synced.resolve();
-    return undefined;
-  });
-  return synced.promise;
-}
-
 function waitForReplyCalls(count: number) {
   const done = createSignal();
   let seen = 0;
@@ -82,20 +70,18 @@ function waitForReplyCalls(count: number) {
   return done.promise;
 }
 
-function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
-  void config;
-  return listSkillCommandsForAgents() as NonNullable<
-    Parameters<typeof listNativeCommandSpecsForConfig>[1]
-  >["skillCommands"];
+async function loadEnvelopeTimestampHelpers() {
+  return await import("../../../test/helpers/envelope-timestamp.js");
+}
+
+async function loadInboundContextContract() {
+  return await import("./test-support/inbound-context-contract.js");
 }
 
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
-    ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
-      await import("../../../src/auto-reply/commands-registry.js"));
     ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
-    ({ normalizeTelegramCommandName } = await import("openclaw/plugin-sdk/config-runtime"));
     ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
       await import("./bot.js"));
   });
@@ -127,127 +113,6 @@ describe("createTelegramBot", () => {
         ...opts,
         telegramDeps: telegramBotDepsForTest,
       });
-  });
-
-  it("merges custom commands with native commands", async () => {
-    const config = {
-      channels: {
-        telegram: {
-          customCommands: [
-            { command: "custom_backup", description: "Git backup" },
-            { command: "/Custom_Generate", description: "Create an image" },
-          ],
-        },
-      },
-    };
-    loadConfig.mockReturnValue(config);
-    const commandsSynced = waitForNextSetMyCommands();
-
-    createTelegramBot({
-      token: "tok",
-      config: {
-        channels: {
-          telegram: {
-            dmPolicy: "open",
-            allowFrom: ["*"],
-            execApprovals: {
-              enabled: true,
-              approvers: ["9"],
-              target: "dm",
-            },
-          },
-        },
-      },
-    });
-
-    await commandsSynced;
-
-    const registered = setMyCommandsSpy.mock.calls.at(-1)?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
-    const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
-      command: normalizeTelegramCommandName(command.name),
-      description: command.description,
-    }));
-    expect(registered.slice(0, native.length)).toEqual(native);
-  });
-
-  it("ignores custom commands that collide with native commands", async () => {
-    const errorSpy = vi.fn();
-    const config = {
-      channels: {
-        telegram: {
-          customCommands: [
-            { command: "status", description: "Custom status" },
-            { command: "custom_backup", description: "Git backup" },
-          ],
-        },
-      },
-    };
-    loadConfig.mockReturnValue(config);
-    const commandsSynced = waitForNextSetMyCommands();
-
-    createTelegramBot({
-      token: "tok",
-      runtime: {
-        log: vi.fn(),
-        error: errorSpy,
-        exit: ((code: number) => {
-          throw new Error(`exit ${code}`);
-        }) as (code: number) => never,
-      },
-    });
-
-    await commandsSynced;
-
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
-    const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
-      command: normalizeTelegramCommandName(command.name),
-      description: command.description,
-    }));
-    const nativeStatus = native.find((command) => command.command === "status");
-    expect(nativeStatus).toBeDefined();
-    expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
-    expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
-    expect(registered.filter((command) => command.command === "status")).toEqual([nativeStatus]);
-    expect(errorSpy).toHaveBeenCalled();
-  });
-
-  it("registers custom commands when native commands are disabled", async () => {
-    const config = {
-      commands: { native: false },
-      channels: {
-        telegram: {
-          customCommands: [
-            { command: "custom_backup", description: "Git backup" },
-            { command: "custom_generate", description: "Create an image" },
-          ],
-        },
-      },
-    };
-    loadConfig.mockReturnValue(config);
-    const commandsSynced = waitForNextSetMyCommands();
-
-    createTelegramBot({ token: "tok" });
-
-    await commandsSynced;
-
-    const registered = setMyCommandsSpy.mock.calls[0]?.[0] as Array<{
-      command: string;
-      description: string;
-    }>;
-    expect(registered).toEqual([
-      { command: "custom_backup", description: "Git backup" },
-      { command: "custom_generate", description: "Create an image" },
-    ]);
-    const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
-    expect(registered.some((command) => reserved.has(command.command))).toBe(false);
   });
 
   it("blocks callback_query when inline buttons are allowlist-only and sender not authorized", async () => {
@@ -487,6 +352,7 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
+          botToken: "tok",
           dmPolicy: "open",
           allowFrom: ["*"],
           capabilities: ["vision"],
@@ -890,12 +756,8 @@ describe("createTelegramBot", () => {
     const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls[0] ?? [];
     expect(chatId).toBe(1234);
     expect(messageId).toBe(12);
-    expect(String(text)).toContain(`${INFO_EMOJI} Commands`);
-    expect(params).toEqual(
-      expect.objectContaining({
-        reply_markup: expect.any(Object),
-      }),
-    );
+    expect(String(text)).toContain(`${INFO_EMOJI} Slash commands`);
+    expect(params).toBeUndefined();
   });
 
   it("falls back to default agent for pagination callbacks without agent suffix", async () => {
@@ -1102,6 +964,79 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-model-html-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
+        },
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(callbackHandler).toBeDefined();
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-html-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 17,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(editMessageTextSpy).toHaveBeenCalledWith(
+        1234,
+        17,
+        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nThis model will be used for your next message.`,
+        expect.objectContaining({ parse_mode: "HTML" }),
+      );
+
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.modelOverride).toBe("gpt-5.4");
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
+  });
+
   it("rejects ambiguous compact model callbacks and returns provider list", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
@@ -1195,6 +1130,9 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
+    const { expectChannelInboundContextContract: expectInboundContextContract } =
+      await loadInboundContextContract();
+    const { escapeRegExp, formatEnvelopeTimestamp } = await loadEnvelopeTimestampHelpers();
     expectInboundContextContract(payload);
     const expectedTimestamp = formatEnvelopeTimestamp(new Date("2025-01-09T00:00:00Z"));
     const timestampPattern = escapeRegExp(expectedTimestamp);
@@ -1877,12 +1815,12 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler: async ({ respond, callback }: PluginInteractiveTelegramHandlerContext) => {
+      handler: (async ({ respond, callback }: TelegramInteractiveHandlerContext) => {
         await respond.editMessage({
           text: `Handled ${callback.payload}`,
         });
         return { handled: true };
-      },
+      }) as never,
     });
 
     createTelegramBot({
@@ -1924,7 +1862,7 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     getChatSpy.mockResolvedValue({ id: -100123456789, type: "supergroup", is_forum: true });
     const handler = vi.fn(
-      async ({ respond, conversationId, threadId }: PluginInteractiveTelegramHandlerContext) => {
+      async ({ respond, conversationId, threadId }: TelegramInteractiveHandlerContext) => {
         expect(conversationId).toBe("-100123456789:topic:1");
         expect(threadId).toBe(1);
         await respond.editMessage({
@@ -1936,7 +1874,7 @@ describe("createTelegramBot", () => {
     registerPluginInteractiveHandler("codex-plugin", {
       channel: "telegram",
       namespace: "codexapp",
-      handler,
+      handler: handler as never,
     });
 
     createTelegramBot({
@@ -2209,6 +2147,20 @@ describe("createTelegramBot", () => {
       name: "blocks reaction when dmPolicy is disabled",
       updateId: 510,
       channelConfig: { dmPolicy: "disabled", reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "blocks reaction in pairing mode for non-paired sender (default dmPolicy)",
+      updateId: 514,
+      channelConfig: { dmPolicy: "pairing", reactionNotifications: "all" },
       reaction: {
         chat: { id: 1234, type: "private" },
         message_id: 42,
@@ -2669,5 +2621,36 @@ describe("createTelegramBot", () => {
     };
     const sessionKey = eventOptions.sessionKey ?? "";
     expect(sessionKey).not.toContain(":topic:");
+  });
+
+  it("blocks reaction in own mode when cache is warm and message not sent by bot", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    wasSentByBot.mockReturnValue(false);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", reactionNotifications: "own" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 601 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 99,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 });

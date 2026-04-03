@@ -5,8 +5,8 @@ let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfi
   session: createPerSenderSessionConfig(),
 };
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => configOverride,
@@ -82,6 +82,34 @@ describe("agents_list", () => {
 
     const tool = requireAgentsListTool();
     const result = await tool.execute("call2", {});
+    const agents = readAgentList(result);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+  });
+
+  it("falls back to default allowlist when the requester agent omits allowAgents", async () => {
+    configOverride = {
+      session: createPerSenderSessionConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["research"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            name: "Main",
+          },
+          {
+            id: "research",
+            name: "Research",
+          },
+        ],
+      },
+    };
+
+    const tool = requireAgentsListTool();
+    const result = await tool.execute("call2b", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
   });

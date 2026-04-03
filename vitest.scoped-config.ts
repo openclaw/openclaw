@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import baseConfig from "./vitest.config.ts";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
@@ -45,20 +45,11 @@ export function createScopedVitestConfig(
     exclude?: string[];
     pool?: "threads" | "forks";
     passWithNoTests?: boolean;
+    setupFiles?: string[];
   },
 ) {
-  const base = baseConfig as unknown as Record<string, unknown>;
-  const baseTest =
-    (
-      baseConfig as {
-        test?: {
-          dir?: string;
-          exclude?: string[];
-          pool?: "threads" | "forks";
-          passWithNoTests?: boolean;
-        };
-      }
-    ).test ?? {};
+  const base = sharedVitestConfig as Record<string, unknown>;
+  const baseTest = sharedVitestConfig.test ?? {};
   const scopedDir = options?.dir;
   const exclude = relativizeScopedPatterns(
     [...(baseTest.exclude ?? []), ...(options?.exclude ?? [])],
@@ -72,6 +63,7 @@ export function createScopedVitestConfig(
       ...baseTest,
       isolate,
       runner: "./test/non-isolated-runner.ts",
+      setupFiles: [...new Set([...(baseTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"])],
       ...(scopedDir ? { dir: scopedDir } : {}),
       include: relativizeScopedPatterns(include, scopedDir),
       exclude,
@@ -79,6 +71,7 @@ export function createScopedVitestConfig(
       ...(options?.passWithNoTests !== undefined
         ? { passWithNoTests: options.passWithNoTests }
         : {}),
+      ...(options?.setupFiles ? { setupFiles: options.setupFiles } : {}),
     },
   });
 }

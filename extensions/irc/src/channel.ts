@@ -16,6 +16,7 @@ import {
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -27,6 +28,7 @@ import {
   type ResolvedIrcAccount,
 } from "./accounts.js";
 import { IrcChannelConfigSchema } from "./config-schema.js";
+import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
 import { monitorIrcProvider } from "./monitor.js";
 import {
   normalizeIrcMessagingTarget,
@@ -186,6 +188,10 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
           },
         }),
     },
+    doctor: {
+      groupAllowFromFallbackToAllowFrom: false,
+      collectMutableAllowlistWarnings: collectIrcMutableAllowlistWarnings,
+    },
     groups: {
       resolveRequireMention: ({ cfg, accountId, groupId }) => {
         const account = resolveIrcAccount({ cfg: cfg as CoreConfig, accountId });
@@ -337,6 +343,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 350,
+      sanitizeText: ({ text }) => sanitizeForPlainText(text),
     },
     attachedResults: {
       channel: "irc",

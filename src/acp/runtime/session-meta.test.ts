@@ -10,12 +10,13 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+}));
+
+vi.mock("../../config/sessions/targets.js", () => ({
   resolveAllAgentSessionStoreTargets: (cfg: OpenClawConfig, opts: unknown) =>
     hoisted.resolveAllAgentSessionStoreTargetsMock(cfg, opts),
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-  updateSessionStore: vi.fn(),
 }));
 let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
 

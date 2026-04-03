@@ -76,7 +76,7 @@ describe("generic current-conversation bindings", () => {
     ).toBeNull();
   });
 
-  it("keeps Slack current-conversation binding support when the runtime registry is empty", () => {
+  it("requires an active channel plugin registration", () => {
     setActivePluginRegistry(createTestRegistry([]));
 
     expect(
@@ -84,12 +84,7 @@ describe("generic current-conversation bindings", () => {
         channel: "slack",
         accountId: "default",
       }),
-    ).toEqual({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current"],
-    });
+    ).toBeNull();
   });
 
   it("reloads persisted bindings after the in-memory cache is cleared", async () => {

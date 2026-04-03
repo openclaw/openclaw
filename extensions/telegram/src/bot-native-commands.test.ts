@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { TELEGRAM_COMMAND_NAME_PATTERN } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
@@ -22,7 +22,6 @@ import {
 
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerTelegramNativeCommands, parseTelegramNativeCommandCallbackData } =
       await import("./bot-native-commands.js"));
   });
@@ -257,8 +256,10 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage:
-          "Running this command now...\n\nI'll edit this message with the final result when it's ready.",
+        nativeProgressMessages: {
+          telegram:
+            "Running this command now...\n\nI'll edit this message with the final result when it's ready.",
+        },
       },
       args: "now",
     } as never);
@@ -316,7 +317,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);
@@ -363,7 +364,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);
@@ -407,7 +408,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);
@@ -447,7 +448,7 @@ describe("registerTelegramNativeCommands", () => {
       command: {
         key: "plug",
         requireAuth: false,
-        telegramNativeProgressMessage: "Working on it...",
+        nativeProgressMessages: { telegram: "Working on it..." },
       },
       args: "now",
     } as never);

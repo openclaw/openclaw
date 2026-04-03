@@ -17,7 +17,7 @@ export type BrowserSnapshotDefaults = {
   mode?: "efficient";
 };
 export type BrowserSsrFPolicyConfig = {
-  /** Legacy alias for private-network access. Prefer dangerouslyAllowPrivateNetwork. */
+  /** @deprecated Legacy alias; normalized to `dangerouslyAllowPrivateNetwork` on load. */
   allowPrivateNetwork?: boolean;
   /** If true, permit browser navigation to private/internal networks. Default: true */
   dangerouslyAllowPrivateNetwork?: boolean;

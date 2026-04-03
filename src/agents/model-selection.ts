@@ -6,8 +6,10 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai-model-id.js";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeNativeXaiModelId,
+} from "../plugin-sdk/provider-model-shared.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -142,7 +144,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
     return normalizeAnthropicModelId(model);
   }
   if (provider === "google" || provider === "google-vertex") {
-    return normalizeGoogleModelId(model);
+    return normalizeGooglePreviewModelId(model);
   }
   if (provider === "openai") {
     return model;
@@ -151,7 +153,7 @@ function normalizeProviderModelId(provider: string, model: string): string {
     return model.includes("/") ? model : `openrouter/${model}`;
   }
   if (provider === "xai") {
-    return normalizeXaiModelId(model);
+    return normalizeNativeXaiModelId(model);
   }
   if (provider === "vercel-ai-gateway" && !model.includes("/")) {
     // Allow Vercel-specific Claude refs without an upstream prefix.
@@ -209,6 +211,42 @@ export function parseModelRef(
     return null;
   }
   return normalizeModelRef(providerRaw, model, options);
+}
+
+export function resolvePersistedModelRef(params: {
+  defaultProvider: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const defaultProvider = params.defaultProvider.trim();
+  const runtimeProvider = params.runtimeProvider?.trim();
+  const runtimeModel = params.runtimeModel?.trim();
+  if (runtimeModel) {
+    if (runtimeProvider) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    return (
+      parseModelRef(runtimeModel, defaultProvider) ?? {
+        provider: defaultProvider,
+        model: runtimeModel,
+      }
+    );
+  }
+
+  const overrideProvider = params.overrideProvider?.trim();
+  const overrideModel = params.overrideModel?.trim();
+  if (!overrideModel) {
+    return null;
+  }
+  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
+  return (
+    parseModelRef(encodedOverride, defaultProvider) ?? {
+      provider: overrideProvider || defaultProvider,
+      model: overrideModel,
+    }
+  );
 }
 
 export function inferUniqueProviderFromConfiguredModels(params: {
