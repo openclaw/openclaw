@@ -8,7 +8,7 @@ vi.mock("node:child_process", async () => {
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
-      execFile: vi.fn(),
+      execFile: vi.fn() as unknown as typeof import("node:child_process").execFile,
     },
   );
 });
