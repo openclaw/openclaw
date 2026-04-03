@@ -1748,7 +1748,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
-- `removeAckAfterReply`: removes ack after reply (Slack/Discord/Telegram/Google Chat only).
+- `removeAckAfterReply`: removes ack after reply on Slack, Discord, and Telegram.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
+  On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
+  On Telegram, set it explicitly to `true` to enable lifecycle status reactions.
 
 ### Inbound debounce
 

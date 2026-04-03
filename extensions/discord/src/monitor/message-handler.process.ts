@@ -943,7 +943,7 @@ export async function processDiscordMessage(
         }
       }
     } else if (shouldSendAckReaction && ackReaction && removeAckAfterReply) {
-      void discordAdapter.removeReaction(ackReaction).catch((err) => {
+      void discordAdapter.removeReaction?.(ackReaction)?.catch((err) => {
         logAckFailure({
           log: logVerbose,
           channel: "discord",

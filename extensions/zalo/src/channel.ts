@@ -44,8 +44,7 @@ import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
-import { zaloSetupAdapter } from "./setup-core.js";
-import { zaloSetupWizard } from "./setup-surface.js";
+import { createZaloSetupWizardProxy, zaloSetupAdapter } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -85,6 +84,9 @@ function chunkTextForOutbound(text: string, limit: number): string[] {
 }
 
 const loadZaloChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const zaloSetupWizard = createZaloSetupWizardProxy(
+  async () => (await import("./setup-surface.js")).zaloSetupWizard,
+);
 const zaloTextChunkLimit = 2000;
 
 const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
