@@ -171,6 +171,34 @@ export type SessionPatchHookEvent = InternalHookEvent & {
   context: SessionPatchHookContext;
 };
 
+export type SessionCompactBeforeHookContext = {
+  sessionId: string;
+  messageCount: number;
+  sessionFile?: string;
+};
+
+export type SessionCompactBeforeHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "compact:before";
+  context: SessionCompactBeforeHookContext;
+};
+
+export type SessionCompactAfterHookContext = {
+  sessionId: string;
+  messageCount: number;
+  compactedCount: number;
+  sessionFile?: string;
+  /** true when compaction completed successfully; false when aborted or failed.
+   * Absent in legacy runner-driven compact:after events (treat missing as true). */
+  completed?: boolean;
+};
+
+export type SessionCompactAfterHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "compact:after";
+  context: SessionCompactAfterHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -454,4 +482,24 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
     typeof context.sessionEntry === "object" &&
     context.sessionEntry !== null
   );
+}
+
+export function isSessionCompactBeforeEvent(
+  event: InternalHookEvent,
+): event is SessionCompactBeforeHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "compact:before")) {
+    return false;
+  }
+  const context = getHookContext<SessionCompactBeforeHookContext>(event);
+  return context != null && typeof context.sessionId === "string";
+}
+
+export function isSessionCompactAfterEvent(
+  event: InternalHookEvent,
+): event is SessionCompactAfterHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "compact:after")) {
+    return false;
+  }
+  const context = getHookContext<SessionCompactAfterHookContext>(event);
+  return context != null && typeof context.sessionId === "string";
 }

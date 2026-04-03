@@ -70,6 +70,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
     compactionInFlight: false,
+    messageCountBeforeCompaction: null,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
     compactionRetryReject: undefined,

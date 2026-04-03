@@ -11,6 +11,7 @@ const hookMocks = vi.hoisted(() => ({
     runAfterCompaction: vi.fn(async () => {}),
   },
   emitAgentEvent: vi.fn(),
+  triggerInternalHook: vi.fn(async () => {}),
 }));
 
 describe("compaction hook wiring", () => {
@@ -24,6 +25,19 @@ describe("compaction hook wiring", () => {
     vi.doMock("../infra/agent-events.js", () => ({
       emitAgentEvent: hookMocks.emitAgentEvent,
     }));
+    vi.doMock("../hooks/internal-hooks.js", () => ({
+      createInternalHookEvent: vi.fn(
+        (type: string, action: string, sessionKey: string, context: Record<string, unknown>) => ({
+          type,
+          action,
+          sessionKey,
+          context,
+          timestamp: new Date(),
+          messages: [],
+        }),
+      ),
+      triggerInternalHook: hookMocks.triggerInternalHook,
+    }));
     ({ handleAutoCompactionStart, handleAutoCompactionEnd } =
       await import("../agents/pi-embedded-subscribe.handlers.compaction.js"));
   });
@@ -36,6 +50,8 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.runAfterCompaction.mockClear();
     hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
     hookMocks.emitAgentEvent.mockClear();
+    hookMocks.triggerInternalHook.mockClear();
+    hookMocks.triggerInternalHook.mockResolvedValue(undefined);
   });
 
   function createCompactionEndCtx(params: {
@@ -284,5 +300,89 @@ describe("compaction hook wiring", () => {
 
     const assistant = messages[0] as { usage?: unknown };
     expect(assistant.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
+  });
+
+  it("fires session:compact:before internal hook in handleAutoCompactionStart", () => {
+    const ctx = {
+      params: {
+        runId: "r6",
+        sessionKey: "agent:main:web-abc123",
+        sessionId: "sid-6",
+        session: { messages: [1, 2], sessionFile: "/tmp/s6.jsonl" },
+        onAgentEvent: vi.fn(),
+      },
+      state: { compactionInFlight: false },
+      log: { debug: vi.fn(), warn: vi.fn() },
+      incrementCompactionCount: vi.fn(),
+      ensureCompactionPromise: vi.fn(),
+    };
+
+    handleAutoCompactionStart(ctx as never);
+
+    expect(hookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    const triggerCalls = hookMocks.triggerInternalHook.mock.calls as unknown as Array<
+      [unknown, ...unknown[]]
+    >;
+    const event = triggerCalls[0]?.[0] as {
+      type?: string;
+      action?: string;
+      sessionKey?: string;
+      context?: Record<string, unknown>;
+    };
+    expect(event?.type).toBe("session");
+    expect(event?.action).toBe("compact:before");
+    expect(event?.sessionKey).toBe("agent:main:web-abc123");
+    expect(event?.context?.messageCount).toBe(2);
+    expect(event?.context?.sessionFile).toBe("/tmp/s6.jsonl");
+    expect(event?.context?.sessionId).toBe("sid-6");
+  });
+
+  it("fires session:compact:after internal hook in handleAutoCompactionEnd when completed", () => {
+    const ctx = createCompactionEndCtx({
+      runId: "r7",
+      messages: [1, 2, 3],
+      sessionFile: "/tmp/s7.jsonl",
+      sessionKey: "agent:main:web-xyz",
+      compactionCount: 2,
+    });
+
+    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" } });
+
+    expect(hookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    const triggerCalls2 = hookMocks.triggerInternalHook.mock.calls as unknown as Array<
+      [unknown, ...unknown[]]
+    >;
+    const event = triggerCalls2[0]?.[0] as {
+      type?: string;
+      action?: string;
+      sessionKey?: string;
+      context?: Record<string, unknown>;
+    };
+    expect(event?.type).toBe("session");
+    expect(event?.action).toBe("compact:after");
+    expect(event?.sessionKey).toBe("agent:main:web-xyz");
+    expect(event?.context?.messageCount).toBe(3);
+    expect(event?.context?.compactedCount).toBe(2);
+    expect(event?.context?.sessionFile).toBe("/tmp/s7.jsonl");
+  });
+
+  it("does not fire session:compact:after internal hook when willRetry is true", () => {
+    const ctx = createCompactionEndCtx({
+      runId: "r8",
+      compactionCount: 1,
+      withRetryHooks: true,
+    });
+
+    runCompactionEnd(ctx, { willRetry: true, result: { summary: "compacted" } });
+
+    expect(hookMocks.triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it("does not fire session:compact:after internal hook when compaction was aborted", () => {
+    const ctx = createCompactionEndCtx({ runId: "r9" });
+
+    runCompactionEnd(ctx, { willRetry: false, result: { summary: "compacted" }, aborted: true });
+
+    expect(hookMocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 });

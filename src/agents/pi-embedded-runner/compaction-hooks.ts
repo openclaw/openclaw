@@ -272,6 +272,7 @@ export async function runAfterCompactionHooks(params: {
       tokensBefore: params.tokensBefore,
       tokensAfter: params.tokensAfter,
       firstKeptEntryId: params.firstKeptEntryId,
+      completed: true,
     });
     await triggerInternalHook(hookEvent);
   } catch (err) {

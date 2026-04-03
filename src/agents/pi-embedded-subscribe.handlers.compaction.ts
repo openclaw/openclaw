@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { resolveStorePath, updateSessionStoreEntry } from "../config/sessions.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -7,6 +8,7 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 
 export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
+  ctx.state.messageCountBeforeCompaction = ctx.params.session.messages?.length ?? 0;
   ctx.ensureCompactionPromise();
   ctx.log.debug(`embedded run compaction start: runId=${ctx.params.runId}`);
   emitAgentEvent({
@@ -17,6 +19,18 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
     data: { phase: "start" },
+  });
+
+  const hookSessionKey = ctx.params.sessionKey?.trim() || ctx.params.sessionId || "";
+  // Fire session:compact:before internal hook (fire-and-forget)
+  void triggerInternalHook(
+    createInternalHookEvent("session", "compact:before", hookSessionKey, {
+      sessionId: ctx.params.sessionId,
+      messageCount: ctx.params.session.messages?.length ?? 0,
+      sessionFile: ctx.params.session.sessionFile,
+    }),
+  ).catch((err) => {
+    ctx.log.warn(`session:compact:before hook failed: ${String(err)}`);
   });
 
   // Run before_compaction plugin hook (fire-and-forget)
@@ -80,6 +94,30 @@ export function handleAutoCompactionEnd(
     stream: "compaction",
     data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
   });
+
+  // Fire session:compact:after internal hook and plugin hook (fire-and-forget).
+  // Gate: successful completion only (hasResult && !wasAborted).
+  // The after_compaction plugin hook below uses !willRetry (fires on any conclusion),
+  // but the internal hook follows the test contract: no dispatch when aborted or no result.
+  // Subscribers can use context.completed to confirm success.
+  if (!willRetry && hasResult && !wasAborted) {
+    const hookSessionKey = ctx.params.sessionKey?.trim() || ctx.params.sessionId || "";
+    const messageCountAfter = ctx.params.session.messages?.length ?? 0;
+    const messageCountBefore = ctx.state.messageCountBeforeCompaction ?? messageCountAfter;
+    const compactedCount = Math.max(0, messageCountBefore - messageCountAfter);
+    ctx.state.messageCountBeforeCompaction = null;
+    void triggerInternalHook(
+      createInternalHookEvent("session", "compact:after", hookSessionKey, {
+        sessionId: ctx.params.sessionId,
+        messageCount: messageCountAfter,
+        compactedCount,
+        sessionFile: ctx.params.session.sessionFile,
+        completed: true,
+      }),
+    ).catch((err) => {
+      ctx.log.warn(`session:compact:after hook failed: ${String(err)}`);
+    });
+  }
 
   // Run after_compaction plugin hook (fire-and-forget)
   if (!willRetry) {
