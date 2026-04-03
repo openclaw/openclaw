@@ -495,6 +495,20 @@ function isMissingPairingScope(gatewayClientScopes: string[] | null): boolean {
   );
 }
 
+const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
+  "approve",
+  "cleanup",
+  "clear",
+  "notify",
+  "pending",
+  "revoke",
+  "status",
+]);
+
+function issuesPairSetupCode(action: string): boolean {
+  return !action || action === "qr" || !PAIR_SETUP_NON_ISSUING_ACTIONS.has(action);
+}
+
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
   const issuedBootstrap = await issueDeviceBootstrapToken({
     profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -642,7 +656,7 @@ export default definePluginEntry({
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
         }
-        if ((!action || action === "qr") && isMissingPairingScope(gatewayClientScopes)) {
+        if (issuesPairSetupCode(action) && isMissingPairingScope(gatewayClientScopes)) {
           return buildMissingPairingScopeReply();
         }
 
