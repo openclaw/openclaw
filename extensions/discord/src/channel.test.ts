@@ -97,6 +97,31 @@ beforeAll(async () => {
 });
 
 describe("discordPlugin outbound", () => {
+  it("honors per-account replyToMode overrides", () => {
+    const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("Expected discordPlugin.threading.resolveReplyToMode to be defined");
+    }
+
+    const cfg = {
+      channels: {
+        discord: {
+          replyToMode: "all",
+          token: "discord-token",
+          accounts: {
+            work: {
+              token: "discord-token-work",
+              replyToMode: "first",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
+    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
+  });
+
   it("forwards mediaLocalRoots to sendMessageDiscord", async () => {
     const sendMessageDiscord = vi.fn(async () => ({ messageId: "m1" }));
 

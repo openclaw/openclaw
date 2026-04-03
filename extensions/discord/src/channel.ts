@@ -682,7 +682,11 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       collectWarnings: collectDiscordSecurityWarnings,
     },
     threading: {
-      topLevelReplyToMode: "discord",
+      scopedAccountReplyToMode: {
+        resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
+        resolveReplyToMode: (account) => account.config.replyToMode,
+        fallback: "off",
+      },
     },
     outbound: {
       base: {
