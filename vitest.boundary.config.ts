@@ -18,6 +18,8 @@ export function createBoundaryVitestConfig(env: Record<string, string | undefine
       isolate: false,
       runner: "./test/non-isolated-runner.ts",
       include: loadBoundaryIncludePatternsFromEnv(env) ?? boundaryTestFiles,
+      // Keep this lane free of OpenClaw runtime bootstrap so pure infra/boundary
+      // suites can avoid plugin/channel setup import cost.
       setupFiles: [],
     },
   });
