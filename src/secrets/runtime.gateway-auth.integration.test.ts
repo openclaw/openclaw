@@ -2,23 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  loadConfig,
-  writeConfigFile,
-} from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   asConfig,
+  beginSecretsRuntimeIsolationForTest,
   EMPTY_LOADABLE_PLUGIN_ORIGINS,
+  endSecretsRuntimeIsolationForTest,
   loadAuthStoreWithProfiles,
   SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS,
+  type SecretsRuntimeEnvSnapshot,
 } from "./runtime.integration.test-helpers.js";
 import {
   activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
@@ -26,25 +23,14 @@ import {
 vi.unmock("../version.js");
 
 describe("secrets runtime snapshot gateway-auth integration", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let envSnapshot: SecretsRuntimeEnvSnapshot;
 
   beforeEach(() => {
-    envSnapshot = captureEnv([
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-      "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
-      "OPENCLAW_VERSION",
-    ]);
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
-    delete process.env.OPENCLAW_VERSION;
+    envSnapshot = beginSecretsRuntimeIsolationForTest();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
-    envSnapshot.restore();
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    endSecretsRuntimeIsolationForTest(envSnapshot);
   });
 
   it("fails fast at startup when gateway auth SecretRef is active and unresolved", async () => {

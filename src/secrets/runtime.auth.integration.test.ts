@@ -3,27 +3,24 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  loadConfig,
-  writeConfigFile,
-} from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   asConfig,
+  beginSecretsRuntimeIsolationForTest,
   createOpenAIFileRuntimeConfig,
   createOpenAIFileRuntimeFixture,
   EMPTY_LOADABLE_PLUGIN_ORIGINS,
+  endSecretsRuntimeIsolationForTest,
   expectResolvedOpenAIRuntime,
   loadAuthStoreWithProfiles,
   OPENAI_ENV_KEY_REF,
   OPENAI_FILE_KEY_REF,
+  type SecretsRuntimeEnvSnapshot,
 } from "./runtime.integration.test-helpers.js";
 import {
   activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
@@ -31,25 +28,14 @@ import {
 vi.unmock("../version.js");
 
 describe("secrets runtime snapshot auth integration", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let envSnapshot: SecretsRuntimeEnvSnapshot;
 
   beforeEach(() => {
-    envSnapshot = captureEnv([
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-      "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
-      "OPENCLAW_VERSION",
-    ]);
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
-    delete process.env.OPENCLAW_VERSION;
+    envSnapshot = beginSecretsRuntimeIsolationForTest();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
-    envSnapshot.restore();
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    endSecretsRuntimeIsolationForTest(envSnapshot);
   });
 
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {

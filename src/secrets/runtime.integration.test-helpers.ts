@@ -1,10 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
+import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
+import { clearPluginLoaderCache } from "../plugins/loader.js";
+import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/types.js";
+import { __testing as webFetchProvidersTesting } from "../plugins/web-fetch-providers.runtime.js";
+import { __testing as webSearchProvidersTesting } from "../plugins/web-search-providers.runtime.js";
+import { captureEnv } from "../test-utils/env.js";
+import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 
 export const OPENAI_ENV_KEY_REF = {
   source: "env",
@@ -20,6 +27,7 @@ export const OPENAI_FILE_KEY_REF = {
 
 export const SECRETS_RUNTIME_INTEGRATION_TIMEOUT_MS = 300_000;
 export const EMPTY_LOADABLE_PLUGIN_ORIGINS: ReadonlyMap<string, PluginOrigin> = new Map();
+export type SecretsRuntimeEnvSnapshot = ReturnType<typeof captureEnv>;
 
 const allowInsecureTempSecretFile = process.platform === "win32";
 
@@ -105,4 +113,30 @@ export function expectResolvedOpenAIRuntime(agentDir: string) {
     type: "api_key",
     key: "sk-file-runtime",
   });
+}
+
+export function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
+  const envSnapshot = captureEnv([
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
+    "OPENCLAW_VERSION",
+  ]);
+  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
+  delete process.env.OPENCLAW_VERSION;
+  return envSnapshot;
+}
+
+export function endSecretsRuntimeIsolationForTest(envSnapshot: SecretsRuntimeEnvSnapshot) {
+  vi.restoreAllMocks();
+  envSnapshot.restore();
+  clearSecretsRuntimeSnapshot();
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  clearPluginLoaderCache();
+  clearPluginDiscoveryCache();
+  clearPluginManifestRegistryCache();
+  webSearchProvidersTesting.resetWebSearchProviderSnapshotCacheForTests();
+  webFetchProvidersTesting.resetWebFetchProviderSnapshotCacheForTests();
 }
