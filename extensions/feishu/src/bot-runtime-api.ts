@@ -1,9 +1,8 @@
-export type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-
 export { buildAgentMediaPayload } from "openclaw/plugin-sdk/media-runtime";
 export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+export type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 export {
   evaluateSupplementalContextVisibility,
   filterSupplementalContextItems,
   normalizeAgentId,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/feishu";
