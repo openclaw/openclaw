@@ -31,6 +31,8 @@ static gboolean cron_fetch_in_flight = FALSE;
 static gboolean cron_status_fetch_in_flight = FALSE;
 static gboolean cron_runs_fetch_in_flight = FALSE;
 static gint64 cron_last_fetch_us = 0;
+/* H1: Generation counter for stale response filtering */
+static guint cron_refresh_generation = 0;
 
 /* Forward declarations */
 static void cron_rebuild_list(void);
@@ -139,6 +141,31 @@ static void on_delete(GtkButton *btn, gpointer user_data) {
     adw_alert_dialog_choose(dialog, toplevel, NULL, on_delete_dialog_response, NULL);
 }
 
+/* G1: Helper to insert route before #token fragment */
+static gchar* dashboard_url_with_route(const gchar *base_url, const gchar *route) {
+    if (!base_url || !route) return NULL;
+    
+    /* Find fragment marker */
+    const gchar *fragment = strchr(base_url, '#');
+    if (fragment) {
+        /* Insert route before fragment */
+        gsize base_len = fragment - base_url;
+        /* Ensure base ends with / */
+        gboolean needs_slash = (base_len == 0 || base_url[base_len - 1] != '/');
+        return g_strdup_printf("%.*s%s%s%s",
+                              (int)base_len, base_url,
+                              needs_slash ? "/" : "",
+                              route, fragment);
+    } else {
+        /* No fragment, append route normally */
+        gboolean needs_slash = base_url[strlen(base_url) - 1] != '/';
+        return g_strdup_printf("%s%s%s",
+                              base_url,
+                              needs_slash ? "/" : "",
+                              route);
+    }
+}
+
 static void on_open_transcript(GtkButton *btn, gpointer user_data) {
     (void)user_data;
     const gchar *key = (const gchar *)g_object_get_data(G_OBJECT(btn), "session-key");
@@ -167,9 +194,12 @@ static void on_open_transcript(GtkButton *btn, gpointer user_data) {
     g_autofree gchar *url = gateway_config_dashboard_url(cfg);
     if (!url) return;
 
-    /* Dashboard route for session logs: /chat/:sessionKey */
-    g_autofree gchar *log_url = g_strdup_printf("%schat/%s", url, key);
-    g_app_info_launch_default_for_uri(log_url, NULL, NULL);
+    /* Dashboard route for session logs: chat/:sessionKey */
+    g_autofree gchar *route = g_strdup_printf("chat/%s", key);
+    g_autofree gchar *log_url = dashboard_url_with_route(url, route);
+    if (log_url) {
+        g_app_info_launch_default_for_uri(log_url, NULL, NULL);
+    }
 }
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -836,9 +866,12 @@ static void cron_rebuild_list(void) {
 }
 
 static void on_cron_status_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    guint generation = GPOINTER_TO_UINT(user_data);
     cron_status_fetch_in_flight = FALSE;
     if (!cron_scheduler_banner) return;
+    
+    /* H1: Ignore stale responses from previous refresh cycles */
+    if (generation != cron_refresh_generation) return;
     
     if (response->ok) {
         gateway_cron_status_free(cron_status_cache);
@@ -848,9 +881,12 @@ static void on_cron_status_rpc_response(const GatewayRpcResponse *response, gpoi
 }
 
 static void on_cron_runs_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    guint generation = GPOINTER_TO_UINT(user_data);
     cron_runs_fetch_in_flight = FALSE;
     if (!cron_runs_box) return;
+    
+    /* H1: Ignore stale responses from previous refresh cycles */
+    if (generation != cron_refresh_generation) return;
     
     if (response->ok) {
         gateway_cron_runs_data_free(cron_runs_cache);
@@ -862,10 +898,13 @@ static void on_cron_runs_rpc_response(const GatewayRpcResponse *response, gpoint
 /* ── RPC callback ────────────────────────────────────────────────── */
 
 static void on_cron_rpc_response(const GatewayRpcResponse *response, gpointer user_data) {
-    (void)user_data;
+    guint generation = GPOINTER_TO_UINT(user_data);
     cron_fetch_in_flight = FALSE;
 
     if (!cron_list_box) return;
+
+    /* H1: Ignore stale responses from previous refresh cycles */
+    if (generation != cron_refresh_generation) return;
 
     if (!response->ok) {
         if (cron_status_label) {
@@ -910,14 +949,18 @@ static void cron_force_refresh(void) {
     if (!cron_list_box) return;
     if (!gateway_rpc_is_ready()) return;
 
+    /* H1: Increment generation to invalidate in-flight responses */
+    cron_refresh_generation++;
+    guint current_gen = cron_refresh_generation;
+
     cron_fetch_in_flight = TRUE;
     g_autofree gchar *req_id1 = gateway_rpc_request(
-        "cron.list", NULL, 0, on_cron_rpc_response, NULL);
+        "cron.list", NULL, 0, on_cron_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id1) cron_fetch_in_flight = FALSE;
 
     cron_status_fetch_in_flight = TRUE;
     g_autofree gchar *req_id2 = gateway_rpc_request(
-        "cron.status", NULL, 0, on_cron_status_rpc_response, NULL);
+        "cron.status", NULL, 0, on_cron_status_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id2) cron_status_fetch_in_flight = FALSE;
 
     cron_runs_fetch_in_flight = TRUE;
@@ -930,7 +973,7 @@ static void cron_force_refresh(void) {
     g_object_unref(b);
     
     g_autofree gchar *req_id3 = gateway_rpc_request(
-        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, NULL);
+        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id3) cron_runs_fetch_in_flight = FALSE;
     json_node_unref(runs_params);
 }

@@ -28,7 +28,13 @@ typedef enum {
     GW_CFG_ERR_NO_HOME,
     GW_CFG_ERR_PARSE,
     GW_CFG_ERR_NOT_OBJECT,
+    GW_CFG_ERR_GATEWAY_NOT_OBJECT,    /* E1 */
+    GW_CFG_ERR_MODE_INVALID,            /* E2 */
     GW_CFG_ERR_MODE_UNSUPPORTED,
+    GW_CFG_ERR_AUTH_NOT_OBJECT,         /* E3 */
+    GW_CFG_ERR_AUTH_MODE_INVALID,       /* E4 */
+    GW_CFG_ERR_AUTH_AMBIGUOUS,          /* E5 */
+    GW_CFG_ERR_PORT_INVALID,            /* E6 */
     GW_CFG_ERR_AUTH_MODE_UNSUPPORTED,
     GW_CFG_ERR_TOKEN_MISSING,
     GW_CFG_ERR_PASSWORD_MISSING,
@@ -46,6 +52,7 @@ typedef struct {
     gchar *mode;           /* gateway.mode: "local" or other (NULL treated as local) */
     gchar *host;           /* effective bind host (default 127.0.0.1) */
     gint port;             /* effective port (default 18789) */
+    gboolean tls_enabled;  /* L6: TLS enablement from gateway.tls or gateway.security.tls */
     gchar *auth_mode;      /* gateway.auth.mode: "token", "password", "none" */
     gchar *token;          /* resolved auth token (config + env override) */
     gchar *password;       /* resolved auth password (config + env override) */

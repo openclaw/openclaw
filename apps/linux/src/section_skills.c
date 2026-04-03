@@ -540,12 +540,13 @@ static GtkWidget* skills_build(void) {
 
 static void skills_refresh(void) {
     if (!skills_list_box || skills_fetch_in_flight) return;
-    if (!section_is_stale(&skills_last_fetch_us)) return;
+    /* L7: Check readiness BEFORE freshness - disconnected state must win over cache */
     if (!gateway_rpc_is_ready()) {
         if (skills_status_label)
             gtk_label_set_text(GTK_LABEL(skills_status_label), "Gateway not connected");
         return;
     }
+    if (!section_is_stale(&skills_last_fetch_us)) return;
 
     skills_fetch_in_flight = TRUE;
     g_autofree gchar *req_id = gateway_rpc_request(

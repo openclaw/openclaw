@@ -215,6 +215,52 @@ gchar* gateway_protocol_extract_challenge_nonce(const GatewayFrame *frame) {
     return NULL;
 }
 
+/* Static helpers for strict JSON type validation */
+
+static gboolean json_node_is_string_value(JsonNode *node) {
+    return JSON_NODE_HOLDS_VALUE(node) && json_node_get_value_type(node) == G_TYPE_STRING;
+}
+
+static gboolean json_node_is_numeric_value(JsonNode *node) {
+    if (!JSON_NODE_HOLDS_VALUE(node)) return FALSE;
+    GType t = json_node_get_value_type(node);
+    return t == G_TYPE_INT64 || t == G_TYPE_DOUBLE || t == G_TYPE_INT || t == G_TYPE_UINT;
+}
+
+static gboolean json_node_is_integer_value(JsonNode *node) {
+    if (!JSON_NODE_HOLDS_VALUE(node)) return FALSE;
+    GType t = json_node_get_value_type(node);
+    return t == G_TYPE_INT64 || t == G_TYPE_INT || t == G_TYPE_UINT;
+}
+
+static gboolean json_object_has_required_nonempty_string(JsonObject *obj, const gchar *key) {
+    if (!json_object_has_member(obj, key)) return FALSE;
+    JsonNode *node = json_object_get_member(obj, key);
+    if (!json_node_is_string_value(node)) return FALSE;
+    const gchar *val = json_node_get_string(node);
+    if (!val || val[0] == '\0') return FALSE;
+    return TRUE;
+}
+
+static gboolean json_object_has_required_positive_integer(JsonObject *obj, const gchar *key) {
+    if (!json_object_has_member(obj, key)) return FALSE;
+    JsonNode *node = json_object_get_member(obj, key);
+    if (!json_node_is_integer_value(node)) return FALSE;
+    gint64 val = json_node_get_int(node);
+    if (val < 1) return FALSE;
+    return TRUE;
+}
+
+static gboolean json_object_get_required_positive_number(JsonObject *obj, const gchar *key, gdouble *out) {
+    if (!json_object_has_member(obj, key)) return FALSE;
+    JsonNode *node = json_object_get_member(obj, key);
+    if (!json_node_is_numeric_value(node)) return FALSE;
+    gdouble val = json_node_get_double(node);
+    if (val <= 0) return FALSE;
+    *out = val;
+    return TRUE;
+}
+
 gboolean gateway_protocol_parse_hello_ok(const GatewayFrame *frame,
     gchar **out_auth_source,
     gdouble *out_tick_interval_ms)
@@ -225,12 +271,74 @@ gboolean gateway_protocol_parse_hello_ok(const GatewayFrame *frame,
 
     JsonObject *obj = json_node_get_object(frame->payload);
 
+    /* Require type field to be "hello-ok" per HelloOkSchema */
+    if (!json_object_has_member(obj, "type")) {
+        return FALSE;
+    }
+    const gchar *type_str = json_object_get_string_member(obj, "type");
+    if (g_strcmp0(type_str, "hello-ok") != 0) {
+        return FALSE;
+    }
+
+    /* protocol: required integer >= 1 (integer types only, no double) */
+    if (!json_object_has_required_positive_integer(obj, "protocol")) {
+        return FALSE;
+    }
+
+    /* server: required object with non-empty version and connId strings */
+    JsonNode *server_node = json_object_get_member(obj, "server");
+    if (!server_node || !JSON_NODE_HOLDS_OBJECT(server_node)) {
+        return FALSE;
+    }
+    JsonObject *server = json_node_get_object(server_node);
+    if (!json_object_has_required_nonempty_string(server, "version") ||
+        !json_object_has_required_nonempty_string(server, "connId")) {
+        return FALSE;
+    }
+
+    /* features: required object with methods and events arrays */
+    JsonNode *features_node = json_object_get_member(obj, "features");
+    if (!features_node || !JSON_NODE_HOLDS_OBJECT(features_node)) {
+        return FALSE;
+    }
+    JsonObject *features = json_node_get_object(features_node);
+    if (!json_object_has_member(features, "methods") ||
+        !json_object_has_member(features, "events")) {
+        return FALSE;
+    }
+    JsonNode *methods_node = json_object_get_member(features, "methods");
+    JsonNode *events_node = json_object_get_member(features, "events");
+    if (!JSON_NODE_HOLDS_ARRAY(methods_node) || !JSON_NODE_HOLDS_ARRAY(events_node)) {
+        return FALSE;
+    }
+
+    /* snapshot: required (can be any valid JSON, but must be present) */
+    if (!json_object_has_member(obj, "snapshot")) {
+        return FALSE;
+    }
+
     /* Policy is strictly required and must be an object */
     JsonNode *policy_node = json_object_get_member(obj, "policy");
     if (!policy_node || !JSON_NODE_HOLDS_OBJECT(policy_node)) {
         return FALSE;
     }
     JsonObject *policy = json_node_get_object(policy_node);
+
+    /* policy.maxPayload: required integer >= 1 (integer types only, no double) */
+    if (!json_object_has_required_positive_integer(policy, "maxPayload")) {
+        return FALSE;
+    }
+
+    /* policy.maxBufferedBytes: required integer >= 1 (integer types only, no double) */
+    if (!json_object_has_required_positive_integer(policy, "maxBufferedBytes")) {
+        return FALSE;
+    }
+
+    /* tickIntervalMs: required positive numeric per HelloOkSchema */
+    gdouble tick_ms;
+    if (!json_object_get_required_positive_number(policy, "tickIntervalMs", &tick_ms)) {
+        return FALSE;
+    }
 
     /* Auth is optional, but if present must be an object */
     JsonObject *auth = NULL;
@@ -250,10 +358,7 @@ gboolean gateway_protocol_parse_hello_ok(const GatewayFrame *frame,
     }
 
     if (out_tick_interval_ms) {
-        *out_tick_interval_ms = 30000.0;
-        if (json_object_has_member(policy, "tickIntervalMs")) {
-            *out_tick_interval_ms = json_object_get_double_member(policy, "tickIntervalMs");
-        }
+        *out_tick_interval_ms = tick_ms;
     }
 
     return TRUE;

@@ -31,6 +31,19 @@ static GDBusProxy *unit_proxy = NULL;
 static gchar *cached_unit_name = NULL;
 static guint properties_changed_signal_id = 0;
 
+/* B1: Cached service config for the currently targeted unit */
+static gchar *cached_previous_unit_name = NULL;
+
+static void clear_cached_service_config(const gchar *reason) {
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "clear_cached_service_config reason=%s", reason);
+    /* Clear the actual cached unit identity (the real service config cache) */
+    g_free(cached_unit_name);
+    cached_unit_name = NULL;
+    /* Also clear the previous unit tracking variable */
+    g_free(cached_previous_unit_name);
+    cached_previous_unit_name = NULL;
+}
+
 static void fetch_unit_properties(void);
 extern void systemd_refresh(void);
 static void clear_unit_subscription(const gchar *reason);
@@ -208,6 +221,26 @@ static DbusEnvResult systemd_try_dbus_effective_env(const gchar *unit,
         G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &error);
 
     if (!get_unit_result) {
+        /* D3: Distinguish transient D-Bus errors from genuine "unit not loaded".
+         * Transient errors should return QUERY_FAILED, not UNIT_NOT_LOADED,
+         * to avoid falling back to unit-file parsing when D-Bus is unavailable.
+         */
+        gboolean is_transient_dbus_error = FALSE;
+        if (error) {
+            is_transient_dbus_error = (
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NO_REPLY) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_DISCONNECTED) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_TIMED_OUT) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER)
+            );
+        }
+        if (is_transient_dbus_error) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD,
+                        "GetUnit transient D-Bus error for '%s': %s",
+                        unit, error->message);
+            return DBUS_ENV_QUERY_FAILED;
+        }
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD,
                      "GetUnit failed for '%s' (unit not loaded, expected fallback): %s",
                      unit, error->message);
@@ -413,8 +446,16 @@ static void on_manager_signal(GDBusProxy *proxy, gchar *sender_name, gchar *sign
     }
 
     if (g_strcmp0(signal_name, "UnitNew") == 0 && parameters) {
+        /* J3: Validate variant type before parsing to prevent crash on malformed signal */
+        if (!g_variant_is_of_type(parameters, G_VARIANT_TYPE("(so)"))) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "on_manager_signal UnitNew: unexpected variant type %s", 
+                        g_variant_get_type_string(parameters));
+            return;
+        }
         const gchar *unit_name = NULL;
-        g_variant_get(parameters, "(&so)", &unit_name, NULL);
+        const gchar *object_path = NULL;  /* L5: Real variable instead of NULL */
+        g_variant_get(parameters, "(&so)", &unit_name, &object_path);
+        (void)object_path; /* Unused but required for correct parsing */
         if (unit_name) {
             const gchar *canonical = systemd_get_canonical_unit_name();
             if ((canonical && g_strcmp0(unit_name, canonical) == 0) || systemd_is_gateway_unit_name(unit_name)) {
@@ -441,9 +482,21 @@ static void on_manager_signal(GDBusProxy *proxy, gchar *sender_name, gchar *sign
 }
 
 static void publish_systemd_state(const gchar *active_state, const gchar *sub_state) {
+    const gchar *current_unit = systemd_get_canonical_unit_name();
+    
+    /* B1: Invalidate cached service config when unit changes */
+    if (cached_previous_unit_name && 
+        g_strcmp0(cached_previous_unit_name, current_unit) != 0) {
+        clear_cached_service_config("unit-retarget");
+    }
+    
     SystemdState sys_state = {0};
     sys_state.installed = TRUE;
-    sys_state.unit_name = g_strdup(systemd_get_canonical_unit_name());
+    sys_state.unit_name = g_strdup(current_unit);
+    
+    /* Update cached previous unit name */
+    g_free(cached_previous_unit_name);
+    cached_previous_unit_name = g_strdup(current_unit);
 
     if (active_state) {
         sys_state.active_state = g_strdup(active_state);
@@ -544,9 +597,33 @@ static void on_get_unit_ready(GObject *source_object, GAsyncResult *res, gpointe
     }
 
     // 3 (continued). Evaluate runtime state result
+    /* D1: Broaden D-Bus error classification to avoid misclassifying transient failures.
+     * These error codes indicate D-Bus problems, not "unit stopped":
+     * - SERVICE_UNKNOWN: systemd service not available (transient)
+     * - NO_REPLY: timeout waiting for response (transient network/D-Bus issue)
+     * - DISCONNECTED: D-Bus connection lost (transient)
+     * - TIMED_OUT: operation timed out (transient)
+     * - NAME_HAS_NO_OWNER: service name not claimed (systemd not ready yet)
+     */
     if (!result) {
-        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_ready !result proxy=%p error=%s",
-                  (void *)unit_proxy, error ? error->message : "(null)");
+        /* Check if it's a genuine D-Bus error vs unit not found */
+        gboolean is_transient_dbus_error = FALSE;
+        if (error) {
+            is_transient_dbus_error = (
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NO_REPLY) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_DISCONNECTED) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_TIMED_OUT) ||
+                g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER)
+            );
+        }
+        if (is_transient_dbus_error) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_ready transient D-Bus error: %s", error->message);
+            /* Don't update state on transient D-Bus errors - preserve previous known state */
+            return;
+        }
+        /* Otherwise treat as unit not loaded/stopped */
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_ready !result (unit not loaded) proxy=%p", (void *)unit_proxy);
         // Drop the previous unit subscription when retargeting to an unloaded unit
         clear_unit_subscription("unit-unloaded");
 
@@ -597,6 +674,9 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
         g_free(requested_unit_name);
     }
 
+    /* D2: Broaden D-Bus error classification in GetUnitFileState for consistency.
+     * Same transient error codes as in on_get_unit_ready.
+     */
     gboolean is_installed = FALSE;
     if (result) {
         const gchar *state_str = NULL;
@@ -604,11 +684,24 @@ static void on_get_unit_file_state_ready(GObject *source_object, GAsyncResult *r
         if (g_strcmp0(state_str, "not-found") != 0) {
             is_installed = TRUE;
         }
+    } else if (error) {
+        gboolean is_transient_dbus_error = (
+            g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_SERVICE_UNKNOWN) ||
+            g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NO_REPLY) ||
+            g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_DISCONNECTED) ||
+            g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_TIMED_OUT) ||
+            g_error_matches(error, G_DBUS_ERROR, G_DBUS_ERROR_NAME_HAS_NO_OWNER)
+        );
+        if (is_transient_dbus_error) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_file_state_ready transient D-Bus error: %s", error->message);
+            /* Don't update state on transient D-Bus errors - preserve previous known state */
+            return;
+        }
     }
 
     // 2. If GetUnitFileState fails or state is "not-found", treat as not installed
     if (!is_installed) {
-        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_file_state_ready !is_installed proxy=%p",
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "on_get_unit_file_state_ready !is_installed (unit not found) proxy=%p",
                   (void *)unit_proxy);
         // Drop the previous unit subscription if the selected unit is no longer installed
         clear_unit_subscription("unit-not-installed");
