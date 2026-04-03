@@ -277,6 +277,14 @@ export function createProfileAvailability({
     }
     const profileState = getProfileState();
     if (!profileState.running) {
+      const remoteCdp = capabilities.isRemote;
+      if (profile.attachOnly || remoteCdp) {
+        // No process was launched for attachOnly/remote profiles, but a Playwright
+        // CDP connection may still be active. Close it so emulation overrides
+        // (prefers-color-scheme, etc.) are released.
+        await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);
+        return { stopped: true };
+      }
       return { stopped: false };
     }
     await stopOpenClawChrome(profileState.running);
