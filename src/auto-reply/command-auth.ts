@@ -330,7 +330,7 @@ function resolveSenderCandidates(params: {
     }
     candidates.push(trimmed);
   };
-  if (params.providerId === "whatsapp") {
+  if (plugin?.commands?.preferSenderE164ForCommands) {
     pushCandidate(params.senderE164);
     pushCandidate(params.senderId);
   } else {
@@ -452,14 +452,6 @@ function resolveFallbackDefaultAccountConfig(
   return definedAccounts.length === 1 ? definedAccounts[0] : undefined;
 }
 
-function resolveFallbackCommandOptions(providerId?: ChannelId): {
-  enforceOwnerForCommands: boolean;
-} {
-  return {
-    enforceOwnerForCommands: providerId === "whatsapp",
-  };
-}
-
 export function resolveCommandAuthorization(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -568,10 +560,7 @@ export function resolveCommandAuthorization(params: {
     : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
 
-  const enforceOwner = Boolean(
-    plugin?.commands?.enforceOwnerForCommands ??
-    resolveFallbackCommandOptions(providerId).enforceOwnerForCommands,
-  );
+  const enforceOwner = Boolean(plugin?.commands?.enforceOwnerForCommands);
   const senderIsOwnerByIdentity = Boolean(matchedSender);
   const senderIsOwnerByScope =
     isInternalMessageChannel(ctx.Provider) &&

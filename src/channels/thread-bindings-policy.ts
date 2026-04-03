@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { getChannelPlugin } from "./plugins/index.js";
 
-export const DISCORD_THREAD_BINDING_CHANNEL = "discord";
-export const MATRIX_THREAD_BINDING_CHANNEL = "matrix";
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
 
@@ -35,25 +34,29 @@ function normalizeChannelId(value: string | undefined | null): string {
 }
 
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
-  const normalized = normalizeChannelId(channel);
-  return (
-    normalized === DISCORD_THREAD_BINDING_CHANNEL || normalized === MATRIX_THREAD_BINDING_CHANNEL
-  );
+  return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
 export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
-  const normalized = normalizeChannelId(channel);
-  return normalized !== "telegram" && normalized !== "feishu" && normalized !== "line";
+  return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
 export function resolveThreadBindingPlacementForCurrentContext(params: {
   channel: string;
   threadId?: string;
 }): "current" | "child" {
-  if (!requiresNativeThreadContextForThreadHere(params.channel)) {
+  if (resolveDefaultTopLevelPlacement(params.channel) !== "child") {
     return "current";
   }
   return params.threadId ? "current" : "child";
+}
+
+function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
+  const normalized = normalizeChannelId(channel);
+  if (!normalized) {
+    return "current";
+  }
+  return getChannelPlugin(normalized)?.conversationBindings?.defaultTopLevelPlacement ?? "current";
 }
 
 function normalizeBoolean(value: unknown): boolean | undefined {
@@ -202,7 +205,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
     normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
-  const spawnEnabled = spawnEnabledRaw ?? !supportsAutomaticThreadBindingSpawn(channel);
+  const spawnEnabled = spawnEnabledRaw ?? resolveDefaultTopLevelPlacement(channel) !== "child";
   return {
     channel,
     accountId,
@@ -254,13 +257,7 @@ export function formatThreadBindingDisabledError(params: {
   accountId: string;
   kind: ThreadBindingSpawnKind;
 }): string {
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL) {
-    return "Discord thread bindings are disabled (set channels.discord.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
-  }
-  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL) {
-    return "Matrix thread bindings are disabled (set channels.matrix.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
-  }
-  return `Thread bindings are disabled for ${params.channel} (set session.threadBindings.enabled=true to enable).`;
+  return `Thread bindings are disabled for ${params.channel} (set channels.${params.channel}.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).`;
 }
 
 export function formatThreadBindingSpawnDisabledError(params: {
@@ -268,17 +265,6 @@ export function formatThreadBindingSpawnDisabledError(params: {
   accountId: string;
   kind: ThreadBindingSpawnKind;
 }): string {
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "acp") {
-    return "Discord thread-bound ACP spawns are disabled for this account (set channels.discord.threadBindings.spawnAcpSessions=true to enable).";
-  }
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
-    return "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).";
-  }
-  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL && params.kind === "acp") {
-    return "Matrix thread-bound ACP spawns are disabled for this account (set channels.matrix.threadBindings.spawnAcpSessions=true to enable).";
-  }
-  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
-    return "Matrix thread-bound subagent spawns are disabled for this account (set channels.matrix.threadBindings.spawnSubagentSessions=true to enable).";
-  }
-  return `Thread-bound ${params.kind} spawns are disabled for ${params.channel}.`;
+  const spawnFlagKey = resolveSpawnFlagKey(params.kind);
+  return `Thread-bound ${params.kind} spawns are disabled for ${params.channel} (set channels.${params.channel}.threadBindings.${spawnFlagKey}=true to enable).`;
 }

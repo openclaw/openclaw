@@ -1,10 +1,3 @@
-/**
- * Auto-rename Telegram DM forum topics on first message using LLM.
- *
- * This module provides LLM-based label generation.
- * Config resolution is in auto-topic-label-config.ts (lightweight, testable).
- * The actual topic rename call is channel-specific and handled by the caller.
- */
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
@@ -13,45 +6,38 @@ import { prepareModelForSimpleCompletion } from "../../agents/simple-completion-
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 
-export { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
-export type { AutoTopicLabelConfig } from "../../config/types.telegram.js";
-
-const MAX_LABEL_LENGTH = 128;
+const DEFAULT_MAX_LABEL_LENGTH = 128;
 const TIMEOUT_MS = 15_000;
 
-export type AutoTopicLabelParams = {
-  /** The user's first message text. */
+export type ConversationLabelParams = {
   userMessage: string;
-  /** System prompt for the LLM. */
   prompt: string;
-  /** The full config object. */
   cfg: OpenClawConfig;
-  /** Agent ID for model resolution. */
   agentId?: string;
-  /** Routed agent directory for model/auth resolution. */
   agentDir?: string;
+  maxLength?: number;
 };
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
-/**
- * Generate a topic label using LLM.
- * Returns the generated label or null on failure.
- */
-export async function generateTopicLabel(params: {
-  userMessage: string;
-  prompt: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  agentDir?: string;
-}): Promise<string | null> {
+export async function generateConversationLabel(
+  params: ConversationLabelParams,
+): Promise<string | null> {
   const { userMessage, prompt, cfg, agentId, agentDir } = params;
+  const maxLength =
+    typeof params.maxLength === "number" &&
+    Number.isFinite(params.maxLength) &&
+    params.maxLength > 0
+      ? Math.floor(params.maxLength)
+      : DEFAULT_MAX_LABEL_LENGTH;
   const modelRef = resolveDefaultModelForAgent({ cfg, agentId });
   const resolved = await resolveModelAsync(modelRef.provider, modelRef.model, agentDir, cfg);
   if (!resolved.model) {
-    logVerbose(`auto-topic-label: failed to resolve model ${modelRef.provider}/${modelRef.model}`);
+    logVerbose(
+      `conversation-label-generator: failed to resolve model ${modelRef.provider}/${modelRef.model}`,
+    );
     return null;
   }
   const completionModel = prepareModelForSimpleCompletion({ model: resolved.model, cfg });
@@ -85,7 +71,7 @@ export async function generateTopicLabel(params: {
 
     const text = result.content
       .filter(isTextContentBlock)
-      .map((b) => b.text)
+      .map((block) => block.text)
       .join("")
       .trim();
 
@@ -93,8 +79,7 @@ export async function generateTopicLabel(params: {
       return null;
     }
 
-    // Enforce max length for Telegram topic names.
-    return text.slice(0, MAX_LABEL_LENGTH);
+    return text.slice(0, maxLength);
   } finally {
     clearTimeout(timeout);
   }

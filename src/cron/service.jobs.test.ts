@@ -389,16 +389,15 @@ describe("applyJobPatch", () => {
     expect(job.delivery?.failureDestination?.to).toBe("https://example.invalid/failure");
   });
 
-  it("rejects Telegram delivery with invalid target (chatId/topicId format)", () => {
+  it("preserves raw channel delivery targets for plugin-owned validation", () => {
     const job = createIsolatedAgentTurnJob("job-telegram-invalid", {
       mode: "announce",
       channel: "telegram",
       to: "-10012345/6789",
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      'Invalid Telegram delivery target "-10012345/6789". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username',
-    );
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    expect(job.delivery?.to).toBe("-10012345/6789");
   });
 
   it.each([

@@ -10,6 +10,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
+import { discordDoctor } from "./doctor.js";
 import {
   createScopedChannelConfigAdapter,
   getChatChannelMeta,
@@ -47,6 +48,8 @@ export function createDiscordPluginBase(params: {
   | "meta"
   | "setupWizard"
   | "capabilities"
+  | "commands"
+  | "doctor"
   | "streaming"
   | "reload"
   | "configSchema"
@@ -65,6 +68,13 @@ export function createDiscordPluginBase(params: {
       media: true,
       nativeCommands: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: true,
+      resolveNativeCommandName: ({ commandKey, defaultName }) =>
+        commandKey === "tts" ? "voice" : defaultName,
+    },
+    doctor: discordDoctor,
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
@@ -89,6 +99,8 @@ export function createDiscordPluginBase(params: {
     | "meta"
     | "setupWizard"
     | "capabilities"
+    | "commands"
+    | "doctor"
     | "streaming"
     | "reload"
     | "configSchema"

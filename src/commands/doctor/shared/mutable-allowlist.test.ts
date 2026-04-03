@@ -5,19 +5,9 @@ import {
 } from "./mutable-allowlist.js";
 
 describe("doctor mutable allowlist scanner", () => {
-  it("finds mutable discord, irc, and zalouser entries when dangerous matching is disabled", () => {
+  it("finds mutable built-in allowlist entries when dangerous matching is disabled", () => {
     const hits = scanMutableAllowlistEntries({
       channels: {
-        discord: {
-          allowFrom: ["alice"],
-          guilds: {
-            ops: {
-              users: ["bob"],
-              roles: [],
-              channels: {},
-            },
-          },
-        },
         irc: {
           allowFrom: ["charlie"],
           groups: {
@@ -26,26 +16,14 @@ describe("doctor mutable allowlist scanner", () => {
             },
           },
         },
-        zalouser: {
-          groups: {
-            "Ops Room": { allow: true },
-          },
+        googlechat: {
+          groupAllowFrom: ["engineering@example.com"],
         },
       },
     });
 
     expect(hits).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          channel: "discord",
-          path: "channels.discord.allowFrom",
-          entry: "alice",
-        }),
-        expect.objectContaining({
-          channel: "discord",
-          path: "channels.discord.guilds.ops.users",
-          entry: "bob",
-        }),
         expect.objectContaining({
           channel: "irc",
           path: "channels.irc.allowFrom",
@@ -57,9 +35,9 @@ describe("doctor mutable allowlist scanner", () => {
           entry: "dana",
         }),
         expect.objectContaining({
-          channel: "zalouser",
-          path: "channels.zalouser.groups",
-          entry: "Ops Room",
+          channel: "googlechat",
+          path: "channels.googlechat.groupAllowFrom",
+          entry: "engineering@example.com",
         }),
       ]),
     );
@@ -68,9 +46,9 @@ describe("doctor mutable allowlist scanner", () => {
   it("skips scopes that explicitly allow dangerous name matching", () => {
     const hits = scanMutableAllowlistEntries({
       channels: {
-        slack: {
+        googlechat: {
           dangerouslyAllowNameMatching: true,
-          allowFrom: ["alice"],
+          groupAllowFrom: ["engineering@example.com"],
         },
       },
     });
@@ -81,24 +59,24 @@ describe("doctor mutable allowlist scanner", () => {
   it("formats mutable allowlist warnings", () => {
     const warnings = collectMutableAllowlistWarnings([
       {
-        channel: "discord",
-        path: "channels.discord.allowFrom",
-        entry: "alice",
-        dangerousFlagPath: "channels.discord.dangerouslyAllowNameMatching",
-      },
-      {
         channel: "irc",
         path: "channels.irc.allowFrom",
         entry: "bob",
         dangerousFlagPath: "channels.irc.dangerouslyAllowNameMatching",
       },
+      {
+        channel: "googlechat",
+        path: "channels.googlechat.groupAllowFrom",
+        entry: "engineering@example.com",
+        dangerousFlagPath: "channels.googlechat.dangerouslyAllowNameMatching",
+      },
     ]);
 
     expect(warnings).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("mutable allowlist entries across discord, irc"),
-        expect.stringContaining("channels.discord.allowFrom: alice"),
+        expect.stringContaining("mutable allowlist entries across googlechat, irc"),
         expect.stringContaining("channels.irc.allowFrom: bob"),
+        expect.stringContaining("channels.googlechat.groupAllowFrom: engineering@example.com"),
         expect.stringContaining("Option A"),
         expect.stringContaining("Option B"),
       ]),

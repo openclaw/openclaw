@@ -40,6 +40,8 @@ import {
 } from "../component-custom-id.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import { type DiscordInteractiveHandlerContext } from "../interactive-dispatch.js";
+import { dispatchDiscordPluginInteractiveHandler } from "../interactive-dispatch.js";
 import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
@@ -91,6 +93,8 @@ import { deliverDiscordReply } from "./reply-delivery.js";
 
 let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
+let pluginRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/plugin-runtime")> | undefined;
+let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 let replyPipelineRuntimePromise:
   | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
   | undefined;
@@ -106,6 +110,15 @@ async function loadComponentsRuntime() {
   return await componentsRuntimePromise;
 }
 
+async function loadPluginRuntime() {
+  pluginRuntimePromise ??= import("openclaw/plugin-sdk/plugin-runtime");
+  return await pluginRuntimePromise;
+}
+
+async function loadReplyRuntime() {
+  replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
+  return await replyRuntimePromise;
+}
 async function loadReplyPipelineRuntime() {
   replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
   return await replyPipelineRuntimePromise;
@@ -191,7 +204,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     await params.interaction.update(payload);
   };
-  const respond: PluginInteractiveDiscordHandlerContext["respond"] = {
+  const respond: DiscordInteractiveHandlerContext["respond"] = {
     acknowledge: async () => {
       if (responded) {
         return;
@@ -279,9 +292,17 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     return "handled";
   }
+<<<<<<< HEAD
   const { dispatchPluginInteractiveHandler } = await loadConversationRuntime();
   const dispatched = await dispatchPluginInteractiveHandler({
     channel: "discord",
+||||||| parent of 75768e4d13 (refactor(plugins): move channel behavior into plugins)
+  const { dispatchPluginInteractiveHandler } = await loadPluginRuntime();
+  const dispatched = await dispatchPluginInteractiveHandler({
+    channel: "discord",
+=======
+  const dispatched = await dispatchDiscordPluginInteractiveHandler({
+>>>>>>> 75768e4d13 (refactor(plugins): move channel behavior into plugins)
     data: params.data,
     interactionId: resolveDiscordInteractionId(params.interaction),
     ctx: {

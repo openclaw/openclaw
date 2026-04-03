@@ -44,7 +44,6 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
-  enableSlackInteractiveReplies?: boolean;
   /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
@@ -87,11 +86,7 @@ export type ReplyDispatcher = {
 
 type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
-  | "responsePrefix"
-  | "enableSlackInteractiveReplies"
-  | "responsePrefixContext"
-  | "responsePrefixContextProvider"
-  | "onHeartbeatStrip"
+  "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -105,7 +100,6 @@ function normalizeReplyPayloadInternal(
 
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
-    enableSlackInteractiveReplies: opts.enableSlackInteractiveReplies,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
     onSkip: opts.onSkip,
@@ -142,7 +136,6 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
-      enableSlackInteractiveReplies: options.enableSlackInteractiveReplies,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
       onHeartbeatStrip: options.onHeartbeatStrip,

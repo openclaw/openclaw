@@ -61,6 +61,23 @@ function migrateThreadBindingsTtlHoursForPath(params: {
   return true;
 }
 
+function hasLegacyThreadBindingTtlInAnyChannel(value: unknown): boolean {
+  const channels = getRecord(value);
+  if (!channels) {
+    return false;
+  }
+  return Object.values(channels).some((entry) => {
+    const channel = getRecord(entry);
+    if (!channel) {
+      return false;
+    }
+    return (
+      hasLegacyThreadBindingTtl(channel.threadBindings) ||
+      hasLegacyThreadBindingTtlInAccounts(channel.accounts)
+    );
+  });
+}
+
 function hasLegacyTelegramStreamingKeys(value: unknown): boolean {
   const entry = getRecord(value);
   if (!entry) {
@@ -104,16 +121,10 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
     match: (value) => hasLegacyThreadBindingTtl(value),
   },
   {
-    path: ["channels", "discord", "threadBindings"],
+    path: ["channels"],
     message:
-      "channels.discord.threadBindings.ttlHours was renamed to channels.discord.threadBindings.idleHours (auto-migrated on load).",
-    match: (value) => hasLegacyThreadBindingTtl(value),
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      "channels.discord.accounts.<id>.threadBindings.ttlHours was renamed to channels.discord.accounts.<id>.threadBindings.idleHours (auto-migrated on load).",
-    match: (value) => hasLegacyThreadBindingTtlInAccounts(value),
+      "channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours (auto-migrated on load).",
+    match: (value) => hasLegacyThreadBindingTtlInAnyChannel(value),
   },
 ];
 
@@ -160,7 +171,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "thread-bindings.ttlHours->idleHours",
     describe:
-      "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channels.discord)",
+      "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channel configs)",
     legacyRules: THREAD_BINDING_RULES,
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
@@ -174,35 +185,39 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       }
 
       const channels = getRecord(raw.channels);
-      const discord = getRecord(channels?.discord);
-      if (!channels || !discord) {
+      if (!channels) {
         return;
       }
 
-      migrateThreadBindingsTtlHoursForPath({
-        owner: discord,
-        pathPrefix: "channels.discord",
-        changes,
-      });
-
-      const accounts = getRecord(discord.accounts);
-      if (accounts) {
-        for (const [accountId, accountRaw] of Object.entries(accounts)) {
-          const account = getRecord(accountRaw);
-          if (!account) {
-            continue;
-          }
-          migrateThreadBindingsTtlHoursForPath({
-            owner: account,
-            pathPrefix: `channels.discord.accounts.${accountId}`,
-            changes,
-          });
-          accounts[accountId] = account;
+      for (const [channelId, channelRaw] of Object.entries(channels)) {
+        const channel = getRecord(channelRaw);
+        if (!channel) {
+          continue;
         }
-        discord.accounts = accounts;
-      }
+        migrateThreadBindingsTtlHoursForPath({
+          owner: channel,
+          pathPrefix: `channels.${channelId}`,
+          changes,
+        });
 
-      channels.discord = discord;
+        const accounts = getRecord(channel.accounts);
+        if (accounts) {
+          for (const [accountId, accountRaw] of Object.entries(accounts)) {
+            const account = getRecord(accountRaw);
+            if (!account) {
+              continue;
+            }
+            migrateThreadBindingsTtlHoursForPath({
+              owner: account,
+              pathPrefix: `channels.${channelId}.accounts.${accountId}`,
+              changes,
+            });
+            accounts[accountId] = account;
+          }
+          channel.accounts = accounts;
+        }
+        channels[channelId] = channel;
+      }
       raw.channels = channels;
     },
   }),

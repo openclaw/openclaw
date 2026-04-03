@@ -91,6 +91,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       commands: {
         enforceOwnerForCommands: true,
+        preferSenderE164ForCommands: true,
         skipWhenConfigEmpty: true,
       },
       agentPrompt: {

@@ -112,12 +112,12 @@ export function validatePluginCommandDefinition(
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
   }
-  if ("telegramNativeProgressMessage" in command) {
-    if (typeof command.telegramNativeProgressMessage !== "string") {
-      return "telegramNativeProgressMessage must be a string";
+  for (const [label, message] of Object.entries(command.nativeProgressMessages ?? {})) {
+    if (typeof message !== "string") {
+      return `Native progress message "${label}" must be a string`;
     }
-    if (!command.telegramNativeProgressMessage.trim()) {
-      return "telegramNativeProgressMessage cannot be empty";
+    if (!message.trim()) {
+      return `Native progress message "${label}" cannot be empty`;
     }
   }
   return null;
@@ -134,9 +134,11 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   };
 
   push(command.name);
-  push(command.nativeNames?.default);
-  push(command.nativeNames?.telegram);
-  push(command.nativeNames?.discord);
+  for (const alias of Object.values(command.nativeNames ?? {})) {
+    if (typeof alias === "string") {
+      push(alias);
+    }
+  }
 
   return [...keys];
 }

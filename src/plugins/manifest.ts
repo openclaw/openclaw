@@ -375,6 +375,7 @@ export type PluginPackageInstall = {
   localPath?: string;
   defaultChoice?: "npm" | "local";
   minHostVersion?: string;
+  allowInvalidConfigRecovery?: boolean;
 };
 
 export type OpenClawPackageStartup = {

@@ -1,20 +1,20 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { autoPrepareLegacyMatrixCrypto } from "../infra/matrix-legacy-crypto.js";
-import { autoMigrateLegacyMatrixState } from "../infra/matrix-legacy-state.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  autoMigrateLegacyMatrixState,
+  autoPrepareLegacyMatrixCrypto,
   hasActionableMatrixMigration,
   hasPendingMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
-} from "../infra/matrix-migration-snapshot.js";
+} from "openclaw/plugin-sdk/matrix-runtime-heavy";
 
-type MatrixMigrationLogger = {
+type MatrixStartupLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
 async function runBestEffortMatrixMigrationStep(params: {
   label: string;
-  log: MatrixMigrationLogger;
+  log: MatrixStartupLogger;
   logPrefix?: string;
   run: () => Promise<unknown>;
 }): Promise<void> {
@@ -27,10 +27,10 @@ async function runBestEffortMatrixMigrationStep(params: {
   }
 }
 
-export async function runStartupMatrixMigration(params: {
+export async function runMatrixStartupMaintenance(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  log: MatrixMigrationLogger;
+  log: MatrixStartupLogger;
   trigger?: string;
   logPrefix?: string;
   deps?: {

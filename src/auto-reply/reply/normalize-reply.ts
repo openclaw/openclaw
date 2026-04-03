@@ -14,13 +14,11 @@ import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
-import { compileSlackInteractiveReplies } from "./slack-directives.js";
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
-  enableSlackInteractiveReplies?: boolean;
   applyChannelTransforms?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
@@ -118,9 +116,5 @@ export function normalizeReplyPayload(
   }
 
   enrichedPayload = { ...enrichedPayload, text };
-  if (applyChannelTransforms && opts.enableSlackInteractiveReplies && text) {
-    enrichedPayload = compileSlackInteractiveReplies(enrichedPayload);
-  }
-
   return enrichedPayload;
 }

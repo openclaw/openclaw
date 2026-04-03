@@ -50,7 +50,6 @@ const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
 const createChannelReplyPipeline = vi.hoisted(() =>
   vi.fn(() => ({
     responsePrefix: undefined,
-    enableSlackInteractiveReplies: undefined,
     responsePrefixContextProvider: () => ({ identityName: undefined }),
     onModelSelected: () => undefined,
   })),

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
-import { runStartupMatrixMigration } from "./server-startup-matrix-migration.js";
+import { withTempHome } from "../../../test/helpers/temp-home.js";
+import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
 
 async function seedLegacyMatrixState(home: string) {
   const stateDir = path.join(home, ".openclaw");
@@ -23,7 +23,7 @@ function makeMatrixStartupConfig(includeCredentials = true) {
             homeserver: "https://matrix.example.org",
           },
     },
-  } as never;
+  } as const;
 }
 
 function createSuccessfulMatrixMigrationDeps() {
@@ -41,7 +41,7 @@ function createSuccessfulMatrixMigrationDeps() {
   };
 }
 
-describe("runStartupMatrixMigration", () => {
+describe("runMatrixStartupMaintenance", () => {
   it("creates a snapshot before actionable startup migration", async () => {
     await withTempHome(async (home) => {
       await seedLegacyMatrixState(home);
@@ -52,7 +52,7 @@ describe("runStartupMatrixMigration", () => {
         warnings: [],
       }));
 
-      await runStartupMatrixMigration({
+      await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(),
         env: process.env,
         deps: {
@@ -79,7 +79,7 @@ describe("runStartupMatrixMigration", () => {
       const autoPrepareLegacyMatrixCryptoMock = vi.fn();
       const info = vi.fn();
 
-      await runStartupMatrixMigration({
+      await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(false),
         env: process.env,
         deps: {
@@ -109,7 +109,7 @@ describe("runStartupMatrixMigration", () => {
       const autoPrepareLegacyMatrixCryptoMock = vi.fn();
       const warn = vi.fn();
 
-      await runStartupMatrixMigration({
+      await runMatrixStartupMaintenance({
         cfg: makeMatrixStartupConfig(),
         env: process.env,
         deps: {
@@ -138,7 +138,7 @@ describe("runStartupMatrixMigration", () => {
       const warn = vi.fn();
 
       await expect(
-        runStartupMatrixMigration({
+        runMatrixStartupMaintenance({
           cfg: makeMatrixStartupConfig(),
           env: process.env,
           deps: {

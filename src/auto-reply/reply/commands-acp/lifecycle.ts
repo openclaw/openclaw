@@ -16,6 +16,7 @@ import {
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
+import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -68,6 +69,27 @@ function resolveAcpBindingLabelNoun(params: {
     return "conversation";
   }
   return params.conversationId === params.threadId ? "thread" : "conversation";
+}
+
+async function resolveBoundReplyChannelData(params: {
+  binding: SessionBindingRecord;
+  placement: "current" | "child";
+}): Promise<Record<string, unknown> | undefined> {
+  const channelId = normalizeChannelId(params.binding.conversation.channel);
+  if (!channelId) {
+    return undefined;
+  }
+  const buildChannelData =
+    getChannelPlugin(channelId)?.conversationBindings?.buildBoundReplyChannelData;
+  if (!buildChannelData) {
+    return undefined;
+  }
+  const resolved = await buildChannelData({
+    operation: "acp-spawn",
+    placement: params.placement,
+    conversation: params.binding.conversation,
+  });
+  return resolved ?? undefined;
 }
 
 async function bindSpawnedAcpSessionToCurrentConversation(params: {
@@ -574,18 +596,30 @@ export async function handleAcpSpawnAction(
   if (binding) {
     const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
     const boundConversationId = binding.conversation.conversationId.trim();
+    const bindingPlacement =
+      currentConversationId && boundConversationId === currentConversationId ? "current" : "child";
     const placementLabel = resolveAcpBindingLabelNoun({
       conversationId: currentConversationId,
-      placement:
-        currentConversationId && boundConversationId === currentConversationId
-          ? "current"
-          : "child",
+      placement: bindingPlacement,
       threadId: resolveAcpCommandThreadId(params),
     });
-    if (currentConversationId && boundConversationId === currentConversationId) {
+    if (bindingPlacement === "current") {
       parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);
     } else {
       parts.push(`Created ${placementLabel} ${boundConversationId} and bound it to ${sessionKey}.`);
+    }
+    const channelData = await resolveBoundReplyChannelData({
+      binding,
+      placement: bindingPlacement,
+    });
+    if (channelData) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: parts.join(" "),
+          channelData,
+        },
+      };
     }
   } else {
     parts.push(
@@ -596,19 +630,6 @@ export async function handleAcpSpawnAction(
   const dispatchNote = resolveAcpDispatchPolicyMessage(params.cfg);
   if (dispatchNote) {
     parts.push(`ℹ️ ${dispatchNote}`);
-  }
-
-  const shouldPinBindingNotice =
-    binding?.conversation.channel === "telegram" &&
-    binding.conversation.conversationId.includes(":topic:");
-  if (shouldPinBindingNotice) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: parts.join(" "),
-        channelData: { telegram: { pin: true } },
-      },
-    };
   }
 
   return stopWithText(parts.join(" "));

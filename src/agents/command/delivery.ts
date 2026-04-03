@@ -117,7 +117,6 @@ export function normalizeAgentCommandReplyPayloads(params: {
   for (const payload of payloads) {
     const normalized = normalizeReplyPayload(payload as ReplyPayload, {
       responsePrefix: replyPrefix.responsePrefix,
-      enableSlackInteractiveReplies: replyPrefix.enableSlackInteractiveReplies,
       applyChannelTransforms,
       responsePrefixContext,
     });
@@ -204,9 +203,17 @@ export async function deliverAgentCommandResult(params: {
   const resolvedTarget = resolved.resolvedTarget;
   const deliveryTarget = resolved.resolvedTo;
   const resolvedThreadId = deliveryPlan.resolvedThreadId ?? opts.threadId;
-  const resolvedReplyToId =
-    deliveryChannel === "slack" && resolvedThreadId != null ? String(resolvedThreadId) : undefined;
-  const resolvedThreadTarget = deliveryChannel === "slack" ? undefined : resolvedThreadId;
+  const replyTransport =
+    deliveryPlugin?.threading?.resolveReplyTransport?.({
+      cfg,
+      accountId: resolvedAccountId,
+      threadId: resolvedThreadId,
+    }) ?? null;
+  const resolvedReplyToId = replyTransport?.replyToId ?? undefined;
+  const resolvedThreadTarget =
+    replyTransport && Object.hasOwn(replyTransport, "threadId")
+      ? (replyTransport.threadId ?? null)
+      : (resolvedThreadId ?? null);
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;

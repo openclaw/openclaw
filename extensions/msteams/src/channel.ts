@@ -383,6 +383,12 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }),
       },
       auth: msTeamsApprovalAuth,
+      doctor: {
+        dmAllowFromMode: "topOnly",
+        groupModel: "hybrid",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: true,
+      },
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,

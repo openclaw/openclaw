@@ -14,14 +14,14 @@ let waitForRegisteredCommands: typeof import("./bot-native-commands.menu-test-su
 
 function registerPairPluginCommand(params?: {
   nativeNames?: { telegram?: string; discord?: string };
-  telegramNativeProgressMessage?: string;
+  nativeProgressMessages?: { telegram?: string; default?: string };
 }) {
   expect(
     registerPluginCommand("demo-plugin", {
       name: "pair",
       ...(params?.nativeNames ? { nativeNames: params.nativeNames } : {}),
-      ...(params?.telegramNativeProgressMessage
-        ? { telegramNativeProgressMessage: params.telegramNativeProgressMessage }
+      ...(params?.nativeProgressMessages
+        ? { nativeProgressMessages: params.nativeProgressMessages }
         : {}),
       description: "Pair device",
       acceptsArgs: true,
@@ -35,12 +35,12 @@ async function registerPairMenu(params: {
   bot: ReturnType<typeof createCommandBot>["bot"];
   setMyCommands: ReturnType<typeof createCommandBot>["setMyCommands"];
   nativeNames?: { telegram?: string; discord?: string };
-  telegramNativeProgressMessage?: string;
+  nativeProgressMessages?: { telegram?: string; default?: string };
 }) {
   registerPairPluginCommand({
     ...(params.nativeNames ? { nativeNames: params.nativeNames } : {}),
-    ...(params.telegramNativeProgressMessage
-      ? { telegramNativeProgressMessage: params.telegramNativeProgressMessage }
+    ...(params.nativeProgressMessages
+      ? { nativeProgressMessages: params.nativeProgressMessages }
       : {}),
   });
 
@@ -104,8 +104,10 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     await registerPairMenu({
       bot,
       setMyCommands,
-      telegramNativeProgressMessage:
-        "Running pair now...\n\nI'll edit this message with the final result when it's ready.",
+      nativeProgressMessages: {
+        telegram:
+          "Running pair now...\n\nI'll edit this message with the final result when it's ready.",
+      },
     });
 
     const handler = commandHandlers.get("pair");

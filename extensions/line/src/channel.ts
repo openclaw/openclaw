@@ -35,6 +35,12 @@ function resolveLineCommandConversation(params: {
   return conversationId ? { conversationId } : null;
 }
 
+function resolveLineInboundConversation(params: { to?: string; conversationId?: string }) {
+  const conversationId =
+    normalizeLineConversationId(params.conversationId) ?? normalizeLineConversationId(params.to);
+  return conversationId ? { conversationId } : null;
+}
+
 const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAccount>({
   channelKey: "line",
   resolveDmPolicy: (account) => account.config.dmPolicy,
@@ -66,6 +72,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
         }
         return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
       },
+      resolveInboundConversation: ({ to, conversationId }) =>
+        resolveLineInboundConversation({ to, conversationId }),
       targetResolver: {
         looksLikeId: (id) => {
           const trimmed = id?.trim();
@@ -102,6 +110,9 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
           commandTo,
           fallbackTo,
         }),
+    },
+    conversationBindings: {
+      defaultTopLevelPlacement: "current",
     },
     agentPrompt: {
       messageToolHints: () => [

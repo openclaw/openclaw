@@ -68,6 +68,7 @@ import {
 } from "./runtime-api.js";
 import { getOptionalSlackRuntime, getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
+import { collectSlackSecurityAuditFindings } from "./security-audit.js";
 import { sendMessageSlack } from "./send.js";
 import { slackSetupAdapter } from "./setup-core.js";
 import { slackSetupWizard } from "./setup-surface.js";
@@ -460,6 +461,9 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         });
       },
     },
+    mentions: {
+      stripPatterns: () => ["<@[^>\\s]+>"],
+    },
   },
   pairing: {
     text: {
@@ -488,6 +492,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
   security: {
     resolveDmPolicy: resolveSlackDmPolicy,
     collectWarnings: collectSlackSecurityWarnings,
+    collectAuditFindings: collectSlackSecurityAuditFindings,
   },
   threading: {
     scopedAccountReplyToMode: {

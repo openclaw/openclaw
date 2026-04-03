@@ -55,6 +55,10 @@ function getLoadedChannelPlugin(rawChannel: string): ChannelPlugin | undefined {
     ?.plugin;
 }
 
+function shouldDefaultParentConversationToSelf(plugin?: ChannelPlugin): boolean {
+  return plugin?.bindings?.selfParentConversationByDefault === true;
+}
+
 function resolveChannelTargetId(params: {
   channel: string;
   target?: string | null;
@@ -137,7 +141,9 @@ export function resolveConversationBindingContext(
   });
   if (resolvedByProvider?.conversationId) {
     const resolvedParentConversationId =
-      channel === "telegram" && !threadId && !resolvedByProvider.parentConversationId
+      shouldDefaultParentConversationToSelf(loadedPlugin) &&
+      !threadId &&
+      !resolvedByProvider.parentConversationId
         ? resolvedByProvider.conversationId
         : resolvedByProvider.parentConversationId;
     return {
@@ -201,7 +207,7 @@ export function resolveConversationBindingContext(
     return null;
   }
   const normalizedParentConversationId =
-    channel === "telegram" && !threadId && !parentConversationId
+    shouldDefaultParentConversationToSelf(loadedPlugin) && !threadId && !parentConversationId
       ? conversationId
       : parentConversationId;
   return {

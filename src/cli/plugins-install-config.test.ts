@@ -7,20 +7,22 @@ import { loadConfigForInstall } from "./plugins-install-command.js";
 const hoisted = vi.hoisted(() => ({
   loadConfigMock: vi.fn<() => OpenClawConfig>(),
   readConfigFileSnapshotMock: vi.fn<() => Promise<ConfigFileSnapshot>>(),
-  cleanStaleMatrixPluginConfigMock: vi.fn(),
+  collectChannelDoctorStaleConfigMutationsMock: vi.fn(),
 }));
 
 const loadConfigMock = hoisted.loadConfigMock;
 const readConfigFileSnapshotMock = hoisted.readConfigFileSnapshotMock;
-const cleanStaleMatrixPluginConfigMock = hoisted.cleanStaleMatrixPluginConfigMock;
+const collectChannelDoctorStaleConfigMutationsMock =
+  hoisted.collectChannelDoctorStaleConfigMutationsMock;
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
   readConfigFileSnapshot: () => readConfigFileSnapshotMock(),
 }));
 
-vi.mock("../commands/doctor/providers/matrix.js", () => ({
-  cleanStaleMatrixPluginConfig: (cfg: OpenClawConfig) => cleanStaleMatrixPluginConfigMock(cfg),
+vi.mock("../commands/doctor/shared/channel-doctor.js", () => ({
+  collectChannelDoctorStaleConfigMutations: (cfg: OpenClawConfig) =>
+    collectChannelDoctorStaleConfigMutationsMock(cfg),
 }));
 
 const MATRIX_REPO_INSTALL_SPEC = repoInstallSpec("matrix");
@@ -53,12 +55,14 @@ describe("loadConfigForInstall", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
-    cleanStaleMatrixPluginConfigMock.mockReset();
+    collectChannelDoctorStaleConfigMutationsMock.mockReset();
 
-    cleanStaleMatrixPluginConfigMock.mockImplementation((cfg: OpenClawConfig) => ({
-      config: cfg,
-      changes: [],
-    }));
+    collectChannelDoctorStaleConfigMutationsMock.mockImplementation(async (cfg: OpenClawConfig) => [
+      {
+        config: cfg,
+        changes: [],
+      },
+    ]);
   });
 
   it("returns the config directly when loadConfig succeeds", async () => {
@@ -75,7 +79,7 @@ describe("loadConfigForInstall", () => {
     loadConfigMock.mockReturnValue(cfg);
 
     const result = await loadConfigForInstall(matrixNpmRequest);
-    expect(cleanStaleMatrixPluginConfigMock).not.toHaveBeenCalled();
+    expect(collectChannelDoctorStaleConfigMutationsMock).not.toHaveBeenCalled();
     expect(result).toBe(cfg);
   });
 
@@ -102,7 +106,7 @@ describe("loadConfigForInstall", () => {
 
     const result = await loadConfigForInstall(matrixNpmRequest);
     expect(readConfigFileSnapshotMock).toHaveBeenCalled();
-    expect(cleanStaleMatrixPluginConfigMock).toHaveBeenCalledWith(snapshotCfg);
+    expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toBe(snapshotCfg);
   });
 

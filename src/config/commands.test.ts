@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-helpers.js";
 import {
   isCommandFlagEnabled,
   isRestartEnabled,
@@ -6,6 +7,10 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "./commands.js";
+
+beforeEach(() => {
+  setDefaultChannelPluginRegistryForTests();
+});
 
 describe("resolveNativeSkillsEnabled", () => {
   it("uses provider defaults for auto", () => {

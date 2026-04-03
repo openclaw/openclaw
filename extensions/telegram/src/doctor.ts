@@ -1,22 +1,24 @@
-import { getChannelPlugin } from "../../../channels/plugins/registry.js";
 import {
-  inspectTelegramAccount,
-  isNumericTelegramUserId,
-  listTelegramAccountIds,
-  normalizeTelegramAllowFromEntry,
-} from "../../../channels/read-only-account-inspect.telegram.js";
-import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
-import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import { createNonExitingRuntime } from "../../../runtime.js";
-import { describeUnknownError } from "../../../secrets/shared.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
-import { hasAllowFromEntries } from "../shared/allowlist.js";
-import type { EmptyAllowlistAccountScanParams } from "../shared/empty-allowlist-scan.js";
-import { asObjectRecord } from "../shared/object.js";
-import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
+  type ChannelDoctorAdapter,
+  type ChannelDoctorConfigMutation,
+  type ChannelDoctorEmptyAllowlistAccountContext,
+} from "openclaw/plugin-sdk/channel-contract";
+import {
+  resolveTelegramPreviewStreamMode,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
+import {
+  getChannelsCommandSecretTargetIds,
+  resolveCommandSecretRefsViaGateway,
+} from "openclaw/plugin-sdk/runtime";
+import { inspectTelegramAccount } from "./account-inspect.js";
+import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import { lookupTelegramChatId } from "./api-fetch.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
+type DoctorAllowFromList = Array<string | number>;
+type DoctorAccountRecord = Record<string, unknown>;
 
 type TelegramAllowFromListRef = {
   pathLabel: string;
@@ -24,15 +26,130 @@ type TelegramAllowFromListRef = {
   key: "allowFrom" | "groupAllowFrom";
 };
 
-export function collectTelegramAccountScopes(
+function asObjectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function sanitizeForLog(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+}
+
+function describeUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function normalizeTelegramStreamingAliases(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  let updated = params.entry;
+  const hadLegacyStreamMode = updated.streamMode !== undefined;
+  const beforeStreaming = updated.streaming;
+  const resolved = resolveTelegramPreviewStreamMode(updated);
+  const shouldNormalize =
+    hadLegacyStreamMode ||
+    typeof beforeStreaming === "boolean" ||
+    (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
+  if (!shouldNormalize) {
+    return { entry: updated, changed: false };
+  }
+
+  let changed = false;
+  if (beforeStreaming !== resolved) {
+    updated = { ...updated, streaming: resolved };
+    changed = true;
+  }
+  if (hadLegacyStreamMode) {
+    const { streamMode: _ignored, ...rest } = updated;
+    updated = rest;
+    changed = true;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
+    );
+  }
+  if (typeof beforeStreaming === "boolean") {
+    params.changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
+  } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
+    params.changes.push(
+      `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
+    );
+  }
+  return { entry: updated, changed };
+}
+
+function normalizeTelegramCompatibilityConfig(cfg: OpenClawConfig): ChannelDoctorConfigMutation {
+  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  if (!rawEntry) {
+    return { config: cfg, changes: [] };
+  }
+
+  const changes: string[] = [];
+  let updated = rawEntry;
+  let changed = false;
+
+  const base = normalizeTelegramStreamingAliases({
+    entry: rawEntry,
+    pathPrefix: "channels.telegram",
+    changes,
+  });
+  updated = base.entry;
+  changed = base.changed;
+
+  const rawAccounts = asObjectRecord(updated.accounts);
+  if (rawAccounts) {
+    let accountsChanged = false;
+    const accounts = { ...rawAccounts };
+    for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
+      const account = asObjectRecord(rawAccount);
+      if (!account) {
+        continue;
+      }
+      const accountStreaming = normalizeTelegramStreamingAliases({
+        entry: account,
+        pathPrefix: `channels.telegram.accounts.${accountId}`,
+        changes,
+      });
+      if (accountStreaming.changed) {
+        accounts[accountId] = accountStreaming.entry;
+        accountsChanged = true;
+      }
+    }
+    if (accountsChanged) {
+      updated = { ...updated, accounts };
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return { config: cfg, changes: [] };
+  }
+  return {
+    config: {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        telegram: updated as unknown as NonNullable<OpenClawConfig["channels"]>["telegram"],
+      } as OpenClawConfig["channels"],
+    },
+    changes,
+  };
+}
+
+function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
+  return Array.isArray(values) && values.some((entry) => String(entry).trim());
+}
+
+function collectTelegramAccountScopes(
   cfg: OpenClawConfig,
 ): Array<{ prefix: string; account: Record<string, unknown> }> {
   const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
-  const telegram = asObjectRecord(cfg.channels?.telegram);
+  const telegram = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
   if (!telegram) {
     return scopes;
   }
-
   scopes.push({ prefix: "channels.telegram", account: telegram });
   const accounts = asObjectRecord(telegram.accounts);
   if (!accounts) {
@@ -40,16 +157,14 @@ export function collectTelegramAccountScopes(
   }
   for (const key of Object.keys(accounts)) {
     const account = asObjectRecord(accounts[key]);
-    if (!account) {
-      continue;
+    if (account) {
+      scopes.push({ prefix: `channels.telegram.accounts.${key}`, account });
     }
-    scopes.push({ prefix: `channels.telegram.accounts.${key}`, account });
   }
-
   return scopes;
 }
 
-export function collectTelegramAllowFromLists(
+function collectTelegramAllowFromLists(
   prefix: string,
   account: Record<string, unknown>,
 ): TelegramAllowFromListRef[] {
@@ -61,7 +176,6 @@ export function collectTelegramAllowFromLists(
   if (!groups) {
     return refs;
   }
-
   for (const groupId of Object.keys(groups)) {
     const group = asObjectRecord(groups[groupId]);
     if (!group) {
@@ -95,17 +209,13 @@ export function scanTelegramAllowFromUsernameEntries(
   cfg: OpenClawConfig,
 ): TelegramAllowFromUsernameHit[] {
   const hits: TelegramAllowFromUsernameHit[] = [];
-
   const scanList = (pathLabel: string, list: unknown) => {
     if (!Array.isArray(list)) {
       return;
     }
     for (const entry of list) {
       const normalized = normalizeTelegramAllowFromEntry(entry);
-      if (!normalized || normalized === "*") {
-        continue;
-      }
-      if (isNumericTelegramUserId(normalized)) {
+      if (!normalized || normalized === "*" || isNumericTelegramUserId(normalized)) {
         continue;
       }
       hits.push({ path: pathLabel, entry: String(entry).trim() });
@@ -117,7 +227,6 @@ export function scanTelegramAllowFromUsernameEntries(
       scanList(ref.pathLabel, ref.holder[ref.key]);
     }
   }
-
   return hits;
 }
 
@@ -150,10 +259,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
     targetIds: getChannelsCommandSecretTargetIds(),
     mode: "read_only_status",
   });
-  const hasConfiguredUnavailableToken = listTelegramAccountIds(cfg).some((accountId) => {
-    const inspected = inspectTelegramAccount({ cfg, accountId });
-    return inspected.tokenStatus === "configured_unavailable";
-  });
+
   const tokenResolutionWarnings: string[] = [];
   const resolverAccountIds: string[] = [];
   for (const accountId of listTelegramAccountIds(resolvedConfig)) {
@@ -172,65 +278,58 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       );
     }
     const token = inspected.tokenSource === "none" ? "" : inspected.token.trim();
-    if (!token) {
-      continue;
+    if (token) {
+      resolverAccountIds.push(accountId);
     }
-    resolverAccountIds.push(accountId);
   }
 
-  const telegramResolver = getChannelPlugin("telegram")?.resolver?.resolveTargets;
-  if (resolverAccountIds.length === 0 || !telegramResolver) {
+  if (resolverAccountIds.length === 0) {
     return {
       config: cfg,
       changes: [
         ...tokenResolutionWarnings,
-        hasConfiguredUnavailableToken
-          ? `- Telegram allowFrom contains @username entries, but configured Telegram bot credentials are unavailable in this command path; cannot auto-resolve (start the gateway or make the secret source available, then rerun doctor --fix).`
-          : !telegramResolver
-            ? `- Telegram allowFrom contains @username entries, but the Telegram channel resolver is unavailable; cannot auto-resolve in this command path.`
-            : `- Telegram allowFrom contains @username entries, but no Telegram bot token is configured; cannot auto-resolve (run setup or replace with numeric sender IDs).`,
+        "- Telegram allowFrom contains @username entries, but no Telegram bot token is available in this command path; cannot auto-resolve.",
       ],
     };
   }
-
-  const resolverRuntime = createNonExitingRuntime();
   const resolveUserId = async (raw: string): Promise<string | null> => {
     const trimmed = raw.trim();
     if (!trimmed) {
       return null;
     }
-    const stripped = normalizeTelegramAllowFromEntry(trimmed);
-    if (!stripped || stripped === "*") {
+    const normalized = normalizeTelegramAllowFromEntry(trimmed);
+    if (!normalized || normalized === "*") {
       return null;
     }
-    if (isNumericTelegramUserId(stripped)) {
-      return stripped;
+    if (isNumericTelegramUserId(normalized) || /\s/.test(normalized)) {
+      return isNumericTelegramUserId(normalized) ? normalized : null;
     }
-    if (/\s/.test(stripped)) {
-      return null;
-    }
-    const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
+    const username = normalized.startsWith("@") ? normalized : `@${normalized}`;
     for (const accountId of resolverAccountIds) {
       try {
-        const [resolved] = await telegramResolver({
-          cfg: resolvedConfig,
-          accountId,
-          inputs: [username],
-          kind: "user",
-          runtime: resolverRuntime,
+        const account = resolveTelegramAccount({ cfg: resolvedConfig, accountId });
+        const token = account.token.trim();
+        if (!token) {
+          continue;
+        }
+        const id = await lookupTelegramChatId({
+          token,
+          chatId: username,
+          network: account.config.network,
+          signal: undefined,
         });
-        if (resolved?.resolved && resolved.id) {
-          return resolved.id;
+        if (id) {
+          return id;
         }
       } catch {
-        // ignore and try next configured account
+        // ignore and try next account
       }
     }
     return null;
   };
 
-  const changes: string[] = [];
   const next = structuredClone(cfg);
+  const changes: string[] = [];
 
   const repairList = async (pathLabel: string, holder: Record<string, unknown>, key: string) => {
     const raw = holder[key];
@@ -244,11 +343,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       if (!normalized) {
         continue;
       }
-      if (normalized === "*") {
-        out.push("*");
-        continue;
-      }
-      if (isNumericTelegramUserId(normalized)) {
+      if (normalized === "*" || isNumericTelegramUserId(normalized)) {
         out.push(normalized);
         continue;
       }
@@ -271,17 +366,15 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
       deduped.push(entry);
     }
     holder[key] = deduped;
-    if (replaced.length > 0) {
-      for (const rep of replaced.slice(0, 5)) {
-        changes.push(
-          `- ${sanitizeForLog(pathLabel)}: resolved ${sanitizeForLog(rep.from)} -> ${sanitizeForLog(rep.to)}`,
-        );
-      }
-      if (replaced.length > 5) {
-        changes.push(
-          `- ${sanitizeForLog(pathLabel)}: resolved ${replaced.length - 5} more @username entries`,
-        );
-      }
+    for (const replacement of replaced.slice(0, 5)) {
+      changes.push(
+        `- ${sanitizeForLog(pathLabel)}: resolved ${sanitizeForLog(replacement.from)} -> ${sanitizeForLog(replacement.to)}`,
+      );
+    }
+    if (replaced.length > 5) {
+      changes.push(
+        `- ${sanitizeForLog(pathLabel)}: resolved ${replaced.length - 5} more @username entries`,
+      );
     }
   };
 
@@ -299,22 +392,18 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
 
 function hasConfiguredGroups(account: DoctorAccountRecord, parent?: DoctorAccountRecord): boolean {
   const groups =
-    (account.groups as Record<string, unknown> | undefined) ??
-    (parent?.groups as Record<string, unknown> | undefined);
+    (asObjectRecord(account.groups) as DoctorAccountRecord | null) ??
+    (asObjectRecord(parent?.groups) as DoctorAccountRecord | null);
   return Boolean(groups) && Object.keys(groups ?? {}).length > 0;
 }
 
-type CollectTelegramGroupPolicyWarningsParams = {
+export function collectTelegramGroupPolicyWarnings(params: {
   account: DoctorAccountRecord;
   prefix: string;
   effectiveAllowFrom?: DoctorAllowFromList;
   dmPolicy?: string;
   parent?: DoctorAccountRecord;
-};
-
-export function collectTelegramGroupPolicyWarnings(
-  params: CollectTelegramGroupPolicyWarningsParams,
-): string[] {
+}): string[] {
   if (!hasConfiguredGroups(params.account, params.parent)) {
     const effectiveDmPolicy = params.dmPolicy ?? "pairing";
     const dmSetupLine =
@@ -333,11 +422,8 @@ export function collectTelegramGroupPolicyWarnings(
   const rawGroupAllowFrom =
     (params.account.groupAllowFrom as DoctorAllowFromList | undefined) ??
     (params.parent?.groupAllowFrom as DoctorAllowFromList | undefined);
-  // Match runtime semantics: resolveGroupAllowFromSources treats empty arrays as
-  // unset and falls back to allowFrom.
   const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
   const effectiveGroupAllowFrom = groupAllowFrom ?? params.effectiveAllowFrom;
-
   if (hasAllowFromEntries(effectiveGroupAllowFrom)) {
     return [];
   }
@@ -348,18 +434,32 @@ export function collectTelegramGroupPolicyWarnings(
 }
 
 export function collectTelegramEmptyAllowlistExtraWarnings(
-  params: EmptyAllowlistAccountScanParams,
+  params: ChannelDoctorEmptyAllowlistAccountContext,
 ): string[] {
+  const account = params.account as DoctorAccountRecord;
+  const parent = params.parent as DoctorAccountRecord | undefined;
   return params.channelName === "telegram" &&
-    ((params.account.groupPolicy as string | undefined) ??
-      (params.parent?.groupPolicy as string | undefined) ??
+    ((account.groupPolicy as string | undefined) ??
+      (parent?.groupPolicy as string | undefined) ??
       undefined) === "allowlist"
     ? collectTelegramGroupPolicyWarnings({
-        account: params.account,
+        account,
         dmPolicy: params.dmPolicy,
-        effectiveAllowFrom: params.effectiveAllowFrom,
-        parent: params.parent,
+        effectiveAllowFrom: params.effectiveAllowFrom as DoctorAllowFromList | undefined,
+        parent,
         prefix: params.prefix,
       })
     : [];
 }
+
+export const telegramDoctor: ChannelDoctorAdapter = {
+  normalizeCompatibilityConfig: ({ cfg }) => normalizeTelegramCompatibilityConfig(cfg),
+  collectPreviewWarnings: ({ cfg, doctorFixCommand }) =>
+    collectTelegramAllowFromUsernameWarnings({
+      hits: scanTelegramAllowFromUsernameEntries(cfg),
+      doctorFixCommand,
+    }),
+  repairConfig: async ({ cfg }) => await maybeRepairTelegramAllowFromUsernames(cfg),
+  collectEmptyAllowlistExtraWarnings: collectTelegramEmptyAllowlistExtraWarnings,
+  shouldSkipDefaultEmptyGroupAllowlistWarning: (params) => params.channelName === "telegram",
+};

@@ -160,6 +160,19 @@ function setMinimalAcpCommandRegistryForTests(): void {
         source: "test",
         plugin: {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "current",
+            buildBoundReplyChannelData: ({
+              operation,
+              conversation,
+            }: {
+              operation: "acp-spawn";
+              conversation: { conversationId: string };
+            }) =>
+              operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
+                ? { telegram: { pin: true } }
+                : null,
+          },
           bindings: {
             resolveCommandConversation: ({
               threadId,
@@ -197,6 +210,9 @@ function setMinimalAcpCommandRegistryForTests(): void {
         source: "test",
         plugin: {
           ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "child",
+          },
           bindings: {
             resolveCommandConversation: ({
               threadId,
@@ -265,6 +281,9 @@ function setMinimalAcpCommandRegistryForTests(): void {
         source: "test",
         plugin: {
           ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          conversationBindings: {
+            defaultTopLevelPlacement: "child",
+          },
           bindings: {
             resolveCommandConversation: ({
               threadId,
