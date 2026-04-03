@@ -1,0 +1,213 @@
+// Sophia Discord + WhatsApp — Render gateway config template
+// Copy to /data/.openclaw/openclaw.json on Render persistent disk.
+// Secrets (API keys, tokens) are resolved from Render env vars at runtime.
+//
+// Placeholders to replace before deploying:
+//   $DISCORD_GUILD_ID       — your private Discord server ID
+//   $DISCORD_VOICE_CHANNEL_ID — the dedicated Sophia voice channel ID
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "anthropic/claude-sonnet-4-6"
+      },
+      "models": {
+        "anthropic/claude-sonnet-4-6": {}
+      },
+      "workspace": "/data/.openclaw/sophia",
+      "memorySearch": {
+        "provider": "openai",
+        "model": "text-embedding-3-small"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "heartbeat": {
+        "every": "2h",
+        "target": "whatsapp",
+        "activeHours": {
+          "start": "08:00",
+          "end": "23:00",
+          "timezone": "Europe/Rome"
+        }
+      },
+      "thinkingDefault": "adaptive",
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      },
+      "userTimezone": "Europe/Rome"
+    },
+    "list": [
+      {
+        "id": "main",
+        "identity": {
+          "name": "Sophia",
+          "theme": "AI companion"
+        }
+      }
+    ]
+  },
+
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "brave"
+      },
+      "fetch": {
+        "enabled": true
+      }
+    },
+    "media": {
+      "audio": {
+        "enabled": true,
+        "models": [{ "provider": "deepgram", "model": "nova-3" }],
+        "providerOptions": {
+          "deepgram": {
+            "detect_language": true,
+            "punctuate": true,
+            "smart_format": true
+          }
+        }
+      }
+    }
+  },
+
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+
+  "cron": {
+    "enabled": true
+  },
+
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "bootstrap-extra-files": {
+          "enabled": true,
+          "paths": [
+            "tone_skills.md",
+            "thinking_tools_taxonomy.md"
+          ]
+        }
+      }
+    }
+  },
+
+  // --- Channels ---
+
+  "channels": {
+    // WhatsApp — preserved from existing config
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "pairing",
+      "allowFrom": [
+        "+393519168570"
+      ],
+      "groupPolicy": "allowlist",
+      "debounceMs": 0,
+      "mediaMaxMb": 50
+    },
+
+    // Discord — new
+    "discord": {
+      "enabled": true,
+      "groupPolicy": "allowlist",
+      "dmPolicy": "pairing",
+      "guilds": {
+        "$DISCORD_GUILD_ID": {
+          "requireMention": false,
+          "channels": {
+            "$DISCORD_VOICE_CHANNEL_ID": {
+              "requireMention": false
+            }
+          }
+        }
+      },
+      "voice": {
+        "enabled": true,
+        "daveEncryption": true,
+        "decryptionFailureTolerance": 24,
+        "tts": {
+          "provider": "elevenlabs",
+          "providers": {
+            "elevenlabs": {
+              "voiceId": "aFueGIISJUmscc05ZNfD",
+              "modelId": "eleven_v3",
+              "voiceSettings": {
+                "stability": 0.5,
+                "similarityBoost": 0.8,
+                "style": 0.1,
+                "useSpeakerBoost": true,
+                "speed": 0.95
+              }
+            }
+          }
+        }
+      },
+      "inboundWorker": {
+        "runTimeoutMs": 1800000
+      },
+      "eventQueue": {
+        "listenerTimeout": 120000
+      },
+      "nativeCommands": {
+        "enabled": true
+      }
+    }
+  },
+
+  // --- TTS (global, also used by WhatsApp voice notes) ---
+
+  "messages": {
+    "tts": {
+      "auto": "off",
+      "provider": "elevenlabs",
+      "providers": {
+        "elevenlabs": {
+          "voiceId": "aFueGIISJUmscc05ZNfD",
+          "modelId": "eleven_v3",
+          "voiceSettings": {
+            "stability": 0.5,
+            "similarityBoost": 0.8,
+            "style": 0.1,
+            "useSpeakerBoost": true,
+            "speed": 0.95
+          }
+        }
+      }
+    }
+  },
+
+  // --- Plugins ---
+
+  "plugins": {
+    "entries": {
+      "brave": {
+        "config": {
+          "webSearch": {
+            "mode": "llm-context"
+          }
+        },
+        "enabled": true
+      }
+    }
+  },
+
+  // --- Talk (legacy TTS path, kept for compatibility) ---
+
+  "talk": {
+    "provider": "elevenlabs",
+    "providers": {
+      "elevenlabs": {
+        "voiceId": "aFueGIISJUmscc05ZNfD"
+      }
+    }
+  }
+}
