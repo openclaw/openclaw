@@ -8,7 +8,8 @@ import {
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
 export const extensionRoutedChannelTestFiles = [
-  bundledPluginFile("telegram", "src/fetch.network-policy.test.ts"),
+  bundledPluginFile("telegram", "src/bot/delivery.resolve-media-retry.test.ts"),
+  bundledPluginFile("telegram", "src/fetch.test.ts"),
 ];
 
 const extensionRoutedChannelTestFileSet = new Set(extensionRoutedChannelTestFiles);
