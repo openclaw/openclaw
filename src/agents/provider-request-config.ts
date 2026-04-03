@@ -301,7 +301,7 @@ export function sanitizeConfiguredProviderRequest(
 }
 
 export function sanitizeConfiguredModelProviderRequest(
-  request: ConfiguredModelProviderRequest | ConfiguredProviderRequest | undefined,
+  request: ConfiguredModelProviderRequest | undefined,
 ): ProviderRequestTransportOverrides | undefined {
   return sanitizeConfiguredProviderRequest(request);
 }
