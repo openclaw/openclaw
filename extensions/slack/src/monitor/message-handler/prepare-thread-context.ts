@@ -102,20 +102,27 @@ export async function resolveSlackThreadContextData(params: {
       senderAllowed: starterAllowed,
     });
 
+  const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
+  threadSessionPreviousTimestamp = readSessionUpdatedAt({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+  });
+
   if (starter?.text && includeStarterContext) {
     threadStarterBody = starter.text;
     const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? `: ${snippet}` : ""}`;
-    if (!params.effectiveDirectMedia && starter.files && starter.files.length > 0) {
-      threadStarterMedia = await resolveSlackMedia({
-        files: starter.files,
-        token: params.ctx.botToken,
-        maxBytes: params.ctx.mediaMaxBytes,
-      });
-      if (threadStarterMedia) {
-        const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
-        logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
-      }
+    // Never hydrate thread starter media for thread replies. The parent
+    // image was already processed on the channel-level turn that started
+    // the thread.  Re-downloading it into every thread session (even just
+    // the first turn) wastes bandwidth and vision tokens, and causes the
+    // model to narrate a photo the user didn't attach to their reply.
+    // The starter *text* is still included via threadStarterBody, which
+    // gives the model sufficient context about the parent message.
+    if (starter.files && starter.files.length > 0) {
+      logVerbose(
+        `slack: skipped thread starter media (${starter.files.length} file(s)) — thread replies never hydrate parent media`,
+      );
     }
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
@@ -125,12 +132,6 @@ export async function resolveSlackThreadContextData(params: {
       `slack: omitted thread starter from context (mode=${params.contextVisibilityMode}, sender_allowed=${starterAllowed ? "yes" : "no"})`,
     );
   }
-
-  const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
-  threadSessionPreviousTimestamp = readSessionUpdatedAt({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-  });
 
   if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
     const threadHistory = await resolveSlackThreadHistory({
