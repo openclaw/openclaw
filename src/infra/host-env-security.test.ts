@@ -146,25 +146,25 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("git_sequence_editor")).toBe(true);
     expect(isDangerousHostEnvVarName("GIT_TEMPLATE_DIR")).toBe(true);
     expect(isDangerousHostEnvVarName("git_template_dir")).toBe(true);
-    expect(isDangerousHostEnvVarName("KUBECONFIG")).toBe(true);
-    expect(isDangerousHostEnvVarName("google_application_credentials")).toBe(true);
-    expect(isDangerousHostEnvVarName("AWS_SHARED_CREDENTIALS_FILE")).toBe(true);
-    expect(isDangerousHostEnvVarName("aws_web_identity_token_file")).toBe(true);
-    expect(isDangerousHostEnvVarName("AZURE_AUTH_LOCATION")).toBe(true);
+    expect(isDangerousHostEnvVarName("KUBECONFIG")).toBe(false);
+    expect(isDangerousHostEnvVarName("google_application_credentials")).toBe(false);
+    expect(isDangerousHostEnvVarName("AWS_SHARED_CREDENTIALS_FILE")).toBe(false);
+    expect(isDangerousHostEnvVarName("aws_web_identity_token_file")).toBe(false);
+    expect(isDangerousHostEnvVarName("AZURE_AUTH_LOCATION")).toBe(false);
     expect(isDangerousHostEnvVarName("CC")).toBe(true);
     expect(isDangerousHostEnvVarName("cxx")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc_wrapper")).toBe(true);
-    expect(isDangerousHostEnvVarName("cargo_home")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_home")).toBe(false);
     expect(isDangerousHostEnvVarName("CMAKE_C_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_cxx_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("rustc_wrapper")).toBe(true);
-    expect(isDangerousHostEnvVarName("HELM_HOME")).toBe(true);
+    expect(isDangerousHostEnvVarName("HELM_HOME")).toBe(false);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
@@ -212,7 +212,7 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("SSL_CERT_DIR")).toBe(false);
     expect(isDangerousHostEnvVarName("requests_ca_bundle")).toBe(false);
     expect(isDangerousHostEnvVarName("CURL_CA_BUNDLE")).toBe(false);
-    expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(true);
+    expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(false);
     expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(false);
     expect(isDangerousHostEnvVarName("DOCKER_TLS_VERIFY")).toBe(false);
     expect(isDangerousHostEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(false);
@@ -271,10 +271,18 @@ describe("sanitizeHostExecEnv", () => {
       OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
       PATH: "/usr/bin:/bin",
       AWS_CONFIG_FILE: "/tmp/aws-config",
+      KUBECONFIG: "/tmp/kubeconfig",
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/gcp.json",
+      AWS_SHARED_CREDENTIALS_FILE: "/tmp/aws-credentials",
+      AWS_WEB_IDENTITY_TOKEN_FILE: "/tmp/aws-web-token",
+      AZURE_AUTH_LOCATION: "/tmp/azure-auth.json",
+      CARGO_HOME: "/tmp/cargo",
+      HELM_HOME: "/tmp/helm",
       HTTP_PROXY: "http://proxy.example.test:8080",
       HTTPS_PROXY: "http://proxy.example.test:8443",
       SSL_CERT_FILE: "/tmp/evil-cert.pem",
       SSL_CERT_DIR: "/tmp/evil-cert-dir",
+      DOCKER_HOST: "tcp://docker.example.test:2376",
       OK: "1",
     });
   });
