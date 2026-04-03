@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 
 vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
@@ -99,14 +100,13 @@ let runReplyAgent: typeof import("./agent-runner.runtime.js").runReplyAgent;
 let routeReply: typeof import("./route-reply.runtime.js").routeReply;
 let drainFormattedSystemEvents: typeof import("./session-system-events.js").drainFormattedSystemEvents;
 let resolveTypingMode: typeof import("./typing-mode.js").resolveTypingMode;
+let loadScopeCounter = 0;
 
 async function loadFreshGetReplyRunModuleForTest() {
-  vi.resetModules();
-  ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
-  ({ routeReply } = await import("./route-reply.runtime.js"));
-  ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
-  ({ resolveTypingMode } = await import("./typing-mode.js"));
-  ({ runPreparedReply } = await import("./get-reply-run.js"));
+  ({ runPreparedReply } = await importFreshModule<typeof import("./get-reply-run.js")>(
+    import.meta.url,
+    `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
+  ));
 }
 
 function baseParams(
@@ -186,6 +186,13 @@ function baseParams(
 }
 
 describe("runPreparedReply media-only handling", () => {
+  beforeAll(async () => {
+    ({ runReplyAgent } = await import("./agent-runner.runtime.js"));
+    ({ routeReply } = await import("./route-reply.runtime.js"));
+    ({ drainFormattedSystemEvents } = await import("./session-system-events.js"));
+    ({ resolveTypingMode } = await import("./typing-mode.js"));
+  });
+
   beforeEach(async () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
