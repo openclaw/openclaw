@@ -360,6 +360,37 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.messageProvider).toBe("feishu");
   });
 
+  it("uses the effective session account for followup originatingAccountId when AccountId is omitted", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:24680",
+          ChatType: "group",
+          AccountId: undefined,
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "discord",
+          ChatType: "group",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:24680",
+          AccountId: "work",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.originatingAccountId).toBe("work");
+  });
+
   it("passes suppressTyping through typing mode resolution", async () => {
     await runPreparedReply(
       baseParams({

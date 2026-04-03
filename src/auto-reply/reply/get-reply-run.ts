@@ -526,7 +526,7 @@ export async function runPreparedReply(
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
-    originatingAccountId: ctx.AccountId,
+    originatingAccountId: sessionCtx.AccountId,
     originatingThreadId: ctx.MessageThreadId,
     originatingChatType: ctx.ChatType,
     run: {
