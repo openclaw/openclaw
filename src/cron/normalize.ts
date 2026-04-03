@@ -1,3 +1,4 @@
+import { SAFE_SESSION_ID_RE } from "../config/sessions/paths.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
@@ -313,6 +314,9 @@ function unwrapJob(raw: UnknownRecord) {
 export function normalizeCronCustomSessionId(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed || trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+    return undefined;
+  }
+  if (!SAFE_SESSION_ID_RE.test(trimmed)) {
     return undefined;
   }
   return trimmed;

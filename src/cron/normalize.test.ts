@@ -604,6 +604,28 @@ describe("normalizeCronJobCreate", () => {
 
     expect(normalized.sessionTarget).toBe("isolated");
   });
+
+  it("rejects custom session ids with backslash", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "custom-session-backslash",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:bad\\id",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+  });
+
+  it("rejects custom session ids with NUL byte", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "custom-session-nul",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "session:bad\0id",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+  });
 });
 
 describe("normalizeCronJobPatch", () => {
