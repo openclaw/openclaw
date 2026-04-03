@@ -346,6 +346,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     errorMessage?: string,
     requestText?: string,
     replyText?: string,
+    toolCalls?: { name: string; input: string }[],
   ) => {
     if (!params.onLlmCallComplete) {
       return;
@@ -376,6 +377,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       ...(errorMessage ? { errorMessage } : {}),
       ...(requestText ? { requestText } : {}),
       ...(replyText ? { replyText } : {}),
+      ...(toolCalls?.length ? { toolCalls } : {}),
     });
   };
   const recordAssistantUsage = (usageLike: unknown) => {

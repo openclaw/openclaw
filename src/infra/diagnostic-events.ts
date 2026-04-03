@@ -59,6 +59,8 @@ export type DiagnosticModelCallEvent = DiagnosticBaseEvent & {
   costUsd?: number;
   requestText?: string;
   replyText?: string;
+  /** Tool calls executed in this LLM response (max 240 chars per input). */
+  toolCalls?: { name: string; input: string }[];
 };
 
 export type DiagnosticToolCallEvent = DiagnosticBaseEvent & {
