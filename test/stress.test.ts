@@ -16,9 +16,11 @@
 /**
  * @slow 标记说明
  *
- * 这些测试需要较长时间运行，不适合在每次 commit 时执行
+ * 这些测试需要较长时间运行,不适合在每次 commit 时执行
  * 只在 nightly build 或手动触发时运行
  */
+
+import { describe, it, expect } from "vitest";
 
 describe("Stress Tests (Optional)", () => {
   describe.skip("Concurrent Operations", () => {
