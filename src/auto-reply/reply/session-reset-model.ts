@@ -89,6 +89,7 @@ function applySelectionToSession(params: {
     selection,
     profileOverride,
     profileOverrideSource,
+    persistDefaultSelection: true,
   });
   if (!updated) {
     return;

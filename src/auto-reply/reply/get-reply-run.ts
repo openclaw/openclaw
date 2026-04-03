@@ -518,6 +518,9 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  const exactModelSelection = Boolean(
+    sessionEntry?.providerOverride?.trim() || sessionEntry?.modelOverride?.trim(),
+  );
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
@@ -556,6 +559,7 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
+      exactModelSelection,
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,

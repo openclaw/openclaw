@@ -191,8 +191,8 @@ describe("applyResetModelOverride", () => {
       defaultModel: "gpt-5.3-codex-spark",
     });
 
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.modelOverride).toBe("gpt-5.3-codex-spark");
     expect(sessionEntry.authProfileOverride).toBe("openai-codex:default");
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(sessionCtx.BodyStripped).toBe("summarize");

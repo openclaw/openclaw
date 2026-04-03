@@ -543,6 +543,16 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe("work");
   });
 
+  it("persists an explicit default-model selection", async () => {
+    const { sessionEntry } = await persistModelDirectiveForTest({
+      command: "/model claude-opus-4-5",
+      allowedModelKeys: ["anthropic/claude-opus-4-5", "openai/gpt-4o"],
+    });
+
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+    expect(sessionEntry.modelOverride).toBe("claude-opus-4-5");
+  });
+
   it("ignores invalid mixed-content model directives during persistence", async () => {
     const { persisted, sessionEntry } = await persistModelDirectiveForTest({
       command: "/model 99 hello",

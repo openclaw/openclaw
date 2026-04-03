@@ -12,6 +12,18 @@ function applyOpenAiSelection(entry: SessionEntry) {
   });
 }
 
+function applyOpenAiDefaultSelection(entry: SessionEntry) {
+  return applyModelOverrideToSessionEntry({
+    entry,
+    selection: {
+      provider: "openai",
+      model: "gpt-5.2",
+      isDefault: true,
+    },
+    persistDefaultSelection: true,
+  });
+}
+
 function expectRuntimeModelFieldsCleared(entry: SessionEntry, before: number) {
   expect(entry.providerOverride).toBe("openai");
   expect(entry.modelOverride).toBe("gpt-5.2");
@@ -116,5 +128,25 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.modelOverride).toBeUndefined();
     expect(entry.contextTokens).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("can persist an explicit default-model selection", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-5",
+      updatedAt: before,
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 4_096,
+    };
+
+    const result = applyOpenAiDefaultSelection(entry);
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("openai");
+    expect(entry.modelOverride).toBe("gpt-5.2");
+    expect(entry.modelProvider).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.contextTokens).toBeUndefined();
   });
 });

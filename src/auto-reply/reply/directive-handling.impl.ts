@@ -416,6 +416,7 @@ export async function handleDirectiveOnly(
         selection: modelSelection,
         profileOverride,
         profileOverrideSource,
+        persistDefaultSelection: true,
       });
       modelSelectionUpdated = applied.updated;
     }

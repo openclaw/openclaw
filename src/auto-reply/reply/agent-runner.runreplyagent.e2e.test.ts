@@ -1290,6 +1290,50 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("warns and suppresses replies when an explicit model selection runs on a different model", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.3-codex-spark",
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "user",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "wrong-model reply" }],
+      meta: {
+        agentMeta: {
+          provider: "openai-codex",
+          model: "gpt-5.4",
+        },
+      },
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      runOverrides: {
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+        authProfileId: "openai-codex:default",
+        authProfileIdSource: "user",
+        exactModelSelection: true,
+      },
+    });
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+
+    expect(payload?.text).toContain("Requested model openai-codex/gpt-5.3-codex-spark");
+    expect(payload?.text).toContain("runtime used openai-codex/gpt-5.4");
+    expect(payload?.text).not.toContain("wrong-model reply");
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBe("openai-codex/gpt-5.3-codex-spark");
+    expect(sessionEntry.fallbackNoticeActiveModel).toBe("openai-codex/gpt-5.4");
+    expect(sessionEntry.fallbackNoticeReason).toBe("selected model unavailable");
+  });
+
   it("retries after compaction failure by resetting the session", async () => {
     await withTempStateDir(async (stateDir) => {
       const sessionId = "session";

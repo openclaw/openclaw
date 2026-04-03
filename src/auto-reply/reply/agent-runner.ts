@@ -480,6 +480,7 @@ export async function runReplyAgent(params: {
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const selectedProvider = followupRun.run.provider;
     const selectedModel = followupRun.run.model;
+    const exactModelSelection = followupRun.run.exactModelSelection === true;
     const fallbackStateEntry =
       activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
     const fallbackTransition = resolveFallbackTransition({
@@ -540,6 +541,27 @@ export async function runReplyAgent(params: {
       cliSessionBinding,
       usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
     });
+
+    const exactSelectionMismatch =
+      exactModelSelection &&
+      (providerUsed.trim() !== selectedProvider.trim() ||
+        modelUsed.trim() !== selectedModel.trim());
+    if (exactSelectionMismatch) {
+      const requestedModelRef = `${selectedProvider}/${selectedModel}`;
+      const activeModelRef = `${providerUsed}/${modelUsed}`;
+      const authProfileLabel = followupRun.run.authProfileId?.trim();
+      const authClause = authProfileLabel ? ` on ${authProfileLabel}` : "";
+      return finalizeWithFollowup(
+        {
+          text:
+            `⚠️ Requested model ${requestedModelRef}${authClause}, but runtime used ${activeModelRef}. ` +
+            "No reply was sent from the fallback model. Selection unchanged.",
+          isError: true,
+        },
+        queueKey,
+        runFollowupTurn,
+      );
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and

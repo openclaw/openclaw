@@ -11,13 +11,15 @@ export function applyModelOverrideToSessionEntry(params: {
   selection: ModelOverrideSelection;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
+  persistDefaultSelection?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
+  const persistDefaultSelection = params.persistDefaultSelection === true;
   let updated = false;
   let selectionUpdated = false;
 
-  if (selection.isDefault) {
+  if (selection.isDefault && !persistDefaultSelection) {
     if (entry.providerOverride) {
       delete entry.providerOverride;
       updated = true;
