@@ -29,6 +29,7 @@ import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
+import { maybeInjectAgentCompactionPressureSignal } from "./agent-compaction-pressure.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -40,7 +41,6 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
-import { maybeInjectAgentCompactionPressureSignal } from "./agent-compaction-pressure.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -464,12 +464,7 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  if (!memoryFlushPlan) {
-    return params.sessionEntry;
-  }
-
-  // Agent-controlled compaction: inject pressure signal instead of running memory flush
+  // Agent-controlled compaction: inject pressure signal regardless of memory plugin
   const compactionMode = params.cfg?.agents?.defaults?.compaction?.mode;
   if (compactionMode === "agent") {
     return maybeInjectAgentCompactionPressureSignal({
@@ -479,6 +474,12 @@ export async function runMemoryFlushIfNeeded(params: {
       defaultModel: params.defaultModel,
       agentCfgContextTokens: params.agentCfgContextTokens,
     });
+  }
+
+  // Non-agent compaction paths require a memory flush plan
+  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  if (!memoryFlushPlan) {
+    return params.sessionEntry;
   }
 
   const memoryFlushWritable = (() => {
