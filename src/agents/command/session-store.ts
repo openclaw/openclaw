@@ -126,7 +126,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
   const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
+    // Omit status from next so that the terminal status already written to disk
+    // by persistGatewaySessionLifecycleEvent is not clobbered by a stale
+    // in-memory "running" value. The in-memory sessionStore is loaded during
+    // session initialisation (before the run) and never updated by the lifecycle
+    // handler, so it can still carry status: "running" by the time this
+    // post-run write executes — even though the lifecycle end event has already
+    // persisted a terminal status (#60250).
+    const { status: _status, ...patch } = next;
+    const merged = mergeSessionEntry(store[sessionKey], patch);
     store[sessionKey] = merged;
     return merged;
   });
