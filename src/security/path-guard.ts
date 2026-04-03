@@ -135,7 +135,15 @@ export async function checkPathGuardStrict(
         const remainder = splitIndex >= 0 ? normalizedEntryPattern.slice(splitIndex) : normalizedEntryPattern;
         try {
           const canonicalDirPrefix = toPosixPath(await resolveRealPathStrict(dirPrefix));
-          const rewrittenPattern = `${canonicalDirPrefix}${remainder}`;
+
+          // Normalize slash joining so root-prefixed patterns don't become //**/*.pem.
+          const rewrittenPattern =
+            canonicalDirPrefix.endsWith("/") && remainder.startsWith("/")
+              ? `${canonicalDirPrefix}${remainder.slice(1)}`
+              : canonicalDirPrefix.endsWith("/") || remainder.startsWith("/")
+                ? `${canonicalDirPrefix}${remainder}`
+                : `${canonicalDirPrefix}/${remainder}`;
+
           return minimatch(normalizedRealPath, rewrittenPattern, {
             dot: true,
             magicalBraces: true,
