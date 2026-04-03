@@ -55,22 +55,42 @@ export type ConfigDocBaseline = {
   pluginEntries: ConfigDocBaselineEntry[];
 };
 
-export type ConfigDocBaselineStatefileRender = {
-  json: string;
-  jsonl: string;
-  baseline: ConfigDocBaseline;
+export type ConfigDocBaselineKindBaseline = {
+  generatedBy: "scripts/generate-config-doc-baseline.ts";
+  kind: ConfigDocBaselineKind;
+  entries: ConfigDocBaselineEntry[];
 };
 
-export type ConfigDocBaselineStatefileWriteResult = {
+export type ConfigDocBaselineArtifacts = {
+  combined: string;
+  core: string;
+  channel: string;
+  plugin: string;
+};
+
+export type ConfigDocBaselineArtifactsRender = {
+  baseline: ConfigDocBaseline;
+  json: ConfigDocBaselineArtifacts;
+};
+
+export type ConfigDocBaselineArtifactPaths = {
+  combined: string;
+  core: string;
+  channel: string;
+  plugin: string;
+};
+
+export type ConfigDocBaselineArtifactsWriteResult = {
   changed: boolean;
   wrote: boolean;
-  jsonPath: string;
-  statefilePath: string;
+  jsonPaths: ConfigDocBaselineArtifactPaths;
 };
 
 const GENERATED_BY = "scripts/generate-config-doc-baseline.ts" as const;
-const DEFAULT_JSON_OUTPUT = "docs/.generated/config-baseline.json";
-const DEFAULT_STATEFILE_OUTPUT = "docs/.generated/config-baseline.jsonl";
+const DEFAULT_COMBINED_OUTPUT = "docs/.generated/config-baseline.json";
+const DEFAULT_CORE_OUTPUT = "docs/.generated/config-baseline.core.json";
+const DEFAULT_CHANNEL_OUTPUT = "docs/.generated/config-baseline.channel.json";
+const DEFAULT_PLUGIN_OUTPUT = "docs/.generated/config-baseline.plugin.json";
 let cachedConfigDocBaselinePromise: Promise<ConfigDocBaseline> | null = null;
 const uiHintIndexCache = new WeakMap<
   ConfigSchemaResponse["uiHints"],
@@ -534,29 +554,33 @@ export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   }
 }
 
-export async function renderConfigDocBaselineStatefile(
-  baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
-): Promise<ConfigDocBaselineStatefileRender> {
-  const start = Date.now();
-  logConfigDocBaselineDebug("render statefile start");
-  const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
-  const entries = flattenConfigDocBaselineEntries(resolvedBaseline);
-  const json = `${JSON.stringify(resolvedBaseline, null, 2)}\n`;
-  const metadataLine = JSON.stringify({
+function renderKindBaseline(
+  kind: ConfigDocBaselineKind,
+  entries: ConfigDocBaselineEntry[],
+): string {
+  const baseline: ConfigDocBaselineKindBaseline = {
     generatedBy: GENERATED_BY,
-    recordType: "meta",
-    totalPaths: entries.length,
-  });
-  const entryLines = entries.map((entry) =>
-    JSON.stringify({
-      recordType: "path",
-      ...entry,
-    }),
-  );
-  logConfigDocBaselineDebug(`render statefile done elapsedMs=${Date.now() - start}`);
+    kind,
+    entries,
+  };
+  return `${JSON.stringify(baseline, null, 2)}\n`;
+}
+
+export async function renderConfigDocBaselineArtifacts(
+  baseline?: ConfigDocBaseline | Promise<ConfigDocBaseline>,
+): Promise<ConfigDocBaselineArtifactsRender> {
+  const start = Date.now();
+  logConfigDocBaselineDebug("render artifacts start");
+  const resolvedBaseline = baseline ? await baseline : await buildConfigDocBaseline();
+  const json: ConfigDocBaselineArtifacts = {
+    combined: `${JSON.stringify(resolvedBaseline, null, 2)}\n`,
+    core: renderKindBaseline("core", resolvedBaseline.coreEntries),
+    channel: renderKindBaseline("channel", resolvedBaseline.channelEntries),
+    plugin: renderKindBaseline("plugin", resolvedBaseline.pluginEntries),
+  };
+  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
   return {
     json,
-    jsonl: `${[metadataLine, ...entryLines].join("\n")}\n`,
     baseline: resolvedBaseline,
   };
 }
@@ -579,49 +603,72 @@ async function writeIfChanged(filePath: string, next: string): Promise<boolean> 
   return true;
 }
 
-export async function writeConfigDocBaselineStatefile(params?: {
+function resolveBaselineArtifactPaths(
+  repoRoot: string,
+  params?: {
+    combinedPath?: string;
+    corePath?: string;
+    channelPath?: string;
+    pluginPath?: string;
+  },
+): ConfigDocBaselineArtifactPaths {
+  return {
+    combined: path.resolve(repoRoot, params?.combinedPath ?? DEFAULT_COMBINED_OUTPUT),
+    core: path.resolve(repoRoot, params?.corePath ?? DEFAULT_CORE_OUTPUT),
+    channel: path.resolve(repoRoot, params?.channelPath ?? DEFAULT_CHANNEL_OUTPUT),
+    plugin: path.resolve(repoRoot, params?.pluginPath ?? DEFAULT_PLUGIN_OUTPUT),
+  };
+}
+
+export async function writeConfigDocBaselineArtifacts(params?: {
   repoRoot?: string;
   check?: boolean;
-  jsonPath?: string;
-  statefilePath?: string;
-  rendered?: ConfigDocBaselineStatefileRender | Promise<ConfigDocBaselineStatefileRender>;
-}): Promise<ConfigDocBaselineStatefileWriteResult> {
+  combinedPath?: string;
+  corePath?: string;
+  channelPath?: string;
+  pluginPath?: string;
+  rendered?: ConfigDocBaselineArtifactsRender | Promise<ConfigDocBaselineArtifactsRender>;
+}): Promise<ConfigDocBaselineArtifactsWriteResult> {
   const start = Date.now();
-  logConfigDocBaselineDebug("write statefile start");
+  logConfigDocBaselineDebug("write artifacts start");
   const repoRoot = params?.repoRoot ?? resolveRepoRoot();
-  const jsonPath = path.resolve(repoRoot, params?.jsonPath ?? DEFAULT_JSON_OUTPUT);
-  const statefilePath = path.resolve(repoRoot, params?.statefilePath ?? DEFAULT_STATEFILE_OUTPUT);
+  const jsonPaths = resolveBaselineArtifactPaths(repoRoot, params);
   const rendered = params?.rendered
     ? await params.rendered
-    : await renderConfigDocBaselineStatefile();
-  logConfigDocBaselineDebug(`render statefile done elapsedMs=${Date.now() - start}`);
-  logConfigDocBaselineDebug(`read current json start ${jsonPath}`);
-  const currentJson = await readIfExists(jsonPath);
-  logConfigDocBaselineDebug(`read current json done elapsedMs=${Date.now() - start}`);
-  logConfigDocBaselineDebug(`read current statefile start ${statefilePath}`);
-  const currentStatefile = await readIfExists(statefilePath);
-  logConfigDocBaselineDebug(`read current statefile done elapsedMs=${Date.now() - start}`);
-  const changed = currentJson !== rendered.json || currentStatefile !== rendered.jsonl;
+    : await renderConfigDocBaselineArtifacts();
+  logConfigDocBaselineDebug(`render artifacts done elapsedMs=${Date.now() - start}`);
+
+  const current = await Promise.all(
+    Object.entries(jsonPaths).map(async ([key, filePath]) => [key, await readIfExists(filePath)]),
+  );
+  const currentByKey = Object.fromEntries(current) as Record<
+    keyof ConfigDocBaselineArtifacts,
+    string | null
+  >;
+  const changed = (Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>).some(
+    (key) => currentByKey[key] !== rendered.json[key],
+  );
   logConfigDocBaselineDebug(
-    `compare statefile done changed=${changed} elapsedMs=${Date.now() - start}`,
+    `compare artifacts done changed=${changed} elapsedMs=${Date.now() - start}`,
   );
 
   if (params?.check) {
     return {
       changed,
       wrote: false,
-      jsonPath,
-      statefilePath,
+      jsonPaths,
     };
   }
 
-  const wroteJson = await writeIfChanged(jsonPath, rendered.json);
-  const wroteStatefile = await writeIfChanged(statefilePath, rendered.jsonl);
+  const wroteResults = await Promise.all(
+    (Object.keys(jsonPaths) as Array<keyof ConfigDocBaselineArtifacts>).map((key) =>
+      writeIfChanged(jsonPaths[key], rendered.json[key]),
+    ),
+  );
   return {
     changed,
-    wrote: wroteJson || wroteStatefile,
-    jsonPath,
-    statefilePath,
+    wrote: wroteResults.some(Boolean),
+    jsonPaths,
   };
 }
 
