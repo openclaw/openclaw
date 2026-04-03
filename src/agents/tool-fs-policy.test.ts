@@ -140,6 +140,52 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "messenger" })).toBe(false);
   });
 
+  it("blocks global fs expansion when agent has explicit alsoAllow restriction", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        fs: { workspaceOnly: false },
+      },
+      agents: {
+        list: [
+          {
+            id: "restricted",
+            tools: {
+              alsoAllow: [],
+            },
+          },
+        ],
+      },
+    };
+
+    // Agent explicitly set alsoAllow:[] — global tools.fs should not grant
+    // implicit read/write/edit for this agent's media path.
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "restricted" })).toBe(false);
+  });
+
+  it("allows agent fs expansion when agent has own fs config with explicit alsoAllow", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+      },
+      agents: {
+        list: [
+          {
+            id: "mixed",
+            tools: {
+              alsoAllow: [],
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    };
+
+    // Agent has explicit alsoAllow:[] but also its own fs config — agent-level
+    // fs should still grant implicit read/write/edit.
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "mixed" })).toBe(true);
+  });
+
   it("honors agent workspaceOnly overrides over global fs opt-in", () => {
     const cfg: OpenClawConfig = {
       tools: {

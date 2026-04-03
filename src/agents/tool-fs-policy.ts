@@ -46,7 +46,13 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   const profile = agentTools?.profile ?? globalTools?.profile;
   const profileAlsoAllow = new Set(agentTools?.alsoAllow ?? globalTools?.alsoAllow ?? []);
   const fsConfig = resolveToolFsConfig(params);
-  const hasExplicitFsConfig = agentTools?.fs !== undefined || globalTools?.fs !== undefined;
+  // When agent has explicit alsoAllow, global fs config should not grant
+  // implicit read/write/edit — only agent-level fs config should. This
+  // prevents the media read path from bypassing agent tool restrictions.
+  const agentHasExplicitAlsoAllow = agentTools?.alsoAllow !== undefined;
+  const hasExplicitFsConfig =
+    agentTools?.fs !== undefined ||
+    (globalTools?.fs !== undefined && !agentHasExplicitAlsoAllow);
   if (fsConfig.workspaceOnly === true) {
     return false;
   }
