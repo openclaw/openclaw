@@ -417,6 +417,13 @@ export type GatewayConfig = {
    * Default: false (safer fail-closed behavior).
    */
   allowRealIpFallback?: boolean;
+  /**
+   * A2A (Agent-to-Agent) Protocol server configuration.
+   * When enabled, exposes a JSON-RPC 2.0 endpoint at /a2a and an
+   * Agent Card at /.well-known/agent.json for cross-network agent
+   * discovery and task exchange per the A2A specification.
+   */
+  a2a?: GatewayA2aConfig;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
   /** WebChat display/history settings. */
@@ -439,4 +446,48 @@ export type GatewayConfig = {
    * the rolling window expires. Default: 10.
    */
   channelMaxRestartsPerHour?: number;
+};
+
+// ---------------------------------------------------------------------------
+// A2A (Agent-to-Agent) Protocol types
+// ---------------------------------------------------------------------------
+
+export type GatewayA2aSkill = {
+  /** Unique skill identifier (e.g. "summarize", "translate"). */
+  id: string;
+  /** Human-readable skill name. */
+  name: string;
+  /** Description of what this skill does. */
+  description?: string;
+  /** JSON Schema describing the expected input. */
+  inputSchema?: Record<string, unknown>;
+};
+
+export type GatewayA2aAuthConfig = {
+  /** API key required for incoming A2A requests. */
+  apiKey?: SecretInput;
+  /** Accept Bearer tokens (e.g. OAuth2 / JWT). */
+  bearerTokens?: boolean;
+};
+
+export type GatewayA2aConfig = {
+  /** Enable the A2A server endpoint (default: false). */
+  enabled?: boolean;
+  /** Human-readable name for the Agent Card (defaults to first agent name). */
+  name?: string;
+  /** Description for the Agent Card. */
+  description?: string;
+  /** Public URL for the A2A endpoint (used in Agent Card; auto-detected if omitted). */
+  url?: string;
+  /** Provider organization info for the Agent Card. */
+  provider?: {
+    name?: string;
+    url?: string;
+  };
+  /** Skills to advertise in the Agent Card. */
+  skills?: GatewayA2aSkill[];
+  /** Authentication configuration for incoming A2A requests. */
+  auth?: GatewayA2aAuthConfig;
+  /** Target agent ID to route incoming A2A tasks to (defaults to default agent). */
+  targetAgentId?: string;
 };

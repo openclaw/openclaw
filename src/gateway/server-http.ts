@@ -78,6 +78,7 @@ import {
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { handleA2aAgentCardRequest, handleA2aJsonRpcRequest } from "./a2a-http.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
@@ -862,6 +863,19 @@ export function createGatewayHttpServer(opts: {
             }),
         },
       ];
+      // A2A Protocol endpoints (Agent Card + JSON-RPC).
+      // These run early and handle their own auth so they are not gated by
+      // the standard gateway auth flow.
+      requestStages.push(
+        {
+          name: "a2a-agent-card",
+          run: () => handleA2aAgentCardRequest(req, res),
+        },
+        {
+          name: "a2a-jsonrpc",
+          run: () => handleA2aJsonRpcRequest(req, res),
+        },
+      );
       if (openResponsesEnabled) {
         requestStages.push({
           name: "openresponses",
