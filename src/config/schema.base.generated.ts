@@ -8548,7 +8548,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               maxPingPongTurns: {
                 type: "integer",
                 minimum: 0,
-                maximum: 5,
+                maximum: 20,
               },
             },
             additionalProperties: false,
@@ -14124,7 +14124,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "session.agentToAgent.maxPingPongTurns": {
       label: "Agent-to-Agent Ping-Pong Turns",
-      help: "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
+      help: "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-20, default 5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
       tags: ["performance", "storage"],
     },
     "session.threadBindings": {

@@ -61561,7 +61561,7 @@
         "storage"
       ],
       "label": "Agent-to-Agent Ping-Pong Turns",
-      "help": "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
+      "help": "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-20, default 5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
       "hasChildren": false
     },
     {
