@@ -4,11 +4,14 @@ import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../../src/security/
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyMock = Mock<DispatchReplyWithBufferedBlockDispatcherFn>;
 
 type DiscordComponentRuntimeMocks = {
   buildPluginBindingResolvedTextMock: UnknownMock;
   dispatchPluginInteractiveHandlerMock: AsyncUnknownMock;
-  dispatchReplyMock: UnknownMock;
+  dispatchReplyMock: DispatchReplyMock;
   enqueueSystemEventMock: UnknownMock;
   readAllowFromStoreMock: AsyncUnknownMock;
   readSessionUpdatedAtMock: UnknownMock;
@@ -22,7 +25,7 @@ const runtimeMocks = vi.hoisted(
   (): DiscordComponentRuntimeMocks => ({
     buildPluginBindingResolvedTextMock: vi.fn(),
     dispatchPluginInteractiveHandlerMock: vi.fn(),
-    dispatchReplyMock: vi.fn(),
+    dispatchReplyMock: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(),
     enqueueSystemEventMock: vi.fn(),
     readAllowFromStoreMock: vi.fn(),
     readSessionUpdatedAtMock: vi.fn(),
@@ -36,7 +39,7 @@ const runtimeMocks = vi.hoisted(
 export const readAllowFromStoreMock: AsyncUnknownMock = runtimeMocks.readAllowFromStoreMock;
 export const dispatchPluginInteractiveHandlerMock: AsyncUnknownMock =
   runtimeMocks.dispatchPluginInteractiveHandlerMock;
-export const dispatchReplyMock: UnknownMock = runtimeMocks.dispatchReplyMock;
+export const dispatchReplyMock: DispatchReplyMock = runtimeMocks.dispatchReplyMock;
 export const enqueueSystemEventMock: UnknownMock = runtimeMocks.enqueueSystemEventMock;
 export const upsertPairingRequestMock: AsyncUnknownMock = runtimeMocks.upsertPairingRequestMock;
 export const recordInboundSessionMock: AsyncUnknownMock = runtimeMocks.recordInboundSessionMock;
@@ -104,7 +107,7 @@ vi.mock("../monitor/agent-components.runtime.js", () => {
     ),
     dispatchPluginInteractiveHandler: (...args: unknown[]) =>
       dispatchPluginInteractiveHandlerMock(...args),
-    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
+    dispatchReplyWithBufferedBlockDispatcher: dispatchReplyMock,
     finalizeInboundContext: vi.fn((ctx) => ctx),
     parsePluginBindingApprovalCustomId,
     recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),

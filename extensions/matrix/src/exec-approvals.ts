@@ -54,24 +54,18 @@ function countMatrixExecApprovalEligibleAccounts(params: {
       cfg: params.cfg,
       accountId,
     });
-    const filters = config?.enabled
-      ? {
-          agentFilter: config.agentFilter,
-          sessionFilter: config.sessionFilter,
-        }
-      : {
-          agentFilter: undefined,
-          sessionFilter: undefined,
-        };
+    if (!config?.enabled) {
+      return false;
+    }
     return (
       isChannelExecApprovalClientEnabledFromConfig({
-        enabled: config?.enabled,
+        enabled: config.enabled,
         approverCount: getMatrixExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
       }) &&
       matchesApprovalRequestFilters({
         request: params.request.request,
-        agentFilter: filters.agentFilter,
-        sessionFilter: filters.sessionFilter,
+        agentFilter: config.agentFilter,
+        sessionFilter: config.sessionFilter,
       })
     );
   }).length;
