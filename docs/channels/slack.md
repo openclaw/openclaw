@@ -392,7 +392,7 @@ Notes:
 ## Manifest and scope checklist
 
 <AccordionGroup>
-  <Accordion title="Slack app manifest example">
+  <Accordion title="Slack app manifest example" defaultOpen>
 
 ```json
 {
