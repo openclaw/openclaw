@@ -362,6 +362,29 @@ describe("hook handler timeout", () => {
     expect(result?.blockReason).toBe("denied");
   });
 
+  it("does not timeout before_install hooks (install security gate)", async () => {
+    addTestHook({
+      registry,
+      pluginId: "slow-scanner",
+      hookName: "before_install",
+      handler: (() =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve({ block: true, blockReason: "unsafe package" }), 5000);
+        })) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, { hookTimeoutMs: 100, catchErrors: true });
+    const promise = runner.runBeforeInstall(
+      { targetName: "test-plugin", targetType: "plugin" } as never,
+      { origin: "test" } as never,
+    );
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const result = await promise;
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toBe("unsafe package");
+  });
+
   // -- Memory-critical hooks (dedicated 2-minute timeout) --
 
   it("allows before_agent_start handlers up to the memory timeout (120 s)", async () => {

@@ -167,13 +167,14 @@ const MEMORY_HOOK_NAMES: ReadonlySet<PluginHookName> = new Set([
 /**
  * Hooks exempt from the per-handler timeout.
  *
- * Security/policy gates (message_sending, before_tool_call) — must never
- * be silently skipped because `handleHookError` would swallow the error
- * and allow the action through (fail-open).
+ * Security/policy gates (message_sending, before_tool_call, before_install)
+ * — must never be silently skipped because their callers treat errors as
+ * non-fatal (fail-open), so a timeout would allow the guarded action through.
  */
 const TIMEOUT_EXEMPT_HOOKS: ReadonlySet<PluginHookName> = new Set([
   "message_sending",
   "before_tool_call",
+  "before_install",
 ]);
 
 export type HookRunnerOptions = {
