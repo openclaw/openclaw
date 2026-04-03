@@ -74,24 +74,6 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
   } as OpenClawConfig;
 }
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
-    "openclaw/plugin-sdk/plugin-runtime",
-  );
-  return {
-    ...actual,
-    getPluginCommandSpecs: getPluginCommandSpecsMock,
-  };
-});
-
-vi.mock("../voice/manager.runtime.js", () => {
-  voiceRuntimeModuleLoadedMock();
-  return {
-    DiscordVoiceManager: class DiscordVoiceManager {},
-    DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
-  };
-});
-
 describe("monitorDiscordProvider", () => {
   type ReconcileHealthProbeParams = {
     cfg: OpenClawConfig;
@@ -140,6 +122,22 @@ describe("monitorDiscordProvider", () => {
   };
 
   beforeAll(async () => {
+    vi.doMock("openclaw/plugin-sdk/plugin-runtime", async () => {
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+        "openclaw/plugin-sdk/plugin-runtime",
+      );
+      return {
+        ...actual,
+        getPluginCommandSpecs: getPluginCommandSpecsMock,
+      };
+    });
+    vi.doMock("../voice/manager.runtime.js", () => {
+      voiceRuntimeModuleLoadedMock();
+      return {
+        DiscordVoiceManager: class DiscordVoiceManager {},
+        DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+      };
+    });
     vi.doMock("../accounts.js", () => ({
       resolveDiscordAccount: (...args: Parameters<typeof resolveDiscordAccountMock>) =>
         resolveDiscordAccountMock(...args),
