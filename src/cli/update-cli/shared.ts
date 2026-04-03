@@ -16,6 +16,7 @@ import {
   type CommandRunner,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
+import type { PackageManager } from "../../infra/update-check.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -239,6 +240,7 @@ export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
+  preferredManager?: PackageManager;
 }): Promise<GlobalInstallManager> {
   const runCommand = createGlobalCommandRunner();
 
@@ -250,6 +252,13 @@ export async function resolveGlobalManager(params: {
     );
     if (detected) {
       return detected;
+    }
+    if (
+      params.preferredManager === "npm" ||
+      params.preferredManager === "pnpm" ||
+      params.preferredManager === "bun"
+    ) {
+      return params.preferredManager;
     }
   }
 

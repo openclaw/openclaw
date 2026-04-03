@@ -338,6 +338,7 @@ async function tryInstallShellCompletion(opts: {
 async function runPackageInstallUpdate(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
+  packageManager?: "pnpm" | "bun" | "npm" | "unknown";
   tag: string;
   timeoutMs: number;
   startedAt: number;
@@ -347,6 +348,7 @@ async function runPackageInstallUpdate(params: {
     root: params.root,
     installKind: params.installKind,
     timeoutMs: params.timeoutMs,
+    preferredManager: params.packageManager,
   });
   const installEnv = await createGlobalInstallEnv();
   const runCommand = createGlobalCommandRunner();
@@ -983,6 +985,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       ? await runPackageInstallUpdate({
           root,
           installKind,
+          packageManager: updateStatus.packageManager,
           tag,
           timeoutMs: timeoutMs ?? 20 * 60_000,
           startedAt,
