@@ -18,4 +18,4 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
   }
 }
 
-export { applySqliteMmapPragma } from "../../../../src/infra/node-sqlite.js";
+export { applySqliteMmapPragma } from "openclaw/plugin-sdk/infra-sqlite";

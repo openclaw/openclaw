@@ -25,6 +25,7 @@ import {
   resolveConfigEnvVars,
 } from "./env-substitution.js";
 import { applyConfigEnvVars } from "./env-vars.js";
+import { applySqliteMmapConfigBridge } from "../infra/node-sqlite.js";
 import {
   ConfigIncludeError,
   readConfigIncludeFileWithGuards,
@@ -1817,6 +1818,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       applyConfigEnvVars(cfg, deps.env);
+      applySqliteMmapConfigBridge(cfg, deps.env);
 
       const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
       if (enabled && !shouldDeferShellEnvFallback(deps.env)) {

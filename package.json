@@ -135,6 +135,10 @@
       "types": "./dist/plugin-sdk/infra-runtime.d.ts",
       "default": "./dist/plugin-sdk/infra-runtime.js"
     },
+    "./plugin-sdk/infra-sqlite": {
+      "types": "./dist/plugin-sdk/infra-sqlite.d.ts",
+      "default": "./dist/plugin-sdk/infra-sqlite.js"
+    },
     "./plugin-sdk/runtime-config-snapshot": {
       "types": "./dist/plugin-sdk/runtime-config-snapshot.d.ts",
       "default": "./dist/plugin-sdk/runtime-config-snapshot.js"
