@@ -45,7 +45,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: native Vitest `projects` via `vitest.projects.config.ts` (`unit` + `boundary`)
+- Config: native Vitest `projects` via `vitest.config.ts` (`unit` + `boundary`)
 - Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
 - Scope:
   - Pure unit tests
@@ -56,7 +56,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Projects note:
-  - `pnpm test`, `pnpm test:projects`, and `pnpm test:watch` all invoke the same native Vitest `projects` config now.
+  - `pnpm test` and `pnpm test:watch` both use the same native Vitest `projects` config now.
   - The tiny script wrapper only strips pnpm's passthrough separator; scheduling stays native Vitest.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
@@ -74,7 +74,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Unit and boundary projects stay on `forks`.
   - Channel, extension, and gateway configs also stay on `forks`.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
-  - `pnpm test` inherits the isolation defaults from `vitest.projects.config.ts`.
+  - `pnpm test` inherits the isolation defaults from the root `vitest.config.ts` projects config.
   - Opt back into unit-file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
 - Fast-local iteration note:

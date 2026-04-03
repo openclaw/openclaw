@@ -3,7 +3,10 @@ import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
+import {
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+} from "../../config/sessions/inbound.runtime.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 

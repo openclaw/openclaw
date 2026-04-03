@@ -982,7 +982,7 @@ describe("secrets runtime snapshot", () => {
     expect(second?.search.selectedProvider).toBe("gemini");
   });
 
-  it("resolves model provider request secret refs for headers and auth", async () => {
+  it("resolves model provider request secret refs for headers, auth, and tls material", async () => {
     const config = asConfig({
       models: {
         providers: {
@@ -996,6 +996,17 @@ describe("secrets runtime snapshot", () => {
                 mode: "authorization-bearer",
                 token: { source: "env", provider: "default", id: "OPENAI_PROVIDER_TOKEN" },
               },
+              proxy: {
+                mode: "explicit-proxy",
+                url: "http://proxy.example:8080",
+                tls: {
+                  ca: { source: "env", provider: "default", id: "OPENAI_PROVIDER_PROXY_CA" },
+                },
+              },
+              tls: {
+                cert: { source: "env", provider: "default", id: "OPENAI_PROVIDER_CERT" },
+                key: { source: "env", provider: "default", id: "OPENAI_PROVIDER_KEY" },
+              },
             },
             models: [],
           },
@@ -1008,6 +1019,9 @@ describe("secrets runtime snapshot", () => {
       env: {
         OPENAI_PROVIDER_TENANT: "tenant-acme",
         OPENAI_PROVIDER_TOKEN: "sk-provider-runtime", // pragma: allowlist secret
+        OPENAI_PROVIDER_PROXY_CA: "proxy-ca",
+        OPENAI_PROVIDER_CERT: "client-cert",
+        OPENAI_PROVIDER_KEY: "client-key",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({ version: 1, profiles: {} }),
@@ -1020,6 +1034,17 @@ describe("secrets runtime snapshot", () => {
       auth: {
         mode: "authorization-bearer",
         token: "sk-provider-runtime",
+      },
+      proxy: {
+        mode: "explicit-proxy",
+        url: "http://proxy.example:8080",
+        tls: {
+          ca: "proxy-ca",
+        },
+      },
+      tls: {
+        cert: "client-cert",
+        key: "client-key",
       },
     });
   });
@@ -1192,7 +1217,7 @@ describe("secrets runtime snapshot", () => {
     const ignoredInactiveWarnings = snapshot.warnings.filter(
       (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
     );
-    expect(ignoredInactiveWarnings).toHaveLength(10);
+    expect(ignoredInactiveWarnings).toHaveLength(6);
     expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
       expect.arrayContaining([
         "agents.defaults.memorySearch.remote.apiKey",
@@ -1201,10 +1226,6 @@ describe("secrets runtime snapshot", () => {
         "channels.telegram.accounts.disabled.botToken",
         "plugins.entries.brave.config.webSearch.apiKey",
         "plugins.entries.google.config.webSearch.apiKey",
-        "plugins.entries.xai.config.webSearch.apiKey",
-        "plugins.entries.moonshot.config.webSearch.apiKey",
-        "plugins.entries.perplexity.config.webSearch.apiKey",
-        "plugins.entries.firecrawl.config.webSearch.apiKey",
       ]),
     );
   });

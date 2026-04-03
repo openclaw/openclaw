@@ -23,17 +23,6 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
-import {
-  buildChannelConfigSchema,
-  buildProbeChannelStatusSummary,
-  chunkTextForOutbound,
-  createActionGate,
-  createDefaultChannelRuntimeState,
-  DEFAULT_ACCOUNT_ID,
-  PAIRING_APPROVED_MESSAGE,
-} from "../runtime-api.js";
-import type { ChannelMessageActionName } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
   resolveFeishuAccount,
@@ -44,6 +33,21 @@ import {
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
+import {
+  buildChannelConfigSchema,
+  buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
+  createActionGate,
+  createDefaultChannelRuntimeState,
+  DEFAULT_ACCOUNT_ID,
+  PAIRING_APPROVED_MESSAGE,
+} from "./channel-runtime-api.js";
+import type {
+  ChannelMessageActionName,
+  ChannelMeta,
+  ChannelPlugin,
+  ClawdbotConfig,
+} from "./channel-runtime-api.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {

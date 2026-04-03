@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import baseConfig, { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
 
 describe("resolveLocalVitestMaxWorkers", () => {
-  it("derives a moderate local cap for 64 GiB hosts", () => {
+  it("uses a moderate local worker cap on larger hosts", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {
@@ -57,7 +57,7 @@ describe("resolveLocalVitestMaxWorkers", () => {
     ).toBe(2);
   });
 
-  it("lets roomy hosts use a higher default cap", () => {
+  it("lets roomy hosts use more local parallelism", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {},

@@ -1,16 +1,5 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadConfig } from "../config/config.js";
-import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
-import {
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "../gateway/session-utils.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   isValidAgentId,
@@ -18,6 +7,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+<<<<<<< feature/pathguard-39672
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -25,12 +15,13 @@ import { combineToolFsPolicies, resolveToolFsConfig } from "./tool-fs-policy.js"
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+=======
+>>>>>>> main
 import {
   mapToolContextToSpawnedRunMetadata,
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
   materializeSubagentAttachments,
@@ -39,12 +30,31 @@ import {
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
-import { readStringParam } from "./tools/common.js";
 import {
+  ADMIN_SCOPE,
+  AGENT_LANE_SUBAGENT,
+  DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  buildSubagentSystemPrompt,
+  callGateway,
+  emitSessionLifecycleEvent,
+  formatThinkingLevels,
+  getGlobalHookRunner,
+  loadConfig,
+  mergeSessionEntry,
+  normalizeDeliveryContext,
+  normalizeThinkLevel,
+  pruneLegacyStoreKeys,
+  resolveAgentConfig,
   resolveDisplaySessionKey,
+  resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
-} from "./tools/sessions-helpers.js";
+  resolveSandboxRuntimeStatus,
+  resolveSubagentSpawnModelSelection,
+  updateSessionStore,
+  isAdminOnlyMethod,
+} from "./subagent-spawn.runtime.js";
+import { readStringParam } from "./tools/common.js";
 
 export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];

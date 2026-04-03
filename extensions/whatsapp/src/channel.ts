@@ -1,7 +1,8 @@
+import { createRequire } from "node:module";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
+import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -12,8 +13,6 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
-import { handleWhatsAppAction } from "./action-runtime.js";
-import { createWhatsAppLoginTool } from "./agent-tools-login.js";
 import { whatsappApprovalAuth } from "./approval-auth.js";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import {
@@ -43,7 +42,6 @@ import {
   normalizeWhatsAppTarget,
 } from "./runtime-api.js";
 import { getWhatsAppRuntime } from "./runtime.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
@@ -53,6 +51,31 @@ import {
   WHATSAPP_CHANNEL,
 } from "./shared.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
+
+type WhatsAppSendModule = typeof import("./send.js");
+type WhatsAppActionRuntimeModule = typeof import("./action-runtime.js");
+
+let whatsAppSendModulePromise: Promise<WhatsAppSendModule> | undefined;
+let whatsAppActionRuntimeModulePromise: Promise<WhatsAppActionRuntimeModule> | undefined;
+let whatsAppAgentToolsModuleCache: typeof import("./agent-tools-login.js") | null = null;
+
+const require = createRequire(import.meta.url);
+
+async function loadWhatsAppSendModule() {
+  whatsAppSendModulePromise ??= import("./send.js");
+  return await whatsAppSendModulePromise;
+}
+
+async function loadWhatsAppActionRuntimeModule() {
+  whatsAppActionRuntimeModulePromise ??= import("./action-runtime.js");
+  return await whatsAppActionRuntimeModulePromise;
+}
+
+function loadWhatsAppAgentToolsModule() {
+  whatsAppAgentToolsModuleCache ??=
+    require("./agent-tools-login.js") as typeof import("./agent-tools-login.js");
+  return whatsAppAgentToolsModuleCache;
+}
 
 function normalizeWhatsAppPayloadText(text: string | undefined): string {
   return (text ?? "").replace(/^(?:[ \t]*\r?\n)+/, "");
@@ -125,8 +148,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
     outbound: {
       ...createWhatsAppOutboundBase({
         chunker: chunkText,
-        sendMessageWhatsApp,
-        sendPollWhatsApp,
+        sendMessageWhatsApp: async (...args) =>
+          await (await loadWhatsAppSendModule()).sendMessageWhatsApp(...args),
+        sendPollWhatsApp: async (...args) =>
+          await (await loadWhatsAppSendModule()).sendPollWhatsApp(...args),
         shouldLogVerbose: () => getWhatsAppRuntime().logging.shouldLogVerbose(),
         resolveTarget: ({ to, allowFrom, mode }) =>
           resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
@@ -148,7 +173,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         isConfigured: async (account) =>
           await (await loadWhatsAppChannelRuntime()).webAuthExists(account.authDir),
       }),
-      agentTools: () => [createWhatsAppLoginTool()],
+      agentTools: () => [loadWhatsAppAgentToolsModule().createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({
         channelId: "whatsapp",
         resolveAccount: resolveWhatsAppAccount,
@@ -260,7 +285,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           const messageId = String(messageIdRaw);
           const emoji = readStringParam(params, "emoji", { allowEmpty: true });
           const remove = typeof params.remove === "boolean" ? params.remove : undefined;
-          return await handleWhatsAppAction(
+          return await (
+            await loadWhatsAppActionRuntimeModule()
+          ).handleWhatsAppAction(
             {
               action: "react",
               chatJid:

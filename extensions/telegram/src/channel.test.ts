@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import * as auditModule from "./audit.js";
@@ -217,6 +217,33 @@ describe("telegramPlugin messaging", () => {
         rawId: "-1001",
       }),
     ).toBeNull();
+  });
+});
+
+describe("telegramPlugin threading", () => {
+  it("honors per-account replyToMode overrides", () => {
+    const resolveReplyToMode = telegramPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("Expected telegramPlugin.threading.resolveReplyToMode to be defined");
+    }
+
+    const cfg = {
+      channels: {
+        telegram: {
+          replyToMode: "all",
+          botToken: "token-default",
+          accounts: {
+            work: {
+              botToken: "token-work",
+              replyToMode: "first",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
+    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
   });
 });
 

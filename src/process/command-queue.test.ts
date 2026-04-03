@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { CommandLane } from "./lanes.js";
 
@@ -74,6 +74,7 @@ describe("command queue", () => {
   });
 
   beforeEach(() => {
+    vi.useRealTimers();
     resetCommandQueueStateForTest();
     // Queue state is global across module instances, so reset main lane
     // concurrency explicitly to avoid cross-file leakage.
@@ -83,6 +84,10 @@ describe("command queue", () => {
     diagnosticMocks.diag.debug.mockClear();
     diagnosticMocks.diag.warn.mockClear();
     diagnosticMocks.diag.error.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("resetAllLanes is safe when no lanes have been created", () => {

@@ -6,6 +6,8 @@ import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
+const PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS = 60_000;
+
 export class ChatLog extends Container {
   private readonly maxComponents: number;
   private toolById = new Map<string, ToolExecutionComponent>();
@@ -156,7 +158,9 @@ export class ChatLog extends Container {
       }
       const matchIndex = normalizedHistory.findIndex(
         (historyEntry) =>
-          historyEntry.text === pendingText && (historyEntry.timestamp ?? 0) >= entry.createdAt,
+          historyEntry.text === pendingText &&
+          (historyEntry.timestamp ?? 0) >=
+            entry.createdAt - PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS,
       );
       if (matchIndex === -1) {
         continue;

@@ -23,6 +23,15 @@ type BindingReadiness = Awaited<
 type ReplyDispatcher = Parameters<
   PluginRuntime["channel"]["reply"]["withReplyDispatcher"]
 >[0]["dispatcher"];
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends (...args: never[]) => unknown
+    ? T[K]
+    : T[K] extends ReadonlyArray<unknown>
+      ? T[K]
+      : T[K] extends object
+        ? DeepPartial<T[K]>
+        : T[K];
+};
 
 function createReplyDispatcher(): ReplyDispatcher {
   return {
@@ -163,20 +172,7 @@ function createUnboundConfiguredRoute(
   return { bindingResolution: null, route };
 }
 
-const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
-  mockResolveAgentRoute(params);
-const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSessionUpdatedAt"] = (
-  params,
-) => mockReadSessionUpdatedAt(params);
-const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
-  mockResolveStorePath(params);
-const resolveEnvelopeFormatOptionsMock = () => ({});
-const finalizeInboundContextMock = (ctx: Record<string, unknown>) => ctx;
-const withReplyDispatcherMock = async ({
-  run,
-}: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
-
-function createBotTestRuntime(): PluginRuntime {
+function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   return {
     channel: {
       routing: {
@@ -206,9 +202,28 @@ function createBotTestRuntime(): PluginRuntime {
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
       },
+      ...(overrides.channel ?? {}),
     },
+<<<<<<< feature/pathguard-39672
+=======
+    ...(overrides.system ? { system: overrides.system as PluginRuntime["system"] } : {}),
+    ...(overrides.media ? { media: overrides.media as PluginRuntime["media"] } : {}),
+>>>>>>> main
   } as unknown as PluginRuntime;
 }
+
+const resolveAgentRouteMock: PluginRuntime["channel"]["routing"]["resolveAgentRoute"] = (params) =>
+  mockResolveAgentRoute(params);
+const readSessionUpdatedAtMock: PluginRuntime["channel"]["session"]["readSessionUpdatedAt"] = (
+  params,
+) => mockReadSessionUpdatedAt(params);
+const resolveStorePathMock: PluginRuntime["channel"]["session"]["resolveStorePath"] = (params) =>
+  mockResolveStorePath(params);
+const resolveEnvelopeFormatOptionsMock = () => ({});
+const finalizeInboundContextMock = (ctx: Record<string, unknown>) => ctx;
+const withReplyDispatcherMock = async ({
+  run,
+}: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => await run();
 
 const {
   mockCreateFeishuReplyDispatcher,
@@ -331,7 +346,7 @@ describe("handleFeishuMessage ACP routing", () => {
       markDispatchIdle: vi.fn(),
     });
 
-    setFeishuRuntime(createBotTestRuntime());
+    setFeishuRuntime(createFeishuBotRuntime());
   });
 
   it("ensures configured ACP routes for Feishu DMs", async () => {
@@ -500,33 +515,37 @@ describe("handleFeishuMessage command authorization", () => {
       },
     });
     mockEnqueueSystemEvent.mockReset();
-    setFeishuRuntime({
-      system: {
-        enqueueSystemEvent: mockEnqueueSystemEvent,
-      },
-      channel: {
-        routing: {
-          resolveAgentRoute: resolveAgentRouteMock,
+    setFeishuRuntime(
+      createFeishuBotRuntime({
+        system: {
+          enqueueSystemEvent: mockEnqueueSystemEvent,
         },
-        session: {
-          readSessionUpdatedAt: readSessionUpdatedAtMock,
-          resolveStorePath: resolveStorePathMock,
-        },
-        reply: {
-          resolveEnvelopeFormatOptions:
-            resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
-          formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
-          finalizeInboundContext: mockFinalizeInboundContext as never,
-          dispatchReplyFromConfig: mockDispatchReplyFromConfig,
-          withReplyDispatcher: mockWithReplyDispatcher as never,
-        },
-        commands: {
-          shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
-          resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+        channel: {
+          reply: {
+            resolveEnvelopeFormatOptions:
+              resolveEnvelopeFormatOptionsMock as unknown as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: mockFinalizeInboundContext as never,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher as never,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          },
+          pairing: {
+            readAllowFromStore: mockReadAllowFromStore,
+            upsertPairingRequest: mockUpsertPairingRequest,
+            buildPairingReply: mockBuildPairingReply,
+          },
+          media: {
+            saveMediaBuffer: mockSaveMediaBuffer,
+          },
         },
         media: {
-          saveMediaBuffer: mockSaveMediaBuffer,
+          detectMime: vi.fn(async () => "application/octet-stream"),
         },
+<<<<<<< feature/pathguard-39672
         pairing: {
           readAllowFromStore: mockReadAllowFromStore,
           upsertPairingRequest: mockUpsertPairingRequest,
@@ -537,6 +556,10 @@ describe("handleFeishuMessage command authorization", () => {
         detectMime: vi.fn(async () => "application/octet-stream"),
       },
     } as unknown as PluginRuntime);
+=======
+      }),
+    );
+>>>>>>> main
   });
 
   it("does not enqueue inbound preview text as system events", async () => {
@@ -1648,7 +1671,7 @@ describe("handleFeishuMessage command authorization", () => {
           get: mockGetMerged,
         },
       },
-    });
+    } as unknown as PluginRuntime);
 
     const cfg: ClawdbotConfig = {
       channels: {

@@ -499,11 +499,14 @@ const telegramCommandTestPlugin: ChannelPlugin = {
       if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
         return undefined;
       }
+      if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
+        return undefined;
+      }
       if (
         isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
         !getTelegramExecApprovalApprovers({ cfg, accountId }).includes(senderId?.trim() ?? "")
       ) {
-        return { kind: "ignore" } as const;
+        return undefined;
       }
       return {
         kind: "reply",
@@ -1014,7 +1017,7 @@ describe("/approve command", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("ignores Telegram /approve from exec target recipients when native approvals are disabled", async () => {
+  it("accepts Telegram /approve from exec target recipients when native approvals are disabled", async () => {
     const cfg = {
       commands: { text: true },
       approvals: {
@@ -1041,8 +1044,13 @@ describe("/approve command", () => {
 
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
-    expect(result.reply).toBeUndefined();
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
   });
 
   it("requires configured Discord approvers for exec approvals", async () => {
@@ -2006,6 +2014,7 @@ describe("handleCommands /allowlist", () => {
                 commands: { text: true, config: true },
                 channels: { telegram: { allowFrom: ["123"] } },
               } as OpenClawConfig);
+              params.command.senderIsOwner = true;
               const result = await handleCommands(params);
 
               expect(result.shouldContinue).toBe(false);
@@ -2048,6 +2057,7 @@ describe("handleCommands /allowlist", () => {
               AccountId: "work",
             },
           );
+          params.command.senderIsOwner = true;
           const result = await handleCommands(params);
 
           expect(result.shouldContinue, "selected account scope").toBe(false);
@@ -2087,11 +2097,47 @@ describe("handleCommands /allowlist", () => {
       Provider: "telegram",
       Surface: "telegram",
     });
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
 
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
     expect(writeConfigFileMock.mock.calls.length).toBe(previousWriteCount);
+  });
+
+  it("blocks allowlist writes from authorized non-owner senders, including cross-channel targets", async () => {
+    const cfg = {
+      commands: {
+        text: true,
+        config: true,
+        allowFrom: { telegram: ["*"] },
+        ownerAllowFrom: ["discord:owner-discord-id"],
+      },
+      channels: {
+        telegram: { allowFrom: ["*"], configWrites: true },
+        discord: { allowFrom: ["owner-discord-id"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    const params = buildPolicyParams(
+      "/allowlist add dm --channel discord attacker-discord-id",
+      cfg,
+      {
+        Provider: "telegram",
+        Surface: "telegram",
+        SenderId: "telegram-attacker",
+        From: "telegram-attacker",
+      },
+    );
+
+    expect(params.command.isAuthorizedSender).toBe(true);
+    expect(params.command.senderIsOwner).toBe(false);
+
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply).toBeUndefined();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
   it("removes default-account entries from scoped and legacy pairing stores", async () => {
@@ -2110,6 +2156,7 @@ describe("handleCommands /allowlist", () => {
       channels: { telegram: { allowFrom: ["123"] } },
     } as OpenClawConfig;
     const params = buildPolicyParams("/allowlist remove dm --store 789", cfg);
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
 
     expect(result.shouldContinue).toBe(false);
@@ -2132,6 +2179,7 @@ describe("handleCommands /allowlist", () => {
       channels: { telegram: { allowFrom: ["123"] } },
     } as OpenClawConfig;
     const params = buildPolicyParams("/allowlist add dm --account __proto__ 789", cfg);
+    params.command.senderIsOwner = true;
     const result = await handleCommands(params);
 
     expect(result.shouldContinue).toBe(false);
@@ -2191,6 +2239,7 @@ describe("handleCommands /allowlist", () => {
           Provider: testCase.provider,
           Surface: testCase.provider,
         });
+        params.command.senderIsOwner = true;
         const result = await handleCommands(params);
 
         expect(result.shouldContinue).toBe(false);

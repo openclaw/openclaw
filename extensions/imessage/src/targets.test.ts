@@ -8,6 +8,7 @@ import {
 } from "./group-policy.js";
 import { probeIMessage } from "./probe.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
+import { imessageDmPolicy } from "./setup-core.js";
 import {
   formatIMessageChatTarget,
   inferIMessageTargetChatType,
@@ -177,6 +178,58 @@ describe("parseIMessageAllowFromEntries", () => {
       entries: [],
       error: "Invalid chat_identifier entry",
     });
+  });
+
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      imessageDmPolicy.getCurrent(
+        {
+          channels: {
+            imessage: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  cliPath: "imsg",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(imessageDmPolicy.resolveConfigKeys?.({ channels: { imessage: {} } }, "work")).toEqual({
+      policyKey: "channels.imessage.accounts.work.dmPolicy",
+      allowFromKey: "channels.imessage.accounts.work.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = imessageDmPolicy.setPolicy(
+      {
+        channels: {
+          imessage: {
+            allowFrom: ["+15555550123"],
+            accounts: {
+              work: {
+                cliPath: "imsg",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
+    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
+    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });
 
