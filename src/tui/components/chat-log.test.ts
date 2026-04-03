@@ -138,12 +138,23 @@ describe("ChatLog", () => {
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 
+  it("reconciles pending users when the gateway clock is slightly behind the client", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello", 65_000);
+
+    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", timestamp: 20_000 }])).toEqual([
+      "run-1",
+    ]);
+    expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
   it("does not hide a new repeated prompt when only older history matches", () => {
     const chatLog = new ChatLog(40);
 
     chatLog.addPendingUser("run-1", "continue", 5_000);
 
-    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: 4_000 }])).toEqual([]);
+    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: -56_000 }])).toEqual([]);
     expect(chatLog.countPendingUsers()).toBe(1);
   });
 });
