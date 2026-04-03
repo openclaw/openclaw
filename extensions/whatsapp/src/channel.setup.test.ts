@@ -52,9 +52,13 @@ vi.mock("openclaw/plugin-sdk/setup", () => {
   };
 });
 
-vi.mock("./accounts.js", () => ({
-  resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
-}));
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
+  return {
+    ...actual,
+    resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
+  };
+});
 
 function createRuntime(): RuntimeEnv {
   return {
