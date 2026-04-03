@@ -106,7 +106,7 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
-  it("keeps telegram fetch transport coverage in extensions while excluding other telegram channel suites", () => {
+  it("keeps telegram plugin tests in extensions while excluding channel-surface plugin roots", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
     expect(
       extensionExcludes.some((pattern) => path.matchesGlob("telegram/src/fetch.test.ts", pattern)),
@@ -116,11 +116,9 @@ describe("scoped vitest configs", () => {
         path.matchesGlob("telegram/src/bot/delivery.resolve-media-retry.test.ts", pattern),
       ),
     ).toBe(false);
-    expect(defaultChannelsConfig.test?.exclude).toContain(
+    expect(defaultChannelsConfig.test?.include).not.toContain("extensions/telegram/**/*.test.ts");
+    expect(defaultChannelsConfig.test?.exclude).not.toContain(
       bundledPluginFile("telegram", "src/fetch.test.ts"),
-    );
-    expect(defaultChannelsConfig.test?.exclude).toContain(
-      bundledPluginFile("telegram", "src/bot/delivery.resolve-media-retry.test.ts"),
     );
     expect(defaultExtensionsConfig.test?.setupFiles).toEqual(["test/setup.extensions.ts"]);
   });

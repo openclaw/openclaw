@@ -58,7 +58,6 @@ const targetedChannelProxyFiles = [
   ...sharedTargetedChannelProxyFiles,
   bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
   bundledPluginFile("discord", "src/monitor/monitor.agent-components.test.ts"),
-  bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
   bundledPluginFile("whatsapp", "src/monitor-inbox.streams-inbound-messages.test.ts"),
 ];
 
@@ -447,10 +446,10 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).not.toContain("vitest.unit.config.ts");
   });
 
-  it("routes telegram fetch transport coverage through the extensions config", () => {
+  it("routes telegram plugin coverage through the extensions config", () => {
     const output = runPlannerPlan([
       "--explain",
-      bundledPluginFile("telegram", "src/fetch.test.ts"),
+      bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
     ]);
 
     expect(output).toContain("surface=extensions");
