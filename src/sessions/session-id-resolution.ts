@@ -2,25 +2,66 @@ import type { SessionEntry } from "../config/sessions.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
 
 type SessionIdMatch = [string, SessionEntry];
+type NormalizedSessionIdMatch = {
+  sessionKey: string;
+  entry: SessionEntry;
+  normalizedSessionKey: string;
+  normalizedRequestKey: string;
+  isCanonicalSessionKey: boolean;
+  isStructural: boolean;
+};
 
-function compareUpdatedAtDescending(a: SessionIdMatch, b: SessionIdMatch): number {
-  return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+export type SessionIdMatchSelection =
+  | { kind: "none" }
+  | { kind: "ambiguous"; sessionKeys: string[] }
+  | { kind: "selected"; sessionKey: string };
+
+function normalizeLookupKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function compareNormalizedUpdatedAtDescending(
+  a: NormalizedSessionIdMatch,
+  b: NormalizedSessionIdMatch,
+): number {
+  return (b.entry?.updatedAt ?? 0) - (a.entry?.updatedAt ?? 0);
 }
 
 function compareStoreKeys(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function collapseAliasMatches(matches: SessionIdMatch[]): SessionIdMatch[] {
-  const grouped = new Map<string, SessionIdMatch[]>();
+function normalizeSessionIdMatches(
+  matches: SessionIdMatch[],
+  normalizedSessionId: string,
+): NormalizedSessionIdMatch[] {
+  return matches.map(([sessionKey, entry]) => {
+    const normalizedSessionKey = normalizeLookupKey(sessionKey);
+    const normalizedRequestKey = normalizeLookupKey(
+      toAgentRequestSessionKey(sessionKey) ?? sessionKey,
+    );
+    return {
+      sessionKey,
+      entry,
+      normalizedSessionKey,
+      normalizedRequestKey,
+      isCanonicalSessionKey: sessionKey === normalizedSessionKey,
+      isStructural:
+        normalizedSessionKey.endsWith(`:${normalizedSessionId}`) ||
+        normalizedRequestKey === normalizedSessionId ||
+        normalizedRequestKey.endsWith(`:${normalizedSessionId}`),
+    };
+  });
+}
+
+function collapseAliasMatches(matches: NormalizedSessionIdMatch[]): NormalizedSessionIdMatch[] {
+  const grouped = new Map<string, NormalizedSessionIdMatch[]>();
   for (const match of matches) {
-    const requestKey = toAgentRequestSessionKey(match[0]) ?? match[0];
-    const normalizedRequestKey = requestKey.trim().toLowerCase();
-    const bucket = grouped.get(normalizedRequestKey);
+    const bucket = grouped.get(match.normalizedRequestKey);
     if (bucket) {
       bucket.push(match);
     } else {
-      grouped.set(normalizedRequestKey, [match]);
+      grouped.set(match.normalizedRequestKey, [match]);
     }
   }
 
@@ -29,66 +70,68 @@ function collapseAliasMatches(matches: SessionIdMatch[]): SessionIdMatch[] {
       return group[0];
     }
     return [...group].toSorted((a, b) => {
-      const timeDiff = compareUpdatedAtDescending(a, b);
+      const timeDiff = compareNormalizedUpdatedAtDescending(a, b);
       if (timeDiff !== 0) {
         return timeDiff;
       }
-      const aNormalizedKey = a[0].trim().toLowerCase();
-      const bNormalizedKey = b[0].trim().toLowerCase();
-      const aIsCanonical = a[0] === aNormalizedKey;
-      const bIsCanonical = b[0] === bNormalizedKey;
-      if (aIsCanonical !== bIsCanonical) {
-        return aIsCanonical ? -1 : 1;
+      if (a.isCanonicalSessionKey !== b.isCanonicalSessionKey) {
+        return a.isCanonicalSessionKey ? -1 : 1;
       }
-      return compareStoreKeys(aNormalizedKey, bNormalizedKey);
+      return compareStoreKeys(a.normalizedSessionKey, b.normalizedSessionKey);
     })[0];
   });
+}
+
+function selectFreshestUniqueMatch(
+  matches: NormalizedSessionIdMatch[],
+): NormalizedSessionIdMatch | undefined {
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  const sortedMatches = [...matches].toSorted(compareNormalizedUpdatedAtDescending);
+  const [freshest, secondFreshest] = sortedMatches;
+  if ((freshest?.entry?.updatedAt ?? 0) > (secondFreshest?.entry?.updatedAt ?? 0)) {
+    return freshest;
+  }
+  return undefined;
+}
+
+export function resolveSessionIdMatchSelection(
+  matches: Array<[string, SessionEntry]>,
+  sessionId: string,
+): SessionIdMatchSelection {
+  if (matches.length === 0) {
+    return { kind: "none" };
+  }
+
+  const canonicalMatches = collapseAliasMatches(
+    normalizeSessionIdMatches(matches, normalizeLookupKey(sessionId)),
+  );
+  if (canonicalMatches.length === 1) {
+    return { kind: "selected", sessionKey: canonicalMatches[0].sessionKey };
+  }
+
+  const structuralMatches = canonicalMatches.filter((match) => match.isStructural);
+  const selectedStructuralMatch = selectFreshestUniqueMatch(structuralMatches);
+  if (selectedStructuralMatch) {
+    return { kind: "selected", sessionKey: selectedStructuralMatch.sessionKey };
+  }
+  if (structuralMatches.length > 1) {
+    return { kind: "ambiguous", sessionKeys: structuralMatches.map((match) => match.sessionKey) };
+  }
+
+  const selectedCanonicalMatch = selectFreshestUniqueMatch(canonicalMatches);
+  if (selectedCanonicalMatch) {
+    return { kind: "selected", sessionKey: selectedCanonicalMatch.sessionKey };
+  }
+
+  return { kind: "ambiguous", sessionKeys: canonicalMatches.map((match) => match.sessionKey) };
 }
 
 export function resolvePreferredSessionKeyForSessionIdMatches(
   matches: Array<[string, SessionEntry]>,
   sessionId: string,
 ): string | undefined {
-  if (matches.length === 0) {
-    return undefined;
-  }
-  if (matches.length === 1) {
-    return matches[0][0];
-  }
-
-  const loweredSessionId = sessionId.trim().toLowerCase();
-  const canonicalMatches = collapseAliasMatches(matches);
-  if (canonicalMatches.length === 1) {
-    return canonicalMatches[0][0];
-  }
-  const structuralMatches = canonicalMatches.filter(([storeKey]) => {
-    const requestKey = toAgentRequestSessionKey(storeKey)?.toLowerCase();
-    return (
-      storeKey.toLowerCase().endsWith(`:${loweredSessionId}`) ||
-      requestKey === loweredSessionId ||
-      requestKey?.endsWith(`:${loweredSessionId}`) === true
-    );
-  });
-  if (structuralMatches.length === 1) {
-    return structuralMatches[0][0];
-  }
-
-  const structuralSorted = [...structuralMatches].toSorted(compareUpdatedAtDescending);
-  const [freshestStructural, secondFreshestStructural] = structuralSorted;
-  if (structuralMatches.length > 1) {
-    if (
-      (freshestStructural?.[1]?.updatedAt ?? 0) > (secondFreshestStructural?.[1]?.updatedAt ?? 0)
-    ) {
-      return freshestStructural[0];
-    }
-    return undefined;
-  }
-
-  const sortedMatches = [...canonicalMatches].toSorted(compareUpdatedAtDescending);
-  const [freshest, secondFreshest] = sortedMatches;
-  if ((freshest?.[1]?.updatedAt ?? 0) > (secondFreshest?.[1]?.updatedAt ?? 0)) {
-    return freshest[0];
-  }
-
-  return undefined;
+  const selection = resolveSessionIdMatchSelection(matches, sessionId);
+  return selection.kind === "selected" ? selection.sessionKey : undefined;
 }

@@ -6,15 +6,22 @@ import {
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./scripts/lib/bundled-plugin-paths.mjs";
 import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
-import { resolveLocalVitestMaxWorkers } from "./scripts/test-planner/runtime-profile.mjs";
-import {
-  behaviorManifestPath,
-  unitMemoryHotspotManifestPath,
-  unitTimingManifestPath,
-} from "./scripts/test-runner-manifest.mjs";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
-export { resolveLocalVitestMaxWorkers };
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function parsePositiveInt(value) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function resolveLocalVitestMaxWorkers(env = process.env, _system = undefined) {
+  const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+  if (override !== null) {
+    return clamp(override, 1, 16);
+  }
+  return 1;
+}
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
@@ -55,12 +62,7 @@ export default defineConfig({
       "test/setup.ts",
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
-      "scripts/test-parallel.mjs",
-      "scripts/test-planner/catalog.mjs",
-      "scripts/test-planner/executor.mjs",
-      "scripts/test-planner/planner.mjs",
-      "scripts/test-planner/runtime-profile.mjs",
-      "scripts/test-runner-manifest.mjs",
+      "scripts/test-projects.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.bundled.config.ts",
@@ -71,12 +73,10 @@ export default defineConfig({
       "vitest.gateway.config.ts",
       "vitest.live.config.ts",
       "vitest.performance-config.ts",
+      "vitest.projects.config.ts",
       "vitest.scoped-config.ts",
       "vitest.unit.config.ts",
       "vitest.unit-paths.mjs",
-      behaviorManifestPath,
-      unitTimingManifestPath,
-      unitMemoryHotspotManifestPath,
     ],
     include: [
       "src/**/*.test.ts",

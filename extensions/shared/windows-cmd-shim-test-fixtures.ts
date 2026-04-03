@@ -1,1 +1,1 @@
-export { createWindowsCmdShimFixture } from "openclaw/plugin-sdk/testing";
+export { createWindowsCmdShimFixture } from "../../src/test-helpers/windows-cmd-shim.js";

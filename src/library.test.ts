@@ -10,7 +10,7 @@ const lazyRuntimeSpecifiers = [
   "./cli/prompt.js",
   "./infra/binaries.js",
   "./process/exec.js",
-  "./plugins/runtime/runtime-web-channel-boundary.js",
+  "./plugins/runtime/runtime-web-channel-plugin.js",
 ] as const;
 
 function readLibraryModuleImports() {

@@ -8,7 +8,9 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async () => {}));
+const parseFeishuMessageEventMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1", chatId: "c1" })));
+const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
@@ -41,19 +43,17 @@ vi.mock("./monitor.transport.js", () => ({
   monitorWebhook: monitorWebhookMock,
 }));
 
-vi.mock("./bot.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot.js")>("./bot.js");
+vi.mock("./bot.js", () => {
   return {
-    ...actual,
     handleFeishuMessage: handleFeishuMessageMock,
+    parseFeishuMessageEvent: parseFeishuMessageEventMock,
   };
 });
 
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+vi.mock("./send.js", () => {
   return {
-    ...actual,
     sendCardFeishu: sendCardFeishuMock,
+    getMessageFeishu: getMessageFeishuMock,
   };
 });
 
