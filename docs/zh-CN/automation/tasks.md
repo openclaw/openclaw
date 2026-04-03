@@ -53,16 +53,17 @@ openclaw tasks audit
 
 ## 什么会创建任务
 
-| 来源 | 运行时类型 | 何时创建任务记录 | 默认通知策略 |
-| ---- | --------- | ---------------- | ----------- |
-| ACP 后台运行 | `acp` | 派生子 ACP 会话时 | `done_only` |
-| 子智能体编排 | `subagent` | 通过 `sessions_spawn` 派生子智能体时 | `done_only` |
-| 定时任务（所有类型）| `cron` | 每次定时任务执行时（主会话和隔离式）| `silent` |
-| CLI 操作 | `cli` | 通过 Gateway 运行的 `openclaw agent` 命令 | `silent` |
+| 来源                 | 运行时类型 | 何时创建任务记录                          | 默认通知策略 |
+| -------------------- | ---------- | ----------------------------------------- | ------------ |
+| ACP 后台运行         | `acp`      | 派生子 ACP 会话时                         | `done_only`  |
+| 子智能体编排         | `subagent` | 通过 `sessions_spawn` 派生子智能体时      | `done_only`  |
+| 定时任务（所有类型） | `cron`     | 每次定时任务执行时（主会话和隔离式）      | `silent`     |
+| CLI 操作             | `cli`      | 通过 Gateway 运行的 `openclaw agent` 命令 | `silent`     |
 
 主会话定时任务默认使用 `silent` 通知策略——它们为追踪创建记录，但不生成通知。隔离定时任务同样默认 `silent`，但因运行在独立会话中而更可见。
 
 **不会创建任务的操作：**
+
 - 心跳轮次（主会话；参见[心跳](/zh-CN/gateway/heartbeat)）
 - 普通交互式聊天轮次
 - 直接的 `/命令` 响应
@@ -81,15 +82,15 @@ stateDiagram-v2
     running --> lost : 会话消失 > 5分钟
 ```
 
-| 状态 | 含义 |
-| ---- | ---- |
-| `queued` | 已创建，等待智能体启动 |
-| `running` | 智能体轮次正在执行 |
-| `succeeded` | 成功完成 |
-| `failed` | 执行出错 |
-| `timed_out` | 超过配置的超时时间 |
+| 状态        | 含义                                      |
+| ----------- | ----------------------------------------- |
+| `queued`    | 已创建，等待智能体启动                    |
+| `running`   | 智能体轮次正在执行                        |
+| `succeeded` | 成功完成                                  |
+| `failed`    | 执行出错                                  |
+| `timed_out` | 超过配置的超时时间                        |
 | `cancelled` | 运维人员通过 `openclaw tasks cancel` 停止 |
-| `lost` | 后端子会话消失（5分钟宽限期后检测到）|
+| `lost`      | 后端子会话消失（5分钟宽限期后检测到）     |
 
 状态转换自动发生——关联的智能体运行结束时，任务状态自动更新。
 
@@ -109,11 +110,11 @@ stateDiagram-v2
 
 控制每个任务的通知频率：
 
-| 策略 | 投递内容 |
-| ---- | -------- |
-| `done_only`（默认）| 仅终态（succeeded、failed 等）——**这是默认值** |
-| `state_changes` | 每个状态转换和进度更新 |
-| `silent` | 什么都不发 |
+| 策略                | 投递内容                                       |
+| ------------------- | ---------------------------------------------- |
+| `done_only`（默认） | 仅终态（succeeded、failed 等）——**这是默认值** |
+| `state_changes`     | 每个状态转换和进度更新                         |
+| `silent`            | 什么都不发                                     |
 
 在任务运行中修改策略：
 
@@ -161,14 +162,14 @@ openclaw tasks audit [--json]
 
 暴露运维问题。发现的问题也会出现在 `openclaw status` 中。
 
-| 发现项 | 严重级别 | 触发条件 |
-| ------ | -------- | -------- |
-| `stale_queued` | warn | 排队超过10分钟 |
-| `stale_running` | error | 运行超过30分钟 |
-| `lost` | error | 后端会话已消失 |
-| `delivery_failed` | warn | 投递失败且通知策略非 `silent` |
-| `missing_cleanup` | warn | 终态任务无清理时间戳 |
-| `inconsistent_timestamps` | warn | 时间轴违规（例如结束时间早于开始时间）|
+| 发现项                    | 严重级别 | 触发条件                               |
+| ------------------------- | -------- | -------------------------------------- |
+| `stale_queued`            | warn     | 排队超过10分钟                         |
+| `stale_running`           | error    | 运行超过30分钟                         |
+| `lost`                    | error    | 后端会话已消失                         |
+| `delivery_failed`         | warn     | 投递失败且通知策略非 `silent`          |
+| `missing_cleanup`         | warn     | 终态任务无清理时间戳                   |
+| `inconsistent_timestamps` | warn     | 时间轴违规（例如结束时间早于开始时间） |
 
 ## 聊天任务看板（`/tasks`）
 
@@ -187,6 +188,7 @@ Tasks: 3 queued · 2 running · 1 issues
 ```
 
 摘要报告：
+
 - **active** — `queued` + `running` 的计数
 - **failures** — `failed` + `timed_out` + `lost` 的计数
 - **byRuntime** — 按 `acp`、`subagent`、`cron`、`cli` 的分类
