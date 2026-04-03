@@ -73,6 +73,70 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("deserializes string arguments back to objects for Ollama (round-trip fix)", () => {
+    // When tool calls round-trip through OpenAI-format storage, arguments
+    // are serialized as a JSON string.  Ollama expects an object.
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_2",
+            name: "Read",
+            arguments: '{"file_path":"/tmp/test.txt"}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "Read", arguments: { file_path: "/tmp/test.txt" } } },
+    ]);
+  });
+
+  it("handles tool_use blocks with string input (Anthropic format round-trip)", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "toolu_1", name: "exec", input: '{"command":"echo hello"}' },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "exec", arguments: { command: "echo hello" } } },
+    ]);
+  });
+
+  it("preserves unsafe integers as strings when replay args are deserialized", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_3",
+            name: "read",
+            arguments: '{"path":9223372036854775807,"nested":{"thread":1234567890123456789}}',
+          },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      {
+        function: {
+          name: "read",
+          arguments: {
+            path: "9223372036854775807",
+            nested: { thread: "1234567890123456789" },
+          },
+        },
+      },
+    ]);
+  });
   it("converts tool result messages with 'tool' role", () => {
     const messages = [{ role: "tool", content: "file1.txt\nfile2.txt" }];
     const result = convertToOllamaMessages(messages);
