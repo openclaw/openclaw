@@ -151,6 +151,68 @@ describe("bluebubbles setup surface", () => {
 
     expect(next?.channels?.bluebubbles?.enabled).toBe(false);
   });
+
+  it("reads the named-account DM policy instead of the channel root", async () => {
+    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
+
+    expect(
+      blueBubblesSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            bluebubbles: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  serverUrl: "http://localhost:1234",
+                  password: "secret",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", async () => {
+    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
+
+    expect(blueBubblesSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "work")).toEqual({
+      policyKey: "channels.bluebubbles.accounts.work.dmPolicy",
+      allowFromKey: "channels.bluebubbles.accounts.work.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
+    const { blueBubblesSetupWizard } = await import("./setup-surface.js");
+
+    const next = blueBubblesSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          bluebubbles: {
+            allowFrom: ["user@example.com"],
+            accounts: {
+              work: {
+                serverUrl: "http://localhost:1234",
+                password: "secret",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next?.channels?.bluebubbles?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.bluebubbles?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next?.channels?.bluebubbles?.accounts?.work?.allowFrom).toEqual([
+      "user@example.com",
+      "*",
+    ]);
+  });
 });
 
 describe("resolveBlueBubblesAccount", () => {
