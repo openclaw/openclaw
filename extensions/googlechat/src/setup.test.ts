@@ -489,4 +489,24 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.config.dangerouslyAllowNameMatching).toBeUndefined();
     expect(resolved.config.audienceType).toBe("app-url");
   });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: {
+              serviceAccountFile: "/tmp/alerts-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg });
+    expect(resolved.accountId).toBe("alerts");
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/alerts-sa.json");
+  });
 });
