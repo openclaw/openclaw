@@ -123,6 +123,10 @@ export type DiscordModalSpec = {
 export type DiscordComponentMessageSpec = {
   text?: string;
   reusable?: boolean;
+  /** Unix epoch timestamp in milliseconds after which the components expire. */
+  expiresAtMs?: number;
+  /** If false, route interactions through the channel's normal session instead of the sending session. */
+  bindSession?: boolean;
   container?: {
     accentColor?: string | number;
     spoiler?: boolean;

@@ -442,6 +442,8 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     : undefined;
   const modalRaw = obj.modal;
   const reusable = typeof obj.reusable === "boolean" ? obj.reusable : undefined;
+  const expiresAtMs = readOptionalNumber(obj.expiresAtMs);
+  const bindSession = typeof obj.bindSession === "boolean" ? obj.bindSession : undefined;
   let modal: DiscordModalSpec | undefined;
   if (modalRaw !== undefined) {
     const modalObj = requireObject(modalRaw, "components.modal");
@@ -467,6 +469,8 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
   return {
     text: readOptionalString(obj.text),
     reusable,
+    expiresAtMs,
+    bindSession,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
         ? {
@@ -784,13 +788,16 @@ export function buildDiscordComponentMessage(params: {
     | File
   > = [];
 
+  const boundSessionKey = params.spec.bindSession === false ? undefined : params.sessionKey;
+
   const addEntry = (entry: DiscordComponentEntry) => {
     entries.push({
       ...entry,
-      sessionKey: params.sessionKey,
+      sessionKey: boundSessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
       reusable: entry.reusable ?? params.spec.reusable,
+      expiresAt: entry.expiresAt ?? params.spec.expiresAtMs,
     });
   };
 
@@ -886,10 +893,11 @@ export function buildDiscordComponentMessage(params: {
       title: params.spec.modal.title,
       callbackData: params.spec.modal.callbackData,
       fields,
-      sessionKey: params.sessionKey,
+      sessionKey: boundSessionKey,
       agentId: params.agentId,
       accountId: params.accountId,
       reusable: params.spec.reusable,
+      expiresAt: params.spec.expiresAtMs,
       allowedUsers: params.spec.modal.allowedUsers,
     });
 
