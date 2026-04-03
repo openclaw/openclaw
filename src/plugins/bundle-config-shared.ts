@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./types.js";
 
@@ -114,13 +114,13 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     if (record.format !== "bundle" || !record.bundleFormat) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
 

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createDeferred,
   createNativeCommandTestParams,
@@ -192,23 +192,14 @@ function registerAndResolveCommandHandlerBase(params: {
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
-  const telegramDeps: TelegramBotDeps = {
+  const telegramDeps: TelegramNativeCommandDeps = {
     loadConfig: vi.fn(() => cfg),
-    resolveStorePath: sessionMocks.resolveStorePath as TelegramBotDeps["resolveStorePath"],
     readChannelAllowFromStore: vi.fn(async () => []),
-    upsertChannelPairingRequest: vi.fn(async () => ({ code: "PAIRCODE", created: true })),
-    enqueueSystemEvent: vi.fn(),
     dispatchReplyWithBufferedBlockDispatcher:
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher as TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"],
-    buildModelsProviderData: vi.fn(async () => ({
-      byProvider: new Map<string, Set<string>>(),
-      providers: [],
-      resolvedDefault: { provider: "openai", model: "gpt-4.1" },
-      modelNames: new Map<string, string>(),
-    })),
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher as TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    getPluginCommandSpecs: vi.fn(() => []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
-    wasSentByBot: vi.fn(() => false),
   };
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
@@ -387,7 +378,6 @@ function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.f
 
 describe("registerTelegramNativeCommands — session metadata", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
   });
 

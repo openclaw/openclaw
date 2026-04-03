@@ -32,6 +32,13 @@ import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 Each subpath is a small, self-contained module. This keeps startup fast and
 prevents circular dependency issues.
 
+Do not add or depend on provider-named convenience seams such as
+`openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
+`openclaw/plugin-sdk/signal`, or `openclaw/plugin-sdk/whatsapp`. Bundled plugins should compose generic SDK
+subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
+either use those plugin-local barrels or add a narrow generic SDK contract when
+the need is truly cross-channel.
+
 ## Subpath reference
 
 The most commonly used subpaths, grouped by purpose. The full list of 100+

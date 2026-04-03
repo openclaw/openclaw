@@ -1134,6 +1134,260 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 authHeader: {
                   type: "boolean",
                 },
+                request: {
+                  type: "object",
+                  properties: {
+                    headers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            oneOf: [
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "env",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                    pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "file",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  source: {
+                                    type: "string",
+                                    const: "exec",
+                                  },
+                                  provider: {
+                                    type: "string",
+                                    pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                  },
+                                  id: {
+                                    type: "string",
+                                  },
+                                },
+                                required: ["source", "provider", "id"],
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        ],
+                      },
+                    },
+                    auth: {
+                      anyOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            mode: {
+                              type: "string",
+                              const: "provider-default",
+                            },
+                          },
+                          required: ["mode"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            mode: {
+                              type: "string",
+                              const: "authorization-bearer",
+                            },
+                            token: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          },
+                          required: ["mode", "token"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            mode: {
+                              type: "string",
+                              const: "header",
+                            },
+                            headerName: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            value: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                            prefix: {
+                              type: "string",
+                            },
+                          },
+                          required: ["mode", "headerName", "value"],
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                  },
+                  additionalProperties: false,
+                },
                 models: {
                   type: "array",
                   items: {
@@ -2814,6 +3068,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               subagents: {
                 type: "object",
                 properties: {
+                  allowAgents: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
                   maxConcurrent: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -5342,72 +5602,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   enabled: {
                     type: "boolean",
                   },
-                  apiKey: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        oneOf: [
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "env",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "file",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                          {
-                            type: "object",
-                            properties: {
-                              source: {
-                                type: "string",
-                                const: "exec",
-                              },
-                              provider: {
-                                type: "string",
-                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                              },
-                              id: {
-                                type: "string",
-                              },
-                            },
-                            required: ["source", "provider", "id"],
-                            additionalProperties: false,
-                          },
-                        ],
-                      },
-                    ],
-                  },
                   model: {
                     type: "string",
                   },
@@ -5560,6 +5754,1118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       additionalProperties: {
                         type: "string",
                       },
+                    },
+                    request: {
+                      type: "object",
+                      properties: {
+                        headers: {
+                          type: "object",
+                          propertyNames: {
+                            type: "string",
+                          },
+                          additionalProperties: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        auth: {
+                          anyOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                mode: {
+                                  type: "string",
+                                  const: "provider-default",
+                                },
+                              },
+                              required: ["mode"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                mode: {
+                                  type: "string",
+                                  const: "authorization-bearer",
+                                },
+                                token: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                              },
+                              required: ["mode", "token"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                mode: {
+                                  type: "string",
+                                  const: "header",
+                                },
+                                headerName: {
+                                  type: "string",
+                                  minLength: 1,
+                                },
+                                value: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                prefix: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["mode", "headerName", "value"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                        proxy: {
+                          anyOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                mode: {
+                                  type: "string",
+                                  const: "env-proxy",
+                                },
+                                tls: {
+                                  type: "object",
+                                  properties: {
+                                    ca: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    cert: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    key: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    passphrase: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    serverName: {
+                                      type: "string",
+                                    },
+                                    insecureSkipVerify: {
+                                      type: "boolean",
+                                    },
+                                  },
+                                  additionalProperties: false,
+                                },
+                              },
+                              required: ["mode"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                mode: {
+                                  type: "string",
+                                  const: "explicit-proxy",
+                                },
+                                url: {
+                                  type: "string",
+                                  minLength: 1,
+                                },
+                                tls: {
+                                  type: "object",
+                                  properties: {
+                                    ca: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    cert: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    key: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    passphrase: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    serverName: {
+                                      type: "string",
+                                    },
+                                    insecureSkipVerify: {
+                                      type: "boolean",
+                                    },
+                                  },
+                                  additionalProperties: false,
+                                },
+                              },
+                              required: ["mode", "url"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                        tls: {
+                          type: "object",
+                          properties: {
+                            ca: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                            cert: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                            key: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                            passphrase: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                            serverName: {
+                              type: "string",
+                            },
+                            insecureSkipVerify: {
+                              type: "boolean",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
                     },
                     profile: {
                       type: "string",
@@ -5730,6 +7036,1118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       type: "string",
                     },
                   },
+                  request: {
+                    type: "object",
+                    properties: {
+                      headers: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                      auth: {
+                        anyOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "provider-default",
+                              },
+                            },
+                            required: ["mode"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "authorization-bearer",
+                              },
+                              token: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            },
+                            required: ["mode", "token"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "header",
+                              },
+                              headerName: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              value: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                              prefix: {
+                                type: "string",
+                              },
+                            },
+                            required: ["mode", "headerName", "value"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                      proxy: {
+                        anyOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "env-proxy",
+                              },
+                              tls: {
+                                type: "object",
+                                properties: {
+                                  ca: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  cert: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  key: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  passphrase: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  serverName: {
+                                    type: "string",
+                                  },
+                                  insecureSkipVerify: {
+                                    type: "boolean",
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            },
+                            required: ["mode"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "explicit-proxy",
+                              },
+                              url: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              tls: {
+                                type: "object",
+                                properties: {
+                                  ca: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  cert: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  key: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  passphrase: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  serverName: {
+                                    type: "string",
+                                  },
+                                  insecureSkipVerify: {
+                                    type: "boolean",
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            },
+                            required: ["mode", "url"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                      tls: {
+                        type: "object",
+                        properties: {
+                          ca: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          cert: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          key: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          passphrase: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          serverName: {
+                            type: "string",
+                          },
+                          insecureSkipVerify: {
+                            type: "boolean",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   attachments: {
                     type: "object",
                     properties: {
@@ -5896,6 +8314,1118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           additionalProperties: {
                             type: "string",
                           },
+                        },
+                        request: {
+                          type: "object",
+                          properties: {
+                            headers: {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            },
+                            auth: {
+                              anyOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "provider-default",
+                                    },
+                                  },
+                                  required: ["mode"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "authorization-bearer",
+                                    },
+                                    token: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                  },
+                                  required: ["mode", "token"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "header",
+                                    },
+                                    headerName: {
+                                      type: "string",
+                                      minLength: 1,
+                                    },
+                                    value: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    prefix: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["mode", "headerName", "value"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                            proxy: {
+                              anyOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "env-proxy",
+                                    },
+                                    tls: {
+                                      type: "object",
+                                      properties: {
+                                        ca: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        cert: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        key: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        passphrase: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        insecureSkipVerify: {
+                                          type: "boolean",
+                                        },
+                                      },
+                                      additionalProperties: false,
+                                    },
+                                  },
+                                  required: ["mode"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "explicit-proxy",
+                                    },
+                                    url: {
+                                      type: "string",
+                                      minLength: 1,
+                                    },
+                                    tls: {
+                                      type: "object",
+                                      properties: {
+                                        ca: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        cert: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        key: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        passphrase: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        insecureSkipVerify: {
+                                          type: "boolean",
+                                        },
+                                      },
+                                      additionalProperties: false,
+                                    },
+                                  },
+                                  required: ["mode", "url"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                            tls: {
+                              type: "object",
+                              properties: {
+                                ca: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                cert: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                key: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                passphrase: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                serverName: {
+                                  type: "string",
+                                },
+                                insecureSkipVerify: {
+                                  type: "boolean",
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         profile: {
                           type: "string",
@@ -6070,6 +9600,1118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       type: "string",
                     },
                   },
+                  request: {
+                    type: "object",
+                    properties: {
+                      headers: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                      auth: {
+                        anyOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "provider-default",
+                              },
+                            },
+                            required: ["mode"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "authorization-bearer",
+                              },
+                              token: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            },
+                            required: ["mode", "token"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "header",
+                              },
+                              headerName: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              value: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                              prefix: {
+                                type: "string",
+                              },
+                            },
+                            required: ["mode", "headerName", "value"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                      proxy: {
+                        anyOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "env-proxy",
+                              },
+                              tls: {
+                                type: "object",
+                                properties: {
+                                  ca: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  cert: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  key: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  passphrase: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  serverName: {
+                                    type: "string",
+                                  },
+                                  insecureSkipVerify: {
+                                    type: "boolean",
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            },
+                            required: ["mode"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "explicit-proxy",
+                              },
+                              url: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              tls: {
+                                type: "object",
+                                properties: {
+                                  ca: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  cert: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  key: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  passphrase: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  serverName: {
+                                    type: "string",
+                                  },
+                                  insecureSkipVerify: {
+                                    type: "boolean",
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            },
+                            required: ["mode", "url"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                      tls: {
+                        type: "object",
+                        properties: {
+                          ca: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          cert: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          key: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          passphrase: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          serverName: {
+                            type: "string",
+                          },
+                          insecureSkipVerify: {
+                            type: "boolean",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   attachments: {
                     type: "object",
                     properties: {
@@ -6236,6 +10878,1118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           additionalProperties: {
                             type: "string",
                           },
+                        },
+                        request: {
+                          type: "object",
+                          properties: {
+                            headers: {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            },
+                            auth: {
+                              anyOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "provider-default",
+                                    },
+                                  },
+                                  required: ["mode"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "authorization-bearer",
+                                    },
+                                    token: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                  },
+                                  required: ["mode", "token"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "header",
+                                    },
+                                    headerName: {
+                                      type: "string",
+                                      minLength: 1,
+                                    },
+                                    value: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    prefix: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["mode", "headerName", "value"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                            proxy: {
+                              anyOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "env-proxy",
+                                    },
+                                    tls: {
+                                      type: "object",
+                                      properties: {
+                                        ca: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        cert: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        key: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        passphrase: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        insecureSkipVerify: {
+                                          type: "boolean",
+                                        },
+                                      },
+                                      additionalProperties: false,
+                                    },
+                                  },
+                                  required: ["mode"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "explicit-proxy",
+                                    },
+                                    url: {
+                                      type: "string",
+                                      minLength: 1,
+                                    },
+                                    tls: {
+                                      type: "object",
+                                      properties: {
+                                        ca: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        cert: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        key: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        passphrase: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        insecureSkipVerify: {
+                                          type: "boolean",
+                                        },
+                                      },
+                                      additionalProperties: false,
+                                    },
+                                  },
+                                  required: ["mode", "url"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                            tls: {
+                              type: "object",
+                              properties: {
+                                ca: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                cert: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                key: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                passphrase: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                serverName: {
+                                  type: "string",
+                                },
+                                insecureSkipVerify: {
+                                  type: "boolean",
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         profile: {
                           type: "string",
@@ -6410,6 +12164,1118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       type: "string",
                     },
                   },
+                  request: {
+                    type: "object",
+                    properties: {
+                      headers: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                      auth: {
+                        anyOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "provider-default",
+                              },
+                            },
+                            required: ["mode"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "authorization-bearer",
+                              },
+                              token: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            },
+                            required: ["mode", "token"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "header",
+                              },
+                              headerName: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              value: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                              prefix: {
+                                type: "string",
+                              },
+                            },
+                            required: ["mode", "headerName", "value"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                      proxy: {
+                        anyOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "env-proxy",
+                              },
+                              tls: {
+                                type: "object",
+                                properties: {
+                                  ca: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  cert: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  key: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  passphrase: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  serverName: {
+                                    type: "string",
+                                  },
+                                  insecureSkipVerify: {
+                                    type: "boolean",
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            },
+                            required: ["mode"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              mode: {
+                                type: "string",
+                                const: "explicit-proxy",
+                              },
+                              url: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              tls: {
+                                type: "object",
+                                properties: {
+                                  ca: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  cert: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  key: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  passphrase: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                  serverName: {
+                                    type: "string",
+                                  },
+                                  insecureSkipVerify: {
+                                    type: "boolean",
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            },
+                            required: ["mode", "url"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                      tls: {
+                        type: "object",
+                        properties: {
+                          ca: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          cert: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          key: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          passphrase: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                          serverName: {
+                            type: "string",
+                          },
+                          insecureSkipVerify: {
+                            type: "boolean",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   attachments: {
                     type: "object",
                     properties: {
@@ -6576,6 +13442,1118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           additionalProperties: {
                             type: "string",
                           },
+                        },
+                        request: {
+                          type: "object",
+                          properties: {
+                            headers: {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {
+                                anyOf: [
+                                  {
+                                    type: "string",
+                                  },
+                                  {
+                                    oneOf: [
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "env",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "file",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                      {
+                                        type: "object",
+                                        properties: {
+                                          source: {
+                                            type: "string",
+                                            const: "exec",
+                                          },
+                                          provider: {
+                                            type: "string",
+                                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                          },
+                                          id: {
+                                            type: "string",
+                                          },
+                                        },
+                                        required: ["source", "provider", "id"],
+                                        additionalProperties: false,
+                                      },
+                                    ],
+                                  },
+                                ],
+                              },
+                            },
+                            auth: {
+                              anyOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "provider-default",
+                                    },
+                                  },
+                                  required: ["mode"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "authorization-bearer",
+                                    },
+                                    token: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                  },
+                                  required: ["mode", "token"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "header",
+                                    },
+                                    headerName: {
+                                      type: "string",
+                                      minLength: 1,
+                                    },
+                                    value: {
+                                      anyOf: [
+                                        {
+                                          type: "string",
+                                        },
+                                        {
+                                          oneOf: [
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "env",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "file",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                            {
+                                              type: "object",
+                                              properties: {
+                                                source: {
+                                                  type: "string",
+                                                  const: "exec",
+                                                },
+                                                provider: {
+                                                  type: "string",
+                                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                },
+                                                id: {
+                                                  type: "string",
+                                                },
+                                              },
+                                              required: ["source", "provider", "id"],
+                                              additionalProperties: false,
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    prefix: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["mode", "headerName", "value"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                            proxy: {
+                              anyOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "env-proxy",
+                                    },
+                                    tls: {
+                                      type: "object",
+                                      properties: {
+                                        ca: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        cert: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        key: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        passphrase: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        insecureSkipVerify: {
+                                          type: "boolean",
+                                        },
+                                      },
+                                      additionalProperties: false,
+                                    },
+                                  },
+                                  required: ["mode"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    mode: {
+                                      type: "string",
+                                      const: "explicit-proxy",
+                                    },
+                                    url: {
+                                      type: "string",
+                                      minLength: 1,
+                                    },
+                                    tls: {
+                                      type: "object",
+                                      properties: {
+                                        ca: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        cert: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        key: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        passphrase: {
+                                          anyOf: [
+                                            {
+                                              type: "string",
+                                            },
+                                            {
+                                              oneOf: [
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "env",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "file",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                                {
+                                                  type: "object",
+                                                  properties: {
+                                                    source: {
+                                                      type: "string",
+                                                      const: "exec",
+                                                    },
+                                                    provider: {
+                                                      type: "string",
+                                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                                    },
+                                                    id: {
+                                                      type: "string",
+                                                    },
+                                                  },
+                                                  required: ["source", "provider", "id"],
+                                                  additionalProperties: false,
+                                                },
+                                              ],
+                                            },
+                                          ],
+                                        },
+                                        serverName: {
+                                          type: "string",
+                                        },
+                                        insecureSkipVerify: {
+                                          type: "boolean",
+                                        },
+                                      },
+                                      additionalProperties: false,
+                                    },
+                                  },
+                                  required: ["mode", "url"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                            tls: {
+                              type: "object",
+                              properties: {
+                                ca: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                cert: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                key: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                passphrase: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      oneOf: [
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "env",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "file",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                        {
+                                          type: "object",
+                                          properties: {
+                                            source: {
+                                              type: "string",
+                                              const: "exec",
+                                            },
+                                            provider: {
+                                              type: "string",
+                                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                            },
+                                            id: {
+                                              type: "string",
+                                            },
+                                          },
+                                          required: ["source", "provider", "id"],
+                                          additionalProperties: false,
+                                        },
+                                      ],
+                                    },
+                                  ],
+                                },
+                                serverName: {
+                                  type: "string",
+                                },
+                                insecureSkipVerify: {
+                                  type: "boolean",
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         profile: {
                           type: "string",
@@ -12126,6 +20104,73 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Format string for the echoed transcript message. Use `{transcript}` as a placeholder for the transcribed text. Default: '📝 \"{transcript}\"'.",
       tags: ["media", "tools"],
     },
+    "tools.media.audio.request": {
+      label: "Audio Request Overrides",
+      help: "Low-level HTTP request overrides for audio providers, including custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.headers": {
+      label: "Audio Request Headers",
+      help: "Additional HTTP headers merged into audio provider requests after provider defaults. Use this for tenant routing or proxy integration headers, and keep secrets in env-backed values.",
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.auth": {
+      label: "Audio Request Auth Override",
+      help: "Optional auth override for audio provider requests. Use this when the upstream expects a non-default bearer token or custom auth header shape.",
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.auth.mode": {
+      label: "Audio Request Auth Mode",
+      help: 'Auth override mode for audio requests: "provider-default" keeps the normal provider auth, "authorization-bearer" forces an Authorization bearer token, and "header" sends a custom header/value pair.',
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.auth.token": {
+      label: "Audio Request Bearer Token",
+      help: "Bearer token used when audio request auth.mode is authorization-bearer. Keep this in secret storage rather than inline config.",
+      tags: ["security", "auth", "media", "tools"],
+      sensitive: true,
+    },
+    "tools.media.audio.request.auth.headerName": {
+      label: "Audio Request Auth Header Name",
+      help: "Header name used when audio request auth.mode is header. Match the exact upstream expectation, such as x-api-key or authorization.",
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.auth.value": {
+      label: "Audio Request Auth Header Value",
+      help: "Header value used when audio request auth.mode is header. Keep secrets in env-backed values and avoid duplicating provider-default auth unnecessarily.",
+      tags: ["security", "media", "tools"],
+      sensitive: true,
+    },
+    "tools.media.audio.request.auth.prefix": {
+      label: "Audio Request Auth Header Prefix",
+      help: "Optional prefix prepended to the custom auth header value, such as Bearer. Leave unset when the upstream expects the raw credential only.",
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.proxy": {
+      label: "Audio Request Proxy",
+      help: "Proxy transport override for audio requests. Use env-proxy to respect process proxy settings, or explicit-proxy to force a dedicated proxy URL for this provider path.",
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.proxy.mode": {
+      label: "Audio Request Proxy Mode",
+      help: 'Proxy mode for audio requests: "env-proxy" uses environment proxy settings, while "explicit-proxy" uses the configured proxy URL only for this request path.',
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.proxy.url": {
+      label: "Audio Request Proxy URL",
+      help: "Explicit proxy URL for audio provider traffic when proxy.mode is explicit-proxy. Keep credentials out of inline URLs when possible and prefer secret-backed env injection.",
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.audio.request.proxy.tls": {
+      label: "Audio Request Proxy TLS",
+      help: "TLS settings applied when connecting to the configured audio proxy, such as custom CA trust for an internal proxy gateway.",
+      tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.tls": {
+      label: "Audio Request TLS",
+      help: "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
+      tags: ["media", "tools"],
+    },
     "tools.media.video.enabled": {
       label: "Enable Video Understanding",
       help: "Enable video understanding so clips can be summarized into text for downstream reasoning and responses. Disable when processing video is out of policy or too expensive for your deployment.",
@@ -13567,6 +21612,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
       tags: ["models"],
     },
+    "models.providers.*.request": {
+      label: "Model Provider Request Overrides",
+      help: "Optional request overrides for model-provider requests. Use this only for header and auth overrides today; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+      tags: ["models"],
+    },
+    "models.providers.*.request.headers": {
+      label: "Model Provider Request Headers",
+      help: "Extra headers merged into provider requests after default attribution and auth resolution.",
+      tags: ["models"],
+    },
+    "models.providers.*.request.auth": {
+      label: "Model Provider Request Auth Override",
+      help: "Override provider request authentication behavior for this provider.",
+      tags: ["models"],
+    },
+    "models.providers.*.request.auth.mode": {
+      label: "Model Provider Request Auth Mode",
+      help: 'Auth override mode: "provider-default", "authorization-bearer", or "header".',
+      tags: ["models"],
+    },
+    "models.providers.*.request.auth.token": {
+      label: "Model Provider Request Bearer Token",
+      help: "Bearer token used when auth mode is authorization-bearer.",
+      tags: ["security", "auth", "models"],
+      sensitive: true,
+    },
+    "models.providers.*.request.auth.headerName": {
+      label: "Model Provider Request Auth Header Name",
+      help: "Custom auth header name used when auth mode is header.",
+      tags: ["models"],
+    },
+    "models.providers.*.request.auth.value": {
+      label: "Model Provider Request Auth Header Value",
+      help: "Custom auth header value used when auth mode is header.",
+      tags: ["security", "models"],
+      sensitive: true,
+    },
+    "models.providers.*.request.auth.prefix": {
+      label: "Model Provider Request Auth Header Prefix",
+      help: "Optional prefix prepended to request.auth.value when auth mode is header.",
+      tags: ["models"],
+    },
     "models.providers.*.models": {
       label: "Model Provider Model List",
       help: "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
@@ -14950,6 +23037,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: 'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
       tags: ["access", "network", "channels"],
     },
+    "channels.defaults.contextVisibility": {
+      label: "Default Context Visibility",
+      help: 'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
+      tags: ["network", "channels"],
+    },
     "channels.defaults.heartbeat": {
       label: "Default Heartbeat Visibility",
       help: "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
@@ -15185,6 +23277,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "models"],
     },
+    "models.providers.*.request.headers.*": {
+      sensitive: true,
+      tags: ["security", "models"],
+    },
     "agents.defaults.sandbox.ssh.identityData": {
       sensitive: true,
       tags: ["security", "storage"],
@@ -15221,9 +23317,305 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
-    "tools.web.x_search.apiKey": {
+    "tools.media.models[].request.headers.*": {
       sensitive: true,
-      tags: ["security", "auth", "tools"],
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.auth.token": {
+      sensitive: true,
+      tags: ["security", "auth", "media", "tools"],
+    },
+    "tools.media.models[].request.auth.value": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.proxy.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.proxy.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.proxy.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.proxy.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.models[].request.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.headers.*": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.auth.token": {
+      sensitive: true,
+      tags: ["security", "auth", "media", "tools"],
+    },
+    "tools.media.image.request.auth.value": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.proxy.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.proxy.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.proxy.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.proxy.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.request.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.headers.*": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.auth.token": {
+      sensitive: true,
+      tags: ["security", "auth", "media", "tools"],
+    },
+    "tools.media.image.models[].request.auth.value": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.proxy.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.proxy.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.proxy.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.proxy.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.image.models[].request.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.headers.*": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.proxy.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.proxy.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.proxy.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.proxy.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.request.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.headers.*": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.auth.token": {
+      sensitive: true,
+      tags: ["security", "auth", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.auth.value": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.proxy.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.proxy.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.proxy.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.proxy.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.audio.models[].request.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.headers.*": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.auth.token": {
+      sensitive: true,
+      tags: ["security", "auth", "media", "tools"],
+    },
+    "tools.media.video.request.auth.value": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.proxy.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.proxy.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.proxy.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.proxy.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.request.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.headers.*": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.auth.token": {
+      sensitive: true,
+      tags: ["security", "auth", "media", "tools"],
+    },
+    "tools.media.video.models[].request.auth.value": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.proxy.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.proxy.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.proxy.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.proxy.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.tls.ca": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.tls.cert": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.tls.key": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
+    },
+    "tools.media.video.models[].request.tls.passphrase": {
+      sensitive: true,
+      tags: ["security", "media", "tools"],
     },
     "mcp.servers.*.headers.*": {
       sensitive: true,
@@ -15242,10 +23634,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.media.models[].baseUrl": {
       tags: ["media", "tools", "url-secret"],
     },
+    "tools.media.models[].request.proxy.url": {
+      tags: ["media", "tools", "url-secret"],
+    },
     "tools.media.image.baseUrl": {
       tags: ["media", "tools", "url-secret"],
     },
+    "tools.media.image.request.proxy.url": {
+      tags: ["media", "tools", "url-secret"],
+    },
     "tools.media.image.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.image.models[].request.proxy.url": {
       tags: ["media", "tools", "url-secret"],
     },
     "tools.media.audio.baseUrl": {
@@ -15254,16 +23655,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.media.audio.models[].baseUrl": {
       tags: ["media", "tools", "url-secret"],
     },
+    "tools.media.audio.models[].request.proxy.url": {
+      tags: ["media", "tools", "url-secret"],
+    },
     "tools.media.video.baseUrl": {
       tags: ["media", "tools", "url-secret"],
     },
+    "tools.media.video.request.proxy.url": {
+      tags: ["media", "tools", "url-secret"],
+    },
     "tools.media.video.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.video.models[].request.proxy.url": {
       tags: ["media", "tools", "url-secret"],
     },
     "mcp.servers.*.url": {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.2",
+  version: "2026.4.3",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

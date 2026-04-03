@@ -5,6 +5,7 @@ import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
 import {
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -148,7 +149,21 @@ async function updateSubagentSessionStore(
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
-  return await subagentSpawnDeps.callGateway(params);
+  // Subagent lifecycle requires methods spanning multiple scope tiers
+  // (sessions.patch / sessions.delete → admin, agent → write).  When each call
+  // independently negotiates least-privilege scopes the first connection pairs
+  // at a lower tier and every subsequent higher-tier call triggers a
+  // scope-upgrade handshake that headless gateway-client connections cannot
+  // complete interactively, causing close(1008) "pairing required" (#59428).
+  //
+  // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
+  // "agent" → write) keep their least-privilege scope so that the gateway does
+  // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
+  const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
+  return await subagentSpawnDeps.callGateway({
+    ...params,
+    ...(scopes != null ? { scopes } : {}),
+  });
 }
 
 function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {
@@ -445,7 +460,10 @@ export async function spawnSubagentDirect(
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
   if (targetAgentId !== requesterAgentId) {
-    const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+    const allowAgents =
+      resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
+      cfg?.agents?.defaults?.subagents?.allowAgents ??
+      [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
     const normalizedTargetId = targetAgentId.toLowerCase();
     const allowSet = new Set(

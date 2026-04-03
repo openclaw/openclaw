@@ -35,6 +35,7 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  listImportedRuntimePluginIds,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -1248,6 +1249,145 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
 
         expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed-scoped-only"]);
         expect(fs.existsSync(skippedMarker)).toBe(false);
+      },
+    },
+    {
+      label: "can build a manifest-only snapshot without importing plugin modules",
+      run: () => {
+        useNoBundledPlugins();
+        const importedMarker = path.join(makeTempDir(), "manifest-only-imported.txt");
+        const plugin = writePlugin({
+          id: "manifest-only-plugin",
+          filename: "manifest-only-plugin.cjs",
+          body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
+module.exports = { id: "manifest-only-plugin", register() { throw new Error("manifest-only snapshot should not register"); } };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          loadModules: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["manifest-only-plugin"],
+              entries: {
+                "manifest-only-plugin": { enabled: true },
+              },
+            },
+          },
+        });
+
+        expect(fs.existsSync(importedMarker)).toBe(false);
+        expect(registry.plugins).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "manifest-only-plugin",
+              status: "loaded",
+            }),
+          ]),
+        );
+      },
+    },
+    {
+      label: "marks a selected memory slot as matched during manifest-only snapshots",
+      run: () => {
+        useNoBundledPlugins();
+        const memoryPlugin = writePlugin({
+          id: "memory-demo",
+          filename: "memory-demo.cjs",
+          body: `module.exports = {
+  id: "memory-demo",
+  kind: "memory",
+  register() {},
+};`,
+        });
+        fs.writeFileSync(
+          path.join(memoryPlugin.dir, "openclaw.plugin.json"),
+          JSON.stringify(
+            {
+              id: "memory-demo",
+              kind: "memory",
+              configSchema: EMPTY_PLUGIN_SCHEMA,
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          loadModules: false,
+          config: {
+            plugins: {
+              load: { paths: [memoryPlugin.file] },
+              allow: ["memory-demo"],
+              slots: { memory: "memory-demo" },
+              entries: {
+                "memory-demo": { enabled: true },
+              },
+            },
+          },
+        });
+
+        expect(
+          registry.diagnostics.some(
+            (entry) =>
+              entry.message === "memory slot plugin not found or not marked as memory: memory-demo",
+          ),
+        ).toBe(false);
+        expect(registry.plugins).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "memory-demo",
+              memorySlotSelected: true,
+            }),
+          ]),
+        );
+      },
+    },
+    {
+      label: "tracks plugins as imported when module evaluation throws after top-level execution",
+      run: () => {
+        useNoBundledPlugins();
+        const importMarker = "__openclaw_loader_import_throw_marker";
+        Reflect.deleteProperty(globalThis, importMarker);
+
+        const plugin = writePlugin({
+          id: "throws-after-import",
+          filename: "throws-after-import.cjs",
+          body: `globalThis.${importMarker} = (globalThis.${importMarker} ?? 0) + 1;
+throw new Error("boom after import");
+module.exports = { id: "throws-after-import", register() {} };`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["throws-after-import"],
+            },
+          },
+        });
+
+        try {
+          expect(registry.plugins).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                id: "throws-after-import",
+                status: "error",
+              }),
+            ]),
+          );
+          expect(listImportedRuntimePluginIds()).toContain("throws-after-import");
+          expect(Number(Reflect.get(globalThis, importMarker) ?? 0)).toBeGreaterThan(0);
+        } finally {
+          Reflect.deleteProperty(globalThis, importMarker);
+        }
       },
     },
     {

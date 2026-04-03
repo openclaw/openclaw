@@ -24,6 +24,9 @@ Scope intent:
 
 - `models.providers.*.apiKey`
 - `models.providers.*.headers.*`
+- `models.providers.*.request.auth.token`
+- `models.providers.*.request.auth.value`
+- `models.providers.*.request.headers.*`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
@@ -39,7 +42,6 @@ Scope intent:
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.tavily.config.webSearch.apiKey`
 - `tools.web.search.apiKey`
-- `tools.web.x_search.apiKey`
 - `gateway.auth.password`
 - `gateway.auth.token`
 - `gateway.remote.token`

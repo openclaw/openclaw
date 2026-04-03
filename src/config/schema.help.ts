@@ -747,6 +747,22 @@ export const FIELD_HELP: Record<string, string> = {
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
+  "models.providers.*.request":
+    "Optional request overrides for model-provider requests. Use this only for header and auth overrides today; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+  "models.providers.*.request.headers":
+    "Extra headers merged into provider requests after default attribution and auth resolution.",
+  "models.providers.*.request.auth":
+    "Override provider request authentication behavior for this provider.",
+  "models.providers.*.request.auth.mode":
+    'Auth override mode: "provider-default", "authorization-bearer", or "header".',
+  "models.providers.*.request.auth.token":
+    "Bearer token used when auth mode is authorization-bearer.",
+  "models.providers.*.request.auth.headerName":
+    "Custom auth header name used when auth mode is header.",
+  "models.providers.*.request.auth.value":
+    "Custom auth header value used when auth mode is header.",
+  "models.providers.*.request.auth.prefix":
+    "Optional prefix prepended to request.auth.value when auth mode is header.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.bedrockDiscovery":
@@ -1443,6 +1459,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default channel behavior applied across providers when provider-specific settings are not set. Use this to enforce consistent baseline policy before per-provider tuning.",
   "channels.defaults.groupPolicy":
     'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
+  "channels.defaults.contextVisibility":
+    'Default supplemental context visibility for fetched quote/thread/history content: "all" (keep all context), "allowlist" (only allowlisted senders), or "allowlist_quote" (allowlist + keep explicit quotes).',
   "channels.defaults.heartbeat":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
   "channels.defaults.heartbeat.showOk":

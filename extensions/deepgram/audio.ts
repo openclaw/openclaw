@@ -32,18 +32,20 @@ export async function transcribeDeepgramAudio(
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const model = resolveModel(params.model);
-  const { baseUrl, allowPrivateNetwork, headers } = resolveProviderHttpRequestConfig({
-    baseUrl: params.baseUrl,
-    defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
-    headers: params.headers,
-    defaultHeaders: {
-      authorization: `Token ${params.apiKey}`,
-      "content-type": params.mime ?? "application/octet-stream",
-    },
-    provider: "deepgram",
-    capability: "audio",
-    transport: "media-understanding",
-  });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      baseUrl: params.baseUrl,
+      defaultBaseUrl: DEFAULT_DEEPGRAM_AUDIO_BASE_URL,
+      headers: params.headers,
+      request: params.request,
+      defaultHeaders: {
+        authorization: `Token ${params.apiKey}`,
+        "content-type": params.mime ?? "application/octet-stream",
+      },
+      provider: "deepgram",
+      capability: "audio",
+      transport: "media-understanding",
+    });
 
   const url = new URL(`${baseUrl}/listen`);
   url.searchParams.set("model", model);
@@ -67,6 +69,7 @@ export async function transcribeDeepgramAudio(
     timeoutMs: params.timeoutMs,
     fetchFn,
     allowPrivateNetwork,
+    dispatcherPolicy,
   });
 
   try {

@@ -177,6 +177,32 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
+  it("accepts Telegram native progress metadata on plugin commands", () => {
+    const result = registerVoiceCommandForTest({
+      telegramNativeProgressMessage: "Running voice command...",
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice")).toMatchObject({
+      command: expect.objectContaining({
+        telegramNativeProgressMessage: "Running voice command...",
+      }),
+    });
+  });
+
+  it("rejects empty Telegram native progress metadata", () => {
+    const result = registerVoiceCommandForTest({
+      telegramNativeProgressMessage: "   ",
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "telegramNativeProgressMessage cannot be empty",
+    });
+  });
+
   it("shares plugin commands across duplicate module instances", async () => {
     const first = await importCommandsModule(`first-${Date.now()}`);
     const second = await importCommandsModule(`second-${Date.now()}`);

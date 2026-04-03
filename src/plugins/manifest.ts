@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import JSON5 from "json5";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
@@ -273,7 +274,7 @@ export function loadPluginManifest(
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
+    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
   } catch (err) {
     return {
       ok: false,

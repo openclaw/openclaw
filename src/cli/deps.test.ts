@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 const moduleLoads = vi.hoisted(() => ({
   whatsapp: vi.fn(),
@@ -20,9 +21,11 @@ const sendFns = vi.hoisted(() => ({
 
 const whatsappBoundaryLoads = vi.hoisted(() => vi.fn());
 
-vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", async (importOriginal) => {
+vi.mock("../plugins/runtime/runtime-web-channel-boundary.js", async (importOriginal) => {
   whatsappBoundaryLoads();
-  return await importOriginal<typeof import("../plugins/runtime/runtime-whatsapp-boundary.js")>();
+  return await importOriginal<
+    typeof import("../plugins/runtime/runtime-web-channel-boundary.js")
+  >();
 });
 
 vi.mock("./send-runtime/whatsapp.js", () => {
@@ -56,8 +59,13 @@ vi.mock("./send-runtime/imessage.js", () => {
 });
 
 describe("createDefaultDeps", () => {
-  async function loadCreateDefaultDeps() {
-    return (await import("./deps.js")).createDefaultDeps;
+  async function loadCreateDefaultDeps(scope: string) {
+    return (
+      await importFreshModule<typeof import("./deps.js")>(
+        import.meta.url,
+        `./deps.js?scope=${scope}`,
+      )
+    ).createDefaultDeps;
   }
 
   function expectUnusedModulesNotLoaded(exclude: keyof typeof moduleLoads): void {
@@ -72,11 +80,10 @@ describe("createDefaultDeps", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.resetModules();
   });
 
   it("does not load provider modules until a dependency is used", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps();
+    const createDefaultDeps = await loadCreateDefaultDeps("lazy-load");
     const deps = createDefaultDeps();
 
     expect(moduleLoads.whatsapp).not.toHaveBeenCalled();
@@ -95,7 +102,7 @@ describe("createDefaultDeps", () => {
   });
 
   it("reuses module cache after first dynamic import", async () => {
-    const createDefaultDeps = await loadCreateDefaultDeps();
+    const createDefaultDeps = await loadCreateDefaultDeps("module-cache");
     const deps = createDefaultDeps();
     const sendDiscord = deps["discord"] as (...args: unknown[]) => Promise<unknown>;
 
@@ -107,7 +114,10 @@ describe("createDefaultDeps", () => {
   });
 
   it("does not import the whatsapp runtime boundary on deps module load", async () => {
-    await import("./deps.js");
+    await importFreshModule<typeof import("./deps.js")>(
+      import.meta.url,
+      "./deps.js?scope=no-whatsapp-runtime-on-import",
+    );
 
     expect(whatsappBoundaryLoads).not.toHaveBeenCalled();
   });

@@ -61,6 +61,10 @@ import {
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
+import {
+  resolveProviderRequestConfig,
+  sanitizeRuntimeProviderRequestOverrides,
+} from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -360,8 +364,24 @@ export async function compactEmbeddedPiSessionDirect(
           profileId: apiKeyInfo.profileId,
         },
       });
-      if (preparedAuth?.baseUrl) {
-        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
+      if (preparedAuth?.baseUrl || preparedAuth?.request) {
+        const runtimeRequestConfig = resolveProviderRequestConfig({
+          provider: runtimeModel.provider,
+          api: runtimeModel.api,
+          baseUrl: preparedAuth?.baseUrl ?? runtimeModel.baseUrl,
+          providerHeaders:
+            runtimeModel.headers && typeof runtimeModel.headers === "object"
+              ? runtimeModel.headers
+              : undefined,
+          request: sanitizeRuntimeProviderRequestOverrides(preparedAuth?.request),
+          capability: "llm",
+          transport: "stream",
+        });
+        runtimeModel = {
+          ...runtimeModel,
+          ...(preparedAuth?.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
+          ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
+        };
       }
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
@@ -942,14 +962,30 @@ export async function compactEmbeddedPiSessionDirect(
           },
         };
       } finally {
-        await flushPendingToolResultsAfterIdle({
-          agent: session?.agent,
-          sessionManager,
-          clearPendingOnTimeout: true,
-        });
-        session.dispose();
-        await bundleMcpRuntime?.dispose();
-        await bundleLspRuntime?.dispose();
+        try {
+          await flushPendingToolResultsAfterIdle({
+            agent: session?.agent,
+            sessionManager,
+            clearPendingOnTimeout: true,
+          });
+        } catch {
+          /* best-effort */
+        }
+        try {
+          session.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleMcpRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleLspRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
       }
     } finally {
       await sessionLock.release();

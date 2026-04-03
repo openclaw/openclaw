@@ -44,6 +44,7 @@ import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
 import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
@@ -96,6 +97,7 @@ export type PluginLoadOptions = {
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
+  loadModules?: boolean;
   throwOnLoadError?: boolean;
 };
 
@@ -241,6 +243,7 @@ function buildCacheKey(params: {
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
+  loadModules?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
@@ -270,13 +273,14 @@ function buildCacheKey(params: {
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
+  const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${moduleLoadMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -360,7 +364,8 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.pluginSdkResolution !== undefined ||
     options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
-    options.preferSetupRuntimeForChannelPlugins === true,
+    options.preferSetupRuntimeForChannelPlugins === true ||
+    options.loadModules === false,
   );
 }
 
@@ -387,6 +392,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    loadModules: options.loadModules,
     runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
@@ -402,6 +408,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
+    shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
     cacheKey,
   };
@@ -433,6 +440,15 @@ export function resolveRuntimePluginRegistry(
     return getCompatibleActivePluginRegistry();
   }
   return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
+}
+
+export function resolveCompatibleRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  // Check whether the active runtime registry is already compatible with these
+  // load options. Unlike resolveRuntimePluginRegistry, this never triggers a
+  // fresh plugin load on cache miss.
+  return getCompatibleActivePluginRegistry(options);
 }
 
 function validatePluginConfig(params: {
@@ -924,6 +940,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
+    shouldLoadModules,
     cacheKey,
     runtimeSubagentMode,
   } = resolvePluginLoadCacheContext(options);
@@ -1306,6 +1323,49 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
+    if (!shouldLoadModules && registrationMode === "full") {
+      const memoryDecision = resolveMemorySlotDecision({
+        id: record.id,
+        kind: record.kind,
+        slot: memorySlot,
+        selectedId: selectedMemoryPluginId,
+      });
+
+      if (!memoryDecision.enabled) {
+        record.enabled = false;
+        record.status = "disabled";
+        record.error = memoryDecision.reason;
+        markPluginActivationDisabled(record, memoryDecision.reason);
+        registry.plugins.push(record);
+        seenIds.set(pluginId, candidate.origin);
+        continue;
+      }
+
+      if (memoryDecision.selected && hasKind(record.kind, "memory")) {
+        selectedMemoryPluginId = record.id;
+        memorySlotMatched = true;
+        record.memorySlotSelected = true;
+      }
+    }
+
+    const validatedConfig = validatePluginConfig({
+      schema: manifestRecord.configSchema,
+      cacheKey: manifestRecord.schemaCacheKey,
+      value: entry?.config,
+    });
+
+    if (!validatedConfig.ok) {
+      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
+      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+      continue;
+    }
+
+    if (!shouldLoadModules) {
+      registry.plugins.push(record);
+      seenIds.set(pluginId, candidate.origin);
+      continue;
+    }
+
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
     const loadSource =
       (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
@@ -1328,6 +1388,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     let mod: OpenClawPluginModule | null = null;
     try {
+      // Track the plugin as imported once module evaluation begins. Top-level
+      // code may have already executed even if evaluation later throws.
+      recordImportedPluginId(record.id);
       mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (err) {
       recordPluginError({
@@ -1421,18 +1484,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         selectedMemoryPluginId = record.id;
         record.memorySlotSelected = true;
       }
-    }
-
-    const validatedConfig = validatePluginConfig({
-      schema: manifestRecord.configSchema,
-      cacheKey: manifestRecord.schemaCacheKey,
-      value: entry?.config,
-    });
-
-    if (!validatedConfig.ok) {
-      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
-      continue;
     }
 
     if (validateOnly) {

@@ -12,6 +12,7 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { ProviderCapabilities } from "../agents/provider-capabilities.js";
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -445,6 +446,7 @@ export type ProviderPrepareRuntimeAuthContext = {
 export type ProviderPreparedRuntimeAuth = {
   apiKey: string;
   baseUrl?: string;
+  request?: ProviderRequestTransportOverrides;
   expiresAt?: number;
 };
 
@@ -1603,6 +1605,13 @@ export type OpenClawPluginCommandDefinition = {
    * override exists (for example `{ default: "talkvoice", discord: "voice2" }`).
    */
   nativeNames?: Partial<Record<string, string>> & { default?: string };
+  /**
+   * Optional Telegram-native progress placeholder text.
+   * When set, Telegram native/plugin command delivery sends this text
+   * immediately, then edits that same message in place if the final reply
+   * is a simple text-only payload.
+   */
+  telegramNativeProgressMessage?: string;
   /** Description shown in /help and command menus */
   description: string;
   /** Whether this command accepts arguments */
@@ -2473,11 +2482,25 @@ export type PluginHookSessionStartEvent = {
 };
 
 // session_end hook
+export type PluginHookSessionEndReason =
+  | "new"
+  | "reset"
+  | "idle"
+  | "daily"
+  | "compaction"
+  | "deleted"
+  | "unknown";
+
 export type PluginHookSessionEndEvent = {
   sessionId: string;
   sessionKey?: string;
   messageCount: number;
   durationMs?: number;
+  reason?: PluginHookSessionEndReason;
+  sessionFile?: string;
+  transcriptArchived?: boolean;
+  nextSessionId?: string;
+  nextSessionKey?: string;
 };
 
 // Subagent context
