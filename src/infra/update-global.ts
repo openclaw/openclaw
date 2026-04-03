@@ -281,24 +281,65 @@ export async function detectGlobalInstallManagerByPresence(
   return null;
 }
 
-export function globalInstallArgs(manager: GlobalInstallManager, spec: string): string[] {
+export function resolveGlobalManagerCommand(
+  manager: GlobalInstallManager,
+  globalRoot?: string | null,
+): string {
+  const baseCommand =
+    manager === "pnpm"
+      ? process.platform === "win32"
+        ? "pnpm.cmd"
+        : "pnpm"
+      : manager === "bun"
+        ? process.platform === "win32"
+          ? "bun.exe"
+          : "bun"
+        : process.platform === "win32"
+          ? "npm.cmd"
+          : "npm";
+
+  const trimmedRoot = globalRoot?.trim();
+  if (!trimmedRoot || manager === "bun") {
+    return baseCommand;
+  }
+
+  const resolvedRoot = path.resolve(trimmedRoot);
+  if (path.basename(resolvedRoot) === "node_modules") {
+    return path.join(path.dirname(resolvedRoot), baseCommand);
+  }
+
+  const libNodeModulesSuffix = path.join("lib", "node_modules");
+  if (resolvedRoot.endsWith(libNodeModulesSuffix)) {
+    const prefix = resolvedRoot.slice(0, -libNodeModulesSuffix.length);
+    return path.join(prefix, "bin", baseCommand);
+  }
+
+  return baseCommand;
+}
+
+export function globalInstallArgs(
+  manager: GlobalInstallManager,
+  spec: string,
+  command = resolveGlobalManagerCommand(manager),
+): string[] {
   if (manager === "pnpm") {
-    return ["pnpm", "add", "-g", spec];
+    return [command, "add", "-g", spec];
   }
   if (manager === "bun") {
-    return ["bun", "add", "-g", spec];
+    return [command, "add", "-g", spec];
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+  return [command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
 }
 
 export function globalInstallFallbackArgs(
   manager: GlobalInstallManager,
   spec: string,
+  command = resolveGlobalManagerCommand(manager),
 ): string[] | null {
   if (manager !== "npm") {
     return null;
   }
-  return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
+  return [command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
 }
 
 export async function cleanupGlobalRenameDirs(params: {
