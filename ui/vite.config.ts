@@ -56,5 +56,14 @@ export default defineConfig(() => {
         },
       },
     ],
+    // Prevent node:module from being externalized for browser builds.
+    // The version.ts file imports createRequire from node:module, which needs
+    // to be handled properly in browser environments.
+    resolve: {
+      alias: {
+        // Provide a stub for node:module when building for browser
+        "node:module": path.resolve(here, "src/polyfills/node-module-stub.ts"),
+      },
+    },
   };
 });
