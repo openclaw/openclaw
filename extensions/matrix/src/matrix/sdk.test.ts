@@ -1194,7 +1194,9 @@ describe("MatrixClient crypto bootstrapping", () => {
     const callsAfterStart = databasesSpy.mock.calls.length;
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(databasesSpy.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    await vi.waitFor(() => {
+      expect(databasesSpy.mock.calls.length).toBeGreaterThan(callsAfterStart);
+    });
 
     client.stop();
     const callsAfterStop = databasesSpy.mock.calls.length;
