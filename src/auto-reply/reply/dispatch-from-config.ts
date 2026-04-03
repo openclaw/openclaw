@@ -666,8 +666,15 @@ export async function dispatchReplyFromConfig(params: {
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             // replyMode "tool-only": suppress text-only auto-delivery (media still delivered)
+            // but allow exec-approval payloads through so users can approve/deny commands
             const hasMedia = payload.mediaUrls?.length || payload.mediaUrl;
-            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only" && !hasMedia) {
+            const isExecApproval =
+              payload.channelData &&
+              typeof payload.channelData === "object" &&
+              !Array.isArray(payload.channelData) &&
+              payload.channelData.execApproval &&
+              typeof payload.channelData.execApproval === "object";
+            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only" && !hasMedia && !isExecApproval) {
               return;
             }
             const ttsPayload = await maybeApplyTtsToPayload({
