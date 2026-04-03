@@ -37,9 +37,9 @@ type ScopedFeishuConfig = Partial<FeishuConfig> & Partial<FeishuAccountConfig>;
 function getScopedFeishuConfig(cfg: OpenClawConfig, accountId: string): ScopedFeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return feishuCfg;
+    return feishuCfg ?? {};
   }
-  return (feishuCfg.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
+  return (feishuCfg?.accounts?.[accountId] as FeishuAccountConfig | undefined) ?? {};
 }
 
 function patchFeishuConfig(

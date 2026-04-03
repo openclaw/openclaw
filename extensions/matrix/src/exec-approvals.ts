@@ -32,13 +32,13 @@ function resolveMatrixExecApprovalConfig(params: {
 }) {
   const account = resolveMatrixAccount(params);
   const config = account.config.execApprovals;
-  if (!config || !account.enabled || !account.configured || config.enabled !== true) {
-    return { enabled: false } as const;
+  if (!config) {
+    return undefined;
   }
   return {
     ...config,
-    enabled: true as const,
-  } as const;
+    enabled: account.enabled && account.configured ? config.enabled : false,
+  };
 }
 
 function countMatrixExecApprovalEligibleAccounts(params: {
@@ -54,18 +54,24 @@ function countMatrixExecApprovalEligibleAccounts(params: {
       cfg: params.cfg,
       accountId,
     });
-    if (!config.enabled) {
-      return false;
-    }
+    const filters = config?.enabled
+      ? {
+          agentFilter: config.agentFilter,
+          sessionFilter: config.sessionFilter,
+        }
+      : {
+          agentFilter: undefined,
+          sessionFilter: undefined,
+        };
     return (
       isChannelExecApprovalClientEnabledFromConfig({
-        enabled: config.enabled,
+        enabled: config?.enabled,
         approverCount: getMatrixExecApprovalApprovers({ cfg: params.cfg, accountId }).length,
       }) &&
       matchesApprovalRequestFilters({
         request: params.request.request,
-        agentFilter: config.agentFilter,
-        sessionFilter: config.sessionFilter,
+        agentFilter: filters.agentFilter,
+        sessionFilter: filters.sessionFilter,
       })
     );
   }).length;
