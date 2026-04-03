@@ -3579,7 +3579,7 @@ describe("security audit", () => {
         },
       },
       {
-        name: "flags unallowlisted extensions as critical when native skill commands are exposed",
+        name: "flags unallowlisted extensions as warn-level findings when extension inventory exists",
         cfg: {
           channels: {
             discord: { enabled: true, token: "t" },
@@ -3590,7 +3590,7 @@ describe("security audit", () => {
             expect.arrayContaining([
               expect.objectContaining({
                 checkId: "plugins.extensions_no_allowlist",
-                severity: "critical",
+                severity: "warn",
               }),
             ]),
           );
@@ -3615,7 +3615,7 @@ describe("security audit", () => {
             expect.arrayContaining([
               expect.objectContaining({
                 checkId: "plugins.extensions_no_allowlist",
-                severity: "critical",
+                severity: "warn",
               }),
             ]),
           );

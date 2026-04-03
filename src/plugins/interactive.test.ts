@@ -1,16 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type {
-  DiscordInteractiveHandlerContext,
-  DiscordInteractiveHandlerRegistration,
-} from "../../extensions/discord/src/interactive-dispatch.js";
-import type {
-  SlackInteractiveHandlerContext,
-  SlackInteractiveHandlerRegistration,
-} from "../../extensions/slack/src/interactive-dispatch.js";
-import type {
-  TelegramInteractiveHandlerContext,
-  TelegramInteractiveHandlerRegistration,
-} from "../../extensions/telegram/src/interactive-dispatch.js";
 import * as conversationBinding from "./conversation-binding.js";
 import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
 import {
@@ -18,6 +6,114 @@ import {
   dispatchPluginInteractiveHandler,
   registerPluginInteractiveHandler,
 } from "./interactive.js";
+import type { PluginInteractiveRegistration } from "./types.js";
+
+type TelegramInteractiveHandlerContext = {
+  accountId: string;
+  callbackId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  threadId?: string | number;
+  isGroup?: boolean;
+  isForum?: boolean;
+  auth?: { isAuthorizedSender?: boolean };
+  callbackMessage: {
+    messageId: number;
+    chatId: string;
+    messageText?: string;
+  };
+  callback: { data: string };
+  channel: string;
+  requestConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  detachConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  getCurrentConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  respond: {
+    reply: (...args: unknown[]) => Promise<void>;
+    editMessage: (...args: unknown[]) => Promise<void>;
+    editButtons: (...args: unknown[]) => Promise<void>;
+    clearButtons: (...args: unknown[]) => Promise<void>;
+    deleteMessage: (...args: unknown[]) => Promise<void>;
+  };
+};
+
+type DiscordInteractiveHandlerContext = {
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  guildId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  auth?: { isAuthorizedSender?: boolean };
+  interaction: {
+    kind: string;
+    messageId?: string;
+    values?: string[];
+    namespace?: string;
+    payload?: string;
+  };
+  channel: string;
+  requestConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  detachConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  getCurrentConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  respond: {
+    acknowledge: (...args: unknown[]) => Promise<void>;
+    reply: (...args: unknown[]) => Promise<void>;
+    followUp: (...args: unknown[]) => Promise<void>;
+    editMessage: (...args: unknown[]) => Promise<void>;
+    clearComponents: (...args: unknown[]) => Promise<void>;
+  };
+};
+
+type SlackInteractiveHandlerContext = {
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  threadId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  auth?: { isAuthorizedSender?: boolean };
+  interaction: {
+    kind: string;
+    actionId?: string;
+    blockId?: string;
+    messageTs?: string;
+    threadTs?: string;
+    value?: string;
+    selectedValues?: string[];
+    selectedLabels?: string[];
+    triggerId?: string;
+    responseUrl?: string;
+    namespace?: string;
+    payload?: string;
+  };
+  channel: string;
+  requestConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  detachConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  getCurrentConversationBinding: (...args: unknown[]) => Promise<unknown>;
+  respond: {
+    acknowledge: (...args: unknown[]) => Promise<void>;
+    reply: (...args: unknown[]) => Promise<void>;
+    followUp: (...args: unknown[]) => Promise<void>;
+    editMessage: (...args: unknown[]) => Promise<void>;
+  };
+};
+
+type TelegramInteractiveHandlerRegistration = PluginInteractiveRegistration<
+  TelegramInteractiveHandlerContext,
+  "telegram"
+>;
+type DiscordInteractiveHandlerRegistration = PluginInteractiveRegistration<
+  DiscordInteractiveHandlerContext,
+  "discord"
+>;
+type SlackInteractiveHandlerRegistration = PluginInteractiveRegistration<
+  SlackInteractiveHandlerContext,
+  "slack"
+>;
 
 let requestPluginConversationBindingMock: MockInstance<
   typeof conversationBinding.requestPluginConversationBinding

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-helpers.js";
+import { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
 import {
   isCommandFlagEnabled,
   isRestartEnabled,

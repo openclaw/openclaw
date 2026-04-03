@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   formatConversationTarget,
   deliveryContextKey,
@@ -10,6 +12,37 @@ import {
 } from "./delivery-context.js";
 
 describe("delivery context helpers", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "room-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "room-chat", label: "Room chat" }),
+            messaging: {
+              resolveDeliveryTarget: ({
+                conversationId,
+                parentConversationId,
+              }: {
+                conversationId: string;
+                parentConversationId?: string;
+              }) =>
+                conversationId.startsWith("$")
+                  ? {
+                      to: parentConversationId ? `room:${parentConversationId}` : undefined,
+                      threadId: conversationId,
+                    }
+                  : {
+                      to: `room:${conversationId}`,
+                    },
+            },
+          },
+        },
+      ]),
+    );
+  });
+
   it("normalizes channel/to/accountId and drops empty contexts", () => {
     expect(
       normalizeDeliveryContext({
@@ -81,30 +114,32 @@ describe("delivery context helpers", () => {
     ).toBe("demo-channel|channel:C1||123.456");
   });
 
-  it("formats generic non-matrix conversation targets as channels", () => {
+  it("formats generic fallback conversation targets as channels", () => {
     expect(formatConversationTarget({ channel: "demo-channel", conversationId: "123" })).toBe(
       "channel:123",
     );
   });
 
-  it("formats matrix conversation targets as rooms", () => {
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "!room:example" })).toBe(
-      "room:!room:example",
-    );
+  it("formats plugin-defined conversation targets via channel messaging hooks", () => {
+    expect(
+      formatConversationTarget({ channel: "room-chat", conversationId: "!room:example" }),
+    ).toBe("room:!room:example");
     expect(
       formatConversationTarget({
-        channel: "matrix",
+        channel: "room-chat",
         conversationId: "$thread",
         parentConversationId: "!room:example",
       }),
     ).toBe("room:!room:example");
-    expect(formatConversationTarget({ channel: "matrix", conversationId: "  " })).toBeUndefined();
+    expect(
+      formatConversationTarget({ channel: "room-chat", conversationId: "  " }),
+    ).toBeUndefined();
   });
 
-  it("resolves delivery targets for Matrix child threads", () => {
+  it("resolves delivery targets for plugin-defined child threads", () => {
     expect(
       resolveConversationDeliveryTarget({
-        channel: "matrix",
+        channel: "room-chat",
         conversationId: "$thread",
         parentConversationId: "!room:example",
       }),

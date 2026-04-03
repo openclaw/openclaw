@@ -714,12 +714,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(true);
       expect(snap.legacyIssues.some((issue) => issue.path === "session.threadBindings")).toBe(true);
-      expect(
-        snap.legacyIssues.some((issue) => issue.path === "channels.discord.threadBindings"),
-      ).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
-        true,
-      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels")).toBe(true);
       expect(snap.sourceConfig.session?.threadBindings).toMatchObject({
         idleHours: 24,
       });

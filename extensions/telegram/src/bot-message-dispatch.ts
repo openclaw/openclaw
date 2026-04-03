@@ -16,7 +16,6 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { generateTelegramTopicLabel, resolveAutoTopicLabelConfig } from "./auto-topic-label.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
@@ -27,14 +26,14 @@ import {
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
 import {
+  generateTopicLabel,
   loadSessionStore,
   resolveMarkdownTableMode,
   resolveSessionStoreEntry,
   resolveStorePath,
   getAgentScopedMediaLocalRoots,
-  resolveChunkMode,
   resolveAutoTopicLabelConfig,
-  generateTopicLabel,
+  resolveChunkMode,
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
@@ -943,7 +942,7 @@ export const dispatchTelegramMessage = async ({
         const topicThreadId = threadSpec.id!;
         void (async () => {
           try {
-            const label = await generateTelegramTopicLabel({
+            const label = await generateTopicLabel({
               userMessage,
               prompt: autoTopicConfig.prompt,
               cfg,
