@@ -38,7 +38,7 @@ export default definePluginEntry({
     "Two-layer context protection: static system-prompt anchor every turn, plus automatic file restore after LCM compaction.",
   configSchema: contextRestoreConfigSchema,
   register(api: OpenClawPluginApi) {
-    const cfg = api.pluginConfig as ContextRestoreConfig;
+    const cfg = (api.pluginConfig ?? {}) as ContextRestoreConfig;
 
     const anchorText =
       cfg.anchorText ??
@@ -83,15 +83,24 @@ export default definePluginEntry({
         const compactedCount =
           typeof rawCount === "number" || typeof rawCount === "string" ? String(rawCount) : "?";
 
-        const fileList = restoreFiles.map((f, i) => `${i + 1}. Read ${f}`).join("\n");
+        if (restoreFiles.length === 0) {
+          return;
+        }
+
+        const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+        const resolvedFiles = restoreFiles.map((f) => f.replace(/YYYY-MM-DD/g, today));
+        const fileList = resolvedFiles.map((f, i) => `${i + 1}. Read ${f}`).join("\n");
 
         const prompt = [
           `[CONTEXT RESTORE] Context compacted (${compactedCount} messages compacted). Re-read the following files now to restore full awareness:`,
           fileList,
-          "Reply NO_REPLY when done. This is a silent restoration.",
+          "Re-read these files silently and continue normally.",
         ].join("\n");
 
-        api.runtime?.system?.enqueueSystemEvent?.(prompt, { sessionKey });
+        api.runtime?.system?.enqueueSystemEvent?.(prompt, {
+          sessionKey,
+          contextKey: `context-restore-${Date.now()}`,
+        });
       },
       { priority: 10 },
     );

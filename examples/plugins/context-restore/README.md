@@ -67,15 +67,14 @@ Add to your agent config (e.g. `openclaw.json` under `plugins`):
 
 ### Dynamic file paths
 
-`restoreFiles` can include dynamic tokens that the agent will resolve at
-restore time. For example, to include today's memory note:
+The plugin substitutes `YYYY-MM-DD` with today's date before building the
+restore prompt. For example:
 
 ```json
 "restoreFiles": ["AGENTS.md", "SOUL.md", "memory/YYYY-MM-DD.md"]
 ```
 
-The agent is instructed to read the file named with today's date substituted
-for `YYYY-MM-DD`.
+This resolves to today's date automatically (e.g. `memory/2025-01-15.md`).
 
 ## How It Works
 
@@ -106,5 +105,5 @@ Both hooks are stable public APIs available since OpenClaw 2026.3.7.
   that need it (e.g. `"agent:mygroup:"`).
 - **Multiple agents, different files**: deploy one plugin instance per agent
   with different `restoreFiles` lists.
-- **Minimal mode**: omit `restoreFiles` and rely only on `anchorText` for a
-  lightweight, zero-side-effect anchor.
+- **Minimal mode**: set `restoreFiles: []` to disable layer 2 and rely only
+  on `anchorText` for a lightweight, zero-side-effect anchor.

@@ -4,6 +4,12 @@
   "private": true,
   "description": "Example OpenClaw plugin: two-layer context protection against LCM compaction drift",
   "type": "module",
+  "devDependencies": {
+    "openclaw": "*"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
