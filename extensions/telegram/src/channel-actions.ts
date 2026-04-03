@@ -18,12 +18,23 @@ import {
   listEnabledTelegramAccounts,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
-import { handleTelegramAction } from "./action-runtime.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
 
+let telegramActionRuntimePromise: Promise<typeof import("./action-runtime.js")> | null = null;
+
+async function loadTelegramActionRuntime() {
+  telegramActionRuntimePromise ??= import("./action-runtime.js");
+  return await telegramActionRuntimePromise;
+}
+
 export const telegramMessageActionRuntime = {
-  handleTelegramAction,
+  handleTelegramAction: async (
+    ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
+  ): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> => {
+    const { handleTelegramAction } = await loadTelegramActionRuntime();
+    return await handleTelegramAction(...args);
+  },
 };
 
 const TELEGRAM_MESSAGE_ACTION_MAP = {

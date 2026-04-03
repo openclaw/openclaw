@@ -66,7 +66,6 @@ import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound
 import type { TelegramProbe } from "./probe.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { getTelegramRuntime } from "./runtime.js";
-import { sendMessageTelegram, sendPollTelegram, sendTypingTelegram } from "./send.js";
 import { resolveTelegramSessionConversation } from "./session-conversation.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
@@ -87,13 +86,16 @@ import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
-type TelegramSendFn = typeof sendMessageTelegram;
+type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
+type TelegramSendPollFn = typeof import("./send.js").sendPollTelegram;
+type TelegramSendTypingFn = typeof import("./send.js").sendTypingTelegram;
 
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
 let telegramAuditModulePromise: Promise<typeof import("./audit.js")> | null = null;
 let telegramMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
 let telegramProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | null = null;
 
 async function loadTelegramAuditModule() {
   telegramAuditModulePromise ??= import("./audit.js");
@@ -108,6 +110,11 @@ async function loadTelegramMonitorModule() {
 async function loadTelegramProbeModule() {
   telegramProbeModulePromise ??= import("./probe.js");
   return await telegramProbeModulePromise;
+}
+
+async function loadTelegramSendModule() {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
 }
 
 async function resolveTelegramProbe() {
@@ -150,8 +157,29 @@ function resolveTelegramSend(deps?: OutboundSendDeps): TelegramSendFn {
   return (
     resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
     getOptionalTelegramRuntime()?.channel?.telegram?.sendMessageTelegram ??
-    sendMessageTelegram
+    sendMessageTelegramLazy
   );
+}
+
+async function sendMessageTelegramLazy(
+  ...args: Parameters<TelegramSendFn>
+): ReturnType<TelegramSendFn> {
+  const { sendMessageTelegram } = await loadTelegramSendModule();
+  return await sendMessageTelegram(...args);
+}
+
+async function sendPollTelegramLazy(
+  ...args: Parameters<TelegramSendPollFn>
+): ReturnType<TelegramSendPollFn> {
+  const { sendPollTelegram } = await loadTelegramSendModule();
+  return await sendPollTelegram(...args);
+}
+
+async function sendTypingTelegramLazy(
+  ...args: Parameters<TelegramSendTypingFn>
+): ReturnType<TelegramSendTypingFn> {
+  const { sendTypingTelegram } = await loadTelegramSendModule();
+  return await sendTypingTelegram(...args);
 }
 
 function resolveTelegramTokenHelper() {
@@ -870,7 +898,7 @@ export const telegramPlugin = createChatChannelPlugin({
             : typeof target.threadId === "string"
               ? Number.parseInt(target.threadId, 10)
               : undefined;
-        await sendTypingTelegram(target.to, {
+        await sendTypingTelegramLazy(target.to, {
           cfg,
           accountId: target.accountId ?? undefined,
           ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
@@ -971,7 +999,7 @@ export const telegramPlugin = createChatChannelPlugin({
         isAnonymous,
         gatewayClientScopes,
       }) =>
-        await sendPollTelegram(to, poll, {
+        await sendPollTelegramLazy(to, poll, {
           cfg,
           accountId: accountId ?? undefined,
           messageThreadId: parseTelegramThreadId(threadId),
