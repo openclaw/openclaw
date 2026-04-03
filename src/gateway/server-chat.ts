@@ -595,7 +595,9 @@ export function createAgentEventHandler({
     });
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress ||
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
+      isSilentReplyLeadFragment(text);
     return { text, shouldSuppressSilent };
   };
 
