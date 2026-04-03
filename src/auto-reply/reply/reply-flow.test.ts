@@ -1747,6 +1747,46 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.display?.text).toBe("visible first");
   });
 
+  it("retries collect overflow summary before forcing individual drain", async () => {
+    const key = `test-collect-overflow-summary-retry-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    let attempt = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("transient summary failure");
+      }
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "first hidden item", displayText: "visible first" }),
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "second hidden item" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.execution.agentPrompt).toContain(
+      "[Queue overflow] Dropped 1 message due to cap.",
+    );
+    expect(calls[0]?.execution.agentPrompt).toContain("- visible first");
+    expect(calls[1]?.execution.agentPrompt).toBe("first hidden item");
+    expect(calls[1]?.display?.text).toBe("visible first");
+  });
+
   it("retries overflow summary delivery without losing dropped previews", async () => {
     const key = `test-overflow-summary-retry-${Date.now()}`;
     const calls: FollowupRun[] = [];

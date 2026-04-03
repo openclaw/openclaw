@@ -129,8 +129,6 @@ export function scheduleFollowupDrain(
           const canBatchRender = renderableItems.length === items.length;
 
           if (!canBatchRender) {
-            collectState.forceIndividualCollect = true;
-            queue.collectForceIndividual = true;
             if (summary) {
               const summaryTarget = items[0];
               if (!summaryTarget) {
@@ -149,6 +147,8 @@ export function scheduleFollowupDrain(
               });
               clearQueueSummaryState(queue);
             }
+            collectState.forceIndividualCollect = true;
+            queue.collectForceIndividual = true;
             let drainedAnyFallbackItem = false;
             while (queue.items.length > 0) {
               if (drainedAnyFallbackItem) {
