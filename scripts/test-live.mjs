@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const forwardedArgs = [];
 let quietOverride;
@@ -24,15 +25,15 @@ const env = {
   OPENCLAW_LIVE_TEST_QUIET: quietOverride ?? process.env.OPENCLAW_LIVE_TEST_QUIET ?? "1",
 };
 
-const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const child = spawn(
-  command,
-  ["exec", "vitest", "run", "--config", "vitest.live.config.ts", ...forwardedArgs],
-  {
-    stdio: "inherit",
-    env,
-  },
-);
+const pnpmRunner = resolvePnpmRunner({
+  pnpmArgs: ["exec", "vitest", "run", "--config", "vitest.live.config.ts", ...forwardedArgs],
+});
+const child = spawn(pnpmRunner.command, pnpmRunner.args, {
+  stdio: "inherit",
+  env: pnpmRunner.env ?? env,
+  shell: pnpmRunner.shell,
+  windowsVerbatimArguments: pnpmRunner.windowsVerbatimArguments,
+});
 
 child.on("exit", (code, signal) => {
   if (signal) {
