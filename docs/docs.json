@@ -1145,11 +1145,11 @@
                 "group": "Automation & Tasks",
                 "pages": [
                   "automation/index",
-                  "automation/tasks",
                   "automation/cron-jobs",
+                  "automation/tasks",
                   "automation/taskflow",
-                  "automation/hooks",
-                  "automation/standing-orders"
+                  "automation/standing-orders",
+                  "automation/hooks"
                 ]
               },
               {
@@ -1249,6 +1249,7 @@
                   "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
+                  "providers/stepfun",
                   "providers/synthetic",
                   "providers/together",
                   "providers/venice",

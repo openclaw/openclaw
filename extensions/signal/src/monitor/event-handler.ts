@@ -14,12 +14,21 @@ import {
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/config-runtime";
+import {
+  resolveChannelGroupPolicy,
+  resolveChannelGroupRequireMention,
+} from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageReceivedContext,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -715,6 +724,47 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
       });
+      const signalGroupPolicy = resolveChannelGroupPolicy({
+        cfg: deps.cfg,
+        channel: "signal",
+        groupId,
+        accountId: deps.accountId,
+      });
+      if (
+        (signalGroupPolicy.groupConfig?.ingest ?? signalGroupPolicy.defaultConfig?.ingest) === true
+      ) {
+        const canonicalGroupTarget =
+          normalizeSignalMessagingTarget(`group:${groupId}`) ?? `group:${groupId}`;
+        fireAndForgetHook(
+          triggerInternalHook(
+            createInternalHookEvent(
+              "message",
+              "received",
+              route.sessionKey,
+              toInternalMessageReceivedContext({
+                from: `group:${groupId}`,
+                to: canonicalGroupTarget,
+                content: pendingBodyText,
+                timestamp: envelope.timestamp ?? undefined,
+                channelId: "signal",
+                accountId: deps.accountId,
+                conversationId: canonicalGroupTarget,
+                messageId:
+                  typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+                senderId: senderDisplay,
+                senderName: envelope.sourceName ?? undefined,
+                provider: "signal",
+                surface: "signal",
+                originatingChannel: "signal",
+                originatingTo: canonicalGroupTarget,
+                isGroup: true,
+                groupId: canonicalGroupTarget,
+              }),
+            ),
+          ),
+          "signal: mention-skip message hook failed",
+        );
+      }
       return;
     }
 

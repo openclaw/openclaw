@@ -56,6 +56,7 @@ const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const FORBIDDEN_PACKED_PATH_PREFIXES = ["docs/.generated/"] as const;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
 
@@ -437,7 +438,21 @@ function collectPackedTarballErrors(): string[] {
       .filter((path): path is string => typeof path === "string" && path.length > 0),
   );
 
-  return collectControlUiPackErrors(packedPaths);
+  return [
+    ...collectControlUiPackErrors(packedPaths),
+    ...collectForbiddenPackedPathErrors(packedPaths),
+  ];
+}
+
+export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (!FORBIDDEN_PACKED_PATH_PREFIXES.some((prefix) => packedPath.startsWith(prefix))) {
+      continue;
+    }
+    errors.push(`npm package must not include generated docs artifact "${packedPath}".`);
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
 function main(): number {

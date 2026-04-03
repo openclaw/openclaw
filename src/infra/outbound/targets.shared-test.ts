@@ -1,10 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
+import {
+  isWhatsAppGroupJid,
+  normalizeWhatsAppTarget,
+} from "../../channels/plugins/normalize/whatsapp.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundTarget } from "./targets.js";
+
+const createOutboundStub = (channel: "telegram" | "whatsapp"): ChannelOutboundAdapter => ({
+  deliveryMode: channel === "whatsapp" ? "gateway" : "direct",
+  resolveTarget:
+    channel === "whatsapp"
+      ? ({ to }) => {
+          const normalized = to ? normalizeWhatsAppTarget(to) : null;
+          return normalized
+            ? { ok: true, to: normalized }
+            : { ok: false, error: new Error("WhatsApp target required") };
+        }
+      : ({ to }) =>
+          typeof to === "string" && to.trim()
+            ? { ok: true, to: to.trim() }
+            : { ok: false, error: new Error("Telegram target required") },
+  sendText: async () => ({ channel, messageId: `${channel}-msg` }),
+});
+
+const telegramOutbound = createOutboundStub("telegram");
+const whatsappOutbound = createOutboundStub("whatsapp");
 
 function parseTelegramTargetForTest(raw: string): {
   chatId: string;

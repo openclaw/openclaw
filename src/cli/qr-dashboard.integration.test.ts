@@ -50,7 +50,7 @@ function createGatewayTokenRefFixture() {
     },
     gateway: {
       bind: "custom",
-      customBindHost: "gateway.local",
+      customBindHost: "127.0.0.1",
       port: 18789,
       auth: {
         mode: "token",
@@ -157,7 +157,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     const setupCode = runtimeLogs.at(-1);
     expect(setupCode).toBeTruthy();
     const payload = decodeSetupCode(setupCode ?? "");
-    expect(payload.url).toBe("ws://gateway.local:18789");
+    expect(payload.url).toBe("ws://127.0.0.1:18789");
     expect(payload.bootstrapToken).toBeTruthy();
     expect(runtimeErrors).toEqual([]);
 

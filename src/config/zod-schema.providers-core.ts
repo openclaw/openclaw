@@ -89,6 +89,7 @@ const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional(
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
@@ -104,6 +105,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
@@ -243,6 +245,12 @@ export const TelegramAccountSchemaBase = z
       .object({
         autoSelectFamily: z.boolean().optional(),
         dnsResultOrder: z.enum(["ipv4first", "verbatim"]).optional(),
+        dangerouslyAllowPrivateNetwork: z
+          .boolean()
+          .optional()
+          .describe(
+            "Dangerous opt-in for trusted Telegram fake-IP or transparent-proxy environments where api.telegram.org resolves to private/internal/special-use addresses during media downloads.",
+          ),
       })
       .strict()
       .optional(),
@@ -1046,6 +1054,7 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
 const SignalGroupEntrySchema = z
   .object({
     requireMention: z.boolean().optional(),
+    ingest: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
   })
