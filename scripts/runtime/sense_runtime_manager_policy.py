@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import json
 import sys
@@ -70,6 +70,42 @@ def main() -> int:
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
+    if final_state == 'provider_config_missing':
+        output = build_policy_output(
+            manager_action='configure_provider',
+            manager_reason='provider configuration is missing and provider remediation should continue before runtime work',
+            next_step='check_provider_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'provider_config_missing_configure_provider',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_provider',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state == 'provider_model_missing':
+        output = build_policy_output(
+            manager_action='configure_provider',
+            manager_reason='model configuration is missing and provider/model remediation should continue before runtime work',
+            next_step='check_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'provider_model_missing_configure_provider',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_provider',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
     if (
         final_state == 'selected_model_not_ready'
         and retry_decision == 'recheck_runtime_status_once'
@@ -115,6 +151,42 @@ def main() -> int:
                     'repeated_decision_detected': repeated_decision_detected,
                 },
                 'selected_action': 'stop_and_surface_diff',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state == 'gpu_not_ready':
+        output = build_policy_output(
+            manager_action='configure_gpu_runtime',
+            manager_reason='gpu runtime is not ready and gpu remediation should continue before runtime work',
+            next_step='configure_gpu_runtime',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'gpu_not_ready_configure_gpu_runtime',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_gpu_runtime',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if final_state == 'nim_not_ready':
+        output = build_policy_output(
+            manager_action='start_nim_runtime',
+            manager_reason='nim runtime is not ready and nim remediation should continue before runtime work',
+            next_step='start_nim_runtime',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'nim_not_ready_start_nim_runtime',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'start_nim_runtime',
             },
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
@@ -176,11 +248,7 @@ def main() -> int:
         return 0
 
     if final_state in {
-        'provider_config_missing',
-        'provider_model_missing',
         'provider_not_ready',
-        'nim_not_ready',
-        'gpu_not_ready',
         'capability_limited',
         'default_model_missing',
         'selected_model_missing',

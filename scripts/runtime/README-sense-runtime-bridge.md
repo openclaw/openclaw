@@ -1,4 +1,4 @@
-# Sense Runtime Tool
+﻿# Sense Runtime Tool
 
 Formal runtime-plane entrypoints for the T550 control plane live in:
 
@@ -417,10 +417,20 @@ Current deterministic manager action matrix:
 
 - `provider_api_key_missing`
   - `manager_action = configure_provider`
+- `provider_config_missing`
+  - `manager_action = configure_provider`
+  - `next_step = check_provider_config`
+- `provider_model_missing`
+  - `manager_action = configure_provider`
+  - `next_step = check_model_config`
 - `selected_model_not_ready` + `retry_decision = recheck_runtime_status_once`
   - `manager_action = retry_once`
 - `selected_model_mismatch` + repeated mismatch / `skip_restart_repeated_mismatch`
   - `manager_action = stop_and_surface_diff`
+- `gpu_not_ready`
+  - `manager_action = configure_gpu_runtime`
+- `nim_not_ready`
+  - `manager_action = start_nim_runtime`
 - `ready_for_runtime_task`
   - `manager_action = run_runtime_task`
 
@@ -432,6 +442,8 @@ Manager policy output now includes:
 - `policy_trace`
 
 `policy_trace` identifies which deterministic rule fired and which fields matched, so the manager can explain why it retried, stopped, or promoted a runtime task.
+
+States that still do not have a dedicated manager action remain on the `manual_review` fallback. This keeps the manager deterministic for known concrete remediation states while preserving a safe fallback for unknown or not-yet-automated states.
 
 Routing loop can now stop more specifically as:
 
