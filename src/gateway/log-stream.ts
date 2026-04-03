@@ -68,6 +68,13 @@ export function createGatewayLogStream(params: {
         limit: subscriber.limit,
         maxBytes: subscriber.maxBytes,
       });
+      if (
+        subscribers.get(subscriber.connId) !== subscriber ||
+        !subscriber.active ||
+        subscriber.socket.readyState !== WebSocket.OPEN
+      ) {
+        return;
+      }
       subscriber.file = file;
       subscriber.cursor = result.cursor;
       if (!result.reset && result.lines.length === 0) {

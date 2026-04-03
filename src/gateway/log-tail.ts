@@ -44,7 +44,7 @@ export async function resolveLogFile(file: string): Promise<string> {
   );
   const sorted = candidates
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .toSorted((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
+    .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
   return sorted[0]?.path ?? file;
 }
 

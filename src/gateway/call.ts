@@ -824,6 +824,8 @@ async function resolveGatewayClientConnectionWithScopes(params: {
       token: resolvedCredentials.token,
       password: resolvedCredentials.password,
       tlsFingerprint,
+      // Keep the client-level request timeout aligned with the outer one-shot
+      // call timer so direct client.request(...) calls do not outlive callGateway().
       requestTimeoutMs: timeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,

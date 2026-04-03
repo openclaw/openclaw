@@ -191,7 +191,6 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
       for (const method of Array.isArray(hello.features?.methods) ? hello.features.methods : []) {
         methods.add(method);
       }
-      streamQueue.reset();
       ready.resolve();
     },
     onConnectError: (err) => {
@@ -275,6 +274,7 @@ async function createFollowLogsClient(opts: LogsCliOptions): Promise<{
     methods,
     waitUntilReady,
     subscribeToStream: async (file, cursor) => {
+      streamQueue.reset();
       const limit = parsePositiveInt(opts.limit, 200);
       const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
       const payload = await client.request("logs.subscribe", { file, cursor, limit, maxBytes });
@@ -927,13 +927,14 @@ export function registerLogsCli(program: Command) {
       return;
     } finally {
       if (followClient) {
-        if (supportsStreamingFollow(followClient.methods)) {
+        const activeFollowClient = followClient;
+        if (supportsStreamingFollow(activeFollowClient.methods)) {
           await Promise.resolve()
-            .then(async () => await followClient.client.request("logs.unsubscribe"))
+            .then(async () => await activeFollowClient.client.request("logs.unsubscribe"))
             .catch(() => {});
         }
-        await followClient.client.stopAndWait().catch(() => {
-          followClient.client.stop();
+        await activeFollowClient.client.stopAndWait().catch(() => {
+          activeFollowClient.client.stop();
         });
       }
     }
