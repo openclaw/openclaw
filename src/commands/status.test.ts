@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { GatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -281,13 +282,11 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../channels/config-presence.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/config-presence.js")>();
-  return {
-    ...actual,
-    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
-  };
-});
+vi.mock("../channels/config-presence.js", () => ({
+  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  listPotentialConfiguredChannelIds: (cfg: { channels?: Record<string, unknown> }) =>
+    Object.keys(cfg.channels ?? {}).filter((key) => key !== "defaults" && key !== "modelByChannel"),
+}));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
@@ -328,25 +327,14 @@ vi.mock("../config/sessions/paths.js", () => ({
 vi.mock("../config/sessions/store-read.js", () => ({
   readSessionStoreReadOnly: mocks.loadSessionStore,
 }));
-vi.mock("../config/sessions/types.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions/types.js")>();
-  return {
-    ...actual,
-    resolveFreshSessionTotalTokens: vi.fn(
-      (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
-        typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
-          ? entry.totalTokens
-          : undefined,
-    ),
-  };
-});
-vi.mock("../channels/config-presence.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/config-presence.js")>();
-  return {
-    ...actual,
-    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
-  };
-});
+vi.mock("../config/sessions/types.js", () => ({
+  resolveFreshSessionTotalTokens: vi.fn(
+    (entry?: { totalTokens?: number; totalTokensFresh?: boolean }) =>
+      typeof entry?.totalTokens === "number" && entry?.totalTokensFresh !== false
+        ? entry.totalTokens
+        : undefined,
+  ),
+}));
 vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => {
     const plugins = [
@@ -430,32 +418,34 @@ vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
 }));
-vi.mock("../gateway/call.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/call.js")>();
-  return { ...actual, callGateway: mocks.callGateway };
-});
-vi.mock("../gateway/agent-list.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/agent-list.js")>();
-  return {
-    ...actual,
-    listGatewayAgentsBasic: mocks.listGatewayAgentsBasic,
-  };
-});
-
-vi.mock("../gateway/session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/session-utils.js")>();
-  return {
-    ...actual,
-  };
-});
-vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
-  return {
-    ...actual,
-    resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
-    resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
-  };
-});
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+  resolveGatewayCredentialsWithSecretInputs: vi.fn(
+    async (params: {
+      config?: {
+        gateway?: {
+          auth?: {
+            token?: unknown;
+          };
+        };
+      };
+    }) => {
+      const token = params.config?.gateway?.auth?.token;
+      if (token && typeof token === "object" && "source" in token) {
+        throw new GatewaySecretRefUnavailableError("gateway.auth.token");
+      }
+      const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
+      return envToken ? { token: envToken } : {};
+    },
+  ),
+}));
+vi.mock("../gateway/agent-list.js", () => ({
+  listGatewayAgentsBasic: mocks.listGatewayAgentsBasic,
+}));
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageRoot: vi.fn().mockResolvedValue("/tmp/openclaw"),
+  resolveOpenClawPackageRootSync: vi.fn(() => "/tmp/openclaw"),
+}));
 vi.mock("../infra/os-summary.js", () => ({
   resolveOsSummary: () => ({
     platform: "darwin",
@@ -489,21 +479,14 @@ vi.mock("../infra/update-check.js", () => ({
   formatGitInstallLabel: vi.fn(() => "main · @ deadbeef"),
   compareSemverStrings: vi.fn(() => 0),
 }));
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: mocks.loadConfig,
-    readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
-  };
-});
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
-  return {
-    ...actual,
-    resolveGatewayService: mocks.resolveGatewayService,
-  };
-});
+vi.mock("../config/config.js", () => ({
+  loadConfig: mocks.loadConfig,
+  readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
+  resolveGatewayPort: vi.fn(() => 18789),
+}));
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: mocks.resolveGatewayService,
+}));
 vi.mock("../daemon/node-service.js", () => ({
   resolveNodeService: mocks.resolveNodeService,
 }));
@@ -570,6 +553,38 @@ vi.mock("../channels/chat-meta.js", () => {
     },
   };
 });
+vi.mock("./status.daemon.js", () => ({
+  getDaemonStatusSummary: vi.fn(async () => {
+    const service = mocks.resolveGatewayService();
+    const loaded = await service.isLoaded();
+    const runtime = await service.readRuntime();
+    const command = await service.readCommand();
+    return {
+      label: service.label,
+      installed: Boolean(command) || runtime?.status === "running",
+      loaded,
+      managedByOpenClaw: Boolean(command),
+      externallyManaged: !command && runtime?.status === "running",
+      loadedText: loaded ? service.loadedText : service.notLoadedText,
+      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+    };
+  }),
+  getNodeDaemonStatusSummary: vi.fn(async () => {
+    const service = mocks.resolveNodeService();
+    const loaded = await service.isLoaded();
+    const runtime = await service.readRuntime();
+    const command = await service.readCommand();
+    return {
+      label: service.label,
+      installed: Boolean(command) || runtime?.status === "running",
+      loaded,
+      managedByOpenClaw: Boolean(command),
+      externallyManaged: !command && runtime?.status === "running",
+      loadedText: loaded ? service.loadedText : service.notLoadedText,
+      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+    };
+  }),
+}));
 
 describe("statusCommand", () => {
   afterEach(() => {

@@ -48,14 +48,10 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
 }));
 
-vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
-  return {
-    ...actual,
-    resolveOpenClawPackageRoot: vi.fn(),
-    resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
-  };
-});
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageRoot: vi.fn(),
+  resolveOpenClawPackageRootSync: vi.fn(() => process.cwd()),
+}));
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: vi.fn(),
@@ -63,24 +59,58 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: vi.fn(() => 18789),
 }));
 
-vi.mock("../infra/update-check.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/update-check.js")>();
-  return {
-    ...actual,
-    checkUpdateStatus: vi.fn(),
-    fetchNpmPackageTargetStatus: vi.fn(),
-    fetchNpmTagVersion: vi.fn(),
-    resolveNpmChannelTag: vi.fn(),
-  };
-});
+vi.mock("../infra/update-check.js", () => ({
+  checkUpdateStatus: vi.fn(),
+  compareSemverStrings: vi.fn((left: string | null, right: string | null) => {
+    const parse = (value: string | null) => {
+      if (!value) {
+        return null;
+      }
+      const match = value.match(/(\d+)\.(\d+)\.(\d+)/);
+      if (!match) {
+        return null;
+      }
+      return [
+        Number.parseInt(match[1] ?? "0", 10),
+        Number.parseInt(match[2] ?? "0", 10),
+        Number.parseInt(match[3] ?? "0", 10),
+      ] as const;
+    };
+    const a = parse(left);
+    const b = parse(right);
+    if (!a || !b) {
+      return null;
+    }
+    for (let index = 0; index < a.length; index += 1) {
+      const diff = a[index] - b[index];
+      if (diff !== 0) {
+        return diff;
+      }
+    }
+    return 0;
+  }),
+  fetchNpmPackageTargetStatus: vi.fn(),
+  fetchNpmTagVersion: vi.fn(),
+  resolveNpmChannelTag: vi.fn(),
+}));
 
-vi.mock("../infra/runtime-guard.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/runtime-guard.js")>();
-  return {
-    ...actual,
-    nodeVersionSatisfiesEngine,
-  };
-});
+vi.mock("../infra/runtime-guard.js", () => ({
+  nodeVersionSatisfiesEngine,
+  parseSemver: (version: string | null) => {
+    if (!version) {
+      return null;
+    }
+    const match = version.match(/(\d+)\.(\d+)\.(\d+)/);
+    if (!match) {
+      return null;
+    }
+    return {
+      major: Number.parseInt(match[1] ?? "0", 10),
+      minor: Number.parseInt(match[2] ?? "0", 10),
+      patch: Number.parseInt(match[3] ?? "0", 10),
+    };
+  },
+}));
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -101,13 +131,12 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-vi.mock("../utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../utils.js")>();
-  return {
-    ...actual,
-    pathExists: (...args: unknown[]) => pathExists(...args),
-  };
-});
+vi.mock("../utils.js", () => ({
+  displayString: (input: string) => input,
+  isRecord: (value: unknown) =>
+    typeof value === "object" && value !== null && !Array.isArray(value),
+  pathExists: (...args: unknown[]) => pathExists(...args),
+}));
 
 vi.mock("../plugins/update.js", () => ({
   syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
