@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
@@ -84,6 +84,10 @@ const testRuntime = (): RuntimeEnv =>
   }) as RuntimeEnv;
 
 describe("mattermost websocket monitor", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("rejects when websocket closes before open", async () => {
     const socket = new FakeWebSocket();
     const connectOnce = createMattermostConnectOnce({
