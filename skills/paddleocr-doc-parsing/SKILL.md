@@ -7,6 +7,8 @@ description: >-
   Trigger terms: 文档解析, 版面分析, 版面还原, 表格提取, 公式识别, 多栏排版, 扫描件结构化,
   发票, 财报, 复杂 PDF, PDF转Markdown, 图表, 阅读顺序; reading order, formula, LaTeX,
   layout parsing, structure extraction, PP-StructureV3, PaddleOCR-VL.
+license: Apache-2.0
+compatibility: Requires Python 3.9+, uv, and internet access.
 metadata:
   openclaw:
     requires:
@@ -43,21 +45,15 @@ metadata:
 
 ## Installation
 
-Install Python dependencies before using this skill. From the skill directory (`skills/paddleocr-doc-parsing`):
+Scripts declare their dependencies inline ([PEP 723](https://peps.python.org/pep-0723/)). No separate install step is needed — [uv](https://docs.astral.sh/uv/) resolves dependencies automatically:
 
 ```bash
-pip install -r requirements.txt
-```
-
-**Optional** — for image optimization and PDF page extraction:
-
-```bash
-pip install -r requirements-optimize.txt
+uv run scripts/layout_caller.py --help
 ```
 
 ## How to Use This Skill
 
-> **Working directory**: All `python scripts/...` commands below should be run from this skill's root directory (the directory containing this SKILL.md file).
+> **Working directory**: All `uv run scripts/...` commands below should be run from this skill's root directory (the directory containing this SKILL.md file).
 
 ### Basic Workflow
 
@@ -68,19 +64,19 @@ pip install -r requirements-optimize.txt
 2. **Execute document parsing**:
 
    ```bash
-   python scripts/layout_caller.py --file-url "URL provided by user" --pretty
+   uv run scripts/layout_caller.py --file-url "URL provided by user" --pretty
    ```
 
    Or for local files:
 
    ```bash
-   python scripts/layout_caller.py --file-path "file path" --pretty
+   uv run scripts/layout_caller.py --file-path "file path" --pretty
    ```
 
    **Optional: explicitly set file type**:
 
    ```bash
-   python scripts/layout_caller.py --file-url "URL provided by user" --file-type 0 --pretty
+   uv run scripts/layout_caller.py --file-url "URL provided by user" --file-type 0 --pretty
    ```
 
    - `--file-type 0`: PDF
@@ -168,7 +164,7 @@ For the complete schema and field-level details, see `references/output_schema.m
 **Example 1: Extract Full Document Text**
 
 ```bash
-python scripts/layout_caller.py \
+uv run scripts/layout_caller.py \
   --file-url "https://example.com/paper.pdf" \
   --pretty
 ```
@@ -181,7 +177,7 @@ Then use:
 **Example 2: Extract Structured Page Data**
 
 ```bash
-python scripts/layout_caller.py \
+uv run scripts/layout_caller.py \
   --file-path "./financial_report.pdf" \
   --pretty
 ```
@@ -193,7 +189,7 @@ Then use:
 **Example 3: Print JSON to stdout (without saving to file)**
 
 ```bash
-python scripts/layout_caller.py \
+uv run scripts/layout_caller.py \
   --file-url "URL" \
   --stdout \
   --pretty
@@ -240,20 +236,18 @@ For PDFs, the maximum is 100 pages per request.
 For large image files, compress before uploading — this reduces upload time and can improve processing stability:
 
 ```bash
-python scripts/optimize_file.py input.png output.jpg --quality 85
-python scripts/layout_caller.py --file-path "output.jpg" --pretty
+uv run scripts/optimize_file.py input.png output.jpg --quality 85
+uv run scripts/layout_caller.py --file-path "output.jpg" --pretty
 ```
 
 `--quality` controls JPEG/WebP lossy compression (1-100, default 85); it has no effect on PNG output. Use `--target-size` (in MB, default 20) to set the max file size — the script iteratively downscales until the target is met.
-
-Requires optional dependencies: `pip install -r requirements-optimize.txt`
 
 #### Use URL for Large Local Files (Recommended)
 
 For very large local files, prefer `--file-url` over `--file-path` to avoid base64 encoding overhead:
 
 ```bash
-python scripts/layout_caller.py --file-url "https://your-server.com/large_file.pdf"
+uv run scripts/layout_caller.py --file-url "https://your-server.com/large_file.pdf"
 ```
 
 #### Process Specific Pages (PDF Only)
@@ -262,13 +256,13 @@ If you only need certain pages from a large PDF, extract them first:
 
 ```bash
 # Extract pages 1-5
-python scripts/split_pdf.py large.pdf pages_1_5.pdf --pages "1-5"
+uv run scripts/split_pdf.py large.pdf pages_1_5.pdf --pages "1-5"
 
 # Mixed ranges are supported
-python scripts/split_pdf.py large.pdf selected_pages.pdf --pages "1-5,8,10-12"
+uv run scripts/split_pdf.py large.pdf selected_pages.pdf --pages "1-5,8,10-12"
 
 # Then process the smaller file
-python scripts/layout_caller.py --file-path "pages_1_5.pdf"
+uv run scripts/layout_caller.py --file-path "pages_1_5.pdf"
 ```
 
 ### Error Handling
@@ -298,7 +292,7 @@ If parsing quality is poor:
 
 - **Large or high-resolution images**: Compress with `optimize_file.py` before parsing — oversized inputs can degrade layout detection:
   ```bash
-  python scripts/optimize_file.py input.png optimized.jpg --quality 85
+  uv run scripts/optimize_file.py input.png optimized.jpg --quality 85
   ```
 - **Check confidence**: `result.result.layoutParsingResults[n].prunedResult` includes confidence scores per layout element — low values indicate regions worth reviewing
 
@@ -313,9 +307,9 @@ If parsing quality is poor:
 To verify the skill is working properly:
 
 ```bash
-python scripts/smoke_test.py
-python scripts/smoke_test.py --skip-api-test
-python scripts/smoke_test.py --test-url "https://..."
+uv run scripts/smoke_test.py
+uv run scripts/smoke_test.py --skip-api-test
+uv run scripts/smoke_test.py --test-url "https://..."
 ```
 
 The first form tests configuration and API connectivity. `--skip-api-test` checks configuration only. `--test-url` overrides the default sample document URL.

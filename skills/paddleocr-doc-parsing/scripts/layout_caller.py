@@ -4,10 +4,17 @@ PaddleOCR Document Parser
 Simple CLI wrapper for the PaddleOCR document parsing library.
 
 Usage:
-    python scripts/layout_caller.py --file-url "URL"
-    python scripts/layout_caller.py --file-path "document.pdf"
-    python scripts/layout_caller.py --file-path "doc.pdf" --pretty
+    uv run scripts/layout_caller.py --file-url "URL"
+    uv run scripts/layout_caller.py --file-path "document.pdf"
+    uv run scripts/layout_caller.py --file-path "doc.pdf" --pretty
 """
+
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#   "httpx>=0.24.0",
+# ]
+# ///
 
 import argparse
 import io
@@ -56,16 +63,22 @@ def main() -> None:
         epilog="""
 Examples:
   # Parse document from URL (result is auto-saved to the system temp directory)
-  python scripts/layout_caller.py --file-url "https://example.com/document.pdf"
+  uv run scripts/layout_caller.py --file-url "https://example.com/document.pdf"
 
   # Parse local file (result is auto-saved to the system temp directory)
-  python scripts/layout_caller.py --file-path "./invoice.pdf"
+  uv run scripts/layout_caller.py --file-path "./invoice.pdf"
 
   # Save result to a custom file path
-  python scripts/layout_caller.py --file-url "URL" --output "./result.json" --pretty
+  uv run scripts/layout_caller.py --file-url "URL" --output "./result.json" --pretty
 
   # Print JSON to stdout without saving a file
-  python scripts/layout_caller.py --file-url "URL" --stdout --pretty
+  uv run scripts/layout_caller.py --file-url "URL" --stdout --pretty
+
+Exit codes:
+  0   Success (ok=true in JSON output)
+  1   Parse or API error (ok=false in JSON output; see error.code and error.message)
+  5   Cannot write result to output file
+
 Configuration:
   Set environment variables: PADDLEOCR_DOC_PARSING_API_URL, PADDLEOCR_ACCESS_TOKEN
   Optional: PADDLEOCR_DOC_PARSING_TIMEOUT

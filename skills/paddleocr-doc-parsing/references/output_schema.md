@@ -89,17 +89,17 @@ Paths are relative to the output envelope root.
 
 ```bash
 # Parse document from URL (result auto-saves to the system temp directory)
-python scripts/layout_caller.py --file-url "URL" --pretty
+uv run scripts/layout_caller.py --file-url "URL" --pretty
 
 # Parse local file (result auto-saves to the system temp directory)
-python scripts/layout_caller.py --file-path "doc.pdf" --pretty
+uv run scripts/layout_caller.py --file-path "doc.pdf" --pretty
 
 # Parse with explicit file type
-python scripts/layout_caller.py --file-url "URL" --file-type 1 --pretty
+uv run scripts/layout_caller.py --file-url "URL" --file-type 1 --pretty
 
 # Save result to a custom file path
-python scripts/layout_caller.py --file-url "URL" --output "./result.json" --pretty
+uv run scripts/layout_caller.py --file-url "URL" --output "./result.json" --pretty
 
 # Print JSON to stdout without saving a file
-python scripts/layout_caller.py --file-url "URL" --stdout --pretty
+uv run scripts/layout_caller.py --file-url "URL" --stdout --pretty
 ```

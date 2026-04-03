@@ -95,17 +95,17 @@ Paths are relative to the output envelope root.
 
 ```bash
 # OCR from URL (result auto-saves to the system temp directory)
-python scripts/ocr_caller.py --file-url "URL" --pretty
+uv run scripts/ocr_caller.py --file-url "URL" --pretty
 
 # OCR local file (result auto-saves to the system temp directory)
-python scripts/ocr_caller.py --file-path "doc.pdf" --pretty
+uv run scripts/ocr_caller.py --file-path "doc.pdf" --pretty
 
 # OCR with explicit file type
-python scripts/ocr_caller.py --file-url "URL" --file-type 1 --pretty
+uv run scripts/ocr_caller.py --file-url "URL" --file-type 1 --pretty
 
 # Save result to a custom file path
-python scripts/ocr_caller.py --file-url "URL" --output "./result.json" --pretty
+uv run scripts/ocr_caller.py --file-url "URL" --output "./result.json" --pretty
 
 # Print JSON to stdout without saving a file
-python scripts/ocr_caller.py --file-url "URL" --stdout --pretty
+uv run scripts/ocr_caller.py --file-url "URL" --stdout --pretty
 ```

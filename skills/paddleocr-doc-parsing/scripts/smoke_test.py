@@ -4,10 +4,17 @@ Smoke Test for PaddleOCR Document Parsing Skill
 Verifies configuration and API connectivity.
 
 Usage:
-    python scripts/smoke_test.py
-    python scripts/smoke_test.py --skip-api-test
-    python scripts/smoke_test.py --test-url "https://example.com/test.pdf"
+    uv run scripts/smoke_test.py
+    uv run scripts/smoke_test.py --skip-api-test
+    uv run scripts/smoke_test.py --test-url "https://example.com/test.pdf"
 """
+
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#   "httpx>=0.24.0",
+# ]
+# ///
 
 import argparse
 import sys
@@ -67,11 +74,9 @@ def main() -> int:
         print(f"  + httpx: {httpx.__version__}")
     except ImportError:
         print("  X httpx not installed")
-        print(
-            "\nPlease install dependencies (from the skill directory, one level above scripts/):"
-        )
-        print("  pip install -r requirements.txt")
-        print("or at minimum:")
+        print("\nRun this script with uv to auto-resolve dependencies:")
+        print("  uv run scripts/smoke_test.py")
+        print("\nOr install manually:")
         print("  pip install httpx")
         return 1
 
@@ -131,8 +136,8 @@ def main() -> int:
     print("Smoke Test PASSED")
     print("=" * 60)
     print("\nNext steps:")
-    print('  python scripts/layout_caller.py --file-url "URL"')
-    print('  python scripts/layout_caller.py --file-path "doc.pdf"')
+    print('  uv run scripts/layout_caller.py --file-url "URL" --pretty')
+    print('  uv run scripts/layout_caller.py --file-path "doc.pdf" --pretty')
     print(
         "  Results are auto-saved to the system temp directory; the caller prints the saved path."
     )

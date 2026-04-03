@@ -2,8 +2,15 @@
 Split a PDF by page ranges.
 
 Usage:
-    python scripts/split_pdf.py input.pdf output.pdf --pages "1-5,8,10-12"
+    uv run scripts/split_pdf.py input.pdf output.pdf --pages "1-5,8,10-12"
 """
+
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#   "pypdfium2>=4.0.0",
+# ]
+# ///
 
 import argparse
 import sys
@@ -53,10 +60,7 @@ def parse_pages(pages_spec: str, total_pages: int) -> list[int]:
 
 def split_pdf(input_path: Path, output_path: Path, pages_spec: str) -> tuple[int, int]:
     """Create a new PDF containing selected pages from the input PDF."""
-    try:
-        import pypdfium2 as pdfium
-    except ImportError:
-        raise RuntimeError("pypdfium2 is required. Install with: pip install pypdfium2")
+    import pypdfium2 as pdfium
 
     source_pdf = pdfium.PdfDocument(str(input_path))
     try:

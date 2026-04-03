@@ -1,7 +1,0 @@
-# File Optimization Dependencies
-
-# Image processing
-Pillow>=10.0.0
-
-# PDF processing
-pypdfium2>=4.0.0

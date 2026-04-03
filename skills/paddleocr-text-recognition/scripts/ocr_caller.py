@@ -4,9 +4,16 @@ PaddleOCR Text Recognition Caller
 Simple CLI wrapper for the PaddleOCR text recognition library.
 
 Usage:
-    python scripts/ocr_caller.py --file-url "URL"
-    python scripts/ocr_caller.py --file-path "image.png" --pretty
+    uv run scripts/ocr_caller.py --file-url "URL"
+    uv run scripts/ocr_caller.py --file-path "image.png" --pretty
 """
+
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+#   "httpx>=0.24.0",
+# ]
+# ///
 
 import argparse
 import io
@@ -55,19 +62,25 @@ def main() -> None:
         epilog="""
 Examples:
   # OCR from URL (result is auto-saved to the system temp directory)
-  python scripts/ocr_caller.py --file-url "https://example.com/image.png"
+  uv run scripts/ocr_caller.py --file-url "https://example.com/image.png"
 
   # OCR local file (result is auto-saved to the system temp directory)
-  python scripts/ocr_caller.py --file-path "./document.pdf" --pretty
+  uv run scripts/ocr_caller.py --file-path "./document.pdf" --pretty
 
   # OCR with explicit file type override
-  python scripts/ocr_caller.py --file-url "URL" --file-type 1 --pretty
+  uv run scripts/ocr_caller.py --file-url "URL" --file-type 1 --pretty
 
   # Save result to a custom file path
-  python scripts/ocr_caller.py --file-url "URL" --output "./result.json" --pretty
+  uv run scripts/ocr_caller.py --file-url "URL" --output "./result.json" --pretty
 
   # Print JSON to stdout without saving a file
-  python scripts/ocr_caller.py --file-url "URL" --stdout --pretty
+  uv run scripts/ocr_caller.py --file-url "URL" --stdout --pretty
+
+Exit codes:
+  0   Success (ok=true in JSON output)
+  1   OCR or API error (ok=false in JSON output; see error.code and error.message)
+  5   Cannot write result to output file
+
 Configuration:
   Set environment variables: PADDLEOCR_OCR_API_URL, PADDLEOCR_ACCESS_TOKEN
   Optional: PADDLEOCR_OCR_TIMEOUT
