@@ -61,7 +61,6 @@ export type {
   DiscordChannelCreate,
   DiscordChannelEdit,
   DiscordChannelMove,
-  DiscordOptionalRuntimeAccountContext,
   DiscordChannelPermissionSet,
   DiscordEmojiUpload,
   DiscordMessageEdit,

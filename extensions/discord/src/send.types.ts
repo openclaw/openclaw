@@ -33,13 +33,6 @@ export type DiscordRuntimeAccountContext = {
   accountId: string;
 };
 
-export type DiscordOptionalRuntimeAccountContext =
-  | DiscordRuntimeAccountContext
-  | {
-      cfg?: undefined;
-      accountId?: undefined;
-    };
-
 export type DiscordReactOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
