@@ -90,6 +90,7 @@ const MIME_TO_EXT: Record<string, string> = {
   // bug in store.ts; entries kept here for future extension support
   "image/bmp": ".bmp",
   "image/tiff": ".tiff",
+  "application/pdf": ".pdf",
 };
 
 // Module-level Set for O(1) lookup — not rebuilt on every attachment iteration.
@@ -105,6 +106,7 @@ const SUPPORTED_OFFLOAD_MIMES = new Set([
   "image/gif",
   "image/heic",
   "image/heif",
+  "application/pdf",
 ]);
 
 /**
@@ -134,6 +136,14 @@ function normalizeMime(mime?: string): string | undefined {
 
 function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
+}
+
+function isPdfMime(mime?: string): boolean {
+  return typeof mime === "string" && mime === "application/pdf";
+}
+
+function isSupportedAttachmentMime(mime?: string): boolean {
+  return isImageMime(mime) || isPdfMime(mime);
 }
 
 function isValidBase64(value: string): boolean {
@@ -352,12 +362,12 @@ export async function parseMessageWithAttachments(
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
 
-      if (sniffedMime && !isImageMime(sniffedMime)) {
-        log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
+      if (sniffedMime && !isSupportedAttachmentMime(sniffedMime)) {
+        log?.warn(`attachment ${label}: detected unsupported type (${sniffedMime}), dropping`);
         continue;
       }
-      if (!sniffedMime && !isImageMime(providedMime)) {
-        log?.warn(`attachment ${label}: unable to detect image mime type, dropping`);
+      if (!sniffedMime && !isSupportedAttachmentMime(providedMime)) {
+        log?.warn(`attachment ${label}: unable to detect supported mime type, dropping`);
         continue;
       }
       if (sniffedMime && providedMime && sniffedMime !== providedMime) {
@@ -372,7 +382,11 @@ export async function parseMessageWithAttachments(
 
       let isOffloaded = false;
 
-      if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+      // PDFs must always be offloaded — they cannot be passed inline as image
+      // blocks. The agent resolves the media:// ref via the PDF extraction pipeline.
+      const forceOffload = isPdfMime(finalMime);
+
+      if (forceOffload || sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
         const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
 
         if (!isSupportedForOffload) {
@@ -380,7 +394,7 @@ export async function parseMessageWithAttachments(
           throw new Error(
             `attachment ${label}: format ${finalMime} is too large to pass inline ` +
               `(${sizeBytes} > ${OFFLOAD_THRESHOLD_BYTES} bytes) and cannot be offloaded. ` +
-              `Please convert to JPEG, PNG, WEBP, GIF, HEIC, or HEIF.`,
+              `Please convert to JPEG, PNG, WEBP, GIF, HEIC, HEIF, or PDF.`,
           );
         }
 
@@ -413,7 +427,7 @@ export async function parseMessageWithAttachments(
           const mediaRef = `media://inbound/${savedMedia.id}`;
 
           updatedMessage += `\n[media attached: ${mediaRef}]`;
-          log?.info?.(`[Gateway] Intercepted large image payload. Saved: ${mediaRef}`);
+          log?.info?.(`[Gateway] Intercepted large attachment payload. Saved: ${mediaRef}`);
 
           // Record for transcript metadata — separate from `images` because
           // these are not passed inline to the model.

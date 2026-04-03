@@ -5,6 +5,11 @@ import {
   parseMessageWithAttachments,
 } from "./chat-attachments.js";
 
+vi.mock("../media/store.js", () => ({
+  saveMediaBuffer: vi.fn(),
+  deleteMediaBuffer: vi.fn(),
+}));
+
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
@@ -76,19 +81,37 @@ describe("parseMessageWithAttachments", () => {
     expect(logs).toHaveLength(0);
   });
 
-  it("drops non-image payloads and logs", async () => {
+  it("offloads PDF payloads to media store", async () => {
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-    const { parsed, logs } = await parseWithWarnings("x", [
+    const { saveMediaBuffer } = await import("../media/store.js");
+    vi.mocked(saveMediaBuffer).mockResolvedValueOnce({ id: "pdf-001", path: "/tmp/pdf-001.pdf" });
+    const { parsed } = await parseWithWarnings("x", [
       {
         type: "file",
-        mimeType: "image/png",
-        fileName: "not-image.pdf",
+        mimeType: "application/pdf",
+        fileName: "doc.pdf",
         content: pdf,
       },
     ]);
     expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+    expect(parsed.message).toContain("media://inbound/pdf-001");
+  });
+
+  it("drops unsupported non-image payloads and logs", async () => {
+    const zip = Buffer.from("PK\x03\x04").toString("base64");
+    const { parsed, logs } = await parseWithWarnings("x", [
+      {
+        type: "file",
+        mimeType: "application/zip",
+        fileName: "archive.zip",
+        content: zip,
+      },
+    ]);
+    expect(parsed.images).toHaveLength(0);
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/non-image/i);
+    expect(logs[0]).toMatch(/unsupported type/i);
   });
 
   it("prefers sniffed mime type and logs mismatch", async () => {
@@ -113,12 +136,14 @@ describe("parseMessageWithAttachments", () => {
     ]);
     expect(parsed.images).toHaveLength(0);
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatch(/unable to detect image mime type/i);
+    expect(logs[0]).toMatch(/unable to detect supported mime type/i);
   });
 
-  it("keeps valid images and drops invalid ones", async () => {
+  it("keeps valid images and offloads PDFs", async () => {
     const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
-    const { parsed, logs } = await parseWithWarnings("x", [
+    const { saveMediaBuffer } = await import("../media/store.js");
+    vi.mocked(saveMediaBuffer).mockResolvedValueOnce({ id: "pdf-002", path: "/tmp/pdf-002.pdf" });
+    const { parsed } = await parseWithWarnings("x", [
       {
         type: "image",
         mimeType: "image/png",
@@ -127,15 +152,16 @@ describe("parseMessageWithAttachments", () => {
       },
       {
         type: "file",
-        mimeType: "image/png",
-        fileName: "not-image.pdf",
+        mimeType: "application/pdf",
+        fileName: "doc.pdf",
         content: pdf,
       },
     ]);
     expect(parsed.images).toHaveLength(1);
     expect(parsed.images[0]?.mimeType).toBe("image/png");
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
-    expect(logs.some((l) => /non-image/i.test(l))).toBe(true);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
   });
 });
 
