@@ -82,6 +82,7 @@ export function loadTestCatalog() {
     const reasons = [];
     const isolated =
       options.unitMemoryIsolatedFiles?.includes(normalizedFile) ||
+      options.extensionMemoryIsolatedFiles?.includes(normalizedFile) ||
       options.extensionTimedIsolatedFiles?.includes(normalizedFile) ||
       options.channelTimedIsolatedFiles?.includes(normalizedFile) ||
       unitForkIsolatedFileSet.has(normalizedFile) ||
@@ -89,6 +90,9 @@ export function loadTestCatalog() {
       channelIsolatedFileSet.has(normalizedFile);
     if (options.unitMemoryIsolatedFiles?.includes(normalizedFile)) {
       reasons.push("unit-memory-isolated");
+    }
+    if (options.extensionMemoryIsolatedFiles?.includes(normalizedFile)) {
+      reasons.push("extensions-memory-heavy");
     }
     if (options.extensionTimedIsolatedFiles?.includes(normalizedFile)) {
       reasons.push("extensions-timed-heavy");
