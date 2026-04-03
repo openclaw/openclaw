@@ -23,6 +23,7 @@ import type { MatrixCryptoFacade } from "./sdk/crypto-facade.js";
 import type { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 import { matrixEventToRaw, parseMxc } from "./sdk/event-helpers.js";
 import { MatrixAuthedHttpClient } from "./sdk/http-client.js";
+import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-lock.js";
 import { ConsoleLogger, LogService, noop } from "./sdk/logger.js";
 import { MatrixRecoveryKeyStore } from "./sdk/recovery-key-store.js";
 import { createMatrixGuardedFetch, type HttpMethod, type QueryParams } from "./sdk/transport.js";
@@ -547,7 +548,7 @@ export class MatrixClient {
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
         }).catch(noop);
-      }, 60_000);
+      }, MATRIX_IDB_PERSIST_INTERVAL_MS);
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
     }

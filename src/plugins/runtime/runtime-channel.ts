@@ -64,7 +64,7 @@ import {
 import {
   setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingMaxAgeBySessionKey,
-} from "../../plugin-sdk/discord-thread-bindings.js";
+} from "../../plugin-sdk/discord-runtime-surface.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";

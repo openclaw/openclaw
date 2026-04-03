@@ -9,6 +9,15 @@ let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
 const auditDiscordChannelPermissionsMock = vi.hoisted(() => vi.fn());
+const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    sleepWithAbort: sleepWithAbortMock,
+  };
+});
 
 vi.mock("./probe.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./probe.js")>();
@@ -45,14 +54,14 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function resolveAccount(cfg: OpenClawConfig): ResolvedDiscordAccount {
-  return discordPlugin.config.resolveAccount(cfg, "default") as ResolvedDiscordAccount;
+function resolveAccount(cfg: OpenClawConfig, accountId = "default"): ResolvedDiscordAccount {
+  return discordPlugin.config.resolveAccount(cfg, accountId) as ResolvedDiscordAccount;
 }
 
-function startDiscordAccount(cfg: OpenClawConfig) {
+function startDiscordAccount(cfg: OpenClawConfig, accountId = "default") {
   return discordPlugin.gateway!.startAccount!(
     createStartAccountContext({
-      account: resolveAccount(cfg),
+      account: resolveAccount(cfg, accountId),
       cfg,
     }),
   );
@@ -73,6 +82,8 @@ afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   auditDiscordChannelPermissionsMock.mockReset();
+  sleepWithAbortMock.mockReset();
+  sleepWithAbortMock.mockResolvedValue(undefined);
 });
 
 beforeEach(async () => {
@@ -184,8 +195,45 @@ describe("discordPlugin outbound", () => {
         accountId: "default",
       }),
     );
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+
+  it("stagger starts later accounts in multi-bot setups", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "Cherry" },
+      application: {
+        intents: {
+          messageContent: "limited",
+          guildMembers: "disabled",
+          presence: "disabled",
+        },
+      },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            // "alpha" sorts before "zeta" so alpha is index 0, zeta is index 1
+            alpha: { token: "Bot alpha-token", enabled: true },
+            zeta: { token: "Bot zeta-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First account (index 0) — no delay
+    await startDiscordAccount(cfg, "alpha");
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+    // Second account (index 1) — 10s delay
+    await startDiscordAccount(cfg, "zeta");
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, expect.any(Object));
   });
 });
 

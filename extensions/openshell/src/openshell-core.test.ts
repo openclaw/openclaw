@@ -74,7 +74,6 @@ describe("openshell cli helpers", () => {
 
 describe("openshell backend manager", () => {
   beforeAll(async () => {
-    vi.resetModules();
     vi.doMock("./cli.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./cli.js")>();
       return {

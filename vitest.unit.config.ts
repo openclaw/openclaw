@@ -23,18 +23,25 @@ export function loadExtraExcludePatternsFromEnv(
   return loadPatternListFromEnv("OPENCLAW_VITEST_EXTRA_EXCLUDE_FILE", env) ?? [];
 }
 
-export function createUnitVitestConfig(env: Record<string, string | undefined> = process.env) {
+export function createUnitVitestConfigWithOptions(
+  env: Record<string, string | undefined> = process.env,
+  options: {
+    includePatterns?: string[];
+    extraExcludePatterns?: string[];
+  } = {},
+) {
   return defineConfig({
     ...base,
     test: {
       ...baseTest,
       isolate: resolveVitestIsolation(env),
       runner: "./test/non-isolated-runner.ts",
-      include: loadIncludePatternsFromEnv(env) ?? unitTestIncludePatterns,
+      include:
+        loadIncludePatternsFromEnv(env) ?? options.includePatterns ?? unitTestIncludePatterns,
       exclude: [
         ...new Set([
           ...exclude,
-          ...unitTestAdditionalExcludePatterns,
+          ...(options.extraExcludePatterns ?? unitTestAdditionalExcludePatterns),
           ...loadExtraExcludePatternsFromEnv(env),
         ]),
       ],
@@ -42,4 +49,8 @@ export function createUnitVitestConfig(env: Record<string, string | undefined> =
   });
 }
 
-export default createUnitVitestConfig();
+export function createUnitVitestConfig(env: Record<string, string | undefined> = process.env) {
+  return createUnitVitestConfigWithOptions(env);
+}
+
+export default createUnitVitestConfigWithOptions();

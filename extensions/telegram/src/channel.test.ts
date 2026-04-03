@@ -254,6 +254,34 @@ describe("telegramPlugin threading", () => {
       currentThreadTs: "77",
     });
   });
+
+  it("keeps current DM topic threadId even when replyToId is present", () => {
+    const resolved = telegramPlugin.threading?.resolveAutoThreadId?.({
+      cfg: createCfg(),
+      to: "telegram:1234",
+      replyToId: "4103",
+      toolContext: {
+        currentChannelId: "telegram:1234",
+        currentThreadTs: "533274",
+      },
+    });
+
+    expect(resolved).toBe("533274");
+  });
+
+  it("does not override an explicit target topic when replyToId is present", () => {
+    const resolved = telegramPlugin.threading?.resolveAutoThreadId?.({
+      cfg: createCfg(),
+      to: "telegram:-1001:topic:99",
+      replyToId: "4103",
+      toolContext: {
+        currentChannelId: "telegram:-1001:topic:77",
+        currentThreadTs: "77",
+      },
+    });
+
+    expect(resolved).toBeUndefined();
+  });
 });
 
 describe("telegramPlugin bindings", () => {

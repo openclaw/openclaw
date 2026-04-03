@@ -4,14 +4,14 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   getChatChannelMeta,
   normalizeAccountId,
   type ChannelPlugin,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/telegram-core";
+} from "openclaw/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
