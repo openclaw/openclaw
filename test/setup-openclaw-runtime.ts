@@ -12,27 +12,22 @@ import { installSharedTestSetup } from "./setup.shared.js";
 
 const testEnv = installSharedTestSetup();
 
-const [
-  { resetContextWindowCacheForTest },
-  { resetModelsJsonReadyCacheForTest },
-  { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
-  { createTopLevelChannelReplyToModeResolver },
-  { createTestRegistry },
-  { cleanupSessionStateForTest },
-] = await Promise.all([
-  import("../src/agents/context.js"),
-  import("../src/agents/models-config.js"),
-  import("../src/agents/session-write-lock.js"),
-  import("../src/channels/plugins/threading-helpers.js"),
-  import("../src/test-utils/channel-plugins.js"),
-  import("../src/test-utils/session-state-cleanup.js"),
-]);
-
 const WORKER_RUNTIME_STATE = Symbol.for("openclaw.testSetupRuntimeState");
+const WORKER_RUNTIME_DEPS = Symbol.for("openclaw.testSetupRuntimeDeps");
 
 type WorkerRuntimeState = {
   defaultPluginRegistry: PluginRegistry | null;
   materializedDefaultPluginRegistry: PluginRegistry | null;
+};
+
+type WorkerRuntimeDeps = {
+  resetContextWindowCacheForTest: typeof import("../src/agents/context.js").resetContextWindowCacheForTest;
+  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config.js").resetModelsJsonReadyCacheForTest;
+  drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
+  resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
+  createTopLevelChannelReplyToModeResolver: typeof import("../src/channels/plugins/threading-helpers.js").createTopLevelChannelReplyToModeResolver;
+  createTestRegistry: typeof import("../src/test-utils/channel-plugins.js").createTestRegistry;
+  cleanupSessionStateForTest: typeof import("../src/test-utils/session-state-cleanup.js").cleanupSessionStateForTest;
 };
 
 const workerRuntimeState = (() => {
@@ -47,6 +42,52 @@ const workerRuntimeState = (() => {
   }
   return globalState[WORKER_RUNTIME_STATE];
 })();
+
+async function loadWorkerRuntimeDeps(): Promise<WorkerRuntimeDeps> {
+  const [
+    { resetContextWindowCacheForTest },
+    { resetModelsJsonReadyCacheForTest },
+    { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
+    { createTopLevelChannelReplyToModeResolver },
+    { createTestRegistry },
+    { cleanupSessionStateForTest },
+  ] = await Promise.all([
+    import("../src/agents/context.js"),
+    import("../src/agents/models-config.js"),
+    import("../src/agents/session-write-lock.js"),
+    import("../src/channels/plugins/threading-helpers.js"),
+    import("../src/test-utils/channel-plugins.js"),
+    import("../src/test-utils/session-state-cleanup.js"),
+  ]);
+
+  return {
+    resetContextWindowCacheForTest,
+    resetModelsJsonReadyCacheForTest,
+    drainSessionWriteLockStateForTest,
+    resetSessionWriteLockStateForTest,
+    createTopLevelChannelReplyToModeResolver,
+    createTestRegistry,
+    cleanupSessionStateForTest,
+  };
+}
+
+const workerRuntimeDeps = await (() => {
+  const globalState = globalThis as typeof globalThis & {
+    [WORKER_RUNTIME_DEPS]?: Promise<WorkerRuntimeDeps>;
+  };
+  globalState[WORKER_RUNTIME_DEPS] ??= loadWorkerRuntimeDeps();
+  return globalState[WORKER_RUNTIME_DEPS];
+})();
+
+const {
+  resetContextWindowCacheForTest,
+  resetModelsJsonReadyCacheForTest,
+  drainSessionWriteLockStateForTest,
+  resetSessionWriteLockStateForTest,
+  createTopLevelChannelReplyToModeResolver,
+  createTestRegistry,
+  cleanupSessionStateForTest,
+} = workerRuntimeDeps;
 
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;

@@ -69,11 +69,17 @@ const mattermostSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedM
 
 function describeMattermostMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const enabledAccounts = listMattermostAccountIds(cfg)
-    .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
+  const enabledAccounts = (
+    accountId
+      ? [resolveMattermostAccount({ cfg, accountId })]
+      : listMattermostAccountIds(cfg).map((listedAccountId) =>
+          resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+        )
+  )
     .filter((account) => account.enabled)
     .filter((account) => Boolean(account.botToken?.trim() && account.baseUrl?.trim()));
 

@@ -161,6 +161,63 @@ describe("googlechat setup", () => {
     expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
   });
 
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      googlechatPlugin.setupWizard?.dmPolicy?.getCurrent(
+        {
+          channels: {
+            googlechat: {
+              dm: {
+                policy: "disabled",
+              },
+              accounts: {
+                alerts: {
+                  serviceAccount: { client_email: "bot@example.com" },
+                  dm: {
+                    policy: "allowlist",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "alerts",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(googlechatPlugin.setupWizard?.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
+      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
+      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
+    });
+  });
+
+  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = googlechatPlugin.setupWizard?.dmPolicy?.setPolicy(
+      {
+        channels: {
+          googlechat: {
+            dm: {
+              allowFrom: ["users/123"],
+            },
+            accounts: {
+              alerts: {
+                serviceAccount: { client_email: "bot@example.com" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "alerts",
+    );
+
+    expect(next?.channels?.googlechat?.dm?.policy).toBeUndefined();
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual(["users/123", "*"]);
+  });
+
   it("keeps startAccount pending until abort, then unregisters", async () => {
     const unregister = vi.fn();
     hoisted.startGoogleChatMonitor.mockResolvedValue(unregister);

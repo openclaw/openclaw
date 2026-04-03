@@ -174,6 +174,66 @@ describe("line setup wizard", () => {
     expect(result.cfg.channels?.line?.channelAccessToken).toBe("line-token");
     expect(result.cfg.channels?.line?.channelSecret).toBe("line-secret");
   });
+
+  it("reads the named-account DM policy instead of the channel root", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    expect(
+      lineSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            line: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  channelAccessToken: "token",
+                  channelSecret: "secret",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    expect(lineSetupWizard.dmPolicy?.resolveConfigKeys?.({} as OpenClawConfig, "work")).toEqual({
+      policyKey: "channels.line.accounts.work.dmPolicy",
+      allowFromKey: "channels.line.accounts.work.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', async () => {
+    const { lineSetupWizard } = await import("./setup-surface.js");
+
+    const next = lineSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          line: {
+            allowFrom: ["Uroot"],
+            accounts: {
+              work: {
+                channelAccessToken: "token",
+                channelSecret: "secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "work",
+    );
+
+    expect(next?.channels?.line?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.line?.allowFrom).toEqual(["Uroot"]);
+    expect(next?.channels?.line?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next?.channels?.line?.accounts?.work?.allowFrom).toEqual(["Uroot", "*"]);
+  });
 });
 
 describe("probeLineBot", () => {

@@ -9,12 +9,44 @@ import type { PluginKind, PluginOrigin } from "./types.js";
 
 export type PluginActivationSource = "disabled" | "explicit" | "auto" | "default";
 
+export type PluginExplicitSelectionCause =
+  | "enabled-in-config"
+  | "bundled-channel-enabled-in-config"
+  | "selected-memory-slot"
+  | "selected-in-allowlist";
+
+export type PluginActivationCause =
+  | PluginExplicitSelectionCause
+  | "plugins-disabled"
+  | "blocked-by-denylist"
+  | "disabled-in-config"
+  | "workspace-disabled-by-default"
+  | "not-in-allowlist"
+  | "enabled-by-effective-config"
+  | "bundled-channel-configured"
+  | "bundled-default-enablement"
+  | "bundled-disabled-by-default";
+
 export type PluginActivationState = {
   enabled: boolean;
   activated: boolean;
   explicitlyEnabled: boolean;
   source: PluginActivationSource;
   reason?: string;
+};
+
+type PluginActivationDecision = {
+  enabled: boolean;
+  activated: boolean;
+  explicitlyEnabled: boolean;
+  source: PluginActivationSource;
+  cause?: PluginActivationCause;
+  reason?: string;
+};
+
+export type PluginActivationConfigSource = {
+  plugins: NormalizedPluginsConfig;
+  rootConfig?: OpenClawConfig;
 };
 
 export type NormalizedPluginsConfig = {
@@ -73,6 +105,42 @@ const normalizeSlotValue = (value: unknown): string | null | undefined => {
   }
   return trimmed;
 };
+
+const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
+  "enabled-in-config": "enabled in config",
+  "bundled-channel-enabled-in-config": "channel enabled in config",
+  "selected-memory-slot": "selected memory slot",
+  "selected-in-allowlist": "selected in allowlist",
+  "plugins-disabled": "plugins disabled",
+  "blocked-by-denylist": "blocked by denylist",
+  "disabled-in-config": "disabled in config",
+  "workspace-disabled-by-default": "workspace plugin (disabled by default)",
+  "not-in-allowlist": "not in allowlist",
+  "enabled-by-effective-config": "enabled by effective config",
+  "bundled-channel-configured": "channel configured",
+  "bundled-default-enablement": "bundled default enablement",
+  "bundled-disabled-by-default": "bundled (disabled by default)",
+};
+
+function resolvePluginActivationReason(
+  cause?: PluginActivationCause,
+  reason?: string,
+): string | undefined {
+  if (reason) {
+    return reason;
+  }
+  return cause ? PLUGIN_ACTIVATION_REASON_BY_CAUSE[cause] : undefined;
+}
+
+function toPluginActivationState(decision: PluginActivationDecision): PluginActivationState {
+  return {
+    enabled: decision.enabled,
+    activated: decision.activated,
+    explicitlyEnabled: decision.explicitlyEnabled,
+    source: decision.source,
+    reason: resolvePluginActivationReason(decision.cause, decision.reason),
+  };
+}
 
 const normalizePluginEntries = (entries: unknown): NormalizedPluginsConfig["entries"] => {
   if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
@@ -162,6 +230,16 @@ export const normalizePluginsConfig = (
   };
 };
 
+export function createPluginActivationSource(params: {
+  config?: OpenClawConfig;
+  plugins?: NormalizedPluginsConfig;
+}): PluginActivationConfigSource {
+  return {
+    plugins: params.plugins ?? normalizePluginsConfig(params.config?.plugins),
+    rootConfig: params.config,
+  };
+}
+
 const hasExplicitMemorySlot = (plugins?: OpenClawConfig["plugins"]) =>
   Boolean(plugins?.slots && Object.prototype.hasOwnProperty.call(plugins.slots, "memory"));
 
@@ -250,21 +328,21 @@ function resolveExplicitPluginSelection(params: {
   origin: PluginOrigin;
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
-}): { explicitlyEnabled: boolean; reason?: string } {
+}): { explicitlyEnabled: boolean; cause?: PluginExplicitSelectionCause } {
   if (params.config.entries[params.id]?.enabled === true) {
-    return { explicitlyEnabled: true, reason: "enabled in config" };
+    return { explicitlyEnabled: true, cause: "enabled-in-config" };
   }
   if (
     params.origin === "bundled" &&
     isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
   ) {
-    return { explicitlyEnabled: true, reason: "channel enabled in config" };
+    return { explicitlyEnabled: true, cause: "bundled-channel-enabled-in-config" };
   }
   if (params.config.slots.memory === params.id) {
-    return { explicitlyEnabled: true, reason: "selected memory slot" };
+    return { explicitlyEnabled: true, cause: "selected-memory-slot" };
   }
   if (params.origin !== "bundled" && params.config.allow.includes(params.id)) {
-    return { explicitlyEnabled: true, reason: "selected in allowlist" };
+    return { explicitlyEnabled: true, cause: "selected-in-allowlist" };
   }
   return { explicitlyEnabled: false };
 }
@@ -275,140 +353,145 @@ export function resolvePluginActivationState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
-  sourceConfig?: NormalizedPluginsConfig;
-  sourceRootConfig?: OpenClawConfig;
+  activationSource?: PluginActivationConfigSource;
   autoEnabledReason?: string;
 }): PluginActivationState {
+  const activationSource =
+    params.activationSource ??
+    createPluginActivationSource({
+      config: params.rootConfig,
+      plugins: params.config,
+    });
   const explicitSelection = resolveExplicitPluginSelection({
     id: params.id,
     origin: params.origin,
-    config: params.sourceConfig ?? params.config,
-    rootConfig: params.sourceRootConfig ?? params.rootConfig,
+    config: activationSource.plugins,
+    rootConfig: activationSource.rootConfig,
   });
   const explicitlyConfiguredBundledChannel =
     params.origin === "bundled" &&
     explicitSelection.explicitlyEnabled &&
-    explicitSelection.reason === "channel enabled in config";
+    explicitSelection.cause === "bundled-channel-enabled-in-config";
 
   if (!params.config.enabled) {
-    return {
+    return toPluginActivationState({
       enabled: false,
       activated: false,
       explicitlyEnabled: explicitSelection.explicitlyEnabled,
       source: "disabled",
-      reason: "plugins disabled",
-    };
+      cause: "plugins-disabled",
+    });
   }
   if (params.config.deny.includes(params.id)) {
-    return {
+    return toPluginActivationState({
       enabled: false,
       activated: false,
       explicitlyEnabled: explicitSelection.explicitlyEnabled,
       source: "disabled",
-      reason: "blocked by denylist",
-    };
+      cause: "blocked-by-denylist",
+    });
   }
   const entry = params.config.entries[params.id];
   if (entry?.enabled === false) {
-    return {
+    return toPluginActivationState({
       enabled: false,
       activated: false,
       explicitlyEnabled: explicitSelection.explicitlyEnabled,
       source: "disabled",
-      reason: "disabled in config",
-    };
+      cause: "disabled-in-config",
+    });
   }
   const explicitlyAllowed = params.config.allow.includes(params.id);
   if (params.origin === "workspace" && !explicitlyAllowed && entry?.enabled !== true) {
-    return {
+    return toPluginActivationState({
       enabled: false,
       activated: false,
       explicitlyEnabled: explicitSelection.explicitlyEnabled,
       source: "disabled",
-      reason: "workspace plugin (disabled by default)",
-    };
+      cause: "workspace-disabled-by-default",
+    });
   }
   if (params.config.slots.memory === params.id) {
-    return {
+    return toPluginActivationState({
       enabled: true,
       activated: true,
       explicitlyEnabled: true,
       source: "explicit",
-      reason: "selected memory slot",
-    };
+      cause: "selected-memory-slot",
+    });
   }
   if (params.config.allow.length > 0 && !explicitlyAllowed && !explicitlyConfiguredBundledChannel) {
-    return {
+    return toPluginActivationState({
       enabled: false,
       activated: false,
       explicitlyEnabled: explicitSelection.explicitlyEnabled,
       source: "disabled",
-      reason: "not in allowlist",
-    };
+      cause: "not-in-allowlist",
+    });
   }
   if (explicitSelection.explicitlyEnabled) {
-    return {
+    return toPluginActivationState({
       enabled: true,
       activated: true,
       explicitlyEnabled: true,
       source: "explicit",
-      reason: explicitSelection.reason,
-    };
+      cause: explicitSelection.cause,
+    });
   }
   if (params.autoEnabledReason) {
-    return {
+    return toPluginActivationState({
       enabled: true,
       activated: true,
       explicitlyEnabled: false,
       source: "auto",
       reason: params.autoEnabledReason,
-    };
+    });
   }
   if (entry?.enabled === true) {
-    return {
+    return toPluginActivationState({
       enabled: true,
       activated: true,
       explicitlyEnabled: false,
       source: "auto",
-      reason: "enabled by effective config",
-    };
+      cause: "enabled-by-effective-config",
+    });
   }
   if (
     params.origin === "bundled" &&
     isBundledChannelEnabledByChannelConfig(params.rootConfig, params.id)
   ) {
-    return {
+    return toPluginActivationState({
       enabled: true,
       activated: true,
       explicitlyEnabled: false,
       source: "auto",
-      reason: "channel configured",
-    };
+      cause: "bundled-channel-configured",
+    });
   }
   if (params.origin === "bundled" && params.enabledByDefault === true) {
-    return {
+    return toPluginActivationState({
       enabled: true,
       activated: true,
       explicitlyEnabled: false,
       source: "default",
-      reason: "bundled default enablement",
-    };
+      cause: "bundled-default-enablement",
+    });
   }
   if (params.origin === "bundled") {
-    return {
+    return toPluginActivationState({
       enabled: false,
       activated: false,
       explicitlyEnabled: false,
       source: "disabled",
-      reason: "bundled (disabled by default)",
-    };
+      cause: "bundled-disabled-by-default",
+    });
   }
-  return {
+  return toPluginActivationState({
     enabled: true,
     activated: true,
     explicitlyEnabled: explicitSelection.explicitlyEnabled,
     source: "default",
-  };
+  });
 }
 
 export function resolveEnableState(
@@ -451,8 +534,7 @@ export function resolveEffectiveEnableState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
-  sourceConfig?: NormalizedPluginsConfig;
-  sourceRootConfig?: OpenClawConfig;
+  activationSource?: PluginActivationConfigSource;
 }): { enabled: boolean; reason?: string } {
   const state = resolveEffectivePluginActivationState(params);
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
@@ -464,8 +546,7 @@ export function resolveEffectivePluginActivationState(params: {
   config: NormalizedPluginsConfig;
   rootConfig?: OpenClawConfig;
   enabledByDefault?: boolean;
-  sourceConfig?: NormalizedPluginsConfig;
-  sourceRootConfig?: OpenClawConfig;
+  activationSource?: PluginActivationConfigSource;
   autoEnabledReason?: string;
 }): PluginActivationState {
   return resolvePluginActivationState(params);

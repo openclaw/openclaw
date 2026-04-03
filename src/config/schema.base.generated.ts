@@ -428,9 +428,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           ssrfPolicy: {
             type: "object",
             properties: {
-              allowPrivateNetwork: {
-                type: "boolean",
-              },
               dangerouslyAllowPrivateNetwork: {
                 type: "boolean",
               },
@@ -4064,9 +4061,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
-                  perSession: {
-                    type: "boolean",
-                  },
                   workspaceRoot: {
                     type: "string",
                   },
@@ -5247,9 +5241,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           const: "shared",
                         },
                       ],
-                    },
-                    perSession: {
-                      type: "boolean",
                     },
                     workspaceRoot: {
                       type: "string",
@@ -18368,90 +18359,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               additionalProperties: {},
             },
           },
-          voiceId: {
-            type: "string",
-          },
-          voiceAliases: {
-            type: "object",
-            propertyNames: {
-              type: "string",
-            },
-            additionalProperties: {
-              type: "string",
-            },
-          },
-          modelId: {
-            type: "string",
-          },
-          outputFormat: {
-            type: "string",
-          },
-          apiKey: {
-            anyOf: [
-              {
-                type: "string",
-              },
-              {
-                oneOf: [
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "env",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "file",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                  {
-                    type: "object",
-                    properties: {
-                      source: {
-                        type: "string",
-                        const: "exec",
-                      },
-                      provider: {
-                        type: "string",
-                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                      },
-                      id: {
-                        type: "string",
-                      },
-                    },
-                    required: ["source", "provider", "id"],
-                    additionalProperties: false,
-                  },
-                ],
-              },
-            ],
-          },
           interruptOnSpeech: {
             type: "boolean",
           },
@@ -23046,11 +22953,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
       tags: ["access"],
     },
-    "browser.ssrfPolicy.allowPrivateNetwork": {
-      label: "Browser Allow Private Network",
-      help: "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
-      tags: ["access"],
-    },
     "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": {
       label: "Browser Dangerously Allow Private Network",
       help: "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
@@ -23770,26 +23672,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
       tags: ["reliability"],
     },
-    "talk.voiceId": {
-      label: "Talk Voice ID",
-      help: "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
-      tags: ["media"],
-    },
-    "talk.voiceAliases": {
-      label: "Talk Voice Aliases",
-      help: 'Use this legacy ElevenLabs voice alias map (for example {"Clawd":"EXAVITQu4vr4xnSDxMaL"}) only during migration. Prefer talk.providers.elevenlabs.voiceAliases.',
-      tags: ["media"],
-    },
-    "talk.modelId": {
-      label: "Talk Model ID",
-      help: "Legacy ElevenLabs model ID for Talk mode (default: eleven_v3). Prefer talk.providers.elevenlabs.modelId.",
-      tags: ["models", "media"],
-    },
-    "talk.outputFormat": {
-      label: "Talk Output Format",
-      help: "Use this legacy ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128) only during migration. Prefer talk.providers.elevenlabs.outputFormat.",
-      tags: ["media"],
-    },
     "talk.interruptOnSpeech": {
       label: "Talk Interrupt on Speech",
       help: "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
@@ -23892,7 +23774,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "messages.statusReactions.enabled": {
       label: "Enable Status Reactions",
-      help: "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
+      help: "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram requires this to be true before lifecycle reactions are used.",
       tags: ["advanced"],
     },
     "messages.statusReactions.emojis": {
@@ -23969,12 +23851,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "talk.providers.*.apiKey": {
       label: "Talk Provider API Key",
       help: "Provider API key for Talk mode.",
-      tags: ["security", "auth", "media"],
-      sensitive: true,
-    },
-    "talk.apiKey": {
-      label: "Talk API Key",
-      help: "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
       tags: ["security", "auth", "media"],
       sensitive: true,
     },
