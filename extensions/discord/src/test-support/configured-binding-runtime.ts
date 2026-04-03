@@ -1,6 +1,6 @@
 type ConfiguredBindingConversationRuntimeModule = {
-  ensureConfiguredBindingRouteReady: (...args: unknown[]) => unknown;
-  resolveConfiguredBindingRoute: (...args: unknown[]) => unknown;
+  ensureConfiguredBindingRouteReady: unknown;
+  resolveConfiguredBindingRoute: unknown;
 };
 
 export async function createConfiguredBindingConversationRuntimeModuleMock<
