@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEvolutionEntry } from "./evolution-schema.js";
-import { EvolutionStore } from "./evolution-store.js";
+import { buildAtomicTempPath, EvolutionStore } from "./evolution-store.js";
 
 const tempDirs: string[] = [];
 
@@ -34,6 +34,20 @@ describe("EvolutionStore", () => {
 
     expect(() => store.appendEntry("../outside", entry)).toThrow("Invalid skill name");
     expect(() => store.getPendingEntries("/tmp/outside")).toThrow("Invalid skill name");
+  });
+
+  it("allows the internal _general fallback skill id", () => {
+    const { store } = createStore();
+    const entry = createEvolutionEntry("execution_failure", "general", {
+      section: "Troubleshooting",
+      action: "append",
+      content: "Capture unattributed failures under the general bucket.",
+      target: "body",
+    });
+
+    store.appendEntry("_general", entry);
+
+    expect(store.getPendingEntries("_general")).toHaveLength(1);
   });
 
   it("replaces entries by merge target index when the evolver requests dedup replacement", () => {
@@ -110,5 +124,17 @@ describe("EvolutionStore", () => {
       "Prefer rg over grep for text search.",
     );
     expect(store.listEvolvedSkills()).toEqual(["search-skill"]);
+  });
+
+  it("builds unique temp file names for atomic writes", () => {
+    const filePath = "/tmp/openclaw/evolutions.json";
+    const tempPathA = buildAtomicTempPath(filePath);
+    const tempPathB = buildAtomicTempPath(filePath);
+
+    expect(tempPathA).toMatch(/evolutions\.json\.tmp-/);
+    expect(tempPathB).toMatch(/evolutions\.json\.tmp-/);
+    expect(tempPathA).not.toBe(`${filePath}.tmp`);
+    expect(tempPathB).not.toBe(`${filePath}.tmp`);
+    expect(tempPathA).not.toBe(tempPathB);
   });
 });

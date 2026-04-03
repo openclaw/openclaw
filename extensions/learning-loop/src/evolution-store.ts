@@ -6,6 +6,7 @@
 // Supports solidification (writing pending entries into SKILL.md).
 // ============================================================================
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { join, resolve, sep } from "node:path";
 import {
@@ -13,6 +14,10 @@ import {
   type EvolutionEntry,
   type EvolutionFile,
 } from "./evolution-schema.js";
+
+export function buildAtomicTempPath(filePath: string): string {
+  return `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID()}`;
+}
 
 // ============================================================================
 // Store
@@ -143,7 +148,7 @@ export class EvolutionStore {
     }
 
     // Atomic write
-    const tmpPath = skillMdPath + ".tmp";
+    const tmpPath = this.createTempPath(skillMdPath);
     fs.writeFileSync(tmpPath, skillContent, "utf-8");
     fs.renameSync(tmpPath, skillMdPath);
 
@@ -206,14 +211,14 @@ export class EvolutionStore {
     fs.mkdirSync(dir, { recursive: true });
 
     const filePath = this.evolutionFilePath(skillName);
-    const tmpPath = filePath + ".tmp";
+    const tmpPath = this.createTempPath(filePath);
     fs.writeFileSync(tmpPath, JSON.stringify(file, null, 2), "utf-8");
     fs.renameSync(tmpPath, filePath);
   }
 
   private skillDirPath(skillName: string): string {
     const normalizedSkillName = skillName.trim();
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(normalizedSkillName)) {
+    if (!/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(normalizedSkillName)) {
       throw new Error(`Invalid skill name: ${skillName}`);
     }
 
@@ -226,6 +231,10 @@ export class EvolutionStore {
     }
 
     return skillDir;
+  }
+
+  private createTempPath(filePath: string): string {
+    return buildAtomicTempPath(filePath);
   }
 
   /**
