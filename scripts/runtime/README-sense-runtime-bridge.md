@@ -428,6 +428,9 @@ Current deterministic manager action matrix:
   - `next_step = check_provider_config`
 - `selected_model_not_ready` + `retry_decision = recheck_runtime_status_once`
   - `manager_action = retry_once`
+- `selected_model_not_ready` + `retry_allowed = false`
+  - `manager_action = configure_model`
+  - `next_step = check_selected_model_config`
 - `selected_model_mismatch` + repeated mismatch / `skip_restart_repeated_mismatch`
   - `manager_action = stop_and_surface_diff`
 - `gpu_not_ready`
@@ -442,6 +445,9 @@ Current deterministic manager action matrix:
 - `selected_model_missing`
   - `manager_action = configure_model`
   - `next_step = check_selected_model_config`
+- `model_not_ready`
+  - `manager_action = configure_model`
+  - `next_step = check_model_config`
 - `ready_for_runtime_task`
   - `manager_action = run_runtime_task`
 
@@ -455,6 +461,17 @@ Manager policy output now includes:
 `policy_trace` identifies which deterministic rule fired and which fields matched, so the manager can explain why it retried, stopped, or promoted a runtime task.
 
 States that still do not have a dedicated manager action remain on the `manual_review` fallback. This keeps the manager deterministic for known concrete remediation states while preserving a safe fallback for unknown or not-yet-automated states.
+
+For model remediation, the manager now distinguishes:
+
+- `selected_model_not_ready` with one allowed runtime-status recheck
+  - `retry_once`
+- `selected_model_not_ready` when retry is not allowed
+  - `configure_model`
+- `model_not_ready`
+  - `configure_model`
+
+This keeps retry behavior explicit while pushing persistent model issues back into model remediation instead of leaving them in the generic fallback.
 
 Routing loop can now stop more specifically as:
 

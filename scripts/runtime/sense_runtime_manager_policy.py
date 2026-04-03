@@ -149,6 +149,28 @@ def main() -> int:
         return 0
 
     if (
+        final_state == 'selected_model_not_ready'
+        and retry.get('retry_allowed') is False
+    ):
+        output = build_policy_output(
+            manager_action='configure_model',
+            manager_reason='selected model is not ready and retry is not allowed, so model configuration should be revisited',
+            next_step='check_selected_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'selected_model_not_ready_configure_model_no_retry',
+                'matched_on': {
+                    'final_state': final_state,
+                    'retry_allowed': False,
+                },
+                'selected_action': 'configure_model',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
+    if (
         final_state == 'selected_model_mismatch'
         and (
             retry_decision == 'skip_restart_repeated_mismatch'
@@ -264,6 +286,24 @@ def main() -> int:
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
+    if final_state == 'model_not_ready':
+        output = build_policy_output(
+            manager_action='configure_model',
+            manager_reason='model is not ready and model configuration should be revisited before runtime work',
+            next_step='check_model_config',
+            retry_decision=retry_decision,
+            policy_input=policy_input,
+            policy_trace={
+                'rule_id': 'model_not_ready_configure_model',
+                'matched_on': {
+                    'final_state': final_state,
+                },
+                'selected_action': 'configure_model',
+            },
+        )
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0
+
     if final_state == 'ready_for_runtime_task':
         output = build_policy_output(
             manager_action='run_runtime_task',
@@ -320,9 +360,7 @@ def main() -> int:
         return 0
 
     if final_state in {
-        'selected_model_not_ready',
         'selected_model_mismatch',
-        'model_not_ready',
     }:
         output = build_policy_output(
             manager_action='manual_review',
