@@ -14,13 +14,19 @@ async function buildSnapshotFromAccount<ResolvedAccount>(params: {
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
   if (params.plugin.status?.buildAccountSnapshot) {
-    return await params.plugin.status.buildAccountSnapshot({
+    const snapshot = await params.plugin.status.buildAccountSnapshot({
       account: params.account,
       cfg: params.cfg,
       runtime: params.runtime,
       probe: params.probe,
       audit: params.audit,
     });
+    return typeof snapshot.accountId === "string" && snapshot.accountId.trim().length > 0
+      ? snapshot
+      : {
+          accountId: params.accountId,
+          ...snapshot,
+        };
   }
   const enabled = params.plugin.config.isEnabled
     ? params.plugin.config.isEnabled(params.account, params.cfg)
