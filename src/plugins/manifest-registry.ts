@@ -187,26 +187,6 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   };
 }
 
-function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string): boolean {
-  const normalizedHint = idHint?.trim();
-  if (!normalizedHint) {
-    return true;
-  }
-  if (normalizedHint === manifestId) {
-    return true;
-  }
-  // Generated idHint for multi-extension plugins takes the form "id/entryBase".
-  if (normalizedHint.startsWith(`${manifestId}/`)) {
-    return true;
-  }
-  return (
-    normalizedHint === `${manifestId}-provider` ||
-    normalizedHint === `${manifestId}-plugin` ||
-    normalizedHint === `${manifestId}-sandbox` ||
-    normalizedHint === `${manifestId}-media-understanding`
-  );
-}
-
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -455,15 +435,6 @@ export function loadPluginManifestRegistry(
               : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
       });
       continue;
-    }
-
-    if (!isCompatiblePluginIdHint(candidate.idHint, manifest.id)) {
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `plugin id mismatch (manifest uses "${manifest.id}", entry hints "${candidate.idHint}")`,
-      });
     }
 
     const configSchema = "configSchema" in manifest ? manifest.configSchema : undefined;
