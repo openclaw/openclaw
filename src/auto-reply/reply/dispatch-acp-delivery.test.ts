@@ -244,14 +244,52 @@ describe("tool-only replyMode filtering", () => {
   it("suppresses block text when replyMode is tool-only", async () => {
     const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
 
-    const delivered = await coordinator.deliver("block", { text: "streaming chunk" }, { skipTts: true });
+    const delivered = await coordinator.deliver(
+      "block",
+      { text: "streaming chunk" },
+      { skipTts: true },
+    );
 
     expect(delivered).toBe(false);
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
-  it("delivers tool results when replyMode is tool-only", async () => {
+  it("suppresses tool results when replyMode is tool-only", async () => {
     const { coordinator, dispatcher } = createToolOnlyCoordinator("tool-only");
+
+    const delivered = await coordinator.deliver("tool", { text: "tool output" }, { skipTts: true });
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("suppresses tool even with shouldSendToolSummaries context (orthogonal concerns)", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+      replyMode: "tool-only",
+    });
+
+    const delivered = await coordinator.deliver(
+      "tool",
+      { text: "🔧 tool_call · read_file · completed" },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(false);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("delivers tool results when replyMode is undefined (auto behavior preserved)", async () => {
+    const { coordinator, dispatcher } = createToolOnlyCoordinator(undefined);
 
     const delivered = await coordinator.deliver("tool", { text: "tool output" }, { skipTts: true });
 
@@ -303,7 +341,11 @@ describe("tool-only replyMode filtering", () => {
   it("delivers block text when replyMode is undefined (auto behavior preserved)", async () => {
     const { coordinator, dispatcher } = createToolOnlyCoordinator(undefined);
 
-    const delivered = await coordinator.deliver("block", { text: "streaming chunk" }, { skipTts: true });
+    const delivered = await coordinator.deliver(
+      "block",
+      { text: "streaming chunk" },
+      { skipTts: true },
+    );
 
     expect(delivered).toBe(true);
     expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "streaming chunk" });

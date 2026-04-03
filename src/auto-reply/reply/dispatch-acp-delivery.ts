@@ -190,11 +190,14 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
 
-    // ── tool-only mode: suppress assistant text but allow tool summaries ──
-    // Block streaming text and text-only finals. Allow tool payloads,
-    // media-bearing finals, and error finals through.
+    // ── tool-only mode: suppress everything except media/error finals ──
+    // Block streaming text, ACP tool summaries (auto-generated narration),
+    // and text-only finals. Allow media-bearing finals and error finals through.
     if (params.replyMode === "tool-only") {
       if (kind === "block") {
+        return false;
+      }
+      if (kind === "tool") {
         return false;
       }
       if (kind === "final") {
