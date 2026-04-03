@@ -158,6 +158,39 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(false);
   });
 
+  it("still treats reply-to-bot as implicit mention in selfChatMode when sender is a different user", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "m-other-reply",
+        to: "+15550000",
+        accountId: "default",
+        body: "following up on bot reply",
+        timestamp: Date.now(),
+        senderE164: "+15559999999",
+        senderJid: "15559999999@s.whatsapp.net",
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        replyToId: "m0",
+        replyToBody: "bot earlier response",
+        replyToSender: "+15551234567",
+        replyToSenderJid: "15551234567@s.whatsapp.net",
+        replyToSenderE164: "+15551234567",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+  });
+
   it.each([
     { id: "g-new", command: "/new" },
     { id: "g-status", command: "/status" },
