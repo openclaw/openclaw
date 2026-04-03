@@ -23,6 +23,7 @@ const releaseLockOnce = () => {
 const child = spawn(command, vitestArgs, {
   stdio: "inherit",
   env: process.env,
+  shell: process.platform === "win32",
 });
 
 child.on("exit", (code, signal) => {

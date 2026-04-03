@@ -8,7 +8,7 @@ import {
   resolveSendableOutboundReplyParts,
   SILENT_REPLY_TOKEN,
   sleep,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/msteams";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";

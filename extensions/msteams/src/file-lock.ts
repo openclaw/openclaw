@@ -1,1 +1,1 @@
-export { withFileLock } from "../runtime-api.js";
+export { withFileLock } from "openclaw/plugin-sdk/msteams";

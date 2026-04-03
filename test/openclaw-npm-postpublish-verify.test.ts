@@ -3,7 +3,7 @@ import {
   buildPublishedInstallScenarios,
   collectInstalledPackageErrors,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
-import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/public-artifacts.ts";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 
 describe("buildPublishedInstallScenarios", () => {
   it("uses a single fresh scenario for plain stable releases", () => {

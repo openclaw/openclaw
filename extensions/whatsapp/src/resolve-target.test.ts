@@ -1,5 +1,5 @@
-import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { installCommonResolveTargetErrorCases } from "../../../src/test-helpers/resolve-target-error-cases.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,

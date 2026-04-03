@@ -30,7 +30,7 @@ import {
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
 import { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./audit.js";
-import { discordMessageActions } from "./channel-actions.js";
+import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
@@ -89,6 +89,41 @@ async function loadDiscordProbeRuntime() {
 const meta = getChatChannelMeta("discord");
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
+
+function resolveRuntimeDiscordMessageActions() {
+  try {
+    return getDiscordRuntime().channel?.discord?.messageActions ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const discordMessageActions = {
+  describeMessageTool: (
+    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.describeMessageTool>>[0],
+  ) =>
+    resolveRuntimeDiscordMessageActions()?.describeMessageTool?.(ctx) ??
+    discordMessageActionsImpl.describeMessageTool?.(ctx) ??
+    null,
+  extractToolSend: (
+    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.extractToolSend>>[0],
+  ) =>
+    resolveRuntimeDiscordMessageActions()?.extractToolSend?.(ctx) ??
+    discordMessageActionsImpl.extractToolSend?.(ctx) ??
+    null,
+  handleAction: async (
+    ctx: Parameters<NonNullable<typeof discordMessageActionsImpl.handleAction>>[0],
+  ) => {
+    const runtimeHandleAction = resolveRuntimeDiscordMessageActions()?.handleAction;
+    if (runtimeHandleAction) {
+      return await runtimeHandleAction(ctx);
+    }
+    if (!discordMessageActionsImpl.handleAction) {
+      throw new Error("Discord message actions not available");
+    }
+    return await discordMessageActionsImpl.handleAction(ctx);
+  },
+};
 
 function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
   const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {

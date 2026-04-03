@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Skills/uv install: block workspace `.env` from overriding `UV_PYTHON` and strip related interpreter override keys from uv skill-install subprocesses so repository-controlled env files cannot steer the selected Python runtime. (#59178) Thanks @pgondhi987.
 - Telegram/reactions: preserve `reactionNotifications: "own"` across gateway restarts by persisting sent-message ownership state instead of treating cold cache as a permissive fallback. (#59207) Thanks @samzong.
 - Gateway/startup: detect PID recycling in gateway lock files on Windows and macOS, and add startup progress so stale lock conflicts no longer block healthy restarts. (#59843) Thanks @TonyDerek-dot.
 - MS Teams/DM media: download inline images in 1:1 chats via Graph API so Teams DM image attachments stop failing to load. (#52212) Thanks @Ted-developer.
@@ -62,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Mobile pairing/device approval: mint both node and operator device tokens when one approval grants merged roles, so mixed mobile bootstrap pairings stop reconnecting as operator-only and showing the node offline. (#60208) Thanks @obviyus.
 - Agents/tool policy: stop `tools.profile` warnings from flagging runtime-gated baseline core tools as unknown when the coding profile is missing tools like `code_execution`, `x_search`, `image`, or `image_generate`, while still warning on explicit extra allowlist entries. Thanks @vincentkoc.
 - Sessions/resolution: collapse alias-duplicate session-id matches before scoring, keep distinct structural ties ambiguous, and prefer current-store reuse when resolving equal cross-store duplicates so follow-up turns stop dropping or duplicating sessions on timestamp ties.
+- Mobile pairing/bootstrap: keep setup bootstrap tokens alive through the initial node auto-pair so the same QR bootstrap token can finish operator approval, then revoke it after the full issued profile connects successfully. (#60221) Thanks @obviyus.
 
 ## 2026.4.2
 

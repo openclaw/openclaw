@@ -179,6 +179,12 @@ const buildModelsProviderData = modelProviderDataHoisted.buildModelsProviderData
 export const replySpy = replySpyHoisted.replySpy;
 export const dispatchReplyWithBufferedBlockDispatcher =
   dispatchReplyHoisted.dispatchReplyWithBufferedBlockDispatcher;
+const menuSyncHoisted = vi.hoisted(() => ({
+  syncTelegramMenuCommands: vi.fn(async ({ bot, commandsToRegister }) => {
+    await bot.api.setMyCommands(commandsToRegister);
+  }),
+}));
+export const syncTelegramMenuCommands = menuSyncHoisted.syncTelegramMenuCommands;
 
 function parseModelRef(raw: string): { provider?: string; model: string } {
   const trimmed = raw.trim();
@@ -368,6 +374,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   buildModelsProviderData: buildModelsProviderData as TelegramBotDeps["buildModelsProviderData"],
   listSkillCommandsForAgents:
     listSkillCommandsForAgents as TelegramBotDeps["listSkillCommandsForAgents"],
+  syncTelegramMenuCommands: syncTelegramMenuCommands as TelegramBotDeps["syncTelegramMenuCommands"],
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   resolveExecApproval: resolveExecApprovalSpy as NonNullable<
     TelegramBotDeps["resolveExecApproval"]
@@ -477,6 +484,10 @@ beforeEach(() => {
         return await replySpy(dispatchParams.ctx, dispatchParams.replyOptions);
       }),
   );
+  syncTelegramMenuCommands.mockReset();
+  syncTelegramMenuCommands.mockImplementation(async ({ bot, commandsToRegister }) => {
+    await bot.api.setMyCommands(commandsToRegister);
+  });
 
   sendAnimationSpy.mockReset();
   sendAnimationSpy.mockResolvedValue({ message_id: 78 });
