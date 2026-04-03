@@ -748,7 +748,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
   "models.providers.*.request":
-    "Optional request overrides for model-provider requests. Today this path supports header and auth overrides only; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+    "Optional request overrides for model-provider requests. Use this only for header and auth overrides today; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
   "models.providers.*.request.headers":
     "Extra headers merged into provider requests after default attribution and auth resolution.",
   "models.providers.*.request.auth":
