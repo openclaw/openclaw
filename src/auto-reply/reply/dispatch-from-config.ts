@@ -160,7 +160,17 @@ const resolveSessionStoreLookup = (
 } => {
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
-  const sessionKey = (targetSessionKey ?? ctx.SessionKey)?.trim();
+  return resolveSessionStoreLookupByKey(targetSessionKey ?? ctx.SessionKey, cfg);
+};
+
+const resolveSessionStoreLookupByKey = (
+  rawSessionKey: string | undefined,
+  cfg: OpenClawConfig,
+): {
+  sessionKey?: string;
+  entry?: SessionEntry;
+} => {
+  const sessionKey = rawSessionKey?.trim();
   if (!sessionKey) {
     return {};
   }
@@ -255,6 +265,10 @@ export async function dispatchReplyFromConfig(params: {
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
   const routeSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const acpDispatchSessionKey = resolveAcpDispatchSessionKey(ctx, cfg) ?? routeSessionKey;
+  const acpSessionStoreEntry =
+    acpDispatchSessionKey && acpDispatchSessionKey !== routeSessionKey
+      ? resolveSessionStoreLookupByKey(acpDispatchSessionKey, cfg)
+      : sessionStoreEntry;
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
@@ -285,7 +299,9 @@ export async function dispatchReplyFromConfig(params: {
   // flow when the provider handles its own messages.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
-  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
+  const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(
+    acpSessionStoreEntry.entry,
+  );
   const routeReplyRuntime = await loadRouteReplyRuntime();
   const { originatingChannel, currentSurface, shouldRouteToOriginating, shouldSuppressTyping } =
     resolveReplyRoutingDecision({
