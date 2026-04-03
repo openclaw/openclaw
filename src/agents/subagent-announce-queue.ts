@@ -60,6 +60,10 @@ type AnnounceQueueState = {
   send: (item: AnnounceQueueItem) => Promise<void>;
   /** Safe queued announce item shape to reuse for overflow-summary delivery when items drain empty. */
   lastSummaryTarget?: AnnounceQueueItem;
+  /** Latest dropped-item target when summarized drops still belong to one origin. */
+  summaryOverflowTarget?: AnnounceQueueItem;
+  /** Origin key for summarized drops; null means mixed/ambiguous and unsafe to route. */
+  summaryOverflowOriginKey?: string | null;
   /** Consecutive drain failures — drives exponential backoff on errors. */
   consecutiveFailures: number;
 };
@@ -105,6 +109,8 @@ function getAnnounceQueue(
     collectForceIndividual: false,
     send,
     lastSummaryTarget: undefined,
+    summaryOverflowTarget: undefined,
+    summaryOverflowOriginKey: undefined,
     consecutiveFailures: 0,
   };
   applyQueueRuntimeSettings({
@@ -130,14 +136,43 @@ function hasAnnounceCrossChannelItems(items: AnnounceQueueItem[]): boolean {
 export function resolveAnnounceCollectEmptySummaryTarget(params: {
   items: AnnounceQueueItem[];
   lastSummaryTarget?: AnnounceQueueItem;
+  summaryOverflowTarget?: AnnounceQueueItem;
+  summaryOverflowOriginKey?: string | null;
 }): AnnounceQueueItem | undefined {
-  return params.items[0] ?? params.lastSummaryTarget;
+  if (params.items[0]) {
+    return params.items[0];
+  }
+  if (params.summaryOverflowOriginKey === null) {
+    return undefined;
+  }
+  return params.summaryOverflowTarget ?? params.lastSummaryTarget;
+}
+
+function clearAnnounceSummaryState(
+  queue: Pick<
+    AnnounceQueueState,
+    | "dropPolicy"
+    | "droppedCount"
+    | "summaryLines"
+    | "summaryOverflowTarget"
+    | "summaryOverflowOriginKey"
+  >,
+): void {
+  clearQueueSummaryState(queue);
+  queue.summaryOverflowTarget = undefined;
+  queue.summaryOverflowOriginKey = undefined;
 }
 
 export async function maybeSendAnnounceCollectEmptySummary(params: {
   queue: Pick<
     AnnounceQueueState,
-    "items" | "dropPolicy" | "droppedCount" | "summaryLines" | "lastSummaryTarget"
+    | "items"
+    | "dropPolicy"
+    | "droppedCount"
+    | "summaryLines"
+    | "lastSummaryTarget"
+    | "summaryOverflowTarget"
+    | "summaryOverflowOriginKey"
   >;
   send: (item: AnnounceQueueItem) => Promise<void>;
 }): Promise<boolean> {
@@ -145,8 +180,16 @@ export async function maybeSendAnnounceCollectEmptySummary(params: {
   const summaryTarget = resolveAnnounceCollectEmptySummaryTarget({
     items: params.queue.items,
     lastSummaryTarget: params.queue.lastSummaryTarget,
+    summaryOverflowTarget: params.queue.summaryOverflowTarget,
+    summaryOverflowOriginKey: params.queue.summaryOverflowOriginKey,
   });
-  if (!summaryPrompt || !summaryTarget) {
+  if (!summaryPrompt) {
+    return false;
+  }
+  if (!summaryTarget) {
+    if (params.queue.summaryOverflowOriginKey === null) {
+      clearAnnounceSummaryState(params.queue);
+    }
     return false;
   }
   params.queue.lastSummaryTarget = summaryTarget;
@@ -155,7 +198,7 @@ export async function maybeSendAnnounceCollectEmptySummary(params: {
     execution: { visibility: "internal", agentPrompt: summaryPrompt },
     display: { visibility: "user-visible", text: summaryPrompt },
   });
-  clearQueueSummaryState(params.queue);
+  clearAnnounceSummaryState(params.queue);
   return true;
 }
 
@@ -219,7 +262,7 @@ function scheduleAnnounceDrain(key: string) {
                 display: { visibility: "user-visible", text: summary },
                 internalEvents: summaryTarget.internalEvents,
               });
-              clearQueueSummaryState(queue);
+              clearAnnounceSummaryState(queue);
             }
             collectState.forceIndividualCollect = true;
             queue.collectForceIndividual = true;
@@ -239,7 +282,7 @@ function scheduleAnnounceDrain(key: string) {
           });
           queue.items.splice(0, items.length);
           if (summary) {
-            clearQueueSummaryState(queue);
+            clearAnnounceSummaryState(queue);
           }
           continue;
         }
@@ -247,21 +290,18 @@ function scheduleAnnounceDrain(key: string) {
         const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "announce" });
         if (summaryPrompt) {
           if (
-            !(await drainNextQueueItem(
-              queue.items,
-              async (item) => {
-                queue.lastSummaryTarget = item;
-                await queue.send({
-                  ...item,
-                  execution: { visibility: "internal", agentPrompt: summaryPrompt },
-                  display: { visibility: "user-visible", text: summaryPrompt },
-                });
-              },
-            ))
+            !(await drainNextQueueItem(queue.items, async (item) => {
+              queue.lastSummaryTarget = item;
+              await queue.send({
+                ...item,
+                execution: { visibility: "internal", agentPrompt: summaryPrompt },
+                display: { visibility: "user-visible", text: summaryPrompt },
+              });
+            }))
           ) {
             break;
           }
-          clearQueueSummaryState(queue);
+          clearAnnounceSummaryState(queue);
           continue;
         }
 
@@ -309,6 +349,18 @@ export function enqueueAnnounce(params: {
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
     summarize: (item) => {
+      if (queue.summaryOverflowOriginKey !== null) {
+        const itemOriginKey = item.originKey;
+        if (queue.summaryOverflowOriginKey === undefined) {
+          queue.summaryOverflowOriginKey = itemOriginKey;
+          queue.summaryOverflowTarget = item;
+        } else if (queue.summaryOverflowOriginKey === itemOriginKey) {
+          queue.summaryOverflowTarget = item;
+        } else {
+          queue.summaryOverflowOriginKey = null;
+          queue.summaryOverflowTarget = undefined;
+        }
+      }
       const display = item.display;
       if (display.visibility === "summary-only") {
         return display.summaryLine?.trim() || "[summary unavailable]";

@@ -67,6 +67,25 @@ describe("subagent-announce-queue", () => {
     );
   });
 
+  it("does not reuse a stale summary target when summarized drops span multiple origins", () => {
+    const lastSummaryTarget = {
+      execution: { visibility: "internal", agentPrompt: "internal" },
+      display: { visibility: "summary-only", summaryLine: "safe summary" },
+      enqueuedAt: 1,
+      sessionKey: "agent:main:telegram:dm:u1",
+      origin: { channel: "telegram", to: "telegram:1" },
+      originKey: "telegram:telegram:1",
+    } as const;
+
+    expect(
+      resolveAnnounceCollectEmptySummaryTarget({
+        items: [],
+        lastSummaryTarget,
+        summaryOverflowOriginKey: null,
+      }),
+    ).toBeUndefined();
+  });
+
   it("sends collect-empty overflow summaries using the last safe summary target", async () => {
     const send = vi.fn(async () => {});
     const queue: CollectEmptySummaryQueue = {
@@ -89,6 +108,30 @@ describe("subagent-announce-queue", () => {
     const sent = getSentItem(send, 0);
     expect(sent.display.text).toContain("[Queue overflow]");
     expect(sent.display.text).toContain("first safe summary");
+    expect(queue.droppedCount).toBe(0);
+    expect(queue.summaryLines).toEqual([]);
+  });
+
+  it("drops ambiguous collect-empty summaries instead of sending them to the wrong origin", async () => {
+    const send = vi.fn(async () => {});
+    const queue: CollectEmptySummaryQueue = {
+      items: [],
+      dropPolicy: "summarize",
+      droppedCount: 2,
+      summaryLines: ["first summary", "second summary"],
+      lastSummaryTarget: {
+        execution: { visibility: "internal", agentPrompt: "internal" },
+        display: { visibility: "summary-only", summaryLine: "safe summary" },
+        enqueuedAt: 1,
+        sessionKey: "agent:main:telegram:dm:u1",
+        origin: { channel: "telegram", to: "telegram:2" },
+        originKey: "telegram:telegram:2",
+      },
+      summaryOverflowOriginKey: null,
+    };
+
+    await expect(maybeSendAnnounceCollectEmptySummary({ queue, send })).resolves.toBe(false);
+    expect(send).not.toHaveBeenCalled();
     expect(queue.droppedCount).toBe(0);
     expect(queue.summaryLines).toEqual([]);
   });
