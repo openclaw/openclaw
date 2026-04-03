@@ -1,7 +1,7 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasEnvHttpProxyConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   closeDispatcher,
@@ -193,7 +193,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         policy: params.policy,
       });
       const canUseTrustedEnvProxy =
-        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasEnvHttpProxyConfigured();
       if (canUseTrustedEnvProxy) {
         const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
         dispatcher = new EnvHttpProxyAgent();

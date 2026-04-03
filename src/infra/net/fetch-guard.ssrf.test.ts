@@ -411,4 +411,31 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("routes through loopback HTTPS_PROXY without SSRF blocking the proxy address", async () => {
+    // Simulates cordon: a credential-injection proxy at 127.0.0.1:6790.
+    // The SSRF guard must validate the *destination* URL (public API), not
+    // the proxy address. The proxy address comes from the env var and is
+    // consumed by undici's EnvHttpProxyAgent directly.
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:6790");
+    const lookupFn = createPublicLookup();
+
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(getDispatcherClassName(requestInit.dispatcher)).toBe("EnvHttpProxyAgent");
+      return okResponse();
+    });
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.openai.com/v1/chat/completions",
+      fetchImpl,
+      lookupFn,
+      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // Destination URL was not blocked despite proxy being on loopback
+    expect(result.response.status).toBe(200);
+    await result.release();
+  });
 });
