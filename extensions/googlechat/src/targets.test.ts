@@ -21,8 +21,8 @@ vi.mock("google-auth-library", () => ({
   },
 }));
 
-vi.mock("./auth.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./auth.js")>();
+vi.mock("./auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
   return {
     ...actual,
     getGoogleChatAccessToken: mocks.getGoogleChatAccessToken,
