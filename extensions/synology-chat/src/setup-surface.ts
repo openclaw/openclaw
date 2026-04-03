@@ -218,7 +218,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
   prepare: async ({ cfg, accountId, credentialValues, prompter }) => {
     const allowInsecureSsl = await prompter.confirm({
       message: INSECURE_SSL_PROMPT,
-      initialValue: getRawAccountConfig(cfg, accountId).allowInsecureSsl === true,
+      initialValue: resolveAccount(cfg, accountId).allowInsecureSsl,
     });
     const sslPatch = resolveAllowInsecureSslSetupPatch({ accountId, allowInsecureSsl });
     return {

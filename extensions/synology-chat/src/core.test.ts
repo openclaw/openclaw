@@ -181,12 +181,15 @@ describe("synology-chat core", () => {
     if (!prepare) {
       throw new Error("setupWizard.prepare is required");
     }
-    const confirm = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Allow insecure SSL for trusted self-signed NAS certificates?") {
-        return false;
-      }
-      throw new Error(`Unexpected confirm prompt: ${message}`);
-    });
+    const confirm = vi.fn(
+      async ({ message, initialValue }: { message: string; initialValue?: boolean }) => {
+        if (message === "Allow insecure SSL for trusted self-signed NAS certificates?") {
+          expect(initialValue).toBe(true);
+          return false;
+        }
+        throw new Error(`Unexpected confirm prompt: ${message}`);
+      },
+    );
 
     const prepared = await prepare({
       cfg: {
