@@ -584,17 +584,26 @@ export async function spawnSubagentDirect(
   const globalFs = resolveToolFsConfig({ cfg });
   const agentFs = resolveToolFsConfig({ cfg, agentId: targetAgentId });
   const subagentFs = cfg.tools?.subagents?.fs;
+  const sessionsSpawnFs = cfg.tools?.sessions_spawn?.fsPolicy;
   const effectiveFsPolicy = combineToolFsPolicies({
     globalPolicy: globalFs,
     agentPolicy: agentFs,
     spawnPolicy: {
       // Subagent defaults are an independent ceiling layer.
-      // Spawn-time overrides may only tighten further; they must not replace the ceiling.
-      workspaceOnly: subagentFs?.workspaceOnly === true || params.fsPolicy?.workspaceOnly === true,
-      allowedPaths: subagentFs?.allowedPaths ?? params.fsPolicy?.allowedPaths,
+      // sessions_spawn.fsPolicy provides a default spawn-time tightening.
+      // Per-call params.fsPolicy may tighten further but must not replace configured ceilings.
+      workspaceOnly:
+        subagentFs?.workspaceOnly === true ||
+        sessionsSpawnFs?.workspaceOnly === true ||
+        params.fsPolicy?.workspaceOnly === true,
+      allowedPaths: subagentFs?.allowedPaths ?? sessionsSpawnFs?.allowedPaths ?? params.fsPolicy?.allowedPaths,
       denyPaths:
-        subagentFs?.denyPaths || params.fsPolicy?.denyPaths
-          ? [...(subagentFs?.denyPaths ?? []), ...(params.fsPolicy?.denyPaths ?? [])]
+        subagentFs?.denyPaths || sessionsSpawnFs?.denyPaths || params.fsPolicy?.denyPaths
+          ? [
+              ...(subagentFs?.denyPaths ?? []),
+              ...(sessionsSpawnFs?.denyPaths ?? []),
+              ...(params.fsPolicy?.denyPaths ?? []),
+            ]
           : undefined,
     },
   });
