@@ -245,6 +245,8 @@ ENV NODE_ENV=production
 # Security hardening: Run as non-root user
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
+RUN npm config -g set prefix '/home/node'
+ENV PATH="/home/node/bin:${PATH}"
 USER node
 
 # Start gateway server with default config.
