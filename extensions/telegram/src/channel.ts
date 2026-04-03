@@ -69,6 +69,7 @@ import * as probeModule from "./probe.js";
 import type { TelegramProbe } from "./probe.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { getTelegramRuntime } from "./runtime.js";
+import { collectTelegramSecurityAuditFindings } from "./security-audit.js";
 import { sendMessageTelegram, sendPollTelegram, sendTypingTelegram } from "./send.js";
 import { resolveTelegramSessionConversation } from "./session-conversation.js";
 import { telegramSetupAdapter } from "./setup-core.js";
@@ -259,6 +260,39 @@ function matchTelegramAcpConversation(params: {
   };
 }
 
+function shouldTreatTelegramRoutedTextAsVisible(params: {
+  kind: "tool" | "block" | "final";
+  text?: string;
+}): boolean {
+  void params.text;
+  return params.kind !== "final";
+}
+
+function targetsMatchTelegramReplySuppression(params: {
+  originTarget: string;
+  targetKey: string;
+  targetThreadId?: string;
+}): boolean {
+  const origin = parseTelegramTarget(params.originTarget);
+  const target = parseTelegramTarget(params.targetKey);
+  const originThreadId =
+    origin.messageThreadId != null && String(origin.messageThreadId).trim()
+      ? String(origin.messageThreadId).trim()
+      : undefined;
+  const targetThreadId =
+    params.targetThreadId?.trim() ||
+    (target.messageThreadId != null && String(target.messageThreadId).trim()
+      ? String(target.messageThreadId).trim()
+      : undefined);
+  if (origin.chatId.trim().toLowerCase() !== target.chatId.trim().toLowerCase()) {
+    return false;
+  }
+  if (originThreadId && targetThreadId) {
+    return originThreadId === targetThreadId;
+  }
+  return originThreadId == null && targetThreadId == null;
+}
+
 function resolveTelegramCommandConversation(params: {
   threadId?: string;
   originatingTo?: string;
@@ -289,6 +323,73 @@ function resolveTelegramCommandConversation(params: {
   };
 }
 
+function resolveTelegramInboundConversation(params: {
+  to?: string;
+  conversationId?: string;
+  threadId?: string | number;
+}) {
+  const rawTarget = params.to?.trim() || params.conversationId?.trim() || "";
+  if (!rawTarget) {
+    return null;
+  }
+  const parsedTarget = parseTelegramTarget(rawTarget);
+  const chatId = parsedTarget.chatId.trim();
+  if (!chatId) {
+    return null;
+  }
+  const threadId =
+    parsedTarget.messageThreadId != null
+      ? String(parsedTarget.messageThreadId)
+      : params.threadId != null
+        ? String(params.threadId).trim() || undefined
+        : undefined;
+  if (threadId) {
+    const parsedTopic = parseTelegramTopicConversation({
+      conversationId: threadId,
+      parentConversationId: chatId,
+    });
+    if (!parsedTopic) {
+      return null;
+    }
+    return {
+      conversationId: parsedTopic.canonicalConversationId,
+      parentConversationId: parsedTopic.chatId,
+    };
+  }
+  return {
+    conversationId: chatId,
+    parentConversationId: chatId,
+  };
+}
+
+function resolveTelegramDeliveryTarget(params: {
+  conversationId: string;
+  parentConversationId?: string;
+}) {
+  const parsedTopic = parseTelegramTopicConversation({
+    conversationId: params.conversationId,
+    parentConversationId: params.parentConversationId,
+  });
+  if (parsedTopic) {
+    return {
+      to: parsedTopic.chatId,
+      threadId: parsedTopic.topicId,
+    };
+  }
+  const parsedTarget = parseTelegramTarget(
+    params.parentConversationId?.trim() || params.conversationId,
+  );
+  if (!parsedTarget.chatId.trim()) {
+    return null;
+  }
+  return {
+    to: parsedTarget.chatId,
+    ...(parsedTarget.messageThreadId != null
+      ? { threadId: String(parsedTarget.messageThreadId) }
+      : {}),
+  };
+}
+
 function parseTelegramExplicitTarget(raw: string) {
   const target = parseTelegramTarget(raw);
   return {
@@ -296,6 +397,41 @@ function parseTelegramExplicitTarget(raw: string) {
     threadId: target.messageThreadId,
     chatType: target.chatType === "unknown" ? undefined : target.chatType,
   };
+}
+
+function shouldStripTelegramThreadFromAnnounceOrigin(params: {
+  requester: {
+    channel?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  entry: {
+    channel?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+}): boolean {
+  const requesterChannel = params.requester.channel?.trim().toLowerCase();
+  if (requesterChannel && requesterChannel !== "telegram") {
+    return true;
+  }
+  const requesterTo = params.requester.to?.trim();
+  if (!requesterTo) {
+    return false;
+  }
+  if (!requesterChannel && !requesterTo.startsWith("telegram:")) {
+    return true;
+  }
+  const requesterTarget = parseTelegramExplicitTarget(requesterTo);
+  if (requesterTarget.chatType !== "group") {
+    return true;
+  }
+  const entryTo = params.entry.to?.trim();
+  if (!entryTo) {
+    return false;
+  }
+  const entryTarget = parseTelegramExplicitTarget(entryTo);
+  return entryTarget.to !== requesterTarget.to;
 }
 
 function buildTelegramBaseSessionKey(params: {
@@ -472,6 +608,7 @@ export const telegramPlugin = createChatChannelPlugin({
       resolveGroupOverrides: resolveTelegramAllowlistGroupOverrides,
     }),
     bindings: {
+      selfParentConversationByDefault: true,
       compileConfiguredBinding: ({ conversationId }) =>
         normalizeTelegramAcpConversationId(conversationId),
       matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
@@ -490,6 +627,25 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     conversationBindings: {
       supportsCurrentConversationBinding: true,
+      defaultTopLevelPlacement: "current",
+      resolveConversationRef: ({
+        accountId: _accountId,
+        conversationId,
+        parentConversationId,
+        threadId,
+      }) =>
+        resolveTelegramInboundConversation({
+          to: parentConversationId ?? conversationId,
+          conversationId,
+          threadId: threadId ?? undefined,
+        }),
+      buildBoundReplyChannelData: ({ operation, conversation }) => {
+        if (operation !== "acp-spawn") {
+          return null;
+        }
+        return conversation.conversationId.includes(":topic:") ? { telegram: { pin: true } } : null;
+      },
+      shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
       createManager: ({ accountId }) =>
         createTelegramThreadBindingManager({
           accountId: accountId ?? undefined,
@@ -531,6 +687,10 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     messaging: {
       normalizeTarget: normalizeTelegramMessagingTarget,
+      resolveInboundConversation: ({ to, conversationId, threadId }) =>
+        resolveTelegramInboundConversation({ to, conversationId, threadId }),
+      resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
+        resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
       resolveSessionConversation: ({ kind, rawId }) =>
         resolveTelegramSessionConversation({ kind, rawId }),
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
@@ -593,6 +753,7 @@ export const telegramPlugin = createChatChannelPlugin({
     actions: telegramMessageActions,
     status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe, unknown>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      skipStaleSocketHealthCheck: true,
       collectStatusIssues: collectTelegramStatusIssues,
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
@@ -820,6 +981,7 @@ export const telegramPlugin = createChatChannelPlugin({
       normalizeEntry: (raw) => raw.replace(/^(telegram|tg):/i, ""),
     },
     collectWarnings: collectTelegramSecurityWarnings,
+    collectAuditFindings: collectTelegramSecurityAuditFindings,
   },
   threading: {
     topLevelReplyToMode: "telegram",
@@ -856,8 +1018,12 @@ export const telegramPlugin = createChatChannelPlugin({
         }).catch(() => {});
       },
       shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
+      shouldTreatRoutedTextAsVisible: shouldTreatTelegramRoutedTextAsVisible,
+      targetsMatchForReplySuppression: targetsMatchTelegramReplySuppression,
       resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
         typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
+      supportsPollDurationSeconds: true,
+      supportsAnonymousPolls: true,
       sendPayload: async ({
         cfg,
         to,

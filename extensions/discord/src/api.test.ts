@@ -1,5 +1,5 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/plugins/fetch-mock.js";
 import { fetchDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
@@ -67,7 +67,7 @@ describe("fetchDiscord", () => {
       "/users/@me/guilds",
       "test",
       fetcher,
-      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0 } },
+      { retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 } },
     );
 
     expect(result).toHaveLength(1);

@@ -1,9 +1,6 @@
-import { sendMessageSlack as sendMessageSlackImpl } from "../../../extensions/slack/runtime-api.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
-type RuntimeSend = {
-  sendMessage: typeof import("../../../extensions/slack/runtime-api.js").sendMessageSlack;
-};
-
-export const runtimeSend = {
-  sendMessage: sendMessageSlackImpl,
-} satisfies RuntimeSend;
+export const runtimeSend = createChannelOutboundRuntimeSend({
+  channelId: "slack",
+  unavailableMessage: "Slack outbound adapter is unavailable.",
+});

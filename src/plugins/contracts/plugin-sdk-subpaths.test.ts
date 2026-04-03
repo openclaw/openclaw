@@ -275,6 +275,11 @@ describe("plugin-sdk subpath exports", () => {
     ]) {
       expectSourceMentions(subpath, ["chunkTextForOutbound"]);
     }
+    expectSourceMentions("approval-auth-runtime", [
+      "createResolvedApproverActionAuthAdapter",
+      "resolveApprovalApprovers",
+    ]);
+    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
@@ -375,7 +380,7 @@ describe("plugin-sdk subpath exports", () => {
         /plugins\/runtime\/runtime-(?:discord|imessage|line|signal|slack|telegram|whatsapp)(?:[-.][^"']*)?\.js/u,
       exclude: [
         "src/plugins/runtime/runtime-plugin-boundary.ts",
-        "src/plugins/runtime/runtime-web-channel-boundary.ts",
+        "src/plugins/runtime/runtime-web-channel-plugin.ts",
       ],
       excludeFilesMatching: [/\.test\.ts$/u, /\.test-harness\.ts$/u],
     });
@@ -427,8 +432,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveThreadBindingThreadName",
       "resolveThreadBindingsEnabled",
       "formatThreadBindingDisabledError",
-      "DISCORD_THREAD_BINDING_CHANNEL",
-      "MATRIX_THREAD_BINDING_CHANNEL",
       "resolveControlCommandGate",
       "resolveCommandAuthorizedFromAuthorizers",
       "resolveDualTextControlCommandGate",
@@ -616,8 +619,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expectSourceMentions("conversation-runtime", [
-      "DISCORD_THREAD_BINDING_CHANNEL",
-      "MATRIX_THREAD_BINDING_CHANNEL",
       "formatThreadBindingDisabledError",
       "resolveThreadBindingFarewellText",
       "resolveThreadBindingConversationIdFromBindingId",
@@ -720,7 +721,11 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
+    expectSourceOmitsSnippet("google-model-id", "./google.js");
+    expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
+    expectSourceOmitsSnippet("google-model-id", "../../extensions/");
     expectSourceOmitsSnippet("xai-model-id", "./xai.js");
+    expectSourceOmitsSnippet("xai-model-id", "./facade-runtime.js");
     expectSourceOmitsSnippet("xai-model-id", "../../extensions/");
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 

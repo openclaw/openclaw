@@ -61,6 +61,58 @@ function migrateThreadBindingsTtlHoursForPath(params: {
   return true;
 }
 
+function hasLegacyThreadBindingTtlInAnyChannel(value: unknown): boolean {
+  const channels = getRecord(value);
+  if (!channels) {
+    return false;
+  }
+  return Object.values(channels).some((entry) => {
+    const channel = getRecord(entry);
+    if (!channel) {
+      return false;
+    }
+    return (
+      hasLegacyThreadBindingTtl(channel.threadBindings) ||
+      hasLegacyThreadBindingTtlInAccounts(channel.accounts)
+    );
+  });
+}
+
+function hasLegacyTelegramStreamingKeys(value: unknown): boolean {
+  const entry = getRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return entry.streamMode !== undefined;
+}
+
+function hasLegacyDiscordStreamingKeys(value: unknown): boolean {
+  const entry = getRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return entry.streamMode !== undefined || typeof entry.streaming === "boolean";
+}
+
+function hasLegacySlackStreamingKeys(value: unknown): boolean {
+  const entry = getRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return entry.streamMode !== undefined || typeof entry.streaming === "boolean";
+}
+
+function hasLegacyStreamingKeysInAccounts(
+  value: unknown,
+  matchEntry: (entry: Record<string, unknown>) => boolean,
+): boolean {
+  const accounts = getRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((entry) => matchEntry(getRecord(entry) ?? {}));
+}
+
 const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   {
     path: ["session", "threadBindings"],
@@ -69,16 +121,49 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
     match: (value) => hasLegacyThreadBindingTtl(value),
   },
   {
-    path: ["channels", "discord", "threadBindings"],
+    path: ["channels"],
     message:
-      "channels.discord.threadBindings.ttlHours was renamed to channels.discord.threadBindings.idleHours (auto-migrated on load).",
-    match: (value) => hasLegacyThreadBindingTtl(value),
+      "channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours (auto-migrated on load).",
+    match: (value) => hasLegacyThreadBindingTtlInAnyChannel(value),
+  },
+];
+
+const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "telegram"],
+    message:
+      "channels.telegram.streamMode is legacy; use channels.telegram.streaming instead (auto-migrated on load).",
+    match: (value) => hasLegacyTelegramStreamingKeys(value),
+  },
+  {
+    path: ["channels", "telegram", "accounts"],
+    message:
+      "channels.telegram.accounts.<id>.streamMode is legacy; use channels.telegram.accounts.<id>.streaming instead (auto-migrated on load).",
+    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
+  },
+  {
+    path: ["channels", "discord"],
+    message:
+      "channels.discord.streamMode and boolean channels.discord.streaming are legacy; use channels.discord.streaming with enum values instead (auto-migrated on load).",
+    match: (value) => hasLegacyDiscordStreamingKeys(value),
   },
   {
     path: ["channels", "discord", "accounts"],
     message:
-      "channels.discord.accounts.<id>.threadBindings.ttlHours was renamed to channels.discord.accounts.<id>.threadBindings.idleHours (auto-migrated on load).",
-    match: (value) => hasLegacyThreadBindingTtlInAccounts(value),
+      "channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
+    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
+  },
+  {
+    path: ["channels", "slack"],
+    message:
+      "channels.slack.streamMode and boolean channels.slack.streaming are legacy; use channels.slack.streaming with enum values instead (auto-migrated on load).",
+    match: (value) => hasLegacySlackStreamingKeys(value),
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
+    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacySlackStreamingKeys),
   },
 ];
 
@@ -86,7 +171,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "thread-bindings.ttlHours->idleHours",
     describe:
-      "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channels.discord)",
+      "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channel configs)",
     legacyRules: THREAD_BINDING_RULES,
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
@@ -100,35 +185,39 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       }
 
       const channels = getRecord(raw.channels);
-      const discord = getRecord(channels?.discord);
-      if (!channels || !discord) {
+      if (!channels) {
         return;
       }
 
-      migrateThreadBindingsTtlHoursForPath({
-        owner: discord,
-        pathPrefix: "channels.discord",
-        changes,
-      });
-
-      const accounts = getRecord(discord.accounts);
-      if (accounts) {
-        for (const [accountId, accountRaw] of Object.entries(accounts)) {
-          const account = getRecord(accountRaw);
-          if (!account) {
-            continue;
-          }
-          migrateThreadBindingsTtlHoursForPath({
-            owner: account,
-            pathPrefix: `channels.discord.accounts.${accountId}`,
-            changes,
-          });
-          accounts[accountId] = account;
+      for (const [channelId, channelRaw] of Object.entries(channels)) {
+        const channel = getRecord(channelRaw);
+        if (!channel) {
+          continue;
         }
-        discord.accounts = accounts;
-      }
+        migrateThreadBindingsTtlHoursForPath({
+          owner: channel,
+          pathPrefix: `channels.${channelId}`,
+          changes,
+        });
 
-      channels.discord = discord;
+        const accounts = getRecord(channel.accounts);
+        if (accounts) {
+          for (const [accountId, accountRaw] of Object.entries(accounts)) {
+            const account = getRecord(accountRaw);
+            if (!account) {
+              continue;
+            }
+            migrateThreadBindingsTtlHoursForPath({
+              owner: account,
+              pathPrefix: `channels.${channelId}.accounts.${accountId}`,
+              changes,
+            });
+            accounts[accountId] = account;
+          }
+          channel.accounts = accounts;
+        }
+        channels[channelId] = channel;
+      }
       raw.channels = channels;
     },
   }),
@@ -136,6 +225,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
     id: "channels.streaming-keys->channels.streaming",
     describe:
       "Normalize legacy streaming keys to channels.<provider>.streaming (Telegram/Discord/Slack)",
+    legacyRules: CHANNEL_STREAMING_RULES,
     apply: (raw, changes) => {
       const channels = getRecord(raw.channels);
       if (!channels) {

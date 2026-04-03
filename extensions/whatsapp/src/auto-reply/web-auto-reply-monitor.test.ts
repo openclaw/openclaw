@@ -40,6 +40,7 @@ function runGroupGating(params: {
   msg: Record<string, unknown>;
   conversationId?: string;
   agentId?: string;
+  selfChatMode?: boolean;
 }) {
   const groupHistories = new Map<string, GroupHistoryEntry[]>();
   const conversationId = params.conversationId ?? "123@g.us";
@@ -55,6 +56,7 @@ function runGroupGating(params: {
     agentId,
     sessionKey,
     baseMentionConfig,
+    selfChatMode: params.selfChatMode,
     groupHistories,
     groupHistoryLimit: 10,
     groupMemberNames: new Map(),
@@ -116,6 +118,114 @@ describe("applyGroupGating", () => {
         selfE164: "+15551234567",
         replyToId: "m0",
         replyToBody: "bot said hi",
+        replyToSender: "+15551234567",
+        replyToSenderJid: "15551234567@s.whatsapp.net",
+        replyToSenderE164: "+15551234567",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+  });
+
+  it("does not treat self-number quoted replies as implicit mention in selfChatMode groups", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+    const { result } = runGroupGating({
+      cfg,
+      selfChatMode: true,
+      msg: createGroupMessage({
+        id: "m-self-reply",
+        to: "+15550000",
+        accountId: "default",
+        body: "following up on my own message",
+        timestamp: Date.now(),
+        senderE164: "+15551234567",
+        senderJid: "15551234567@s.whatsapp.net",
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        replyToId: "m0",
+        replyToBody: "my earlier message",
+        replyToSender: "+15551234567",
+        replyToSenderJid: "15551234567@s.whatsapp.net",
+        replyToSenderE164: "+15551234567",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(false);
+  });
+
+  it("still treats reply-to-bot as implicit mention in selfChatMode when sender is a different user", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+    const { result } = runGroupGating({
+      cfg,
+      selfChatMode: true,
+      msg: createGroupMessage({
+        id: "m-other-reply",
+        to: "+15550000",
+        accountId: "default",
+        body: "following up on bot reply",
+        timestamp: Date.now(),
+        senderE164: "+15559999999",
+        senderJid: "15559999999@s.whatsapp.net",
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        replyToId: "m0",
+        replyToBody: "bot earlier response",
+        replyToSender: "+15551234567",
+        replyToSenderJid: "15551234567@s.whatsapp.net",
+        replyToSenderE164: "+15551234567",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+  });
+
+  it("honors per-account selfChatMode overrides before suppressing implicit mentions", () => {
+    const cfg = makeConfig({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+          accounts: {
+            work: {
+              selfChatMode: false,
+            },
+          },
+        },
+      },
+    });
+    // Per-account override: work account has selfChatMode: false despite root being true
+    const { result } = runGroupGating({
+      cfg,
+      selfChatMode: false,
+      msg: createGroupMessage({
+        id: "m-account-override",
+        to: "+15550000",
+        accountId: "work",
+        body: "following up on bot reply",
+        timestamp: Date.now(),
+        senderE164: "+15551234567",
+        senderJid: "15551234567@s.whatsapp.net",
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        replyToId: "m0",
+        replyToBody: "bot earlier response",
         replyToSender: "+15551234567",
         replyToSenderJid: "15551234567@s.whatsapp.net",
         replyToSenderE164: "+15551234567",

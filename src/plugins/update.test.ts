@@ -605,6 +605,32 @@ describe("updateNpmInstalledPlugins", () => {
       marketplacePlugin: "claude-bundle",
     });
   });
+
+  it("forwards dangerous force unsafe install to plugin update installers", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server@beta",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      dangerouslyForceUnsafeInstall: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "openclaw-codex-app-server@beta",
+        dangerouslyForceUnsafeInstall: true,
+        expectedPluginId: "openclaw-codex-app-server",
+      }),
+    );
+  });
 });
 
 describe("syncPluginsForUpdateChannel", () => {

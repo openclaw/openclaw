@@ -1,11 +1,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
-export const readConfigFileSnapshotForWrite = vi.fn();
-export const writeConfigFile = vi.fn();
-export const loadCronStore = vi.fn();
-export const resolveCronStorePath = vi.fn();
-export const saveCronStore = vi.fn();
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
+type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+
+export const readConfigFileSnapshotForWrite: AsyncUnknownMock = vi.fn();
+export const writeConfigFile: AsyncUnknownMock = vi.fn();
+export const loadCronStore: AsyncUnknownMock = vi.fn();
+export const resolveCronStorePath: UnknownMock = vi.fn();
+export const saveCronStore: AsyncUnknownMock = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();

@@ -12,6 +12,10 @@ import {
 } from "./exec.js";
 
 describe("runCommandWithTimeout", () => {
+  function createSilentIdleArgv(): string[] {
+    return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
+  }
+
   beforeEach(() => {
     vi.useRealTimers();
   });
@@ -89,13 +93,10 @@ describe("runCommandWithTimeout", () => {
     "kills command when no output timeout elapses",
     { timeout: 15_000 },
     async () => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-        {
-          timeoutMs: 2_000,
-          noOutputTimeoutMs: 200,
-        },
-      );
+      const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 2_000,
+        noOutputTimeoutMs: 200,
+      });
 
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
@@ -107,12 +108,9 @@ describe("runCommandWithTimeout", () => {
     "reports global timeout termination when overall timeout elapses",
     { timeout: 15_000 },
     async () => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-        {
-          timeoutMs: 200,
-        },
-      );
+      const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 200,
+      });
 
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);

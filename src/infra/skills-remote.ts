@@ -1,6 +1,6 @@
-import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills.js";
-import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
+import type { SkillEligibilityContext, SkillEntry } from "../agents/skills/types.js";
+import { loadWorkspaceSkillEntries } from "../agents/skills/workspace.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";

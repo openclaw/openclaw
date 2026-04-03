@@ -330,6 +330,56 @@ describe("redactConfigSnapshot", () => {
     expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
   });
 
+  it("redacts model provider request proxy URLs from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        request: {
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              request: {
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.request.proxy.url).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.openai.request.proxy.url).toBe(
+      "http://alice:secret@proxy.example.internal:8080",
+    );
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,
