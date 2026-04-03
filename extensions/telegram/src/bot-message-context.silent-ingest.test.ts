@@ -87,6 +87,7 @@ describe("telegram mention-skip silent ingest", () => {
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
+
   it("uses wildcard ingest when a specific group override omits ingest", async () => {
     internalHookMocks.createInternalHookEvent.mockClear();
     internalHookMocks.triggerInternalHook.mockClear();
