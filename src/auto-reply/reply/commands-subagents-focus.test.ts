@@ -227,6 +227,18 @@ function createThreadCommandParams(commandBody: string) {
   return params;
 }
 
+function createThreadCommandParamsWithoutAccountId(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  const params = buildCommandTestParams(commandBody, cfg, {
+    Provider: THREAD_CHANNEL,
+    Surface: THREAD_CHANNEL,
+    OriginatingChannel: THREAD_CHANNEL,
+    OriginatingTo: "channel:parent-1",
+    MessageThreadId: "thread-1",
+  });
+  params.command.senderId = "user-1";
+  return params;
+}
+
 function createTopicCommandParams(commandBody: string) {
   const params = buildCommandTestParams(commandBody, baseCfg, {
     Provider: TOPIC_CHANNEL,
@@ -674,6 +686,47 @@ describe("/focus, /unfocus, /agents", () => {
 
     expect(text).toContain("persistent-1");
     expect(text).toContain("binding:thread-persistent-1");
+  });
+
+  it("/agents honors the plugin default account when AccountId is omitted", async () => {
+    hoisted.runtimeChannelRegistry.channels[0]!.plugin.config.defaultAccountId = () => "work";
+    addSubagentRunForTests({
+      runId: "run-work-1",
+      childSessionKey: "agent:main:subagent:work-1",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "work task",
+      cleanup: "keep",
+      label: "work-1",
+      createdAt: Date.now(),
+    });
+
+    hoisted.sessionBindingListBySessionMock.mockImplementation((sessionKey: string) => {
+      if (sessionKey !== "agent:main:subagent:work-1") {
+        return [];
+      }
+      return [
+        createSessionBindingRecord({
+          bindingId: "work:thread-work-1",
+          targetSessionKey: sessionKey,
+          targetKind: "subagent",
+          conversation: {
+            channel: THREAD_CHANNEL,
+            accountId: "work",
+            conversationId: "thread-work-1",
+          },
+        }),
+      ];
+    });
+
+    const result = await handleSubagentsCommand(
+      createThreadCommandParamsWithoutAccountId("/agents"),
+      true,
+    );
+    const text = result?.reply?.text ?? "";
+
+    expect(text).toContain("work-1");
+    expect(text).toContain("binding:thread-work-1");
   });
 
   it("/focus rejects unsupported channels", async () => {
