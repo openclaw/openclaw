@@ -416,14 +416,14 @@ export function handleToolExecutionStart(
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
       if (isMessagingSend) {
         const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+        // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
+        const text = (argsRecord.content as string) ?? (argsRecord.message as string);
+        if (text && typeof text === "string") {
+          ctx.state.pendingMessagingTexts.set(toolCallId, text);
+          ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
+        }
         if (sendTarget) {
-          // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-          const text = (argsRecord.content as string) ?? (argsRecord.message as string);
-          if (text && typeof text === "string") {
-            sendTarget.hasText = true;
-            ctx.state.pendingMessagingTexts.set(toolCallId, text);
-            ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
-          }
+          sendTarget.hasText = true;
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
         // Track media URLs from messaging tool args (pending until tool_execution_end).
