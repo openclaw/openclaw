@@ -1,10 +1,7 @@
 import { expect, it } from "vitest";
+import { isSignalSenderAllowed, type SignalSender } from "../../../extensions/signal/api.js";
 import { isAllowedBlueBubblesSender } from "../../../src/plugin-sdk/bluebubbles-policy.js";
 import { isMattermostSenderAllowed } from "../../../src/plugin-sdk/mattermost-policy.js";
-import {
-  isSignalSenderAllowed,
-  type SignalSender,
-} from "../../../src/plugin-sdk/signal-surface.js";
 import {
   DM_GROUP_ACCESS_REASON,
   resolveDmGroupAccessWithLists,

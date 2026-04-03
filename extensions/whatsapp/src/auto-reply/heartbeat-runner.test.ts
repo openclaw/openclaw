@@ -37,7 +37,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../src/channels/plugins/whatsapp-heartbeat.js", () => ({
+vi.mock("../heartbeat-recipients.js", () => ({
   resolveWhatsAppHeartbeatRecipients: () => [],
 }));
 
@@ -49,8 +49,8 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
   return {
     ...actual,
     resolveHeartbeatVisibility: () => state.visibility,

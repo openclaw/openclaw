@@ -1,6 +1,6 @@
 {
   "config": "vitest.extensions.config.ts",
-  "generatedAt": "2026-04-03T00:00:00.000Z",
+  "generatedAt": "2026-04-03T04:18:33.578Z",
   "defaultMinDeltaKb": 1048576,
   "lane": "extensions, extensions-batch-*",
   "files": {
@@ -10,10 +10,6 @@
     },
     "extensions/nextcloud-talk/src/setup.test.ts": {
       "deltaKb": 2474639,
-      "sources": ["checks-fast-extensions:2026-04-03"]
-    },
-    "extensions/browser/src/browser/server-context.remote-tab-ops.test.ts": {
-      "deltaKb": 1855980,
       "sources": ["checks-fast-extensions:2026-04-03"]
     },
     "extensions/acpx/src/runtime.test.ts": {
@@ -36,6 +32,10 @@
       "deltaKb": 1625293,
       "sources": ["checks-fast-extensions:2026-04-03"]
     },
+    "extensions/bluebubbles/src/send.test.ts": {
+      "deltaKb": 1625293,
+      "sources": ["gh-job-69804189668:extensions-batch-19-shard-6"]
+    },
     "extensions/googlechat/src/approval-auth.test.ts": {
       "deltaKb": 1614807,
       "sources": ["checks-fast-extensions:2026-04-03"]
@@ -43,6 +43,42 @@
     "extensions/diffs/src/tool.test.ts": {
       "deltaKb": 1604321,
       "sources": ["checks-fast-extensions:2026-04-03"]
+    },
+    "extensions/memory-core/src/memory/mmr.test.ts": {
+      "deltaKb": 1572864,
+      "sources": ["gh-job-69804189668:extensions-batch-2-shard-6"]
+    },
+    "extensions/diffs/src/config.test.ts": {
+      "deltaKb": 1572864,
+      "sources": ["gh-job-69804189668:extensions-batch-20-shard-6"]
+    },
+    "extensions/voice-call/src/webhook-security.test.ts": {
+      "deltaKb": 1541407,
+      "sources": ["gh-job-69804189666:extensions-batch-5-shard-1"]
+    },
+    "extensions/nostr/src/nostr-bus.fuzz.test.ts": {
+      "deltaKb": 1509949,
+      "sources": ["gh-job-69804189668:extensions-batch-11-shard-6"]
+    },
+    "extensions/memory-lancedb/index.test.ts": {
+      "deltaKb": 1499464,
+      "sources": ["gh-job-69804189668:extensions-batch-12-shard-6"]
+    },
+    "extensions/google/provider-models.test.ts": {
+      "deltaKb": 1478492,
+      "sources": ["gh-job-69804189681:extensions-batch-11-shard-5"]
+    },
+    "extensions/fal/image-generation-provider.test.ts": {
+      "deltaKb": 1447035,
+      "sources": ["gh-job-69804189668:extensions-batch-13-shard-6"]
+    },
+    "extensions/matrix/src/matrix/format.test.ts": {
+      "deltaKb": 1447035,
+      "sources": ["gh-job-69804189668:extensions-batch-23-shard-6"]
+    },
+    "extensions/minimax/model-definitions.test.ts": {
+      "deltaKb": 1447035,
+      "sources": ["gh-job-69804189676:extensions-batch-15-shard-4"]
     }
   }
 }

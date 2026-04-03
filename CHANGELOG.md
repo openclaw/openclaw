@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 - Channels/context visibility: add configurable `contextVisibility` per channel (`all`, `allowlist`, `allowlist_quote`) so supplemental quote, thread, and fetched history context can be filtered by sender allowlists instead of always passing through as received.
 - Matrix/exec approvals: add Matrix-native exec approval prompts with account-scoped approvers, channel-or-DM delivery, and room-thread aware resolution handling. (#58635) Thanks @gumadeiras.
 - Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
+- Providers/config: add `models.providers.*.request` overrides for headers and auth on model-provider paths, and full request transport overrides for media provider HTTP paths.
 
 ### Fixes
 
@@ -21,6 +22,8 @@ Docs: https://docs.openclaw.ai
 - Telegram/local Bot API: thread `channels.telegram.apiRoot` through buffered reply-media and album downloads so self-hosted Bot API file paths stop falling back to `api.telegram.org` and 404ing. (#59544) Thanks @SARAMALI15792.
 - Telegram/replies: preserve explicit topic targets when `replyTo` is present while still inheriting the current topic for same-chat replies without an explicit topic. (#59634) Thanks @dashhuang.
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
+- Media/request overrides: resolve shared and capability-filtered media request SecretRefs correctly and expose media transport override fields to schema-driven config consumers. (#59848) Thanks @vincentkoc.
+- Providers/request overrides: stop advertising unsupported proxy and TLS transport settings on `models.providers.*.request`, and fail closed if unvalidated config tries to route LLM model-provider traffic through dead transport fields. Thanks @vincentkoc.
 - Matrix: allow secret-storage recreation during automatic repair bootstrap so clients that lose their recovery key can recover and persist new cross-signing keys. (#59846) Thanks @al3mart.
 - Matrix/crypto persistence: capture and write the IndexedDB snapshot while holding the snapshot file lock so concurrent gateway and CLI persists cannot overwrite newer crypto state. (#59851) Thanks @al3mart.
 - Ollama/auth: prefer real cloud auth over local marker during model auth resolution so cloud-backed Ollama auth does not get shadowed by stale local-only markers.
@@ -31,6 +34,14 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime: reuse compatible active registries for `web_search` and `web_fetch` provider snapshot resolution so repeated runtime reads do not re-import the same bundled plugin set on each agent message. Related #48380.
 - Infra/tailscale: ignore `OPENCLAW_TEST_TAILSCALE_BINARY` outside explicit test environments and block it from workspace `.env`, so test-only binary overrides cannot be injected through trusted repository state. (#58468) Thanks @eleqtrizit.
 - Agents/tool policy: preserve restrictive plugin-only allowlists instead of silently widening access to core tools, and keep allowlist warnings aligned with the enforced policy. (#58476) Thanks @eleqtrizit.
+- Hooks/session_end: preserve deterministic reason metadata for custom reset aliases and overlapping idle-plus-daily rollovers so plugins can rely on lifecycle reason reporting. (#59715) Thanks @jalehman.
+- Tools/image generation: stop inferring unsupported resolution overrides for OpenAI reference-image edits when no explicit `size` or `resolution` is provided, so default edit flows no longer fail before the provider request is sent.
+- Agents/sessions: release embedded runner session locks even when teardown cleanup throws, so timed-out or failed cleanup paths no longer leave sessions wedged until the stale-lock watchdog recovers them. (#59194) Thanks @samzong.
+- Slack/app manifest: add the missing `groups:read` scope to the onboarding and example Slack app manifest so apps copied from the OpenClaw templates can resolve private group conversations reliably.
+- Mobile pairing/Android: stop generating Tailscale and public mobile setup codes that point at unusable cleartext remote gateways, keep private LAN pairing allowed, and make Android reject insecure remote endpoints with clearer guidance while mixed bootstrap approvals honor operator scopes correctly. (#60128) Thanks @obviyus.
+- Telegram/media: add `channels.telegram.network.dangerouslyAllowPrivateNetwork` for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve `api.telegram.org` to private/internal/special-use addresses.
+- Discord/proxy: keep Carbon REST, monitor startup, and webhook sends on the configured Discord proxy while falling back cleanly when the proxy URL is invalid, so Discord replies and deploys do not hard-fail on malformed proxy config. (#57465) Thanks @geekhuashan.
+- Mobile pairing/device approval: mint both node and operator device tokens when one approval grants merged roles, so mixed mobile bootstrap pairings stop reconnecting as operator-only and showing the node offline. (#60208) Thanks @obviyus.
 
 ## 2026.4.2
 
@@ -61,6 +72,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Providers/transport policy: centralize request auth, proxy, TLS, and header shaping across shared HTTP, stream, and websocket paths, block insecure TLS/runtime transport overrides, and keep proxy-hop TLS separate from target mTLS settings. (#59682) Thanks @vincentkoc.
+- Providers/OpenRouter: gate documented OpenRouter attribution to native OpenRouter endpoints or the default route so custom proxy base URLs do not inherit OpenRouter request headers.
 - Providers/Copilot: classify native GitHub Copilot API hosts in the shared provider endpoint resolver and harden token-derived proxy endpoint parsing so Copilot base URL routing stays centralized and fails closed on malformed hints. (#59644) Thanks @vincentkoc.
 - Providers/streaming headers: centralize default and attribution header merging across OpenAI websocket, embedded-runner, and proxy stream paths so provider-specific headers stay consistent and caller overrides only win where intended. (#59542) Thanks @vincentkoc.
 - Providers/media HTTP: centralize base URL normalization, default auth/header injection, and explicit header override handling across shared OpenAI-compatible audio, Deepgram audio, Gemini media/image, and Moonshot video request paths. (#59469) Thanks @vincentkoc.

@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 
 const ESCAPE = String.fromCodePoint(27);
 const BELL = String.fromCodePoint(7);
@@ -7,6 +9,8 @@ const ANSI_ESCAPE_PATTERN = new RegExp(
   `${ESCAPE}(?:\\][^${BELL}]*(?:${BELL}|${ESCAPE}\\\\)|\\[[0-?]*[ -/]*[@-~]|[@-Z\\\\-_])`,
   "g",
 );
+const GITHUB_CLI_LOG_PREFIX_PATTERN =
+  /^[^\t\r\n]+\t[^\t\r\n]+\t\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/u;
 const GITHUB_ACTIONS_LOG_PREFIX_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/u;
 
 const COMPLETED_TEST_FILE_LINE_PATTERN =
@@ -46,7 +50,9 @@ function stripAnsi(text) {
 }
 
 function normalizeLogLine(line) {
-  return line.replace(GITHUB_ACTIONS_LOG_PREFIX_PATTERN, "");
+  return line
+    .replace(GITHUB_CLI_LOG_PREFIX_PATTERN, "")
+    .replace(GITHUB_ACTIONS_LOG_PREFIX_PATTERN, "");
 }
 
 export function parseCompletedTestFileLines(text) {
@@ -191,4 +197,87 @@ export function sampleProcessTreeRssKb(rootPid) {
   }
 
   return { rssKb, processCount };
+}
+
+const REPORT_FILE_PATTERN =
+  /^report\.(?<date>\d+)\.(?<time>\d+)\.(?<pid>\d+)\.0\.(?<sequence>\d+)\.json$/u;
+
+function readDiagnosticReport(reportPath) {
+  try {
+    const raw = fs.readFileSync(reportPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const rssBytes = parsed?.resourceUsage?.rss;
+    const usedHeapBytes = parsed?.javascriptHeap?.usedMemory;
+    const externalBytes = parsed?.javascriptHeap?.externalMemory;
+    if (
+      !Number.isFinite(rssBytes) ||
+      !Number.isFinite(usedHeapBytes) ||
+      !Number.isFinite(externalBytes)
+    ) {
+      return null;
+    }
+    return {
+      rssKb: Math.round(rssBytes / 1024),
+      usedHeapKb: Math.round(usedHeapBytes / 1024),
+      externalKb: Math.round(externalBytes / 1024),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function summarizeDiagnosticReports(reportDir) {
+  if (typeof reportDir !== "string" || reportDir.trim() === "") {
+    return [];
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(reportDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const reportsByPid = new Map();
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const match = entry.name.match(REPORT_FILE_PATTERN);
+    if (!match?.groups) {
+      continue;
+    }
+    const pid = Number.parseInt(match.groups.pid, 10);
+    const sequence = Number.parseInt(match.groups.sequence, 10);
+    if (!Number.isInteger(pid) || !Number.isInteger(sequence)) {
+      continue;
+    }
+    const reportPath = path.join(reportDir, entry.name);
+    const report = readDiagnosticReport(reportPath);
+    if (!report) {
+      continue;
+    }
+    const bucket = reportsByPid.get(pid) ?? [];
+    bucket.push({ pid, sequence, ...report });
+    reportsByPid.set(pid, bucket);
+  }
+
+  return [...reportsByPid.entries()]
+    .map(([pid, reports]) => {
+      const ordered = reports.toSorted((left, right) => left.sequence - right.sequence);
+      const first = ordered[0];
+      const last = ordered.at(-1);
+      if (!first || !last) {
+        return null;
+      }
+      return {
+        pid,
+        first,
+        last,
+        rssDeltaKb: last.rssKb - first.rssKb,
+        usedHeapDeltaKb: last.usedHeapKb - first.usedHeapKb,
+        externalDeltaKb: last.externalKb - first.externalKb,
+      };
+    })
+    .filter((entry) => entry !== null)
+    .toSorted((left, right) => right.rssDeltaKb - left.rssDeltaKb);
 }
