@@ -35,11 +35,21 @@ import {
   type SessionBindingContractChannelId,
 } from "./manifest.js";
 
-const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
-  discordThreadBindingTesting: {
-    resetThreadBindingsForTests: () => void;
-  };
-}>("discord");
+type DiscordThreadBindingTesting = {
+  resetThreadBindingsForTests: () => void;
+};
+
+let discordThreadBindingTestingCache: DiscordThreadBindingTesting | undefined;
+
+function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
+  if (!discordThreadBindingTestingCache) {
+    ({ discordThreadBindingTesting: discordThreadBindingTestingCache } =
+      loadBundledPluginTestApiSync<{
+        discordThreadBindingTesting: DiscordThreadBindingTesting;
+      }>("discord"));
+  }
+  return discordThreadBindingTestingCache;
+}
 
 function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
   return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
@@ -758,7 +768,7 @@ const sessionBindingContractEntries: Record<
         enableSweeper: false,
       });
       manager.stop();
-      discordThreadBindingTesting.resetThreadBindingsForTests();
+      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
       expectClearedSessionBinding({
         channel: "discord",
         accountId: "default",

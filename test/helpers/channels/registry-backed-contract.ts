@@ -21,7 +21,7 @@ import {
   installChannelThreadingContractSuite,
   installSessionBindingContractSuite,
 } from "../../../src/channels/plugins/contracts/suites.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -30,11 +30,21 @@ import { __testing as sessionBindingTesting } from "../../../src/infra/outbound/
 import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
-  discordThreadBindingTesting: {
-    resetThreadBindingsForTests: () => void;
-  };
-}>("discord");
+type DiscordThreadBindingTesting = {
+  resetThreadBindingsForTests: () => void;
+};
+
+let discordThreadBindingTestingCache: DiscordThreadBindingTesting | undefined;
+
+function getDiscordThreadBindingTesting(): DiscordThreadBindingTesting {
+  if (!discordThreadBindingTestingCache) {
+    ({ discordThreadBindingTesting: discordThreadBindingTestingCache } =
+      loadBundledPluginTestApiSync<{
+        discordThreadBindingTesting: DiscordThreadBindingTesting;
+      }>("discord"));
+  }
+  return discordThreadBindingTestingCache;
+}
 const { resetTelegramThreadBindingsForTests } = loadBundledPluginTestApiSync<{
   resetTelegramThreadBindingsForTests: () => Promise<void>;
 }>("telegram");
@@ -153,7 +163,7 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
       }
       setDefaultChannelPluginRegistryForTests();
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
-      discordThreadBindingTesting.resetThreadBindingsForTests();
+      getDiscordThreadBindingTesting().resetThreadBindingsForTests();
       feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
       resetMatrixThreadBindingsForTests();
       await resetTelegramThreadBindingsForTests();

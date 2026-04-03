@@ -3,6 +3,7 @@ import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
+  type ThreadBindingTargetKind,
   unbindThreadBindingsBySessionKey,
 } from "./monitor/thread-bindings.js";
 
@@ -46,6 +47,14 @@ type DiscordSubagentDeliveryTargetEvent = {
     threadId?: string | number;
   };
 };
+
+function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (normalized === "subagent" || normalized === "acp") {
+    return normalized;
+  }
+  return undefined;
+}
 
 function resolveThreadBindingFlags(api: OpenClawPluginApi, accountId?: string) {
   const account = resolveDiscordAccount({
@@ -95,13 +104,14 @@ export async function handleDiscordSubagentSpawning(
     };
   }
   try {
+    const agentId = event.agentId?.trim() || "subagent";
     const binding = await autoBindSpawnedDiscordSubagent({
       accountId: event.requester?.accountId,
       channel: event.requester?.channel,
       to: event.requester?.to,
       threadId: event.requester?.threadId,
       childSessionKey: event.childSessionKey,
-      agentId: event.agentId,
+      agentId,
       label: event.label,
       boundBy: "system",
     });
@@ -125,7 +135,7 @@ export function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
   unbindThreadBindingsBySessionKey({
     targetSessionKey: event.targetSessionKey,
     accountId: event.accountId,
-    targetKind: event.targetKind,
+    targetKind: normalizeThreadBindingTargetKind(event.targetKind),
     reason: event.reason,
     sendFarewell: event.sendFarewell,
   });
