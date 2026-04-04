@@ -27,7 +27,7 @@ Docs: https://docs.openclaw.ai
 - Memory/dreaming (experimental): add opt-in weighted short-term recall promotion to `MEMORY.md`, managed dreaming modes (`off|core|rem|deep`), and a `/dreaming` command plus Dreams UI so durable memory promotion can run on background cadence without manual scheduling. (#60569) Thanks @vignesh07.
 - Agents/system prompts: add an internal cache-prefix boundary across Anthropic-family, OpenAI-family, Google, and CLI transport shaping so stable system-prompt prefixes stay reusable without leaking internal cache markers to provider payloads. (#59054) Thanks @coletebou and @vincentkoc.
 - Docs/memory: add a dedicated Dreaming concept page, expand Memory overview with the Dreaming model, and link Dreaming from further reading to document the experimental opt-in consolidation workflow. Thanks @vignesh07.
-- Memory/dreaming (experimental): harden the new dreaming workflow with recall audit/repair, `openclaw memory status --fix`, `openclaw doctor --fix` memory repair, more robust managed cron behavior, and multilingual conceptual tagging for European-language and CJK memory snippets so promotion quality scales better across labs. (#60697) Thanks @vincentkoc.
+- Memory/dreaming (experimental): add follow-up dreaming hardening, multilingual conceptual tagging, and doctor/status repair support. Thanks @vincentkoc. (#60697)
 
 ### Fixes
 
