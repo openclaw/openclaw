@@ -366,7 +366,15 @@ Notes:
 Key ideas:
 
 - Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
-- If browser control is enabled and no auth is configured, OpenClaw auto-generates `gateway.auth.token` on startup and persists it to config.
+- The standalone loopback browser HTTP API uses **shared-secret auth only**:
+  gateway token bearer auth, `x-openclaw-password`, or HTTP Basic auth with the
+  configured gateway password.
+- Tailscale Serve identity headers and `gateway.auth.mode: "trusted-proxy"` do
+  **not** authenticate this standalone loopback browser API.
+- If browser control is enabled and no shared-secret auth is configured, OpenClaw
+  auto-generates `gateway.auth.token` on startup and persists it to config.
+- OpenClaw does **not** auto-generate that token when `gateway.auth.mode` is
+  already `password`, `none`, or `trusted-proxy`.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
@@ -553,10 +561,17 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 
 All endpoints accept `?profile=<name>`.
 
-If gateway auth is configured, browser HTTP routes require auth too:
+If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
 - `Authorization: Bearer <gateway token>`
 - `x-openclaw-password: <gateway password>` or HTTP Basic auth with that password
+
+Notes:
+
+- This standalone loopback browser API does **not** consume trusted-proxy or
+  Tailscale Serve identity headers.
+- If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
+  routes do not inherit those identity-bearing modes; keep them loopback-only.
 
 ### Playwright requirement
 

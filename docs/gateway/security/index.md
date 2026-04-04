@@ -1120,6 +1120,9 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Prefer a dedicated profile for the agent (the default `openclaw` profile).
 - Avoid pointing the agent at your personal daily-driver profile.
 - Keep host browser control disabled for sandboxed agents unless you trust them.
+- The standalone loopback browser control API only honors shared-secret auth
+  (gateway token bearer auth or gateway password). It does not consume
+  trusted-proxy or Tailscale Serve identity headers.
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
