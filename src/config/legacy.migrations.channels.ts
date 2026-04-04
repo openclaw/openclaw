@@ -1,20 +1,160 @@
 import {
-  formatSlackStreamingBooleanMigrationMessage,
-  formatSlackStreamModeMigrationMessage,
-  resolveDiscordPreviewStreamMode,
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-  resolveTelegramPreviewStreamMode,
-} from "./discord-preview-streaming.js";
-import {
   defineLegacyConfigMigration,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "./legacy.shared.js";
 
+type StreamingMode = "off" | "partial" | "block" | "progress";
+type DiscordPreviewStreamMode = "off" | "partial" | "block";
+type TelegramPreviewStreamMode = "off" | "partial" | "block";
+type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
+
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function normalizeStreamingMode(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function parseStreamingMode(value: unknown): StreamingMode | null {
+  const normalized = normalizeStreamingMode(value);
+  if (
+    normalized === "off" ||
+    normalized === "partial" ||
+    normalized === "block" ||
+    normalized === "progress"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function parseDiscordPreviewStreamMode(value: unknown): DiscordPreviewStreamMode | null {
+  const parsed = parseStreamingMode(value);
+  if (!parsed) {
+    return null;
+  }
+  return parsed === "progress" ? "partial" : parsed;
+}
+
+function parseTelegramPreviewStreamMode(value: unknown): TelegramPreviewStreamMode | null {
+  const parsed = parseStreamingMode(value);
+  if (!parsed) {
+    return null;
+  }
+  return parsed === "progress" ? "partial" : parsed;
+}
+
+function parseSlackLegacyDraftStreamMode(value: unknown): SlackLegacyDraftStreamMode | null {
+  const normalized = normalizeStreamingMode(value);
+  if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
+    return normalized;
+  }
+  return null;
+}
+
+function mapSlackLegacyDraftStreamModeToStreaming(mode: SlackLegacyDraftStreamMode): StreamingMode {
+  if (mode === "append") {
+    return "block";
+  }
+  if (mode === "status_final") {
+    return "progress";
+  }
+  return "partial";
+}
+
+function resolveTelegramPreviewStreamMode(
+  params: {
+    streamMode?: unknown;
+    streaming?: unknown;
+  } = {},
+): TelegramPreviewStreamMode {
+  const parsedStreaming = parseStreamingMode(params.streaming);
+  if (parsedStreaming) {
+    return parsedStreaming === "progress" ? "partial" : parsedStreaming;
+  }
+
+  const legacy = parseTelegramPreviewStreamMode(params.streamMode);
+  if (legacy) {
+    return legacy;
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming ? "partial" : "off";
+  }
+  return "partial";
+}
+
+function resolveDiscordPreviewStreamMode(
+  params: {
+    streamMode?: unknown;
+    streaming?: unknown;
+  } = {},
+): DiscordPreviewStreamMode {
+  const parsedStreaming = parseDiscordPreviewStreamMode(params.streaming);
+  if (parsedStreaming) {
+    return parsedStreaming;
+  }
+
+  const legacy = parseDiscordPreviewStreamMode(params.streamMode);
+  if (legacy) {
+    return legacy;
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming ? "partial" : "off";
+  }
+  return "off";
+}
+
+function resolveSlackStreamingMode(
+  params: {
+    streamMode?: unknown;
+    streaming?: unknown;
+  } = {},
+): StreamingMode {
+  const parsedStreaming = parseStreamingMode(params.streaming);
+  if (parsedStreaming) {
+    return parsedStreaming;
+  }
+  const legacyStreamMode = parseSlackLegacyDraftStreamMode(params.streamMode);
+  if (legacyStreamMode) {
+    return mapSlackLegacyDraftStreamModeToStreaming(legacyStreamMode);
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming ? "partial" : "off";
+  }
+  return "partial";
+}
+
+function resolveSlackNativeStreaming(
+  params: {
+    nativeStreaming?: unknown;
+    streaming?: unknown;
+  } = {},
+): boolean {
+  if (typeof params.nativeStreaming === "boolean") {
+    return params.nativeStreaming;
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming;
+  }
+  return true;
+}
+
+function formatSlackStreamModeMigrationMessage(pathPrefix: string, resolvedStreaming: string) {
+  return `Moved ${pathPrefix}.streamMode → ${pathPrefix}.streaming (${resolvedStreaming}).`;
+}
+
+function formatSlackStreamingBooleanMigrationMessage(
+  pathPrefix: string,
+  resolvedNativeStreaming: boolean,
+) {
+  return `Moved ${pathPrefix}.streaming (boolean) → ${pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`;
 }
 
 function hasLegacyThreadBindingTtl(value: unknown): boolean {
