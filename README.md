@@ -25,6 +25,23 @@ If you want a personal, single-user assistant that feels local, fast, and always
 
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
+License and IP: [LICENSE](LICENSE) · [NOTICE](NOTICE) · [TRADEMARKS](TRADEMARKS.md) · [INFRINGEMENT](INFRINGEMENT.md) · [PATENTS](PATENTS.md)
+
+## Launch focus: VeriClaw 爪印
+
+`VeriClaw 爪印` is the Apple-native correction companion for OpenClaw.
+
+OpenClaw remains the runtime and Gateway. VeriClaw adds the native supervision
+layer for evidence-first correction cases, professional-role drift diagnosis,
+prescription and follow-up guidance, verification before closure, and per-bot
+casebook learning.
+
+This launch window is focused on the GitHub-first public story for OpenClaw
+plus VeriClaw. The Apple companion path continues in parallel, but GitHub is
+the current publish surface. Watch remains outside the current release gate.
+
+Launch materials: [GitHub launch kit](docs/launch/github-launch-kit.md) · [GitHub release announcement](docs/launch/github-release-announcement.md) · [Market differentiation](docs/launch/market-differentiation.md)
+
 Preferred setup: run the onboarding wizard (`openclaw onboard`) in your terminal.
 The wizard guides you step by step through setting up the gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
@@ -286,8 +303,11 @@ The Gateway alone delivers a great experience. All apps are optional and add ext
 
 If you plan to build/run companion apps, follow the platform runbooks below.
 
-### macOS (OpenClaw.app) (optional)
+### macOS (VeriClaw 爪印.app) (optional)
 
+- Apple-native correction workspace and hover supervisor for drifting bots.
+- Case-based loop: evidence, diagnosis, prescription, verification, casebook.
+- Professional-role drift review for named seats and agents.
 - Menu bar control for the Gateway and health.
 - Voice Wake + push-to-talk overlay.
 - WebChat + debug tools.
@@ -297,6 +317,7 @@ Note: signed builds required for macOS permissions to stick across rebuilds (see
 
 ### iOS node (optional)
 
+- Secure companion surface for evidence capture and role-aware correction follow-up.
 - Pairs as a node over the Gateway WebSocket (device pairing).
 - Voice trigger forwarding + Canvas surface.
 - Controlled via `openclaw nodes …`.

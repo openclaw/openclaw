@@ -1,0 +1,34 @@
+OpenClaw
+Copyright (c) 2025 Peter Steinberger and contributors
+
+This repository is distributed under the MIT License in the root LICENSE file.
+Redistributions of the Software, in source or substantial copied form, must
+preserve applicable copyright notices and license text.
+
+The source-reference and forwarding expectations below are project
+redistribution guidance and brand-protection rules. They do not amend or
+replace the MIT License text in the root LICENSE file.
+
+Redistribution and forwarding expectations:
+
+- Keep the root LICENSE file and this NOTICE alongside redistributed source
+  archives, mirrors, package snapshots, or other substantial copies.
+- Preserve any component-specific notices or licenses shipped with bundled or
+  vendored material.
+- When redistributing from a public mirror, catalog, listing, or reposted page,
+  include a clear source reference to https://github.com/openclaw/openclaw or
+  https://openclaw.ai where reasonably practicable.
+- Use of OpenClaw names, logos, and other brand identifiers is governed
+  separately by TRADEMARKS.md. The software license does not grant trademark
+  rights.
+
+Known component-specific notices and licenses include:
+
+- apps/macos/Sources/OpenClaw/Resources/DeviceModels/NOTICE.md
+- apps/macos/Sources/OpenClaw/Resources/DeviceModels/LICENSE.apple-device-identifiers.txt
+- Swabble/LICENSE
+- vendor/a2ui/LICENSE
+- extensions/open-prose/skills/prose/LICENSE
+
+For copyright, attribution, trademark, or takedown requests, see
+INFRINGEMENT.md.
