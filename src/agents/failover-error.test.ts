@@ -199,19 +199,35 @@ describe("failover-error", () => {
   it("classifies Anthropic bare 'unknown error' as timeout for failover (#49706)", () => {
     expect(
       resolveFailoverReasonFromError({
+        provider: "anthropic",
         message: "An unknown error occurred",
       }),
     ).toBe("timeout");
   });
 
-  it("classifies OpenRouter 'provider returned error' as timeout for failover (#45834)", () => {
+  it("does not classify generic internal unknown-error text as failover timeout", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "LLM request failed with an unknown error.",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "An unknown error occurred",
+      }),
+    ).toBeNull();
     expect(
       resolveFailoverReasonFromError({
         message: "Provider returned error",
       }),
-    ).toBe("timeout");
+    ).toBeNull();
   });
-
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
     expect(
       resolveFailoverReasonFromError({

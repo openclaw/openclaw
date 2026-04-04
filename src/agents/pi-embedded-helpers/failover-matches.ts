@@ -77,10 +77,6 @@ const ERROR_PATTERNS = {
     "upstream error",
     "upstream connect error",
     "connection reset",
-    // Anthropic returns bare "An unknown error occurred" during API instability (#49706).
-    "unknown error",
-    // OpenRouter wraps upstream failures as "Provider returned error" (#45834).
-    "provider returned error",
   ],
   timeout: [
     "timeout",

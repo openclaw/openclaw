@@ -109,7 +109,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/device auth: reuse cached device-token scopes only for cached-token reconnects, while keeping explicit `deviceToken` scope requests and empty-cache fallbacks intact so reconnects preserve `operator.read` without breaking explicit auth flows. (#46032) Thanks @caicongyang.
 - Mattermost/config schema: accept `groups.*.requireMention` again so existing Mattermost configs no longer fail strict validation after upgrade. (#58271) Thanks @MoerAI.
 - Providers/OpenRouter failover: classify `403 "Key limit exceeded"` spending-limit responses as billing so model fallback continues instead of stopping on generic auth. (#59892) Thanks @rockcent.
-- Agents/failover: recognize generic provider error messages (Anthropic "unknown error", OpenRouter "provider returned error") as transient server errors so the failover chain is triggered instead of surfacing the error directly. (#49706, #45834) Thanks @aaron-he-zhu.
 
 ## 2026.4.2
 
