@@ -158,8 +158,6 @@ export type TelegramAccountConfig = {
    * - "progress": alias that maps to "partial" on Telegram
    */
   streaming?: TelegramStreamingMode;
-  /** Chunking config for Telegram stream previews in `streaming: "block"`. */
-  draftChunk?: BlockStreamingChunkConfig;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Draft block-stream chunking thresholds for Telegram preview edits. */
