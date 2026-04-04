@@ -6,6 +6,7 @@ import type { monitorFeishuProvider } from "./monitor.js";
 
 const WEBHOOK_READY_MAX_ATTEMPTS = 200;
 const WEBHOOK_READY_RETRY_DELAY_MS = 50;
+const WEBHOOK_MONITOR_START_MAX_ATTEMPTS = 4;
 
 export async function getFreePort(): Promise<number> {
   const server = createServer();
@@ -72,31 +73,44 @@ export async function withRunningWebhookMonitor(
   monitor: typeof monitorFeishuProvider,
   run: (url: string) => Promise<void>,
 ) {
-  const port = await getFreePort();
-  const cfg = buildWebhookConfig({
-    accountId: params.accountId,
-    path: params.path,
-    port,
-    encryptKey: params.encryptKey,
-    verificationToken: params.verificationToken,
-  });
+  let startupError: unknown;
+  for (let attempt = 1; attempt <= WEBHOOK_MONITOR_START_MAX_ATTEMPTS; attempt += 1) {
+    const port = await getFreePort();
+    const cfg = buildWebhookConfig({
+      accountId: params.accountId,
+      path: params.path,
+      port,
+      encryptKey: params.encryptKey,
+      verificationToken: params.verificationToken,
+    });
 
-  const abortController = new AbortController();
-  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-  const monitorPromise = monitor({
-    config: cfg,
-    runtime,
-    abortSignal: abortController.signal,
-    accountId: params.accountId,
-  });
+    const abortController = new AbortController();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const monitorPromise = monitor({
+      config: cfg,
+      runtime,
+      abortSignal: abortController.signal,
+      accountId: params.accountId,
+    });
 
-  const url = `http://127.0.0.1:${port}${params.path}`;
-  await waitUntilServerReady(url);
-
-  try {
-    await run(url);
-  } finally {
-    abortController.abort();
-    await monitorPromise;
+    const url = `http://127.0.0.1:${port}${params.path}`;
+    try {
+      await waitUntilServerReady(url);
+      try {
+        await run(url);
+      } finally {
+        abortController.abort();
+        await monitorPromise.catch(() => undefined);
+      }
+      return;
+    } catch (error) {
+      startupError = error;
+      abortController.abort();
+      await monitorPromise.catch(() => undefined);
+      if (attempt < WEBHOOK_MONITOR_START_MAX_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * WEBHOOK_READY_RETRY_DELAY_MS));
+      }
+    }
   }
+  throw startupError instanceof Error ? startupError : new Error("failed to start webhook monitor");
 }
