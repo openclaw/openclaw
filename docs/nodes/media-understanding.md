@@ -249,6 +249,13 @@ File-attachment extraction behavior:
 
 - Extracted file text is wrapped as **untrusted external content** before it is
   appended to the media prompt.
+- The injected block uses explicit boundary markers like
+  `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` /
+  `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` and includes a
+  `Source: External` metadata line.
+- This attachment-extraction path intentionally omits the long
+  `SECURITY NOTICE:` banner to avoid bloating the media prompt; the boundary
+  markers and metadata still remain.
 - If a file has no extractable text, OpenClaw injects `[No extractable text]`.
 - If a PDF falls back to rendered page images in this path, the media prompt keeps
   the placeholder `[PDF content rendered to images; images not forwarded to model]`

@@ -2998,6 +2998,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - using a read-only or tool-disabled "reader" agent to summarize untrusted content
     - keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents
+    - treating decoded file/document text as untrusted too: OpenResponses
+      `input_file` and media-attachment extraction both wrap extracted text in
+      explicit external-content boundary markers instead of passing raw file text
     - sandboxing and strict tool allowlists
 
     Details: [Security](/gateway/security).
