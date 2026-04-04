@@ -297,6 +297,15 @@ done`,
       expect(result.matchedPatterns).toContain("command-too-long");
     });
 
+    it("still flags obfuscation appended after a large cat heredoc closing delimiter", () => {
+      const body = "key: value\n".repeat(2_000);
+      const command = `cat > /tmp/config.yaml << 'EOF'\n${body}EOF\necho payload | base64 -d | sh`;
+      expect(command.length).toBeGreaterThan(10_000);
+      const result = detectCommandObfuscation(command);
+      expect(result.detected).toBe(true);
+      expect(result.matchedPatterns).toContain("base64-pipe-exec");
+    });
+
     it("still flags oversized cat heredoc piped to shell", () => {
       const body = "payload\n".repeat(2_000);
       const command = `cat << 'EOF' | bash\n${body}EOF`;

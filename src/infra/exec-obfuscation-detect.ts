@@ -270,13 +270,30 @@ export function detectCommandObfuscation(command: string): ObfuscationDetection 
     }
   }
 
-  // For long file-write heredocs, scan only the command line (not the body)
-  // to keep regex cost bounded on large payloads.
+  // For long file-write heredocs, strip the heredoc body (the expensive part)
+  // but keep the command line AND any text after the closing delimiter so
+  // post-heredoc commands are still scanned.
   let textToScan = command;
   if (command.length > MAX_COMMAND_CHARS) {
     const firstNewline = command.indexOf("\n");
     if (firstNewline > 0) {
-      textToScan = command.substring(0, firstNewline);
+      const commandLine = command.substring(0, firstNewline);
+      const delimMatch = commandLine.match(/<<-?\s*['"]?([a-zA-Z_][\w-]*)['"]?/);
+      if (delimMatch) {
+        const closingRe = new RegExp(`^${delimMatch[1]}\\s*$`, "m");
+        const bodyStart = firstNewline + 1;
+        const closingMatch = closingRe.exec(command.substring(bodyStart));
+        if (closingMatch && closingMatch.index !== undefined) {
+          const afterDelimiter = command.substring(
+            bodyStart + closingMatch.index + closingMatch[0].length,
+          );
+          textToScan = commandLine + "\n" + afterDelimiter;
+        } else {
+          textToScan = commandLine;
+        }
+      } else {
+        textToScan = commandLine;
+      }
     }
   }
 
