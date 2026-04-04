@@ -1,5 +1,9 @@
 {
-  "messages": [],
-  "updated_at": "2026-04-04T22:00:00.000Z",
-  "source": "dufu"
+  "messages": [
+    { "time": "2026-04-04 20:15", "text": "sentinel 巡檢完成，所有系統正常" },
+    { "time": "2026-04-04 19:30", "text": "cafe engine v2.0 部署成功" },
+    { "time": "2026-04-04 18:45", "text": "harvest-echo 已採集 6 個 repo 的活動" }
+  ],
+  "updated_at": "2026-04-04T22:00:00+08:00",
+  "source": "tg-echo-pipeline"
 }

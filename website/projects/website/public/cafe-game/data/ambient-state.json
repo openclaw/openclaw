@@ -1,8 +1,7 @@
 {
+  "mood": "rest",
   "doing": "下班",
   "where": "苗栗家中",
-  "with": "Cruz + 兒子",
-  "updated_at": "2026-04-03T19:06:14",
-  "mood": "rest",
-  "generated_at": "2026-04-04T18:30:00"
+  "updated_at": "2026-04-04T22:25:00+08:00",
+  "companions": ["Cruz", "兒子"]
 }
