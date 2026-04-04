@@ -215,10 +215,17 @@ openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id>             # update one plugin
 openclaw plugins update <id> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
+openclaw plugins uninstall <id>          # remove config/install records
+openclaw plugins uninstall <id> --keep-files
+openclaw plugins marketplace list <source>
 
 openclaw plugins enable <id>
 openclaw plugins disable <id>
 ```
+
+Bundled plugins ship with OpenClaw. Many are enabled by default (for example
+bundled model providers, bundled speech providers, and the bundled browser
+plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 
 `--force` overwrites an existing installed plugin or hook pack in place.
 It is not supported with `--link`, which reuses the source path instead of
