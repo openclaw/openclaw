@@ -20,9 +20,15 @@ Current release posture:
 
 ## Release title options
 
-- `VeriClaw: self-hosted AI assistant, MCP gateway, and correction workspace`
-- `VeriClaw 爪印: evidence-first correction for a multi-agent bot runtime`
-- `VeriClaw launch: self-hosted AI assistant with MCP gateway and runtime truth`
+- `VeriClaw: self-hosted AI assistant, MCP-compatible gateway, and evidence-first correction workspace`
+- `VeriClaw 爪印: self-hosted AI assistant with runtime truth and delivery integrity`
+- `VeriClaw launch: MCP-compatible gateway, multi-channel bot runtime, and correction workspace`
+
+## Default release title
+
+Use this unless there is a strong reason not to:
+
+- `VeriClaw: self-hosted AI assistant, MCP-compatible gateway, and evidence-first correction workspace`
 
 ## Paste-ready GitHub release body
 
@@ -31,14 +37,12 @@ Current release posture:
 
 VeriClaw is the public-facing product brand for a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot runtime for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
 
-The current repository, runtime, Gateway, and CLI compatibility layer still use OpenClaw and `openclaw` naming under the hood.
-
 VeriClaw 爪印 is built for the moment when a bot drifts, hallucinates, fake-completes, overreaches, or fails its professional role contract.
 
 The ship story is:
 
 - VeriClaw for the outward product story
-- OpenClaw for runtime, channel orchestration, and tool-connected execution compatibility
+- VeriClaw runtime coverage across channels, tools, and browser workflows
 - VeriClaw correction for evidence-first diagnosis, verification, and casebook learning
 
 Instead of stopping at alerts or dashboards, the correction loop is:
@@ -97,6 +101,11 @@ So teams can answer three questions clearly:
 - watchOS remains outside the current release gate
 - release copy should stay aligned across GitHub, docs, and Apple-facing materials
 
+## Note on naming
+
+The public-facing product name is VeriClaw.
+The current repository, runtime, Gateway, and CLI still use `OpenClaw` / `openclaw` naming for compatibility.
+
 ## Legal and redistribution
 
 Redistribution should preserve license, notice, attribution, and source
@@ -119,8 +128,6 @@ Use this when a shorter GitHub post or pinned discussion is needed:
 ```md
 VeriClaw is the public-facing product brand for a self-hosted AI assistant and MCP-compatible gateway for multi-channel bots, browser automation, and multi-agent workflows.
 
-The current runtime and CLI still use OpenClaw / `openclaw` naming under the hood.
-
 VeriClaw 爪印 adds the correction layer for the moment a bot drifts. It pushes the workflow toward evidence, diagnosis, prescription, verification, and casebook learning.
 ```
 
@@ -137,6 +144,8 @@ If you also want runtime truth, evidence-first correction, and verification befo
 ## Maintainer notes
 
 - Keep the wording `companion, not clone`.
+- Make the first line and the title fully `VeriClaw`-first.
+- Mention `OpenClaw / openclaw` once, later, as a compatibility note instead of a co-headline.
 - Keep `self-hosted AI assistant`, `MCP-compatible gateway`, `multi-channel bot runtime`, and `evidence-first correction` visible in most public launch copy.
 - Do not claim watchOS is in the current release scope.
 - Do not overstate market exclusivity.

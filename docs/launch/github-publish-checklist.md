@@ -25,6 +25,8 @@ Current positioning:
 - README hero and launch section mention `VeriClaw 爪印` clearly
 - GitHub release body is ready from
   [github-release-announcement.md](github-release-announcement.md)
+- pinned GitHub discussion draft is ready from
+  [github-discussion-template.md](github-discussion-template.md)
 - copy deck is aligned in
   [github-launch-kit.md](github-launch-kit.md)
 - legal/IP pack is present at repo root:
@@ -52,8 +54,10 @@ Current positioning:
 2. Confirm the version/tag you plan to publish is newer than the latest existing GitHub release.
 3. Publish or draft the GitHub release body from
    [github-release-announcement.md](github-release-announcement.md).
-4. Recheck the top-level README after push on the live GitHub page.
-5. Keep the release note, pinned discussion, and Apple-facing wording aligned to the same ship-point story.
+4. Prepare the pinned GitHub discussion from
+   [github-discussion-template.md](github-discussion-template.md).
+5. Recheck the top-level README after push on the live GitHub page.
+6. Keep the release note, pinned discussion, and Apple-facing wording aligned to the same ship-point story.
 
 ## Current local caution
 

@@ -53,6 +53,10 @@ runtime compatibility layer understandable:
 
 ## Short copy
 
+Default outward title:
+
+- `VeriClaw: self-hosted AI assistant, MCP-compatible gateway, and evidence-first correction workspace`
+
 Hero line:
 
 - `Self-hosted AI assistant, MCP gateway, and correction workspace`
@@ -217,6 +221,8 @@ Suggested GitHub screenshot or media caption style:
   [market-differentiation.md](market-differentiation.md)
 - Short launch and repost copy:
   [social-copy-pack.md](social-copy-pack.md)
+- Pinned GitHub discussion draft:
+  [github-discussion-template.md](github-discussion-template.md)
 - Apple submission copy and screenshot notes:
   [APP_STORE_SUBMISSION_KIT.md](../../apps/ios/APP_STORE_SUBMISSION_KIT.md)
 - First-use UX acceptance notes:
