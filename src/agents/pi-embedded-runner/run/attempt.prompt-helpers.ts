@@ -96,6 +96,12 @@ export function shouldInjectHeartbeatPrompt(params: {
   return params.isDefaultAgent && shouldInjectHeartbeatPromptForTrigger(params.trigger);
 }
 
+export function shouldWarnOnOrphanedUserRepair(
+  trigger: EmbeddedRunAttemptParams["trigger"],
+): boolean {
+  return trigger === "user" || trigger === "manual";
+}
+
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
