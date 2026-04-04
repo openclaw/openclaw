@@ -38,6 +38,39 @@ import {
   translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+
+function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
+  for (const attachment of attachments) {
+    if (attachment.contentType !== "text/html") {
+      continue;
+    }
+    const raw =
+      typeof attachment.content === "string"
+        ? attachment.content
+        : typeof attachment.content?.text === "string"
+          ? attachment.content.text
+          : typeof attachment.content?.body === "string"
+            ? attachment.content.body
+            : "";
+    if (!raw) {
+      continue;
+    }
+    const text = raw
+      .replace(/<at[^>]*>.*?<\/at>/gis, " ")
+      .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import {
   isMSTeamsGroupAllowed,
@@ -778,11 +811,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
   return async function handleTeamsMessage(context: MSTeamsTurnContext) {
     const activity = context.activity;
-    const rawText = activity.text?.trim() ?? "";
-    const text = stripMSTeamsMentionTags(rawText);
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
       : [];
+    const rawText = activity.text?.trim() ?? "";
+    const htmlText = extractTextFromHtmlAttachments(attachments);
+    const text = stripMSTeamsMentionTags(rawText || htmlText);
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;
