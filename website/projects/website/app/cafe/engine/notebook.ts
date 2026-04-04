@@ -359,6 +359,71 @@ const Notebook = {
       reveal.textContent = `你已經寫了 ${myScrolls.length} 個咒語。這就是 prompt engineering。`;
       container.appendChild(reveal);
     }
+
+    // ── Coming Soon Feature Cards ──
+    const WORKSHOP_FEATURES = [
+      {
+        icon: '⚒️',
+        title: 'Prompt 鍛造台',
+        desc: '烈焰吞噬混沌思緒，淬鍊為鋒利指令。',
+      },
+      {
+        icon: '〰️',
+        title: '頻率調音器',
+        desc: '旋動幽冥刻度，校準與深淵的共振頻率。',
+      },
+      {
+        icon: '🎭',
+        title: '角色面具',
+        desc: '戴上無面之具，化身千百陌生的自己。',
+      },
+    ];
+
+    const divider = document.createElement('div');
+    divider.style.cssText = 'margin:28px 0 20px;border-top:1px solid rgba(212,163,115,0.12);padding-top:18px';
+    const workshopLabel = document.createElement('div');
+    workshopLabel.style.cssText = 'font-size:10px;color:#d4a373;opacity:0.45;letter-spacing:0.18em;margin-bottom:16px;text-transform:uppercase';
+    workshopLabel.textContent = '即將開放';
+    divider.appendChild(workshopLabel);
+    container.appendChild(divider);
+
+    WORKSHOP_FEATURES.forEach((feat) => {
+      const card = document.createElement('div');
+      card.className = 'nb-scroll-card';
+      card.style.cssText = 'opacity:0.72;cursor:default;margin-bottom:12px';
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px';
+
+      const left = document.createElement('div');
+      left.style.cssText = 'display:flex;align-items:center;gap:10px';
+
+      const iconEl = document.createElement('span');
+      iconEl.style.cssText = 'font-size:18px;line-height:1;opacity:0.75';
+      iconEl.textContent = feat.icon;
+
+      const titleEl = document.createElement('span');
+      titleEl.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.85);letter-spacing:0.02em';
+      titleEl.textContent = feat.title;
+
+      left.appendChild(iconEl);
+      left.appendChild(titleEl);
+
+      const badge = document.createElement('span');
+      badge.style.cssText = 'font-size:9px;letter-spacing:0.14em;color:#d4a373;opacity:0.55;border:1px solid rgba(212,163,115,0.25);border-radius:3px;padding:2px 7px;white-space:nowrap';
+      badge.textContent = 'COMING SOON';
+
+      row.appendChild(left);
+      row.appendChild(badge);
+      card.appendChild(row);
+
+      const descEl = document.createElement('div');
+      descEl.style.cssText = 'font-size:12px;opacity:0.5;line-height:1.75;padding-left:28px';
+      descEl.textContent = feat.desc;
+      card.appendChild(descEl);
+
+      container.appendChild(card);
+    });
   },
 };
 
