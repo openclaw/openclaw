@@ -84,6 +84,7 @@ import {
   drainSystemEventEntries,
   peekSystemEventEntries,
   requeueSystemEventEntries,
+  resolveSystemEventDeliveryContext,
 } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
@@ -586,12 +587,11 @@ export async function runHeartbeatOnce(opts: {
     : [];
   const previousUpdatedAt = entry?.updatedAt;
 
-  // When isolatedSession is enabled, create a fresh session via the same
-  // pattern as cron sessionTarget: "isolated". This gives the heartbeat
-  // a new session ID (empty transcript) each run, avoiding the cost of
-  // sending the full conversation history (~100K tokens) to the LLM.
-  // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  // Heartbeats default to an isolated session so background runs do not
+  // contaminate the agent's interactive transcript when a model stream hangs
+  // or when HEARTBEAT.md-driven prompts diverge from the active chat.
+  // Operators can opt back into shared history with isolatedSession: false.
+  const useIsolatedSession = heartbeat?.isolatedSession !== false;
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
