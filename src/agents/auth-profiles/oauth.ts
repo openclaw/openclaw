@@ -282,7 +282,9 @@ async function tryResolveOAuthProfile(
     return null;
   }
 
-  if (Date.now() < cred.expires) {
+  // Apply EXTERNAL_CLI_NEAR_EXPIRY_MS buffer here too for consistency with the other
+  // expiry checks — ensures fallback profile path also proactively refreshes.
+  if (Date.now() < cred.expires - EXTERNAL_CLI_NEAR_EXPIRY_MS) {
     return await buildOAuthProfileResult({
       provider: cred.provider,
       credentials: cred,
