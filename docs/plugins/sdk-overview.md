@@ -64,6 +64,7 @@ explicitly promotes one as public.
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/plugin-entry`   | `definePluginEntry`                                                                                                                    |
 | `plugin-sdk/core`           | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema` |
+| `plugin-sdk/config-schema`  | `OpenClawSchema`                                                                                                                       |
 | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry`                                                                                                      |
 
 <AccordionGroup>
@@ -71,6 +72,7 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
+    | `plugin-sdk/config-schema` | Root `openclaw.json` Zod schema export (`OpenClawSchema`) |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | Account-scoped setup runtime helpers, delegated setup proxies, setup status builders |

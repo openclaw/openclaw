@@ -104,14 +104,14 @@ If you need hostile-user isolation, split trust boundaries by OS user/host and r
 
 Use this as the quick model when triaging risk:
 
-| Boundary or control                         | What it means                                     | Common misread                                                                |
-| ------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `gateway.auth` (token/password/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
-| `sessionKey`                                | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
-| Prompt/content guardrails                   | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
-| `canvas.eval` / browser evaluate            | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
-| Local TUI `!` shell                         | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
-| Node pairing and node commands              | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
+| Boundary or control                                       | What it means                                     | Common misread                                                                |
+| --------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
+| `sessionKey`                                              | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
+| Prompt/content guardrails                                 | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
+| `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
+| Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
+| Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
 
 ## Not vulnerabilities by design
 
@@ -294,7 +294,7 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `hooks.allowed_agent_ids_unrestricted`                        | warn/critical | Authenticated hook callers may route to any configured agent                         | `hooks.allowedAgentIds`                                                                              | no       |
 | `hooks.request_session_key_enabled`                           | warn/critical | External caller can choose sessionKey                                                | `hooks.allowRequestSessionKey`                                                                       | no       |
 | `hooks.request_session_key_prefixes_missing`                  | warn/critical | No bound on external session key shapes                                              | `hooks.allowedSessionKeyPrefixes`                                                                    | no       |
-| `hooks.path_root`                                             | warn          | Hook path is `/`, making ingress easier to collide or misroute                       | `hooks.path`                                                                                         | no       |
+| `hooks.path_root`                                             | critical      | Hook path is `/`, making ingress easier to collide or misroute                       | `hooks.path`                                                                                         | no       |
 | `hooks.installs_unpinned_npm_specs`                           | warn          | Hook install records are not pinned to immutable npm specs                           | hook install metadata                                                                                | no       |
 | `hooks.installs_missing_integrity`                            | warn          | Hook install records lack integrity metadata                                         | hook install metadata                                                                                | no       |
 | `hooks.installs_version_drift`                                | warn          | Hook install records drift from installed packages                                   | hook install metadata                                                                                | no       |
@@ -358,6 +358,11 @@ Prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
 For break-glass scenarios only, `gateway.controlUi.dangerouslyDisableDeviceAuth`
 disables device identity checks entirely. This is a severe security downgrade;
 keep it off unless you are actively debugging and can revert quickly.
+
+Separate from those dangerous flags, successful `gateway.auth.mode: "trusted-proxy"`
+can admit **operator** Control UI sessions without device identity. That is an
+intentional auth-mode behavior, not an `allowInsecureAuth` shortcut, and it still
+does not extend to node-role Control UI sessions.
 
 `openclaw security audit` warns when this setting is enabled.
 
@@ -753,7 +758,7 @@ If you load canvas content in a normal browser, treat it like any other untruste
 Bind mode controls where the Gateway listens:
 
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with a shared token/password and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured non-loopback trusted proxy) and a real firewall.
 
 Rules of thumb:
 
@@ -858,7 +863,7 @@ In minimal mode, the Gateway still broadcasts enough for device discovery (`role
 
 ### 0.5) Lock down the Gateway WebSocket (local auth)
 
-Gateway auth is **required by default**. If no token/password is configured,
+Gateway auth is **required by default**. If no valid gateway auth path is configured,
 the Gateway refuses WebSocket connections (fail‑closed).
 
 Onboarding generates a token by default (even for loopback) so
@@ -916,7 +921,8 @@ and matching it to the header. This only triggers for requests that hit loopback
 and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
 injected by Tailscale.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
-still require token/password auth.
+do **not** use Tailscale identity-header auth. They still follow the gateway's
+configured HTTP auth mode.
 
 Important boundary note:
 
@@ -931,11 +937,14 @@ Important boundary note:
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.
 Do not treat this as protection against hostile same-host processes. If untrusted
 local code may run on the gateway host, disable `gateway.auth.allowTailscale`
-and require token/password auth.
+and require explicit shared-secret auth with `gateway.auth.mode: "token"` or
+`"password"`.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
-`gateway.auth.allowTailscale` and use token/password auth (or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)) instead.
+`gateway.auth.allowTailscale` and use shared-secret auth (`gateway.auth.mode:
+"token"` or `"password"`) or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
+instead.
 
 Trusted proxies:
 
@@ -1112,6 +1121,9 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Prefer a dedicated profile for the agent (the default `openclaw` profile).
 - Avoid pointing the agent at your personal daily-driver profile.
 - Keep host browser control disabled for sandboxed agents unless you trust them.
+- The standalone loopback browser control API only honors shared-secret auth
+  (gateway token bearer auth or gateway password). It does not consume
+  trusted-proxy or Tailscale Serve identity headers.
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.

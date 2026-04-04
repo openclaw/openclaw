@@ -19,7 +19,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 1. Start the gateway.
 2. Open the WebChat UI (macOS/iOS app) or the Control UI chat tab.
-3. Ensure gateway auth is configured (required by default, even on loopback).
+3. Ensure a valid gateway auth path is configured (shared-secret by default,
+   even on loopback).
 
 ## How it works (behavior)
 
@@ -59,7 +60,10 @@ WebChat options:
 Related global options:
 
 - `gateway.port`, `gateway.bind`: WebSocket host/port.
-- `gateway.auth.mode`, `gateway.auth.token`, `gateway.auth.password`: WebSocket auth (token/password).
+- `gateway.auth.mode`, `gateway.auth.token`, `gateway.auth.password`:
+  shared-secret WebSocket auth.
+- `gateway.auth.allowTailscale`: browser Control UI chat tab can use Tailscale
+  Serve identity headers when enabled.
 - `gateway.auth.mode: "trusted-proxy"`: reverse-proxy auth for browser clients behind an identity-aware **non-loopback** proxy source (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `gateway.remote.url`, `gateway.remote.token`, `gateway.remote.password`: remote gateway target.
 - `session.*`: session storage and main key defaults.

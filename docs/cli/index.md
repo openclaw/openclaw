@@ -824,6 +824,9 @@ Notes:
 
 - `devices list` and `devices approve` can fall back to local pairing files on local loopback when direct pairing scope is unavailable.
 - `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
+- Stored-token reconnects reuse the token's cached approved scopes; explicit
+  `devices rotate --scope ...` updates that stored scope set for future
+  cached-token reconnects.
 - `devices rotate` and `devices revoke` return JSON payloads.
 
 ### `qr`
@@ -845,6 +848,7 @@ Notes:
 
 - `--token` and `--password` are mutually exclusive.
 - The setup code carries a short-lived bootstrap token, not the shared gateway token/password.
+- `--remote` can use `gateway.remote.url` or the active Tailscale Serve/Funnel URL.
 - After scanning, approve the request with `openclaw devices list` / `openclaw devices approve <requestId>`.
 
 ### `clawbot`
@@ -1637,6 +1641,12 @@ Subcommands:
 - `cron run <id> [--due]`
 
 All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
+
+`cron add|edit --model ...` uses that selected allowed model for the job. If
+the model is not allowed, cron warns and falls back to the job's agent/default
+model selection instead. Configured fallback chains still apply, but a plain
+model override with no explicit per-job fallback list no longer appends the
+agent primary as a hidden extra retry target.
 
 ## Node host
 

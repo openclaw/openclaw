@@ -156,18 +156,21 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     The wizard opens your browser with a clean (non-tokenized) dashboard URL right after onboarding and also prints the link in the summary. Keep that tab open; if it didn't launch, copy/paste the printed URL on the same machine.
   </Accordion>
 
-  <Accordion title="How do I authenticate the dashboard (token) on localhost vs remote?">
+  <Accordion title="How do I authenticate the dashboard on localhost vs remote?">
     **Localhost (same machine):**
 
     - Open `http://127.0.0.1:18789/`.
-    - If it asks for auth, paste the token from `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
-    - Retrieve it from the gateway host: `openclaw config get gateway.auth.token` (or generate one: `openclaw doctor --generate-gateway-token`).
+    - If it asks for shared-secret auth, paste the configured token or password into Control UI settings.
+    - Token source: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
+    - Password source: `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+    - If no shared secret is configured yet, generate a token with `openclaw doctor --generate-gateway-token`.
 
     **Not on localhost:**
 
-    - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no token, assumes trusted gateway host); HTTP APIs still require token/password.
-    - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"`, open `http://<tailscale-ip>:18789/`, paste token in dashboard settings.
-    - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/` and paste the token in Control UI settings.
+    - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no pasted shared secret, assumes trusted gateway host); HTTP APIs still require shared-secret auth unless you deliberately use private-ingress `none` or trusted-proxy HTTP auth.
+    - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"` (or configure password auth), open `http://<tailscale-ip>:18789/`, then paste the matching shared secret in dashboard settings.
+    - **Identity-aware reverse proxy**: keep the Gateway behind a non-loopback trusted proxy, configure `gateway.auth.mode: "trusted-proxy"`, then open the proxy URL.
+    - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`. Shared-secret auth still applies over the tunnel; paste the configured token or password if prompted.
 
     See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth details.
 
@@ -2519,7 +2522,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
   </Accordion>
 
   <Accordion title="How do I run OpenClaw in remote mode (client connects to a Gateway elsewhere)?">
-    Set `gateway.mode: "remote"` and point to a remote WebSocket URL, optionally with a token/password:
+    Set `gateway.mode: "remote"` and point to a remote WebSocket URL, optionally with shared-secret remote credentials:
 
     ```json5
     {
@@ -2538,24 +2541,27 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - `openclaw gateway` only starts when `gateway.mode` is `local` (or you pass the override flag).
     - The macOS app watches the config file and switches modes live when these values change.
+    - `gateway.remote.token` / `.password` are client-side remote credentials only; they do not enable local gateway auth by themselves.
 
   </Accordion>
 
   <Accordion title='The Control UI says "unauthorized" (or keeps reconnecting). What now?'>
-    Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not sending the matching token/password.
+    Your gateway auth path and the UI's auth method do not match.
 
     Facts (from code):
 
     - The Control UI keeps the token in `sessionStorage` for the current browser tab session and selected gateway URL, so same-tab refreshes keep working without restoring long-lived localStorage token persistence.
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
+    - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
 
     Fix:
 
     - Fastest: `openclaw dashboard` (prints + copies the dashboard URL, tries to open; shows SSH hint if headless).
     - If you don't have a token yet: `openclaw doctor --generate-gateway-token`.
     - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
-    - Set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) on the gateway host.
-    - In the Control UI settings, paste the same token.
+    - Shared-secret mode: set `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, then paste the matching secret in Control UI settings.
+    - Tailscale Serve mode: make sure `gateway.auth.allowTailscale` is enabled and you are opening the Serve URL, not a raw loopback/tailnet URL that bypasses Tailscale identity headers.
+    - Trusted-proxy mode: make sure you are coming through the configured non-loopback identity-aware proxy, not a same-host loopback proxy or raw gateway URL.
     - If mismatch persists after the one retry, rotate/re-approve the paired device token:
       - `openclaw devices list`
       - `openclaw devices rotate --device <id> --role operator`
