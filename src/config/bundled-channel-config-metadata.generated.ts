@@ -6856,9 +6856,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               enabled: {
                 type: "boolean",
               },
-              allow: {
-                type: "boolean",
-              },
               requireMention: {
                 type: "boolean",
               },
@@ -6936,9 +6933,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
               },
               enabled: {
-                type: "boolean",
-              },
-              allow: {
                 type: "boolean",
               },
               requireMention: {

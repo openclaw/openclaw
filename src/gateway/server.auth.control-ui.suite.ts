@@ -1373,6 +1373,44 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("auto-approves Docker-style CLI connects on loopback with a private host header", async () => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+    const wsDockerCli = await openWs(port, { host: "172.17.0.2:18789" });
+    try {
+      const { identity, identityPath } =
+        await createOperatorIdentityFixture("openclaw-cli-docker-");
+      const nonce = await readConnectChallengeNonce(wsDockerCli);
+      const dockerCli = await connectReq(wsDockerCli, {
+        token: "secret",
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CLI,
+          version: "1.0.0",
+          platform: "linux",
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CLI,
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
+          scopes: ["operator.admin"],
+          nonce,
+        }),
+      });
+      expect(dockerCli.ok).toBe(true);
+      const pending = await listDevicePairing();
+      expect(pending.pending).toHaveLength(0);
+      expect(await getPairedDevice(identity.deviceId)).toBeTruthy();
+    } finally {
+      wsDockerCli.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("requires pairing for gateway backend clients when connection is not local-direct", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     ws.close();
@@ -1384,6 +1422,47 @@ export function registerControlUiAndPairingSuite(): void {
       });
       expect(remoteLikeBackend.ok).toBe(false);
       expect(remoteLikeBackend.error?.message ?? "").toContain("pairing required");
+    } finally {
+      wsRemoteLike.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("requires pairing for gateway backend clients on loopback with a private host header", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+    const wsPrivateHost = await openWs(port, { host: "172.17.0.2:18789" });
+    try {
+      const remoteLikeBackend = await connectReq(wsPrivateHost, {
+        token: "secret",
+        client: BACKEND_GATEWAY_CLIENT,
+      });
+      expect(remoteLikeBackend.ok).toBe(false);
+      expect(remoteLikeBackend.error?.message ?? "").toContain("pairing required");
+    } finally {
+      wsPrivateHost.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("requires pairing for CLI clients when the host header is not private-or-loopback", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+    const wsRemoteLike = await openWs(port, { host: "gateway.example" });
+    try {
+      const remoteCli = await connectReq(wsRemoteLike, {
+        token: "secret",
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CLI,
+          version: "1.0.0",
+          platform: "linux",
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+      });
+      expect(remoteCli.ok).toBe(false);
+      expect(remoteCli.error?.message ?? "").toContain("pairing required");
     } finally {
       wsRemoteLike.close();
       await server.close();

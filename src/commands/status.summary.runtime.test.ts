@@ -72,4 +72,24 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
       model: "qwen2.5-coder:7b",
     });
   });
+
+  it("uses the configured default provider for providerless runtime models", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4" },
+            },
+          },
+        } as never,
+        {
+          model: "gpt-5.2",
+        },
+      ),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.2",
+    });
+  });
 });
