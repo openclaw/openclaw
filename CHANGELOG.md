@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Agents/cache: diagnostics: add prompt-cache break diagnostics, trace live cache scenarios through embedded runner paths, and show cache reuse explicitly in `openclaw status --verbose`. Thanks @vincentkoc.
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
 - Plugin SDK/config: export `OpenClawSchema` via `openclaw/plugin-sdk/config-schema` so external tooling can validate and introspect full `openclaw.json` config through a supported public subpath. (#60557) Thanks @feniix.
+- Discord/Voice: add `/vc switch <agent>` subcommand to hand off an active voice session to a different agent without leaving the channel, so multiple agents can share a single voice session bidirectionally.
 
 ### Fixes
 

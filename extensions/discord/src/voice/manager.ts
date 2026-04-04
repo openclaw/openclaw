@@ -11,7 +11,12 @@ import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/ag
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import {
+  buildAgentMainSessionKey,
+  buildAgentSessionKey,
+  deriveLastRoutePolicy,
+  resolveAgentRoute,
+} from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -528,6 +533,46 @@ export class DiscordVoiceManager {
     };
   }
 
+  switchAgent(params: { guildId: string; agentId: string }): VoiceOperationResult {
+    const guildId = params.guildId.trim();
+    const agentId = params.agentId.trim();
+    const entry = this.sessions.get(guildId);
+    if (!entry) {
+      return { ok: false, message: "Not connected to a voice channel in this guild." };
+    }
+    const agents = this.params.cfg.agents?.list ?? [];
+    if (!agents.some((a) => a.id === agentId)) {
+      return { ok: false, message: `Agent "${agentId}" not found.` };
+    }
+    const newSessionKey = buildAgentSessionKey({
+      agentId,
+      channel: "discord",
+      accountId: this.params.accountId,
+      peer: { kind: "channel", id: entry.sessionChannelId },
+    }).toLowerCase();
+    const newMainSessionKey = buildAgentMainSessionKey({ agentId }).toLowerCase();
+    const previousAgentId = entry.route.agentId;
+    entry.route = {
+      ...entry.route,
+      agentId,
+      sessionKey: newSessionKey,
+      mainSessionKey: newMainSessionKey,
+      lastRoutePolicy: deriveLastRoutePolicy({
+        sessionKey: newSessionKey,
+        mainSessionKey: newMainSessionKey,
+      }),
+    };
+    logVoiceVerbose(
+      `switchAgent: guild ${guildId} channel ${entry.channelId} ${previousAgentId} -> ${agentId}`,
+    );
+    return {
+      ok: true,
+      message: `Switched from **${previousAgentId}** to **${agentId}**.`,
+      guildId,
+      channelId: entry.channelId,
+    };
+  }
+
   async destroy(): Promise<void> {
     for (const entry of this.sessions.values()) {
       entry.stop();
@@ -593,8 +638,17 @@ export class DiscordVoiceManager {
       logVoiceVerbose(
         `capture ready (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
       );
+      // Snapshot the route at queue time so a /vc switch between capture and
+      // execution does not silently reroute pre-switch utterances to the new agent.
+      const routeSnapshot = entry.route;
       this.enqueueProcessing(entry, async () => {
-        await this.processSegment({ entry, wavPath, userId, durationSeconds });
+        await this.processSegment({
+          entry,
+          route: routeSnapshot,
+          wavPath,
+          userId,
+          durationSeconds,
+        });
       });
     } finally {
       entry.activeSpeakers.delete(userId);
@@ -603,11 +657,12 @@ export class DiscordVoiceManager {
 
   private async processSegment(params: {
     entry: VoiceSessionEntry;
+    route: VoiceSessionEntry["route"];
     wavPath: string;
     userId: string;
     durationSeconds: number;
   }) {
-    const { entry, wavPath, userId, durationSeconds } = params;
+    const { entry, route, wavPath, userId, durationSeconds } = params;
     logVoiceVerbose(
       `segment processing (${durationSeconds.toFixed(2)}s): guild ${entry.guildId} channel ${entry.channelId}`,
     );
@@ -643,7 +698,7 @@ export class DiscordVoiceManager {
     }
     const transcript = await transcribeAudio({
       cfg: this.params.cfg,
-      agentId: entry.route.agentId,
+      agentId: route.agentId,
       filePath: wavPath,
     });
     if (!transcript) {
@@ -661,8 +716,8 @@ export class DiscordVoiceManager {
     const result = await agentCommandFromIngress(
       {
         message: prompt,
-        sessionKey: entry.route.sessionKey,
-        agentId: entry.route.agentId,
+        sessionKey: route.sessionKey,
+        agentId: route.agentId,
         messageChannel: "discord",
         senderIsOwner: speaker.senderIsOwner,
         allowModelOverride: false,
