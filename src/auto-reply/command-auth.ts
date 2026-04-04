@@ -1,6 +1,6 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
@@ -29,6 +29,10 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
     return undefined;
   }
   const direct =
+    normalizeChatChannelId(explicitMessageChannel ?? undefined) ??
+    normalizeChatChannelId(ctx.Provider) ??
+    normalizeChatChannelId(ctx.Surface) ??
+    normalizeChatChannelId(ctx.OriginatingChannel) ??
     normalizeAnyChannelId(explicitMessageChannel ?? undefined) ??
     normalizeAnyChannelId(ctx.Provider) ??
     normalizeAnyChannelId(ctx.Surface) ??
@@ -70,6 +74,43 @@ function resolveProviderFromContext(ctx: MsgContext, cfg: OpenClawConfig): Chann
     return configured[0];
   }
   return undefined;
+}
+
+function resolveChannelAllowFromFallback(params: {
+  cfg: OpenClawConfig;
+  providerId?: ChannelId;
+  accountId?: string | null;
+}): Array<string | number> {
+  const providerId = params.providerId?.trim();
+  if (!providerId) {
+    return [];
+  }
+
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  const channelConfig = channels && typeof channels === "object" ? channels[providerId] : undefined;
+  if (!channelConfig || typeof channelConfig !== "object") {
+    return [];
+  }
+
+  const accountId = params.accountId?.trim();
+  if ("accounts" in channelConfig) {
+    const accounts = (channelConfig as { accounts?: Record<string, unknown> }).accounts;
+    if (accounts && typeof accounts === "object") {
+      const scopedAccount =
+        (accountId ? accounts[accountId] : undefined) ??
+        accounts.default ??
+        accounts.DEFAULT_ACCOUNT_ID;
+      if (scopedAccount && typeof scopedAccount === "object") {
+        const scopedAllowFrom = (scopedAccount as { allowFrom?: Array<string | number> }).allowFrom;
+        if (Array.isArray(scopedAllowFrom)) {
+          return scopedAllowFrom;
+        }
+      }
+    }
+  }
+
+  const allowFrom = (channelConfig as { allowFrom?: Array<string | number> }).allowFrom;
+  return Array.isArray(allowFrom) ? allowFrom : [];
 }
 
 function formatAllowFromList(params: {
@@ -275,7 +316,11 @@ export function resolveCommandAuthorization(params: {
 
   const allowFromRaw = plugin?.config?.resolveAllowFrom
     ? plugin.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
-    : [];
+    : resolveChannelAllowFromFallback({
+        cfg,
+        providerId,
+        accountId: ctx.AccountId,
+      });
   const allowFromList = formatAllowFromList({
     plugin,
     cfg,
@@ -352,7 +397,10 @@ export function resolveCommandAuthorization(params: {
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
   const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerAllowAll;
-  const requireOwner = enforceOwner || ownerAllowlistConfigured;
+  const requireOwner =
+    enforceOwner ||
+    ownerAllowlistConfigured ||
+    (!allowAll && ownerCandidatesForCommands.length > 0);
   const isOwnerForCommands = !requireOwner
     ? true
     : ownerAllowAll

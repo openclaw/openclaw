@@ -226,6 +226,9 @@ export function stripMentions(
       agentId,
     });
   }
+  // Slack user mentions are common command prefixes in channels and should be
+  // stripped even when the plugin registry is not initialized.
+  result = result.replace(/<@[A-Z0-9]+(?:\|[^>]+)?>/gi, " ");
   // Generic mention patterns like @123456789 or plain digits
   result = result.replace(/@[0-9+]{5,}/g, " ");
   return result.replace(/\s+/g, " ").trim();

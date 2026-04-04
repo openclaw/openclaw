@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -48,6 +46,19 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+let cliRunnerModulePromise: Promise<typeof import("../../agents/cli-runner.js")> | undefined;
+let cliSessionModulePromise: Promise<typeof import("../../agents/cli-session.js")> | undefined;
+
+function loadCliRunnerModule() {
+  cliRunnerModulePromise ??= import("../../agents/cli-runner.js");
+  return cliRunnerModulePromise;
+}
+
+function loadCliSessionModule() {
+  cliSessionModulePromise ??= import("../../agents/cli-session.js");
+  return cliSessionModulePromise;
+}
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -201,7 +212,7 @@ export async function runAgentTurnWithFallback(params: {
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
-        run: (provider, model, runOptions) => {
+        run: async (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -221,6 +232,8 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
+            const { getCliSessionId } = await loadCliSessionModule();
+            const { runCliAgent } = await loadCliRunnerModule();
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
               let lifecycleTerminalEmitted = false;

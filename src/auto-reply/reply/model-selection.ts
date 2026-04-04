@@ -13,7 +13,11 @@ import {
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import type { AgentDefaultsLikeConfig } from "../../config/types.agents.js";
+import {
+  applyModelOverrideToSessionEntry,
+  resetLegacyMainSessionModelOverride,
+} from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 import type { ThinkLevel } from "./directives.js";
 
@@ -264,7 +268,7 @@ function scoreFuzzyMatch(params: {
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
   agentId?: string;
-  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  agentCfg: AgentDefaultsLikeConfig | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -322,6 +326,25 @@ export async function createModelSelectionState(params: {
     allowedModelKeys = allowed.allowedKeys;
   }
 
+  if (sessionEntry && sessionStore && sessionKey) {
+    const { updated } = resetLegacyMainSessionModelOverride({
+      entry: sessionEntry,
+      sessionKey,
+      mainKey: cfg.session?.mainKey,
+      defaultProvider,
+      defaultModel,
+    });
+    if (updated) {
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await updateSessionStore(storePath, (store) => {
+          store[sessionKey] = sessionEntry;
+        });
+      }
+      resetModelOverride = true;
+    }
+  }
+
   if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
     const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
     const overrideModel = sessionEntry.modelOverride?.trim();
@@ -340,7 +363,7 @@ export async function createModelSelectionState(params: {
             });
           }
         }
-        resetModelOverride = updated;
+        resetModelOverride = resetModelOverride || updated;
       }
     }
   }
@@ -403,6 +426,13 @@ export async function createModelSelectionState(params: {
   };
 
   const resolveDefaultReasoningLevel = async (): Promise<"on" | "off"> => {
+    const configured =
+      params.agentCfg?.reasoningDefault === "on" || params.agentCfg?.reasoningDefault === "off"
+        ? params.agentCfg.reasoningDefault
+        : undefined;
+    if (configured) {
+      return configured;
+    }
     let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
     if (!catalogForReasoning || catalogForReasoning.length === 0) {
       modelCatalog = await loadModelCatalog({ config: cfg });
@@ -601,7 +631,7 @@ export function resolveModelDirectiveSelection(params: {
 }
 
 export function resolveContextTokens(params: {
-  agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+  agentCfg: AgentDefaultsLikeConfig | undefined;
   model: string;
 }): number {
   return (

@@ -1428,6 +1428,47 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("does not carry model overrides into a reset session", async () => {
+    const storePath = await createStorePath("openclaw-reset-model-override-");
+    const sessionKey = "agent:main:telegram:dm:model-override";
+    await seedSessionStoreWithOverrides({
+      storePath,
+      sessionKey,
+      sessionId: "existing-session-model-override",
+      overrides: {
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-model-override",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+  });
+
   it("archives the old session store entry on /new", async () => {
     const storePath = await createStorePath("openclaw-archive-old-");
     const sessionKey = "agent:main:telegram:dm:user-archive";

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  shouldResetLegacyMainSessionModelOverride,
+} from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
   return applyModelOverrideToSessionEntry({
@@ -15,6 +18,7 @@ function applyOpenAiSelection(entry: SessionEntry) {
 function expectRuntimeModelFieldsCleared(entry: SessionEntry, before: number) {
   expect(entry.providerOverride).toBe("openai");
   expect(entry.modelOverride).toBe("gpt-5.2");
+  expect(entry.modelOverrideSource).toBe("user");
   expect(entry.modelProvider).toBeUndefined();
   expect(entry.model).toBeUndefined();
   expect((entry.updatedAt ?? 0) > before).toBe(true);
@@ -114,7 +118,30 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(result.updated).toBe(true);
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
     expect(entry.contextTokens).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("does not treat explicit user-tagged main-session overrides as legacy drift", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-5",
+      updatedAt: Date.now(),
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "user",
+      modelProvider: "openai-codex",
+      model: "gpt-5.4",
+    };
+
+    expect(
+      shouldResetLegacyMainSessionModelOverride({
+        entry,
+        sessionKey: "agent:main:main",
+        mainKey: "main",
+        defaultProvider: "miaomiaocode-codex",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toBe(false);
   });
 });

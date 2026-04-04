@@ -263,6 +263,90 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.provider).toBe(defaultProvider);
     expect(state.model).toBe("deepseek-v3-4bit-mlx");
   });
+
+  it("clears a legacy main-session provider pin when it only mirrors the old runtime model", async () => {
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "deepseek-v3-4bit-mlx",
+      modelProvider: "openai-codex",
+      model: "deepseek-v3-4bit-mlx",
+    });
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: { session: { mainKey: "main" } } as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.resetModelOverride).toBe(true);
+    expect(sessionStore["agent:main:main"]?.providerOverride).toBeUndefined();
+    expect(sessionStore["agent:main:main"]?.modelOverride).toBeUndefined();
+  });
+
+  it("keeps explicit user-tagged main-session overrides", async () => {
+    const { loadModelCatalog } = await import("../../agents/model-catalog.js");
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      { provider: "inferencer", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3" },
+      { provider: "openai-codex", id: "deepseek-v3-4bit-mlx", name: "DeepSeek V3 via Codex" },
+    ]);
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "deepseek-v3-4bit-mlx",
+      modelOverrideSource: "user",
+      modelProvider: "openai-codex",
+      model: "deepseek-v3-4bit-mlx",
+    });
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: { session: { mainKey: "main" } } as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("deepseek-v3-4bit-mlx");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore["agent:main:main"]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore["agent:main:main"]?.modelOverrideSource).toBe("user");
+  });
+
+  it("prefers agent reasoningDefault over catalog-derived default", async () => {
+    const sessionEntry = makeEntry();
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { reasoningDefault: "on" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+  });
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {

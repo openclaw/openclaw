@@ -18,8 +18,6 @@ import {
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../agents/bootstrap-budget.js";
-import { runCliAgent } from "../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
@@ -84,7 +82,10 @@ import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  resetLegacyMainSessionModelOverride,
+} from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
@@ -93,6 +94,19 @@ import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
 import { resolveSession } from "./agent/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./agent/types.js";
+
+let cliRunnerModulePromise: Promise<typeof import("../agents/cli-runner.js")> | undefined;
+let cliSessionModulePromise: Promise<typeof import("../agents/cli-session.js")> | undefined;
+
+function loadCliRunnerModule() {
+  cliRunnerModulePromise ??= import("../agents/cli-runner.js");
+  return cliRunnerModulePromise;
+}
+
+function loadCliSessionModule() {
+  cliSessionModulePromise ??= import("../agents/cli-session.js");
+  return cliSessionModulePromise;
+}
 
 type PersistSessionEntryParams = {
   sessionStore: Record<string, SessionEntry>;
@@ -104,6 +118,7 @@ type PersistSessionEntryParams = {
 type OverrideFieldClearedByDelete =
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -115,6 +130,7 @@ type OverrideFieldClearedByDelete =
 const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -317,7 +333,7 @@ async function persistAcpTurnTranscript(params: {
   return sessionEntry;
 }
 
-function runAgentAttempt(params: {
+async function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
   cfg: ReturnType<typeof loadConfig>;
@@ -355,6 +371,8 @@ function runAgentAttempt(params: {
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   if (isCliProvider(params.providerOverride, params.cfg)) {
+    const { getCliSessionId, setCliSessionId } = await loadCliSessionModule();
+    const { runCliAgent } = await loadCliRunnerModule();
     const cliSessionId = getCliSessionId(params.sessionEntry, params.providerOverride);
     const runCliWithSession = (nextCliSessionId: string | undefined) =>
       runCliAgent({
@@ -957,6 +975,24 @@ async function agentCommandInternal(
       allowAnyModel = allowed.allowAny ?? false;
     }
 
+    if (sessionEntry && sessionStore && sessionKey) {
+      const { updated } = resetLegacyMainSessionModelOverride({
+        entry: sessionEntry,
+        sessionKey,
+        mainKey: cfg.session?.mainKey,
+        defaultProvider,
+        defaultModel,
+      });
+      if (updated) {
+        await persistSessionEntry({
+          sessionStore,
+          sessionKey,
+          storePath,
+          entry: sessionEntry,
+        });
+      }
+    }
+
     if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
       const entry = sessionEntry;
       const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
@@ -1069,6 +1105,7 @@ async function agentCommandInternal(
         sessionId,
         sessionKey: sessionKey ?? sessionId,
         sessionEntry,
+        storePath,
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });

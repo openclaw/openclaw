@@ -7,8 +7,6 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
@@ -75,6 +73,19 @@ import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+
+let cliRunnerModulePromise: Promise<typeof import("../../agents/cli-runner.js")> | undefined;
+let cliSessionModulePromise: Promise<typeof import("../../agents/cli-session.js")> | undefined;
+
+function loadCliRunnerModule() {
+  cliRunnerModulePromise ??= import("../../agents/cli-runner.js");
+  return cliRunnerModulePromise;
+}
+
+function loadCliSessionModule() {
+  cliSessionModulePromise ??= import("../../agents/cli-session.js");
+  return cliSessionModulePromise;
+}
 
 export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
@@ -587,6 +598,8 @@ export async function runCronIsolatedAgentTurn(params: {
           const bootstrapPromptWarningSignature =
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
           if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
+            const { getCliSessionId } = await loadCliSessionModule();
+            const { runCliAgent } = await loadCliRunnerModule();
             // Fresh isolated cron sessions must not reuse a stored CLI session ID.
             // Passing an existing ID activates the resume watchdog profile
             // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
@@ -644,6 +657,7 @@ export async function runCronIsolatedAgentTurn(params: {
               provider: providerOverride,
               model: modelOverride,
               sessionEntry: cronSession.sessionEntry,
+              agentCfg,
             }).enabled,
             verboseLevel: resolvedVerboseLevel,
             timeoutMs,
@@ -747,6 +761,7 @@ export async function runCronIsolatedAgentTurn(params: {
     });
     cronSession.sessionEntry.contextTokens = contextTokens;
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
+      const { setCliSessionId } = await loadCliSessionModule();
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);

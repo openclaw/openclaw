@@ -31,6 +31,7 @@ import {
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -147,23 +148,96 @@ function resolveAcpResetBindingContext(ctx: MsgContext): {
   };
 }
 
+function hasConfiguredAcpBindingFallback(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId: string;
+  conversationId: string;
+  parentConversationId?: string;
+}): boolean {
+  const channel = normalizeConversationText(params.channel).toLowerCase();
+  const accountId = normalizeConversationText(params.accountId) || "default";
+  const conversationId = normalizeConversationText(params.conversationId);
+  const parentConversationId = normalizeConversationText(params.parentConversationId);
+  if (!channel || !conversationId) {
+    return false;
+  }
+
+  for (const binding of params.cfg.bindings ?? []) {
+    if (binding.type !== "acp") {
+      continue;
+    }
+    const bindingChannel = normalizeConversationText(binding.match.channel).toLowerCase();
+    if (bindingChannel !== channel) {
+      continue;
+    }
+    const bindingAccountId = normalizeConversationText(binding.match.accountId);
+    if (bindingAccountId && bindingAccountId !== "*" && bindingAccountId !== accountId) {
+      continue;
+    }
+    const bindingConversationId = normalizeConversationText(binding.match.peer?.id);
+    if (!bindingConversationId) {
+      continue;
+    }
+    if (
+      bindingConversationId === conversationId ||
+      bindingConversationId === parentConversationId
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function resolveBoundAcpSessionForReset(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): string | undefined {
   const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
+  const activeAcpSessionKey = activeSessionKey.includes(":acp:binding:") ? activeSessionKey : "";
   const bindingContext = resolveAcpResetBindingContext(params.ctx);
-  return resolveEffectiveResetTargetSessionKey({
+  if (!bindingContext?.channel || !bindingContext.conversationId) {
+    return activeAcpSessionKey || undefined;
+  }
+
+  const resolvedTarget = resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
-    channel: bindingContext?.channel,
-    accountId: bindingContext?.accountId,
-    conversationId: bindingContext?.conversationId,
-    parentConversationId: bindingContext?.parentConversationId,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    parentConversationId: bindingContext.parentConversationId,
     activeSessionKey,
     allowNonAcpBindingSessionKey: false,
     skipConfiguredFallbackWhenActiveSessionNonAcp: true,
     fallbackToActiveAcpWhenUnbound: false,
   });
+  if (resolvedTarget) {
+    return resolvedTarget;
+  }
+  if (!activeAcpSessionKey) {
+    return undefined;
+  }
+
+  const liveBinding = getSessionBindingService().resolveByConversation({
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    parentConversationId: bindingContext.parentConversationId,
+  });
+  if (liveBinding) {
+    return undefined;
+  }
+
+  return hasConfiguredAcpBindingFallback({
+    cfg: params.cfg,
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    parentConversationId: bindingContext.parentConversationId,
+  })
+    ? activeAcpSessionKey
+    : undefined;
 }
 
 export async function initSessionState(params: {
@@ -215,8 +289,6 @@ export async function initSessionState(params: {
   let persistedVerbose: string | undefined;
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
-  let persistedModelOverride: string | undefined;
-  let persistedProviderOverride: string | undefined;
   let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
@@ -351,8 +423,6 @@ export async function initSessionState(params: {
     persistedVerbose = entry.verboseLevel;
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
-    persistedModelOverride = entry.modelOverride;
-    persistedProviderOverride = entry.providerOverride;
     persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
@@ -367,8 +437,6 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
       persistedLabel = entry.label;
     }
   }
@@ -418,8 +486,6 @@ export async function initSessionState(params: {
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
     responseUsage: baseEntry?.responseUsage,
-    modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
-    providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,

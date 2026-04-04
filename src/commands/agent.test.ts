@@ -11,7 +11,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as commandSecretGatewayModule from "../cli/command-secret-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import * as sessionsModule from "../config/sessions.js";
+import * as sessionPathsModule from "../config/sessions/paths.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -462,19 +462,17 @@ describe("agentCommand", () => {
       const store = path.join(customStoreDir, "sessions.json");
       writeSessionStoreSeed(store, {});
       mockConfig(home, store);
-      const resolveSessionFilePathSpy = vi.spyOn(sessionsModule, "resolveSessionFilePath");
+      const resolveSessionFilePathOptionsSpy = vi.spyOn(
+        sessionPathsModule,
+        "resolveSessionFilePathOptions",
+      );
 
       await agentCommand({ message: "resume me", sessionId: "session-custom-123" }, runtime);
 
-      const matchingCall = resolveSessionFilePathSpy.mock.calls.find(
-        (call) => call[0] === "session-custom-123",
-      );
-      expect(matchingCall?.[2]).toEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionsDir: customStoreDir,
-        }),
-      );
+      expect(resolveSessionFilePathOptionsSpy).toHaveBeenCalledWith({
+        agentId: "main",
+        storePath: store,
+      });
     });
   });
 
@@ -624,6 +622,52 @@ describe("agentCommand", () => {
       >;
       expect(saved["agent:main:subagent:allow-any"]?.providerOverride).toBe("openai");
       expect(saved["agent:main:subagent:allow-any"]?.modelOverride).toBe("gpt-custom-foo");
+    });
+  });
+
+  it("clears a legacy main-session provider pin when it only mirrors the stale runtime model", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:main": {
+          sessionId: "session-main-legacy-provider-pin",
+          updatedAt: Date.now(),
+          providerOverride: "openai-codex",
+          modelOverride: "gpt-5.4",
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "miaomiaocode-codex/gpt-5.4" },
+        models: {
+          "miaomiaocode-codex/gpt-5.4": {},
+          "openai-codex/gpt-5.4": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "miaomiaocode-codex" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai-codex" },
+      ]);
+
+      await runAgentWithSessionKey("agent:main:main");
+
+      expectLastRunProviderModel("miaomiaocode-codex", "gpt-5.4");
+
+      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
+        string,
+        {
+          providerOverride?: string;
+          modelOverride?: string;
+          modelOverrideSource?: string;
+        }
+      >;
+      const entry = saved["agent:main:main"];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(entry?.modelOverrideSource).toBeUndefined();
     });
   });
 
