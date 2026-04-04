@@ -35,7 +35,9 @@ See [Plugins](/tools/plugin) for plugin behavior and install rules.
 
 ## Setup
 
-1. Ensure the Matrix bundled plugin is available.
+1. Ensure the Matrix plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Matrix account on your homeserver.
 3. Configure `channels.matrix` with either:
    - `homeserver` + `accessToken`, or

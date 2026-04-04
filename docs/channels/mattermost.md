@@ -36,7 +36,9 @@ Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
-1. Ensure the Mattermost bundled plugin is available.
+1. Ensure the Mattermost plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Mattermost bot account and copy the **bot token**.
 3. Copy the Mattermost **base URL** (e.g., `https://chat.example.com`).
 4. Configure OpenClaw and start the gateway.

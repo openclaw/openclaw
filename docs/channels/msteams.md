@@ -35,7 +35,9 @@ Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Ensure the Microsoft Teams bundled plugin is available.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + client secret + tenant ID).
 3. Configure OpenClaw with those credentials.
 4. Expose `/api/messages` (port 3978 by default) via a public URL or tunnel.
@@ -136,7 +138,9 @@ Example:
 
 ## How it works
 
-1. Ensure the Microsoft Teams bundled plugin is available.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + secret + tenant ID).
 3. Build a **Teams app package** that references the bot and includes the RSC permissions below.
 4. Upload/install the Teams app into a team (or personal scope for DMs).

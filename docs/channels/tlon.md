@@ -38,7 +38,9 @@ Details: [Plugins](/tools/plugin)
 
 ## Setup
 
-1. Ensure the Tlon bundled plugin is available.
+1. Ensure the Tlon plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Gather your ship URL and login code.
 3. Configure `channels.tlon`.
 4. Restart the gateway.
