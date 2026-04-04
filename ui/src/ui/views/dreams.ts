@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { DreamingMode } from "../controllers/dreaming.ts";
 
 export type DreamsProps = {
   active: boolean;
@@ -7,6 +8,13 @@ export type DreamsProps = {
   promotedCount: number;
   dreamingOf: string | null;
   nextCycle: string | null;
+  mode: DreamingMode;
+  statusLoading: boolean;
+  statusError: string | null;
+  modeSaving: boolean;
+  managedCronPresent: boolean;
+  onRefresh: () => void;
+  onModeChange: (mode: DreamingMode) => void;
 };
 
 const DREAM_PHRASES = [

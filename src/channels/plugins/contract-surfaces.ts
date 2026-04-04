@@ -165,20 +165,16 @@ function loadBundledChannelContractSurfaceEntries(): Array<{
     if (manifest.origin !== "bundled" || manifest.channels.length === 0) {
       continue;
     }
-    const modulePaths = resolveSourceFirstContractSurfaceModulePaths({
+    const modulePath = resolveSourceFirstContractSurfaceModulePaths({
       rootDir: manifest.rootDir,
-    });
-    if (modulePaths.length === 0) {
+    })[0];
+    if (!modulePath) {
       continue;
     }
     try {
-      const surface = Object.assign(
-        {},
-        ...modulePaths.map((modulePath) => loadModule(modulePath)(modulePath) as object),
-      );
       surfaces.push({
         pluginId: manifest.id,
-        surface,
+        surface: loadModule(modulePath)(modulePath),
       });
     } catch {
       continue;
