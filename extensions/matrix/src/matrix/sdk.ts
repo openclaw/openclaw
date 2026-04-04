@@ -1445,7 +1445,7 @@ export class MatrixClient {
   private async shouldForceSecretStorageRecreationForBackupReset(
     crypto: MatrixCryptoBootstrapApi,
   ): Promise<boolean> {
-    const { decryptionKeyCached } = await this.resolveRoomKeyBackupLocalState(crypto);
+    const decryptionKeyCached = await this.resolveCachedRoomKeyBackupDecryptionKey(crypto);
     if (decryptionKeyCached !== false) {
       return false;
     }
