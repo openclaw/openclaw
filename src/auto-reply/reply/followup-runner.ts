@@ -81,12 +81,20 @@ export function createFollowupRunner(params: {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
-    const queuedUserFacingContent = queued.display
-      ? toUserFacingContent({
-          payload: queued.display,
-          source: "queued-followup-display",
-        })
-      : undefined;
+    let queuedUserFacingContent;
+    try {
+      queuedUserFacingContent = queued.display
+        ? toUserFacingContent({
+            payload: queued.display,
+            source: "queued-followup-display",
+          })
+        : undefined;
+    } catch (err) {
+      defaultRuntime.error?.(
+        `followup queue: dropping malformed queued display payload before drain retry: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");

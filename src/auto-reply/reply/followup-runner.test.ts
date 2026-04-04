@@ -1152,4 +1152,35 @@ describe("createFollowupRunner agentDir forwarding", () => {
     const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
     expect(call?.agentDir).toBe(agentDir);
   });
+
+  it("drops malformed queued display payloads before they can wedge followup delivery", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(
+      createQueuedRun({
+        display: { visibility: "summary-only" },
+        originatingChannel: "telegram",
+        originatingTo: "telegram:123",
+        originatingAccountId: "default",
+        run: {
+          ...createMockFollowupRun().run,
+          messageProvider: "telegram",
+        },
+      }),
+    );
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
 });
