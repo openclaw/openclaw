@@ -10,7 +10,14 @@
     "extensions": [
       "./index.ts"
     ],
+    "compat": {
+      "pluginApi": ">=2026.4.1"
+    },
+    "build": {
+      "openclawVersion": "2026.4.1"
+    },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

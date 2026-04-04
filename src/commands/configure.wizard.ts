@@ -559,6 +559,15 @@ export async function runConfigureWizard(
         await configureChannelsSection();
       }
 
+      if (selected.includes("plugins")) {
+        const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
+        nextConfig = await configurePluginConfig({
+          config: nextConfig,
+          prompter,
+          workspaceDir: resolveUserPath(workspaceDir),
+        });
+      }
+
       if (selected.includes("skills")) {
         const wsDir = resolveUserPath(workspaceDir);
         nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
@@ -613,6 +622,16 @@ export async function runConfigureWizard(
 
         if (choice === "channels") {
           await configureChannelsSection();
+          await persistConfig();
+        }
+
+        if (choice === "plugins") {
+          const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
+          nextConfig = await configurePluginConfig({
+            config: nextConfig,
+            prompter,
+            workspaceDir: resolveUserPath(workspaceDir),
+          });
           await persistConfig();
         }
 

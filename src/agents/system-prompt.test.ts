@@ -101,7 +101,7 @@ describe("buildAgentSystemPrompt", () => {
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
       heartbeatPrompt: "ping",
-      toolNames: ["message", "memory_search"],
+      toolNames: ["message", "memory_search", "cron"],
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",
       ttsHint: "Voice (TTS) is enabled.",
@@ -119,7 +119,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      'For follow-up at a future time (for example "check back in 10 minutes", reminders, run-later work, or recurring tasks), use cron instead of exec sleep, yieldMs delays, or process polling.',
+    );
+    expect(prompt).toContain(
+      "Use exec/process only for commands that start now and continue running in the background.",
+    );
+    expect(prompt).toContain(
+      "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
     );
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
@@ -171,20 +177,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("allow-once|allow-always|deny");
   });
 
-  it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
+  it("keeps manual /approve instructions for telegram runtime prompts", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      runtimeInfo: { channel: "telegram" },
+      runtimeInfo: { channel: "telegram", capabilities: ["inlineButtons"] },
     });
 
     expect(prompt).toContain(
-      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
-    );
-    expect(prompt).toContain(
-      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
     );
     expect(prompt).not.toContain(
-      "When exec returns approval-pending, include the concrete /approve command from tool output",
+      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear",
     );
   });
 
@@ -195,7 +198,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear",
     );
     expect(prompt).toContain(
       "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
@@ -287,7 +290,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      'For follow-up at a future time (for example "check back in 10 minutes", reminders, run-later work, or recurring tasks), use cron instead of exec sleep, yieldMs delays, or process polling.',
+    );
+    expect(prompt).toContain(
+      "Use exec/process only for commands that start now and continue running in the background.",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
@@ -493,14 +499,14 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
-        "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Opus: anthropic/claude-opus-4-6",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 
     expect(prompt).toContain("## Model Aliases");
     expect(prompt).toContain("Prefer aliases when specifying model overrides");
-    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-6");
   });
 
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
@@ -642,7 +648,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("channel=telegram");
-    expect(prompt).toContain("capabilities=inlineButtons");
+    expect(prompt.toLowerCase()).toContain("capabilities=inlinebuttons");
   });
 
   it("includes agent id in runtime when provided", () => {
@@ -682,7 +688,7 @@ describe("buildAgentSystemPrompt", () => {
         arch: "arm64",
         node: "v20",
         model: "anthropic/claude",
-        defaultModel: "anthropic/claude-opus-4-5",
+        defaultModel: "anthropic/claude-opus-4-6",
       },
       "telegram",
       ["inlineButtons"],
@@ -695,10 +701,56 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
     expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(line).toContain("default_model=anthropic/claude-opus-4-6");
     expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlineButtons");
+    expect(line).toContain("capabilities=inlinebuttons");
     expect(line).toContain("thinking=low");
+  });
+
+  it("normalizes runtime capability ordering and casing for cache stability", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+      },
+      "telegram",
+      [" React ", "inlineButtons", "react"],
+      "low",
+    );
+
+    expect(line).toContain("capabilities=inlinebuttons,react");
+  });
+
+  it("keeps semantically equivalent structured prompt inputs byte-stable", () => {
+    const clean = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlinebuttons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+      heartbeatPrompt: "ping",
+      extraSystemPrompt: "Group chat context\nSecond line",
+      workspaceNotes: ["Reminder: keep commits scoped."],
+      modelAliasLines: ["- Sonnet: anthropic/claude-sonnet-4-5"],
+    });
+    const noisy = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: [" react ", "inlineButtons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\r\n  <skill>  \r\n    <name>demo</name>\t\r\n  </skill>\r\n</available_skills>\r\n",
+      heartbeatPrompt: " ping  \r\n",
+      extraSystemPrompt: "  Group chat context  \r\nSecond line \t\r\n",
+      workspaceNotes: ["  Reminder: keep commits scoped. \t\r\n"],
+      modelAliasLines: ["  - Sonnet: anthropic/claude-sonnet-4-5 \t\r\n"],
+    });
+
+    expect(noisy).toBe(clean);
+    expect(noisy).not.toContain("\r");
+    expect(noisy).not.toMatch(/[ \t]+$/m);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {

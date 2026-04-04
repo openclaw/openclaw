@@ -1,11 +1,4 @@
 import type { Bot } from "grammy";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import {
   logAckFailure,
   logTypingFailure,
@@ -26,14 +19,21 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+  resolveAgentDir,
+  resolveDefaultModelForAgent,
+} from "./bot-message-dispatch.agent.runtime.js";
+import {
+  generateTopicLabel,
   loadSessionStore,
   resolveMarkdownTableMode,
   resolveSessionStoreEntry,
   resolveStorePath,
   getAgentScopedMediaLocalRoots,
-  resolveChunkMode,
   resolveAutoTopicLabelConfig,
-  generateTopicLabel,
+  resolveChunkMode,
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";

@@ -27,10 +27,17 @@ Scope intent:
 - `models.providers.*.request.auth.token`
 - `models.providers.*.request.auth.value`
 - `models.providers.*.request.headers.*`
+- `models.providers.*.request.proxy.tls.ca`
+- `models.providers.*.request.proxy.tls.cert`
+- `models.providers.*.request.proxy.tls.key`
+- `models.providers.*.request.proxy.tls.passphrase`
+- `models.providers.*.request.tls.ca`
+- `models.providers.*.request.tls.cert`
+- `models.providers.*.request.tls.key`
+- `models.providers.*.request.tls.passphrase`
 - `skills.entries.*.apiKey`
 - `agents.defaults.memorySearch.remote.apiKey`
 - `agents.list[].memorySearch.remote.apiKey`
-- `talk.apiKey`
 - `talk.providers.*.apiKey`
 - `messages.tts.providers.*.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
@@ -40,6 +47,7 @@ Scope intent:
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
+- `plugins.entries.minimax.config.webSearch.apiKey`
 - `plugins.entries.tavily.config.webSearch.apiKey`
 - `tools.web.search.apiKey`
 - `gateway.auth.password`

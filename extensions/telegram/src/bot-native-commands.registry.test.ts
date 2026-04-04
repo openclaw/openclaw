@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let clearPluginCommands: typeof import("../../../src/plugins/commands.js").clearPluginCommands;
 let registerPluginCommand: typeof import("../../../src/plugins/commands.js").registerPluginCommand;
+let setActivePluginRegistry: typeof import("../../../src/plugins/runtime.js").setActivePluginRegistry;
 let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
 let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
 let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
@@ -12,16 +13,72 @@ let editMessageTelegram: typeof import("./bot-native-commands.menu-test-support.
 let resetNativeCommandMenuMocks: typeof import("./bot-native-commands.menu-test-support.js").resetNativeCommandMenuMocks;
 let waitForRegisteredCommands: typeof import("./bot-native-commands.menu-test-support.js").waitForRegisteredCommands;
 
+function createTelegramPluginRegistry() {
+  return {
+    plugins: [],
+    tools: [],
+    hooks: [],
+    typedHooks: [],
+    channels: [
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            docsPath: "/channels/telegram",
+            blurb: "test stub.",
+          },
+          capabilities: { chatTypes: ["direct"] },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+          commands: {
+            nativeCommandsAutoEnabled: true,
+          },
+        },
+      },
+    ],
+    channelSetups: [
+      {
+        pluginId: "telegram",
+        source: "test",
+        enabled: true,
+        plugin: {
+          id: "telegram",
+        },
+      },
+    ],
+    providers: [],
+    speechProviders: [],
+    mediaUnderstandingProviders: [],
+    imageGenerationProviders: [],
+    webFetchProviders: [],
+    webSearchProviders: [],
+    gatewayHandlers: {},
+    httpRoutes: [],
+    cliRegistrars: [],
+    services: [],
+    commands: [],
+    conversationBindingResolvedHandlers: [],
+    diagnostics: [],
+  };
+}
+
 function registerPairPluginCommand(params?: {
   nativeNames?: { telegram?: string; discord?: string };
-  telegramNativeProgressMessage?: string;
+  nativeProgressMessages?: { telegram?: string; default?: string };
 }) {
   expect(
     registerPluginCommand("demo-plugin", {
       name: "pair",
       ...(params?.nativeNames ? { nativeNames: params.nativeNames } : {}),
-      ...(params?.telegramNativeProgressMessage
-        ? { telegramNativeProgressMessage: params.telegramNativeProgressMessage }
+      ...(params?.nativeProgressMessages
+        ? { nativeProgressMessages: params.nativeProgressMessages }
         : {}),
       description: "Pair device",
       acceptsArgs: true,
@@ -35,12 +92,12 @@ async function registerPairMenu(params: {
   bot: ReturnType<typeof createCommandBot>["bot"];
   setMyCommands: ReturnType<typeof createCommandBot>["setMyCommands"];
   nativeNames?: { telegram?: string; discord?: string };
-  telegramNativeProgressMessage?: string;
+  nativeProgressMessages?: { telegram?: string; default?: string };
 }) {
   registerPairPluginCommand({
     ...(params.nativeNames ? { nativeNames: params.nativeNames } : {}),
-    ...(params.telegramNativeProgressMessage
-      ? { telegramNativeProgressMessage: params.telegramNativeProgressMessage }
+    ...(params.nativeProgressMessages
+      ? { nativeProgressMessages: params.nativeProgressMessages }
       : {}),
   });
 
@@ -56,6 +113,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   beforeAll(async () => {
     ({ clearPluginCommands, registerPluginCommand } =
       await import("../../../src/plugins/commands.js"));
+    ({ setActivePluginRegistry } = await import("../../../src/plugins/runtime.js"));
     ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
     ({
       createCommandBot,
@@ -69,6 +127,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   });
 
   beforeEach(() => {
+    setActivePluginRegistry(createTelegramPluginRegistry() as never);
     clearPluginCommands();
     resetNativeCommandMenuMocks();
   });
@@ -104,8 +163,10 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
     await registerPairMenu({
       bot,
       setMyCommands,
-      telegramNativeProgressMessage:
-        "Running pair now...\n\nI'll edit this message with the final result when it's ready.",
+      nativeProgressMessages: {
+        telegram:
+          "Running pair now...\n\nI'll edit this message with the final result when it's ready.",
+      },
     });
 
     const handler = commandHandlers.get("pair");

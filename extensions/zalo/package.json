@@ -4,7 +4,7 @@
   "description": "OpenClaw Zalo channel plugin",
   "type": "module",
   "dependencies": {
-    "undici": "7.24.6"
+    "undici": "8.0.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
@@ -40,7 +40,14 @@
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.1"
     },
+    "compat": {
+      "pluginApi": ">=2026.4.1"
+    },
+    "build": {
+      "openclawVersion": "2026.4.1"
+    },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

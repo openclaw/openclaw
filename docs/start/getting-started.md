@@ -92,7 +92,7 @@ Need to install Node? See [Node setup](/install/node).
 
 <Columns>
   <Card title="Connect a channel" href="/channels" icon="message-square">
-    WhatsApp, Telegram, Discord, iMessage, and more.
+    Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more.
   </Card>
   <Card title="Pairing and safety" href="/channels/pairing" icon="shield">
     Control who can message your agent.

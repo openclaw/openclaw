@@ -4,7 +4,6 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   hasConfiguredSecretInput,
@@ -17,9 +16,10 @@ import {
   resolveSlackAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
+import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
+import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -33,7 +33,7 @@ function buildSlackManifest(botName: string) {
     features: {
       bot_user: {
         display_name: safeName,
-        always_online: false,
+        always_online: true,
       },
       app_home: {
         messages_tab_enabled: true,
@@ -118,7 +118,7 @@ export function setSlackChannelAllowlist(
   accountId: string,
   channelKeys: string[],
 ): OpenClawConfig {
-  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
+  const channels = Object.fromEntries(channelKeys.map((key) => [key, { enabled: true }]));
   return patchChannelConfigForAccount({
     cfg,
     channel: SLACK_CHANNEL,
@@ -168,6 +168,8 @@ export function createSlackPluginBase(params: {
   | "meta"
   | "setupWizard"
   | "capabilities"
+  | "commands"
+  | "doctor"
   | "agentPrompt"
   | "streaming"
   | "reload"
@@ -175,7 +177,7 @@ export function createSlackPluginBase(params: {
   | "config"
   | "setup"
 > {
-  return createChannelPluginBase({
+  return {
     id: SLACK_CHANNEL,
     meta: {
       ...getChatChannelMeta(SLACK_CHANNEL),
@@ -189,7 +191,24 @@ export function createSlackPluginBase(params: {
       media: true,
       nativeCommands: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: false,
+      nativeSkillsAutoEnabled: false,
+      resolveNativeCommandName: ({ commandKey, defaultName }) =>
+        commandKey === "status" ? "agentstatus" : defaultName,
+    },
+    doctor: slackDoctor,
     agentPrompt: {
+      inboundFormattingHints: () => ({
+        text_markup: "slack_mrkdwn",
+        rules: [
+          "Use Slack mrkdwn, not standard Markdown.",
+          "Bold uses *single asterisks*.",
+          "Links use <url|label>.",
+          "Code blocks use triple backticks without a language identifier.",
+          "Do not use markdown headings or pipe tables.",
+        ],
+      }),
       messageToolHints: ({ cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
@@ -220,12 +239,14 @@ export function createSlackPluginBase(params: {
         }),
     },
     setup: params.setup,
-  }) as Pick<
+  } as Pick<
     ChannelPlugin<ResolvedSlackAccount>,
     | "id"
     | "meta"
     | "setupWizard"
     | "capabilities"
+    | "commands"
+    | "doctor"
     | "agentPrompt"
     | "streaming"
     | "reload"

@@ -6,7 +6,7 @@ summary: 通过 gogcli 将 Gmail Pub/Sub 推送接入 OpenClaw webhooks
 title: Gmail PubSub
 x-i18n:
   generated_at: "2026-02-03T07:43:25Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: dfb92133b69177e4e984b7d072f5dc28aa53a9e0cf984a018145ed811aa96195
   source_path: automation/gmail-pubsub.md
@@ -55,7 +55,7 @@ x-i18n:
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
-        model: "openai/gpt-5.2-mini",
+        model: "openai/gpt-5.4-mini",
         deliver: true,
         channel: "last",
         // to: "+15551234567"

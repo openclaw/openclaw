@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-sdk/facade-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-sdk/facade-runtime.js")>();
+vi.mock("./plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./plugin-sdk/facade-runtime.js")>(
+    "./plugin-sdk/facade-runtime.js",
+  );
   return {
     ...actual,
     loadBundledPluginPublicSurfaceModuleSync,

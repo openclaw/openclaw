@@ -20,9 +20,13 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
+}));
+const controlUiState = vi.hoisted(() => ({
+  root: "/tmp/openclaw-control-ui" as string | null,
 }));
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -65,6 +69,10 @@ vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
+vi.mock("../../infra/control-ui-assets.js", () => ({
+  resolveControlUiRootSync: () => controlUiState.root,
+}));
+
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: (style: string) => setGatewayWsLogStyle(style),
 }));
@@ -89,7 +97,9 @@ vi.mock("../../logging/console.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
-    info: () => undefined,
+    info: (message: string) => {
+      gatewayLogMessages.push(message);
+    },
     warn: () => undefined,
     error: () => undefined,
   }),
@@ -132,6 +142,8 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { exists: false };
+    controlUiState.root = "/tmp/openclaw-control-ui";
+    gatewayLogMessages.length = 0;
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
@@ -205,6 +217,16 @@ describe("gateway run option collisions", () => {
       expect.objectContaining({
         bind: "loopback",
       }),
+    );
+  });
+
+  it("logs when first startup will build missing Control UI assets", async () => {
+    controlUiState.root = null;
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(gatewayLogMessages).toContain(
+      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. Prebuild with `pnpm ui:build` for a faster first boot.",
     );
   });
 

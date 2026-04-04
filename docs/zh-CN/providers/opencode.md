@@ -54,7 +54,7 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 ### Zen
 
 - 运行时提供商：`opencode`
-- 示例模型：`opencode/claude-opus-4-6`、`opencode/gpt-5.2`、`opencode/gemini-3-pro`
+- 示例模型：`opencode/claude-opus-4-6`、`opencode/gpt-5.4`、`opencode/gemini-3-pro`
 - 适合你想使用精选的 OpenCode 多模型代理时
 
 ### Go

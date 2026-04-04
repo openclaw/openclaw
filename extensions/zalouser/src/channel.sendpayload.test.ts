@@ -1,5 +1,5 @@
-import { primeChannelOutboundSendMock } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
 import "./accounts.test-mocks.js";
 import "./zalo-js.test-mocks.js";
 import type { ReplyPayload } from "../runtime-api.js";

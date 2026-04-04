@@ -3,7 +3,7 @@ summary: 关于 OpenClaw 安装、配置和使用的常见问题
 title: 常见问题
 x-i18n:
   generated_at: "2026-03-16T06:52:18Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 94f7c6ea1024d5606379ce80d65a006b3acc12a963d57ca2333fcee3e5a31872
   source_path: help/faq.md
@@ -673,7 +673,7 @@ claude setup-token
 
 ### Codex 认证如何工作
 
-OpenClaw 通过 OAuth（ChatGPT 登录）支持 **OpenAI Code (Codex)**。新手引导可以运行 OAuth 流程，并在适当时将默认模型设置为 `openai-codex/gpt-5.2`。参阅[模型提供商](/concepts/model-providers)和[CLI 新手引导](/start/wizard)。
+OpenClaw 通过 OAuth（ChatGPT 登录）支持 **OpenAI Code (Codex)**。新手引导可以运行 OAuth 流程，并在适当时将默认模型设置为 `openai-codex/gpt-5.4`。参阅[模型提供商](/concepts/model-providers)和[CLI 新手引导](/start/wizard)。
 
 ### 是否支持 OpenAI 订阅认证（Codex OAuth）
 
@@ -1789,13 +1789,13 @@ OpenClaw 的默认模型是你设置的：
 agents.defaults.model.primary
 ```
 
-模型以 `provider/model` 引用（示例：`anthropic/claude-opus-4-5`）。如果你省略提供商，OpenClaw 目前假设 `anthropic` 作为临时弃用回退——但你仍然应该**明确**设置 `provider/model`。
+模型以 `provider/model` 引用（示例：`anthropic/claude-opus-4-6`）。如果你省略提供商，OpenClaw 目前假设 `anthropic` 作为临时弃用回退——但你仍然应该**明确**设置 `provider/model`。
 
 ### 推荐什么模型
 
-**推荐默认：** `anthropic/claude-opus-4-5`。
-**好的替代：** `anthropic/claude-sonnet-4-5`。
-**可靠（个性较少）：** `openai/gpt-5.2`——几乎和 Opus 一样好，只是个性较少。
+**推荐默认：** `anthropic/claude-opus-4-6`。
+**好的替代：** `anthropic/claude-sonnet-4-6`。
+**可靠（个性较少）：** `openai/gpt-5.4`——几乎和 Opus 一样好，只是个性较少。
 **经济：** `zai/glm-4.7`。
 
 MiniMax M2.1 有自己的文档：[MiniMax](/providers/minimax) 和
@@ -1834,7 +1834,7 @@ MiniMax M2.1 有自己的文档：[MiniMax](/providers/minimax) 和
 
 ### OpenClaw、Flawd 和 Krill 使用什么模型
 
-- **OpenClaw + Flawd：** Anthropic Opus（`anthropic/claude-opus-4-5`）——参阅 [Anthropic](/providers/anthropic)。
+- **OpenClaw + Flawd：** Anthropic Opus（`anthropic/claude-opus-4-6`）——参阅 [Anthropic](/providers/anthropic)。
 - **Krill：** MiniMax M2.1（`minimax/MiniMax-M2.1`）——参阅 [MiniMax](/providers/minimax)。
 
 ### 如何在运行中切换模型（无需重启）
@@ -1874,7 +1874,7 @@ MiniMax M2.1 有自己的文档：[MiniMax](/providers/minimax) 和
 重新运行 `/model` 但**不带** `@profile` 后缀：
 
 ```
-/model anthropic/claude-opus-4-5
+/model anthropic/claude-opus-4-6
 ```
 
 如果你想返回默认值，从 `/model` 中选择（或发送 `/model <default provider/model>`）。
@@ -1884,8 +1884,8 @@ MiniMax M2.1 有自己的文档：[MiniMax](/providers/minimax) 和
 
 可以。设置一个为默认并按需切换：
 
-- **快速切换（按会话）：** 日常任务用 `/model gpt-5.2`，编程用 `/model gpt-5.2-codex`。
-- **默认 + 切换：** 将 `agents.defaults.model.primary` 设置为 `openai-codex/gpt-5.2`，然后编程时切换到 `openai-codex/gpt-5.2-codex`（或反过来）。
+- **快速切换（按会话）：** 日常任务用 `/model gpt-5.4`，编程用 `/model gpt-5.4`。
+- **默认 + 切换：** 将 `agents.defaults.model.primary` 设置为 `openai-codex/gpt-5.4`，然后编程时切换到 `openai-codex/gpt-5.4-codex`（或反过来）。
 - **子智能体：** 将编程任务路由到具有不同默认模型的子智能体。
 
 参阅[模型](/concepts/models)和[斜杠命令](/tools/slash-commands)。
@@ -1931,7 +1931,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
       model: { primary: "minimax/MiniMax-M2.1" },
       models: {
         "minimax/MiniMax-M2.1": { alias: "minimax" },
-        "openai/gpt-5.2": { alias: "gpt" },
+        "openai/gpt-5.4": { alias: "gpt" },
       },
     },
   },
@@ -1956,10 +1956,10 @@ Model "provider/model" is not allowed. Use /model to list available models.
 
 是的。OpenClaw 内置了一些默认简写（仅在模型存在于 `agents.defaults.models` 中时应用）：
 
-- `opus` → `anthropic/claude-opus-4-5`
-- `sonnet` → `anthropic/claude-sonnet-4-5`
-- `gpt` → `openai/gpt-5.2`
-- `gpt-mini` → `openai/gpt-5-mini`
+- `opus` → `anthropic/claude-opus-4-6`
+- `sonnet` → `anthropic/claude-sonnet-4-6`
+- `gpt` → `openai/gpt-5.4`
+- `gpt-mini` → `openai/gpt-5.4-mini`
 - `gemini` → `google/gemini-3-pro-preview`
 - `gemini-flash` → `google/gemini-3-flash-preview`
 
@@ -1973,10 +1973,10 @@ Model "provider/model" is not allowed. Use /model to list available models.
 {
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-4-5" },
+      model: { primary: "anthropic/claude-opus-4-6" },
       models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
-        "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
         "anthropic/claude-haiku-4-5": { alias: "haiku" },
       },
     },
@@ -1994,8 +1994,8 @@ OpenRouter（按令牌付费；多种模型）：
 {
   agents: {
     defaults: {
-      model: { primary: "openrouter/anthropic/claude-sonnet-4-5" },
-      models: { "openrouter/anthropic/claude-sonnet-4-5": {} },
+      model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
+      models: { "openrouter/anthropic/claude-sonnet-4-6": {} },
     },
   },
   env: { OPENROUTER_API_KEY: "sk-or-..." },
@@ -2633,7 +2633,7 @@ OpenClaw 默认阻止**跨提供商**消息。如果工具调用绑定到 Telegr
 
 **问：“使用 API 密钥时 Anthropic 的默认模型是什么？”**
 
-**答：** 在 OpenClaw 中，凭据和模型选择是分开的。设置 `ANTHROPIC_API_KEY`（或在认证配置文件中存储 Anthropic API 密钥）启用认证，但实际的默认模型是你在 `agents.defaults.model.primary` 中配置的（例如 `anthropic/claude-sonnet-4-5` 或 `anthropic/claude-opus-4-5`）。如果你看到 `No credentials found for profile "anthropic:default"`，意味着 Gateway 网关在正在运行的智能体的预期 `auth-profiles.json` 中找不到 Anthropic 凭据。
+**答：** 在 OpenClaw 中，凭据和模型选择是分开的。设置 `ANTHROPIC_API_KEY`（或在认证配置文件中存储 Anthropic API 密钥）启用认证，但实际的默认模型是你在 `agents.defaults.model.primary` 中配置的（例如 `anthropic/claude-sonnet-4-6` 或 `anthropic/claude-opus-4-6`）。如果你看到 `No credentials found for profile "anthropic:default"`，意味着 Gateway 网关在正在运行的智能体的预期 `auth-profiles.json` 中找不到 Anthropic 凭据。
 
 ---
 

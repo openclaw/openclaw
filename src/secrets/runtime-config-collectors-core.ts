@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
-  matchesMediaEntryCapability,
+  resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
@@ -79,7 +79,7 @@ function collectModelProviderAssignments(params: {
         context: params.context,
         active: providerIsActive,
         inactiveReason: "provider is disabled.",
-        collectTransportSecrets: false,
+        collectTransportSecrets: true,
       });
     }
   }
@@ -400,7 +400,11 @@ function collectMediaRequestAssignments(params: {
     return;
   }
 
-  const providerRegistry = buildMediaUnderstandingRegistry(undefined, params.config);
+  let providerRegistry: ReturnType<typeof buildMediaUnderstandingRegistry> | undefined;
+  const getProviderRegistry = () => {
+    providerRegistry ??= buildMediaUnderstandingRegistry(undefined, params.config);
+    return providerRegistry;
+  };
   const capabilityKeys = ["audio", "image", "video"] as const;
   const isCapabilityEnabled = (capability: (typeof capabilityKeys)[number]) =>
     (isRecord(media[capability]) ? media[capability] : undefined)?.enabled !== false;
@@ -434,11 +438,14 @@ function collectMediaRequestAssignments(params: {
 
   collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
     const entry = rawModel as MediaUnderstandingModelConfig;
-    const capabilities = resolveEffectiveMediaEntryCapabilities({
-      entry,
-      source: "shared",
-      providerRegistry,
-    });
+    const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+    const capabilities =
+      configuredCapabilities ??
+      resolveEffectiveMediaEntryCapabilities({
+        entry,
+        source: "shared",
+        providerRegistry: getProviderRegistry(),
+      });
     if (!capabilities || capabilities.length === 0) {
       return {
         active: false,
@@ -469,12 +476,11 @@ function collectMediaRequestAssignments(params: {
     collectModelAssignments(section?.models, `tools.media.${capability}.models`, (rawModel) => ({
       active:
         active &&
-        matchesMediaEntryCapability({
-          entry: rawModel as MediaUnderstandingModelConfig,
-          source: "capability",
-          capability,
-          providerRegistry,
-        }),
+        (() => {
+          const entry = rawModel as MediaUnderstandingModelConfig;
+          const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+          return configuredCapabilities ? configuredCapabilities.includes(capability) : true;
+        })(),
       inactiveReason: active
         ? `${capability} media model is filtered out by its configured capabilities.`
         : inactiveReason,

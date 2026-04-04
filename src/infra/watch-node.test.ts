@@ -127,6 +127,25 @@ describe("watch-node script", () => {
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
   });
 
+  it("returns the child exit code when the runner exits on its own", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force", "--help"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    child.emit("exit", 0, null);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(0);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
   it("ignores test-only changes and restarts on non-test source changes", async () => {
     const childA = Object.assign(new EventEmitter(), {
       kill: vi.fn(function () {

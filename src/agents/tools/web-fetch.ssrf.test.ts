@@ -27,7 +27,7 @@ function textResponse(body: string): Response {
 function setMockFetch(
   impl: FetchMock = async (_input: RequestInfo | URL, _init?: RequestInit) => textResponse(""),
 ) {
-  const fetchSpy = vi.fn<FetchMock>(impl);
+  const fetchSpy = vi.fn(impl);
   global.fetch = withFetchPreconnect(fetchSpy);
   return fetchSpy;
 }

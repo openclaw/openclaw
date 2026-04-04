@@ -3,14 +3,54 @@ type ErrorPattern = RegExp | string;
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b/i;
 
+const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
+  /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
+  "key has been disabled",
+  "key has been revoked",
+  "account has been deactivated",
+  "not allowed for this organization",
+] as const satisfies readonly ErrorPattern[];
+
+const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
+  /invalid[_ ]?api[_ ]?key/,
+  /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
+  "permission_error",
+] as const satisfies readonly ErrorPattern[];
+
+const COMMON_AUTH_ERROR_PATTERNS = [
+  "incorrect api key",
+  "invalid token",
+  "authentication",
+  "re-authenticate",
+  "oauth token refresh failed",
+  "unauthorized",
+  "forbidden",
+  "access denied",
+  "insufficient permissions",
+  "insufficient permission",
+  /missing scopes?:/i,
+  "expired",
+  "token has expired",
+  /\b401\b/,
+  /\b403\b/,
+  "no credentials found",
+  "no api key found",
+  /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
+] as const satisfies readonly ErrorPattern[];
+
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
+    /too many (?:concurrent )?requests/i,
     "model_cooldown",
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
     "resource_exhausted",
+    "throttlingexception",
+    "throttling_exception",
+    "throttled",
+    "throttling",
     "usage limit",
     /\btpm\b/i,
     "tokens per minute",
@@ -80,37 +120,8 @@ const ERROR_PATTERNS = {
     "insufficient usd or diem balance",
     /requires?\s+more\s+credits/i,
   ],
-  authPermanent: [
-    /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
-    "invalid_api_key",
-    "key has been disabled",
-    "key has been revoked",
-    "account has been deactivated",
-    /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
-    "permission_error",
-    "not allowed for this organization",
-  ],
-  auth: [
-    /invalid[_ ]?api[_ ]?key/,
-    "incorrect api key",
-    "invalid token",
-    "authentication",
-    "re-authenticate",
-    "oauth token refresh failed",
-    "unauthorized",
-    "forbidden",
-    "access denied",
-    "insufficient permissions",
-    "insufficient permission",
-    /missing scopes?:/i,
-    "expired",
-    "token has expired",
-    /\b401\b/,
-    /\b403\b/,
-    "no credentials found",
-    "no api key found",
-    /\bfailed to (?:extract|parse|validate|decode)\b.*\btoken\b/,
-  ],
+  authPermanent: HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS,
+  auth: [...AMBIGUOUS_AUTH_ERROR_PATTERNS, ...COMMON_AUTH_ERROR_PATTERNS],
   format: [
     "string should match pattern",
     "tool_use.id",
@@ -135,6 +146,13 @@ function matchesErrorPatterns(raw: string, patterns: readonly ErrorPattern[]): b
   return patterns.some((pattern) =>
     pattern instanceof RegExp ? pattern.test(value) : value.includes(pattern),
   );
+}
+
+function matchesErrorPatternGroups(
+  raw: string,
+  groups: readonly (readonly ErrorPattern[])[],
+): boolean {
+  return groups.some((patterns) => matchesErrorPatterns(raw, patterns));
 }
 
 export function matchesFormatErrorPattern(raw: string): boolean {
@@ -177,11 +195,14 @@ export function isBillingErrorMessage(raw: string): boolean {
 }
 
 export function isAuthPermanentErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
+  return matchesErrorPatternGroups(raw, [HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS]);
 }
 
 export function isAuthErrorMessage(raw: string): boolean {
-  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
+  return matchesErrorPatternGroups(raw, [
+    AMBIGUOUS_AUTH_ERROR_PATTERNS,
+    COMMON_AUTH_ERROR_PATTERNS,
+  ]);
 }
 
 export function isOverloadedErrorMessage(raw: string): boolean {

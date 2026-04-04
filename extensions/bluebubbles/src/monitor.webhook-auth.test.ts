@@ -31,6 +31,7 @@ import {
 const { TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS } = vi.hoisted(() => ({
   TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: 3,
 }));
+const TEST_WEBHOOK_BODY_TIMEOUT_MS = 1;
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -70,6 +71,11 @@ vi.mock("./webhook-ingress.js", async () => {
       ...actual.WEBHOOK_RATE_LIMIT_DEFAULTS,
       maxRequests: TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
     },
+    readWebhookBodyOrReject: (params: Parameters<typeof actual.readWebhookBodyOrReject>[0]) =>
+      actual.readWebhookBodyOrReject({
+        ...params,
+        timeoutMs: TEST_WEBHOOK_BODY_TIMEOUT_MS,
+      }),
   };
 });
 
@@ -78,14 +84,18 @@ const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
 const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
-const mockResolveAgentRoute = vi.fn(() => ({
+const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
+  PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
+> = {
   agentId: "main",
   channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
+  lastRoutePolicy: "main",
   matchedBy: "default",
-}));
+};
+const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -99,7 +109,10 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open" as const);
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
   async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
@@ -368,25 +381,17 @@ describe("BlueBubbles webhook monitor", () => {
     });
 
     it("returns 408 when request body times out (Slow-Loris protection)", async () => {
-      vi.useFakeTimers();
-      try {
-        setupWebhookTarget();
+      setupWebhookTarget();
 
-        // Create a request that never sends data or ends (simulates slow-loris)
-        const { req, destroyMock } = createHangingWebhookRequestForTest();
+      // Create a request that never sends data or ends (simulates slow-loris).
+      const { req, destroyMock } = createHangingWebhookRequestForTest();
 
-        const { res, handledPromise } = createWebhookDispatchForTest(req);
+      const { res, handledPromise } = createWebhookDispatchForTest(req);
 
-        // Advance past the 30s timeout
-        await vi.advanceTimersByTimeAsync(31_000);
-
-        const handled = await handledPromise;
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(408);
-        expect(destroyMock).toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
+      const handled = await handledPromise;
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(408);
+      expect(destroyMock).toHaveBeenCalled();
     });
 
     it("rejects unauthorized requests before reading the body", async () => {

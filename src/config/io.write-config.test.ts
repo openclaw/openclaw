@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -9,10 +10,17 @@ import type { OpenClawConfig } from "./types.js";
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
 // test exercise the exact code path that caused the bug: AJV injecting
 // defaults during the write-back validation pass.
-const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const mockLoadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
+);
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
 
 describe("config io write", () => {
@@ -22,6 +30,39 @@ describe("config io write", () => {
     warn: () => {},
     error: () => {},
   };
+
+  function createBlueBubblesManifestRecord(): PluginManifestRecord {
+    return {
+      id: "bluebubbles",
+      origin: "bundled",
+      channels: ["bluebubbles"],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      rootDir: "/virtual/plugins/bluebubbles",
+      source: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      manifestPath: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      channelCatalogMeta: {
+        id: "bluebubbles",
+        label: "BlueBubbles",
+        blurb: "BlueBubbles channel",
+      },
+      channelConfigs: {
+        bluebubbles: {
+          schema: {
+            type: "object",
+            properties: {
+              enrichGroupParticipantsFromContacts: { type: "boolean", default: true },
+              serverUrl: { type: "string" },
+            },
+            additionalProperties: true,
+          },
+          uiHints: {},
+        },
+      },
+    };
+  }
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
@@ -37,7 +78,7 @@ describe("config io write", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   afterAll(async () => {
@@ -416,36 +457,7 @@ describe("config io write", () => {
     // write-back leak.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
-      plugins: [
-        {
-          id: "bluebubbles",
-          origin: "bundled",
-          channels: ["bluebubbles"],
-          channelCatalogMeta: {
-            id: "bluebubbles",
-            label: "BlueBubbles",
-            blurb: "BlueBubbles channel",
-          },
-          channelConfigs: {
-            bluebubbles: {
-              schema: {
-                type: "object",
-                properties: {
-                  enrichGroupParticipantsFromContacts: {
-                    type: "boolean",
-                    default: true,
-                  },
-                  serverUrl: {
-                    type: "string",
-                  },
-                },
-                additionalProperties: true,
-              },
-              uiHints: {},
-            },
-          },
-        },
-      ],
+      plugins: [createBlueBubblesManifestRecord()],
     });
 
     await withSuiteHome(async (home) => {
@@ -496,7 +508,7 @@ describe("config io write", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
@@ -732,6 +744,85 @@ describe("config io write", () => {
       expect(last.watchMode).toBe(true);
       expect(last.watchSession).toBe("watch-session-1");
       expect(last.watchCommand).toBe("gateway --force");
+    });
+  });
+
+  it("accepts unrelated writes when the file still contains legacy nested allow aliases", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          channels: {
+            slack: {
+              channels: {
+                ops: {
+                  allow: false,
+                },
+              },
+            },
+            googlechat: {
+              groups: {
+                "spaces/aaa": {
+                  allow: true,
+                },
+              },
+            },
+            discord: {
+              guilds: {
+                "100": {
+                  channels: {
+                    general: {
+                      allow: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      next.gateway = {
+        ...next.gateway,
+        auth: { mode: "token" },
+      };
+
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        channels?: Record<string, unknown>;
+        gateway?: Record<string, unknown>;
+      };
+      expect(persisted.gateway).toEqual({
+        auth: { mode: "token" },
+      });
+      expect(
+        (
+          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
+            ?.channels?.ops as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(false);
+      expect(
+        (
+          (persisted.channels?.googlechat as { groups?: Record<string, unknown> } | undefined)
+            ?.groups?.["spaces/aaa"] as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(true);
+      expect(
+        (
+          (
+            (persisted.channels?.discord as { guilds?: Record<string, unknown> } | undefined)
+              ?.guilds?.["100"] as { channels?: Record<string, unknown> } | undefined
+          )?.channels?.general as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(false);
+      expect(
+        (
+          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
+            ?.channels?.ops as Record<string, unknown> | undefined
+        )?.allow,
+      ).toBeUndefined();
     });
   });
 });

@@ -371,6 +371,16 @@ For `host=node`, approval requests include a canonical `systemRunPlan` payload. 
 that plan as the authoritative command/cwd/session context when forwarding approved `system.run`
 requests.
 
+That matters for async approval latency:
+
+- the node exec path prepares one canonical plan up front
+- the approval record stores that plan and its binding metadata
+- once approved, the final forwarded `system.run` call reuses the stored plan
+  instead of trusting later caller edits
+- if the caller changes `command`, `rawCommand`, `cwd`, `agentId`, or
+  `sessionKey` after the approval request was created, the gateway rejects the
+  forwarded run as an approval mismatch
+
 ## Interpreter/runtime commands
 
 Approval-backed interpreter/runtime runs are intentionally conservative:

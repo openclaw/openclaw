@@ -11,8 +11,8 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
-import { isSelfChatMode, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "../accounts.js";
+import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
 
 export type InboundAccessControlResult = {
   allowed: boolean;

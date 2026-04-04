@@ -214,6 +214,8 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {
       BuiltinMemoryEmbeddingProviderDoctorMetadata: import("@openclaw/memory-core/runtime-api.js").BuiltinMemoryEmbeddingProviderDoctorMetadata;
+      RepairShortTermPromotionArtifactsResult: import("@openclaw/memory-core/runtime-api.js").RepairShortTermPromotionArtifactsResult;
+      ShortTermAuditSummary: import("@openclaw/memory-core/runtime-api.js").ShortTermAuditSummary;
     };
   };
   "mattermost-policy": {
@@ -556,6 +558,23 @@ export interface PluginSdkFacadeTypeMap {
       };
     };
     types: {};
+  };
+  "whatsapp-surface": {
+    module: typeof import("@openclaw/whatsapp/api.js");
+    sourceModules: {
+      source1: {
+        module: typeof import("@openclaw/whatsapp/api.js");
+      };
+      source2: {
+        module: typeof import("@openclaw/whatsapp/constants.js");
+      };
+    };
+    types: {
+      WebChannelStatus: import("@openclaw/whatsapp/api.js").WebChannelStatus;
+      WebInboundMessage: import("@openclaw/whatsapp/api.js").WebInboundMessage;
+      WebListenerCloseReason: import("@openclaw/whatsapp/api.js").WebListenerCloseReason;
+      WebMonitorTuning: import("@openclaw/whatsapp/api.js").WebMonitorTuning;
+    };
   };
   "zalo-setup": {
     module: typeof import("@openclaw/zalo/api.js");

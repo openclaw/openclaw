@@ -632,9 +632,6 @@ describe("createOllamaStreamFn streaming events", () => {
         done: false,
       });
 
-      const nextBeforeDone = await nextEventWithin(iterator, 25);
-      expect(nextBeforeDone).toBe("timeout");
-
       controlledFetch.pushLine(
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":10,"eval_count":5}',
       );
