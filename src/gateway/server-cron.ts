@@ -483,7 +483,7 @@ export function buildGatewayCronService(params: {
             } else {
               // No explicit failureDestination — fall back to primary delivery channel (#60608)
               const primaryPlan = resolveCronDeliveryPlan(job);
-              if (primaryPlan.mode === "announce" && primaryPlan.requested && primaryPlan.to) {
+              if (primaryPlan.mode === "announce" && primaryPlan.requested) {
                 const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
                 void sendFailureNotificationAnnounce(
                   params.deps,
