@@ -10,6 +10,7 @@ import {
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../infra/google-api-base-url.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   createEmptyTransportUsage,
@@ -445,7 +446,11 @@ export function buildGoogleGenerativeAiParams(
   }
   if (context.systemPrompt) {
     params.systemInstruction = {
-      parts: [{ text: sanitizeTransportPayloadText(context.systemPrompt) }],
+      parts: [
+        {
+          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ],
     };
   }
   if (context.tools?.length) {

@@ -4,6 +4,7 @@ import { MAX_IMAGE_BYTES } from "../media/constants.js";
 import { buildCliArgs, loadPromptRefImages } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {
@@ -116,5 +117,20 @@ describe("buildCliArgs", () => {
         useResume: true,
       }),
     ).toEqual(["exec", "resume", "thread-123", "--model", "gpt-5.4"]);
+  });
+
+  it("strips the internal cache boundary from CLI system prompt args", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+        },
+        baseArgs: ["-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        useResume: false,
+      }),
+    ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
   });
 });

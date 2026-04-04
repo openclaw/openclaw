@@ -7,6 +7,7 @@ import type {
 } from "./openai-ws-connection.js";
 import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 
 type WsModel = Parameters<StreamFn>[0];
 type WsContext = Parameters<StreamFn>[1];
@@ -106,7 +107,9 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
     model: params.model.id,
     ...(supportsResponsesStoreField ? { store: false } : {}),
     input: params.turnInput.inputItems,
-    instructions: params.context.systemPrompt ?? undefined,
+    instructions: params.context.systemPrompt
+      ? stripSystemPromptCacheBoundary(params.context.systemPrompt)
+      : undefined,
     tools: params.tools.length > 0 ? params.tools : undefined,
     ...(params.turnInput.previousResponseId
       ? { previous_response_id: params.turnInput.previousResponseId }
