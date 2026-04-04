@@ -37,6 +37,11 @@ openclaw cron runs --id <job-id>
 - All cron executions create [background task](/automation/tasks) records.
 - One-shot jobs (`--at`) auto-delete after success by default.
 
+Task reconciliation for cron is runtime-owned: an active cron task stays live while the
+cron runtime still tracks that job as running, even if an old child session row still exists.
+Once the runtime stops owning the job and the 5-minute grace window expires, maintenance can
+mark the task `lost`.
+
 ## Schedule types
 
 | Kind    | CLI flag  | Description                                             |
@@ -313,7 +318,7 @@ openclaw doctor
 - Check `cron.enabled` and `OPENCLAW_SKIP_CRON` env var.
 - Confirm the Gateway is running continuously.
 - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
-- `reason: not-due` in run output means manual run called without `--force`.
+- `reason: not-due` in run output means manual run was checked with `openclaw cron run <jobId> --due` and the job was not due yet.
 
 ### Cron fired but no delivery
 

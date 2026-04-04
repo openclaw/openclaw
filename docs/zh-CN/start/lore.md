@@ -5,7 +5,7 @@ summary: OpenClaw 的背景故事和传说，用于上下文和语气参考
 title: OpenClaw 传说
 x-i18n:
   generated_at: "2026-02-03T10:10:30Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 27af2b9009577ac0ad16b3515a05f11c6725445a987e101ce92401a0f6c14455
   source_path: start/lore.md

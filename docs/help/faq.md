@@ -626,7 +626,7 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is AWS Bedrock supported?">
-    Yes - via pi-ai's **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `models.bedrockDiscovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
@@ -1266,7 +1266,7 @@ for usage/billing and raise limits as needed.
     - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
       `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
       `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
-    - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
+    - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs,
       and shared skills (`~/.openclaw/skills`).
 
     Default workspace is `~/.openclaw/workspace`, configurable via:
@@ -2247,7 +2247,8 @@ for usage/billing and raise limits as needed.
     - `opus` → `anthropic/claude-opus-4-6`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
     - `gpt` → `openai/gpt-5.4`
-    - `gpt-mini` → `openai/gpt-5-mini`
+    - `gpt-mini` → `openai/gpt-5.4-mini`
+    - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`
     - `gemini-flash` → `google/gemini-3-flash-preview`
     - `gemini-flash-lite` → `google/gemini-3.1-flash-lite-preview`

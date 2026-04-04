@@ -26,6 +26,7 @@ import {
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+import { buildMinimaxSpeechProvider } from "./speech-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -92,7 +93,7 @@ function resolvePortalCatalog(ctx: ProviderCatalogContext) {
 
   return {
     provider: buildPortalProviderCatalog({
-      baseUrl: explicitBaseUrl || DEFAULT_BASE_URL_GLOBAL,
+      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider().baseUrl,
       apiKey,
     }),
   };
@@ -303,5 +304,6 @@ export default definePluginEntry({
     });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
+    api.registerSpeechProvider(buildMinimaxSpeechProvider());
   },
 });

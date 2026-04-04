@@ -945,7 +945,7 @@ Time format in system prompt. Default: `auto` (OS preference).
       },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["openai/gpt-5-mini"],
+        fallbacks: ["openai/gpt-5.4-mini"],
       },
       params: { cacheRetention: "long" }, // global default provider params
       pdfMaxBytesMb: 10,
@@ -970,12 +970,12 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Also used as fallback routing when the selected/default model cannot accept image input.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared image-generation capability and any future tool/plugin surface that generates images.
-  - Typical values: `google/gemini-3-pro-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
+  - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
-  - If omitted, `image_generate` can still infer a best-effort provider default from compatible auth-backed image-generation providers.
+  - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
-  - If omitted, the PDF tool falls back to `imageModel`, then to best-effort provider defaults.
+  - If omitted, the PDF tool falls back to `imageModel`, then to the resolved session/default model.
 - `pdfMaxBytesMb`: default PDF size limit for the `pdf` tool when `maxBytesMb` is not passed at call time.
 - `pdfMaxPages`: default maximum pages considered by extraction fallback mode in the `pdf` tool.
 - `verboseDefault`: default verbose level for agents. Values: `"off"`, `"on"`, `"full"`. Default: `"off"`.
@@ -994,7 +994,8 @@ Time format in system prompt. Default: `auto` (OS preference).
 | `opus`              | `anthropic/claude-opus-4-6`            |
 | `sonnet`            | `anthropic/claude-sonnet-4-6`          |
 | `gpt`               | `openai/gpt-5.4`                       |
-| `gpt-mini`          | `openai/gpt-5-mini`                    |
+| `gpt-mini`          | `openai/gpt-5.4-mini`                  |
+| `gpt-nano`          | `openai/gpt-5.4-nano`                  |
 | `gemini`            | `google/gemini-3.1-pro-preview`        |
 | `gemini-flash`      | `google/gemini-3-flash-preview`        |
 | `gemini-flash-lite` | `google/gemini-3.1-flash-lite-preview` |
@@ -2430,10 +2431,10 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
             id: "MiniMax-M2.7",
             name: "MiniMax M2.7",
             reasoning: true,
-            input: ["text"],
-            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
-            contextWindow: 200000,
-            maxTokens: 8192,
+            input: ["text", "image"],
+            cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+            contextWindow: 204800,
+            maxTokens: 131072,
           },
         ],
       },
@@ -2442,7 +2443,9 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 }
 ```
 
-Set `MINIMAX_API_KEY`. Shortcut: `openclaw onboard --auth-choice minimax-api`.
+Set `MINIMAX_API_KEY`. Shortcuts:
+`openclaw onboard --auth-choice minimax-global-api` or
+`openclaw onboard --auth-choice minimax-cn-api`.
 The model catalog now defaults to M2.7 only.
 
 </Accordion>
@@ -3040,11 +3043,13 @@ Notes:
 {
   auth: {
     profiles: {
-      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" },
+      "openai-codex:personal": { provider: "openai-codex", mode: "oauth" },
     },
     order: {
-      anthropic: ["anthropic:me@example.com", "anthropic:work"],
+      anthropic: ["anthropic:default", "anthropic:work"],
+      "openai-codex": ["openai-codex:personal"],
     },
   },
 }

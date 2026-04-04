@@ -6,7 +6,7 @@ summary: 外部 CLI（signal-cli、imsg）的 RPC 适配器和 Gateway 网关模
 title: RPC 适配器
 x-i18n:
   generated_at: "2026-02-03T07:53:44Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: c04edc952390304a22a3a4763aca00a0311b38d390477ec0be5fe485ec257fa7
   source_path: reference/rpc.md

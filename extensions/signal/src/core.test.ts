@@ -347,8 +347,10 @@ describe("signal setup parsing", () => {
     });
 
     const next = signalDmPolicy.setPolicy(cfg, "open");
-    expect(next.channels?.signal?.dmPolicy).toBeUndefined();
+    expect(next.channels?.signal?.dmPolicy).toBe("disabled");
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
     expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 
   it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
@@ -368,7 +370,7 @@ describe("signal setup parsing", () => {
     const next = signalDmPolicy.setPolicy(cfg, "open", "work");
 
     expect(next.channels?.signal?.dmPolicy).toBeUndefined();
-    expect(next.channels?.signal?.allowFrom).toBeUndefined();
+    expect(next.channels?.signal?.allowFrom).toEqual(["+15555550123"]);
     expect(next.channels?.signal?.accounts?.work?.dmPolicy).toBe("open");
     expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });

@@ -21,7 +21,7 @@ function makeAgentExecConfig(home: string) {
   return {
     agents: {
       defaults: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         workspace: `${home}/openclaw`,
       },
       list: [

@@ -7,7 +7,7 @@ summary: 使用 Ansible、Tailscale VPN 和防火墙隔离进行自动化、加�
 title: Ansible
 x-i18n:
   generated_at: "2026-02-03T07:49:29Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 896807f344d923f09039f377c13b4bf4a824aa94eec35159fc169596a3493b29
   source_path: install/ansible.md

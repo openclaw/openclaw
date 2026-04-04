@@ -90,6 +90,8 @@ export type MSTeamsConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
+  typingIndicator?: boolean;
   /** Enable progressive block-by-block message delivery instead of a single reply. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */

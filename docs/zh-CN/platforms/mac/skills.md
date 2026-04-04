@@ -6,7 +6,7 @@ summary: macOS Skills 设置 UI 和基于 Gateway 网关的状态
 title: Skills
 x-i18n:
   generated_at: "2026-02-03T10:08:09Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ecd5286bbe49eed89319686c4f7d6da55ef7b0d3952656ba98ef5e769f3fbf79
   source_path: platforms/mac/skills.md

@@ -30,6 +30,8 @@ export type PendingRequest = {
   uiVersion?: string;
   remoteIp?: string;
   ts: number;
+  commands?: string[];
+  requiredApproveScopes?: Array<"operator.pairing" | "operator.write" | "operator.admin">;
 };
 
 export type PairedNode = {

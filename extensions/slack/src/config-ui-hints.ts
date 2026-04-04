@@ -81,10 +81,6 @@ export const slackChannelConfigUiHints = {
     label: "Slack Native Streaming",
     help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
   },
-  streamMode: {
-    label: "Slack Stream Mode (Legacy)",
-    help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
-  },
   "thread.historyScope": {
     label: "Slack Thread History Scope",
     help: 'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',

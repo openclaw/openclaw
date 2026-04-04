@@ -26,6 +26,7 @@ model as `provider/model`.
 
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)
+- [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [GLM models](/providers/glm)
@@ -43,6 +44,12 @@ model as `provider/model`.
 - [Venice (Venice AI)](/providers/venice)
 - [xAI](/providers/xai)
 - [Z.AI](/providers/zai)
+
+## Additional bundled provider variants
+
+- `anthropic-vertex` - implicit Anthropic on Google Vertex support when Vertex credentials are available; no separate onboarding auth choice
+- `copilot-proxy` - local VS Code Copilot Proxy bridge; use `openclaw onboard --auth-choice copilot-proxy`
+- `google-gemini-cli` - unofficial Gemini CLI OAuth flow; use `openclaw onboard --auth-choice google-gemini-cli` or `openclaw models auth login --provider google-gemini-cli --set-default`
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

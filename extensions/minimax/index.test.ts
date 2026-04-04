@@ -8,8 +8,8 @@ import {
 import minimaxPlugin from "./index.js";
 
 describe("minimax provider hooks", () => {
-  it("keeps native reasoning mode for MiniMax transports", () => {
-    const { providers } = registerProviderPlugin({
+  it("keeps native reasoning mode for MiniMax transports", async () => {
+    const { providers } = await registerProviderPlugin({
       plugin: minimaxPlugin,
       id: "minimax",
       name: "MiniMax Provider",
@@ -36,8 +36,8 @@ describe("minimax provider hooks", () => {
     ).toBe("native");
   });
 
-  it("owns replay policy for Anthropic and OpenAI-compatible MiniMax transports", () => {
-    const { providers } = registerProviderPlugin({
+  it("owns replay policy for Anthropic and OpenAI-compatible MiniMax transports", async () => {
+    const { providers } = await registerProviderPlugin({
       plugin: minimaxPlugin,
       id: "minimax",
       name: "MiniMax Provider",
@@ -73,8 +73,8 @@ describe("minimax provider hooks", () => {
     });
   });
 
-  it("owns fast-mode stream wrapping for MiniMax transports", () => {
-    const { providers } = registerProviderPlugin({
+  it("owns fast-mode stream wrapping for MiniMax transports", async () => {
+    const { providers } = await registerProviderPlugin({
       plugin: minimaxPlugin,
       id: "minimax",
       name: "MiniMax Provider",

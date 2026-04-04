@@ -44,4 +44,47 @@ describe("minimax provider catalog", () => {
       "MiniMax-M2.7-highspeed",
     ]);
   });
+
+  it("keeps MiniMax highspeed pricing distinct in implicit catalogs", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await writeFile(
+      join(agentDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "minimax:default": {
+              type: "api_key",
+              provider: "minimax",
+              key: "sk-minimax-test", // pragma: allowlist secret
+            },
+            "minimax-portal:default": {
+              type: "oauth",
+              provider: "minimax-portal",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const providers = await resolveImplicitProvidersForTest({ agentDir });
+    const apiHighspeed = providers?.minimax?.models?.find((model) => model.id === "MiniMax-M2.7-highspeed");
+    const portalHighspeed = providers?.["minimax-portal"]?.models?.find(
+      (model) => model.id === "MiniMax-M2.7-highspeed",
+    );
+
+    expect(apiHighspeed?.cost).toEqual({
+      input: 0.6,
+      output: 2.4,
+      cacheRead: 0.06,
+      cacheWrite: 0.375,
+    });
+    expect(portalHighspeed?.cost).toEqual(apiHighspeed?.cost);
+  });
 });

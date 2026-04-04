@@ -1,7 +1,14 @@
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeXaiModelId } from "../model-id.js";
+import {
+  buildXaiResponsesToolBody,
+  extractXaiWebSearchContent,
+  resolveXaiResponseTextAndCitations,
+  XAI_RESPONSES_ENDPOINT,
+} from "./responses-tool-shared.js";
+export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 
-export const XAI_WEB_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
 
 export type XaiWebSearchResponse = {
@@ -88,41 +95,6 @@ export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
 }
 
-export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
-  text: string | undefined;
-  annotationCitations: string[];
-} {
-  for (const output of data.output ?? []) {
-    if (output.type === "message") {
-      for (const block of output.content ?? []) {
-        if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-          const urls = (block.annotations ?? [])
-            .filter(
-              (annotation) =>
-                annotation.type === "url_citation" && typeof annotation.url === "string",
-            )
-            .map((annotation) => annotation.url as string);
-          return { text: block.text, annotationCitations: [...new Set(urls)] };
-        }
-      }
-    }
-
-    if (output.type === "output_text" && typeof output.text === "string" && output.text) {
-      const urls = (output.annotations ?? [])
-        .filter(
-          (annotation) => annotation.type === "url_citation" && typeof annotation.url === "string",
-        )
-        .map((annotation) => annotation.url as string);
-      return { text: output.text, annotationCitations: [...new Set(urls)] };
-    }
-  }
-
-  return {
-    text: typeof data.output_text === "string" ? data.output_text : undefined,
-    annotationCitations: [],
-  };
-}
-
 export async function requestXaiWebSearch(params: {
   query: string;
   model: string;
@@ -135,22 +107,18 @@ export async function requestXaiWebSearch(params: {
       url: XAI_WEB_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
-      body: {
+      body: buildXaiResponsesToolBody({
         model: params.model,
-        input: [{ role: "user", content: params.query }],
+        inputText: params.query,
         tools: [{ type: "web_search" }],
-      },
+      }),
       errorLabel: "xAI",
     },
     async (response) => {
       const data = (await response.json()) as XaiWebSearchResponse;
-      const { text, annotationCitations } = extractXaiWebSearchContent(data);
-      const citations =
-        Array.isArray(data.citations) && data.citations.length > 0
-          ? data.citations
-          : annotationCitations;
+      const { content, citations } = resolveXaiResponseTextAndCitations(data);
       return {
-        content: text ?? "No response",
+        content,
         citations,
         inlineCitations:
           params.inlineCitations && Array.isArray(data.inline_citations)

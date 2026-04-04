@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TeamsHttpStream } from "./streaming-message.js";
 
 describe("TeamsHttpStream", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("sends first chunk as typing activity with streaminfo", async () => {
     const sent: unknown[] = [];
     const stream = new TeamsHttpStream({
@@ -202,5 +206,41 @@ describe("TeamsHttpStream", () => {
 
     await stream.finalize();
     expect(sendActivity.mock.calls.length).toBe(callCount);
+  });
+
+  it("stops streaming before stream age timeout and finalizes with last good text", async () => {
+    vi.useFakeTimers();
+
+    const sent: unknown[] = [];
+    const sendActivity = vi.fn(async (activity) => {
+      sent.push(activity);
+      return { id: "stream-1" };
+    });
+    const stream = new TeamsHttpStream({ sendActivity, throttleMs: 1 });
+
+    stream.update("Hello, this is a long enough response for streaming to begin.");
+    await vi.advanceTimersByTimeAsync(1);
+
+    stream.update(
+      "Hello, this is a long enough response for streaming to begin. More text before timeout.",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+
+    vi.setSystemTime(new Date(Date.now() + 45_001));
+    stream.update(
+      "Hello, this is a long enough response for streaming to begin. More text before timeout. Even more text after timeout.",
+    );
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(stream.isFailed).toBe(true);
+
+    const finalActivity = sent.find((a) => (a as Record<string, unknown>).type === "message") as
+      | Record<string, unknown>
+      | undefined;
+
+    expect(finalActivity).toBeDefined();
+    expect(finalActivity!.text).toBe(
+      "Hello, this is a long enough response for streaming to begin. More text before timeout.",
+    );
   });
 });

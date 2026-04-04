@@ -45,8 +45,14 @@ open until it completes.
 ### Optional flags
 
 ```bash
-openclaw models auth login-github-copilot --profile-id github-copilot:work
 openclaw models auth login-github-copilot --yes
+```
+
+To also apply the provider's recommended default model in one step, use the
+generic auth command instead:
+
+```bash
+openclaw models auth login --provider github-copilot --method device --set-default
 ```
 
 ## Set a default model

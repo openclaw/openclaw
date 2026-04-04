@@ -1,4 +1,3 @@
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 
 export function resolveSignalRpcContext(
@@ -7,14 +6,10 @@ export function resolveSignalRpcContext(
 ) {
   const hasBaseUrl = Boolean(opts.baseUrl?.trim());
   const hasAccount = Boolean(opts.account?.trim());
-  const resolvedAccount =
-    accountInfo ||
-    (!hasBaseUrl || !hasAccount
-      ? resolveSignalAccount({
-          cfg: loadConfig(),
-          accountId: opts.accountId,
-        })
-      : undefined);
+  if ((!hasBaseUrl || !hasAccount) && !accountInfo) {
+    throw new Error("Signal account config is required when baseUrl or account is missing");
+  }
+  const resolvedAccount = accountInfo;
   const baseUrl = opts.baseUrl?.trim() || resolvedAccount?.baseUrl;
   if (!baseUrl) {
     throw new Error("Signal base URL is required");

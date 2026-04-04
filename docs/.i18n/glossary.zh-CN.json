@@ -56,6 +56,18 @@
     "target": "Qwen"
   },
   {
+    "source": "BytePlus (International)",
+    "target": "BytePlus（国际版）"
+  },
+  {
+    "source": "Moonshot AI",
+    "target": "Moonshot AI"
+  },
+  {
+    "source": "Additional bundled variants",
+    "target": "其他内置变体"
+  },
+  {
     "source": "Diffs",
     "target": "Diffs"
   },

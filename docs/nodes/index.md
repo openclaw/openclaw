@@ -45,6 +45,10 @@ Notes:
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
 - `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
+- Approval scope follows the pending request's declared commands:
+  - commandless request: `operator.pairing`
+  - non-exec node commands: `operator.pairing` + `operator.write`
+  - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
 ## Remote node host (system.run)
 

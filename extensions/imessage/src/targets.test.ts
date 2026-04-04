@@ -232,7 +232,7 @@ describe("parseIMessageAllowFromEntries", () => {
     );
 
     expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
-    expect(next.channels?.imessage?.allowFrom).toBeUndefined();
+    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
     expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
     expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
@@ -263,7 +263,7 @@ describe("parseIMessageAllowFromEntries", () => {
     const next = imessageDmPolicy.setPolicy(cfg, "open");
 
     expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
-    expect(next.channels?.imessage?.allowFrom).toBeUndefined();
+    expect(next.channels?.imessage?.allowFrom).toEqual(["+15555550123"]);
     expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
     expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["chat_id:123", "*"]);
   });

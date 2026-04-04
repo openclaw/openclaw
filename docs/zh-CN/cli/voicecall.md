@@ -6,7 +6,7 @@ summary: 语音通话插件命令的 `openclaw voicecall` CLI 参考
 title: voicecall
 x-i18n:
   generated_at: "2026-02-01T20:21:37Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d93aaee6f6f5c9ac468d8d2905cb23f0f2db75809408cb305c055505be9936f2
   source_path: cli/voicecall.md

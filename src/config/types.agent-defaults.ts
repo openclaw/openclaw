@@ -346,7 +346,7 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
-  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
+  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;

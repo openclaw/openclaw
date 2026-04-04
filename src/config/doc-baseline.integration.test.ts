@@ -3,9 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  type ConfigDocBaseline,
   type ConfigDocBaselineEntry,
-  type ConfigDocBaselineArtifacts,
   flattenConfigDocBaselineEntries,
   renderConfigDocBaselineArtifacts,
   writeConfigDocBaselineArtifacts,
@@ -13,41 +11,19 @@ import {
 
 describe("config doc baseline integration", () => {
   const tempRoots: string[] = [];
-  const generatedBaselinePaths = {
-    combined: path.resolve(process.cwd(), "docs/.generated/config-baseline.json"),
-    core: path.resolve(process.cwd(), "docs/.generated/config-baseline.core.json"),
-    channel: path.resolve(process.cwd(), "docs/.generated/config-baseline.channel.json"),
-    plugin: path.resolve(process.cwd(), "docs/.generated/config-baseline.plugin.json"),
-  } satisfies Record<keyof ConfigDocBaselineArtifacts, string>;
-  let sharedBaselinePromise: Promise<ConfigDocBaseline> | null = null;
   let sharedRenderedPromise: Promise<
     Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>
   > | null = null;
-  const sharedGeneratedJsonPromises: Partial<
-    Record<keyof ConfigDocBaselineArtifacts, Promise<string>>
-  > = {};
   let sharedByPathPromise: Promise<Map<string, ConfigDocBaselineEntry>> | null = null;
 
-  function getSharedBaseline() {
-    sharedBaselinePromise ??= fs
-      .readFile(generatedBaselinePaths.combined, "utf8")
-      .then((raw) => JSON.parse(raw) as ConfigDocBaseline);
-    return sharedBaselinePromise;
-  }
-
   function getSharedRendered() {
-    sharedRenderedPromise ??= renderConfigDocBaselineArtifacts(getSharedBaseline());
+    sharedRenderedPromise ??= renderConfigDocBaselineArtifacts();
     return sharedRenderedPromise;
   }
 
-  function getGeneratedJson(kind: keyof ConfigDocBaselineArtifacts) {
-    sharedGeneratedJsonPromises[kind] ??= fs.readFile(generatedBaselinePaths[kind], "utf8");
-    return sharedGeneratedJsonPromises[kind];
-  }
-
   function getSharedByPath() {
-    sharedByPathPromise ??= getSharedBaseline().then(
-      (baseline) =>
+    sharedByPathPromise ??= getSharedRendered().then(
+      ({ baseline }) =>
         new Map(flattenConfigDocBaselineEntries(baseline).map((entry) => [entry.path, entry])),
     );
     return sharedByPathPromise;
@@ -62,7 +38,7 @@ describe("config doc baseline integration", () => {
   });
 
   it("is deterministic across repeated runs", async () => {
-    const baseline = await getSharedBaseline();
+    const { baseline } = await getSharedRendered();
     const first = await renderConfigDocBaselineArtifacts(baseline);
     const second = await renderConfigDocBaselineArtifacts(baseline);
 
@@ -70,22 +46,6 @@ describe("config doc baseline integration", () => {
     expect(second.json.core).toBe(first.json.core);
     expect(second.json.channel).toBe(first.json.channel);
     expect(second.json.plugin).toBe(first.json.plugin);
-  });
-
-  it("matches the checked-in generated baseline artifacts", async () => {
-    const [rendered, generatedCombined, generatedCore, generatedChannel, generatedPlugin] =
-      await Promise.all([
-        getSharedRendered(),
-        getGeneratedJson("combined"),
-        getGeneratedJson("core"),
-        getGeneratedJson("channel"),
-        getGeneratedJson("plugin"),
-      ]);
-
-    expect(rendered.json.combined).toBe(generatedCombined);
-    expect(rendered.json.core).toBe(generatedCore);
-    expect(rendered.json.channel).toBe(generatedChannel);
-    expect(rendered.json.plugin).toBe(generatedPlugin);
   });
 
   it("includes core, channel, and plugin config metadata", async () => {
@@ -160,44 +120,33 @@ describe("config doc baseline integration", () => {
     expect(byPath.get("bindings.*.match.peer.id")).toBeDefined();
   });
 
-  it("supports check mode for stale generated artifacts", async () => {
+  it("supports check mode for stale hash files", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-doc-baseline-"));
     tempRoots.push(tempRoot);
     const rendered = getSharedRendered();
 
     const initial = await writeConfigDocBaselineArtifacts({
       repoRoot: tempRoot,
-      combinedPath: "docs/.generated/config-baseline.json",
-      corePath: "docs/.generated/config-baseline.core.json",
-      channelPath: "docs/.generated/config-baseline.channel.json",
-      pluginPath: "docs/.generated/config-baseline.plugin.json",
       rendered,
     });
     expect(initial.wrote).toBe(true);
 
     const current = await writeConfigDocBaselineArtifacts({
       repoRoot: tempRoot,
-      combinedPath: "docs/.generated/config-baseline.json",
-      corePath: "docs/.generated/config-baseline.core.json",
-      channelPath: "docs/.generated/config-baseline.channel.json",
-      pluginPath: "docs/.generated/config-baseline.plugin.json",
       check: true,
       rendered,
     });
     expect(current.changed).toBe(false);
 
+    // Corrupt the hash file to simulate drift
     await fs.writeFile(
-      path.join(tempRoot, "docs/.generated/config-baseline.json"),
-      '{"generatedBy":"broken","entries":[]}\n',
+      path.join(tempRoot, "docs/.generated/config-baseline.sha256"),
+      "0000000000000000000000000000000000000000000000000000000000000000  config-baseline.json\n",
       "utf8",
     );
 
     const stale = await writeConfigDocBaselineArtifacts({
       repoRoot: tempRoot,
-      combinedPath: "docs/.generated/config-baseline.json",
-      corePath: "docs/.generated/config-baseline.core.json",
-      channelPath: "docs/.generated/config-baseline.channel.json",
-      pluginPath: "docs/.generated/config-baseline.plugin.json",
       check: true,
       rendered,
     });

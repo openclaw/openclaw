@@ -588,7 +588,7 @@ describe("gateway server sessions", () => {
           sessionId: "sess-child",
           updatedAt: Date.now() - 1_000,
           modelProvider: "anthropic",
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-6",
           parentSessionKey: "agent:main:main",
           totalTokens: 0,
           totalTokensFresh: false,

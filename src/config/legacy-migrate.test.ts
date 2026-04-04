@@ -499,6 +499,48 @@ describe("legacy migrate channel streaming aliases", () => {
       streaming: "off",
     });
   });
+
+  it("removes legacy googlechat streamMode aliases", () => {
+    const raw = {
+      channels: {
+        googlechat: {
+          streamMode: "append",
+          accounts: {
+            work: {
+              streamMode: "replace",
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(
+      (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (
+        validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined
+      )?.streamMode,
+    ).toBeUndefined();
+
+    const res = migrateLegacyConfig(raw);
+    expect(res.changes).toContain("Removed channels.googlechat.streamMode (legacy key no longer used).");
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.accounts.work.streamMode (legacy key no longer used).",
+    );
+    expect(
+      (res.config?.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (res.config?.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+  });
 });
 
 describe("legacy migrate nested channel enabled aliases", () => {

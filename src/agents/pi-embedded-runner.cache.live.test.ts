@@ -45,6 +45,16 @@ type CacheRun = {
   text: string;
   usage: AssistantMessage["usage"];
 };
+type CacheTraceEvent = {
+  sessionId?: string;
+  stage?: string;
+  note?: string;
+  options?: {
+    previousCacheRead?: number;
+    cacheRead?: number;
+    changes?: Array<{ code?: string; detail?: string }>;
+  };
+};
 type LiveResolvedModel = Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 
 const NOOP_TOOL: Tool = {
@@ -54,6 +64,14 @@ const NOOP_TOOL: Tool = {
 };
 let liveTestPngBase64 = "";
 let liveRunnerRootDir: string | undefined;
+let liveCacheTraceFile: string | undefined;
+let previousCacheTraceEnv: {
+  enabled?: string;
+  file?: string;
+  messages?: string;
+  prompt?: string;
+  system?: string;
+} | null = null;
 
 type UserContent = Extract<Message, { role: "user" }>["content"];
 
@@ -96,6 +114,30 @@ function buildRunnerSessionPaths(sessionId: string) {
 function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
   const candidate = (model as { baseUrl?: unknown }).baseUrl;
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
+}
+
+async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
+  if (!liveCacheTraceFile) {
+    throw new Error("live cache trace file not initialized");
+  }
+  const raw = await fs.readFile(liveCacheTraceFile, "utf8").catch(() => "");
+  return raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as CacheTraceEvent)
+    .filter((event) => event.sessionId === sessionId);
+}
+
+async function expectCacheTraceStages(
+  sessionId: string,
+  requiredStages: Array<"cache:state" | "cache:result">,
+): Promise<void> {
+  const events = await readCacheTraceEvents(sessionId);
+  const stages = new Set(events.map((event) => event.stage));
+  for (const stage of requiredStages) {
+    expect(stages.has(stage)).toBe(true);
+  }
 }
 
 function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {
@@ -230,6 +272,13 @@ function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {
     );
   }
   return lines.join("\n");
+}
+
+function buildNoisyStructuredPromptVariant(text: string): string {
+  return `\r\n${text
+    .split("\n")
+    .map((line) => `${line}  \t`)
+    .join("\r\n")}\r\n\r\n`;
 }
 
 function extractRunPayloadText(payloads: Array<{ text?: string } | undefined> | undefined): string {
@@ -700,10 +749,47 @@ async function runAnthropicImageCacheProbe(params: {
 describeCacheLive("pi embedded runner prompt caching (live)", () => {
   beforeAll(async () => {
     liveRunnerRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cache-"));
+    liveCacheTraceFile = path.join(liveRunnerRootDir, "cache-trace.jsonl");
     liveTestPngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
+    previousCacheTraceEnv = {
+      enabled: process.env.OPENCLAW_CACHE_TRACE,
+      file: process.env.OPENCLAW_CACHE_TRACE_FILE,
+      messages: process.env.OPENCLAW_CACHE_TRACE_MESSAGES,
+      prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
+      system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
+    };
+    process.env.OPENCLAW_CACHE_TRACE = "1";
+    process.env.OPENCLAW_CACHE_TRACE_FILE = liveCacheTraceFile;
+    process.env.OPENCLAW_CACHE_TRACE_MESSAGES = "0";
+    process.env.OPENCLAW_CACHE_TRACE_PROMPT = "0";
+    process.env.OPENCLAW_CACHE_TRACE_SYSTEM = "0";
   }, 120_000);
 
   afterAll(async () => {
+    if (previousCacheTraceEnv) {
+      const restore = (
+        key:
+          | "OPENCLAW_CACHE_TRACE"
+          | "OPENCLAW_CACHE_TRACE_FILE"
+          | "OPENCLAW_CACHE_TRACE_MESSAGES"
+          | "OPENCLAW_CACHE_TRACE_PROMPT"
+          | "OPENCLAW_CACHE_TRACE_SYSTEM",
+        value: string | undefined,
+      ) => {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      };
+      restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);
+      restore("OPENCLAW_CACHE_TRACE_FILE", previousCacheTraceEnv.file);
+      restore("OPENCLAW_CACHE_TRACE_MESSAGES", previousCacheTraceEnv.messages);
+      restore("OPENCLAW_CACHE_TRACE_PROMPT", previousCacheTraceEnv.prompt);
+      restore("OPENCLAW_CACHE_TRACE_SYSTEM", previousCacheTraceEnv.system);
+    }
+    previousCacheTraceEnv = null;
+    liveCacheTraceFile = undefined;
     if (liveRunnerRootDir) {
       await fs.rm(liveRunnerRootDir, { recursive: true, force: true });
     }
@@ -718,7 +804,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         provider: "openai",
         api: "openai-responses",
         envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-        preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.2"],
+        preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.4"],
       });
       logLiveCache(`openai model=${fixture.model.provider}/${fixture.model.id}`);
     }, 120_000);
@@ -868,6 +954,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.4);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       8 * 60_000,
     );
@@ -914,6 +1001,52 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
+    );
+
+    it(
+      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      async () => {
+        const sessionId = `${OPENAI_SESSION_ID}-structured-normalization`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: OPENAI_PREFIX,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-warmup",
+        });
+        logLiveCache(
+          `openai structured warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+
+        const noisyPrefix = buildNoisyStructuredPromptVariant(OPENAI_PREFIX);
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-hit-a",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "openai",
+          sessionId,
+          suffix: "structured-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `openai structured best-hit suffix=${bestHit.suffix} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       8 * 60_000,
     );
@@ -927,7 +1060,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         provider: "anthropic",
         api: "anthropic-messages",
         envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
-        preferredModelIds: ["claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-3-5"],
+        preferredModelIds: ["claude-sonnet-4-6", "claude-sonnet-4-6", "claude-haiku-3-5"],
       });
       logLiveCache(`anthropic model=${fixture.model.provider}/${fixture.model.id}`);
     }, 120_000);
@@ -1106,6 +1239,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.4);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       8 * 60_000,
     );
@@ -1159,8 +1293,55 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
 
         expect(followup.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
         expect(followup.hitRate).toBeGreaterThanOrEqual(0.3);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
       },
       10 * 60_000,
+    );
+
+    it(
+      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      async () => {
+        const sessionId = `${ANTHROPIC_SESSION_ID}-structured-normalization`;
+        const warmup = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: ANTHROPIC_PREFIX,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-warmup",
+        });
+        logLiveCache(
+          `anthropic structured warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
+        );
+        expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
+
+        const noisyPrefix = buildNoisyStructuredPromptVariant(ANTHROPIC_PREFIX);
+        const hitA = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-hit-a",
+        });
+        const hitB = await runEmbeddedCacheProbe({
+          ...fixture,
+          cacheRetention: "short",
+          prefix: noisyPrefix,
+          providerTag: "anthropic",
+          sessionId,
+          suffix: "structured-hit-b",
+        });
+        const bestHit = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
+        logLiveCache(
+          `anthropic structured best-hit suffix=${bestHit.suffix} cacheWrite=${bestHit.usage.cacheWrite} cacheRead=${bestHit.usage.cacheRead} input=${bestHit.usage.input} rate=${bestHit.hitRate.toFixed(3)}`,
+        );
+
+        expect(bestHit.usage.cacheRead ?? 0).toBeGreaterThan(1_024);
+        expect(bestHit.hitRate).toBeGreaterThanOrEqual(0.35);
+        await expectCacheTraceStages(sessionId, ["cache:state", "cache:result"]);
+      },
+      8 * 60_000,
     );
   });
 });

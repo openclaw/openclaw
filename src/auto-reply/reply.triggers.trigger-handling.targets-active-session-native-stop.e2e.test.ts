@@ -103,7 +103,7 @@ async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promis
         sessionId: "main",
         updatedAt: Date.now(),
         providerOverride: "openai",
-        modelOverride: "gpt-5.2",
+        modelOverride: "gpt-5.4",
       },
     }),
     "utf-8",
@@ -312,7 +312,7 @@ describe("trigger handling", () => {
         {
           label: "stored-override",
           setup: () => undefined,
-          expected: { provider: "openai", model: "gpt-5.2" },
+          expected: { provider: "openai", model: "gpt-5.4" },
         },
       ] as const;
 
@@ -424,7 +424,7 @@ describe("trigger handling", () => {
           workspaceDir: join(home, "workspace"),
           config: cfg,
           provider: "anthropic",
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           timeoutMs: 10,
           blockReplyBreak: "text_end",
         },

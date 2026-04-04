@@ -77,16 +77,24 @@ override with a custom `baseUrl` in config.
 - **China**: [bailian.console.aliyun.com](https://bailian.console.aliyun.com/)
 - **Global/Intl**: [modelstudio.console.alibabacloud.com](https://modelstudio.console.alibabacloud.com/)
 
-## Available models
+## Built-in catalog
 
-- **qwen3.5-plus** (default) — Qwen 3.5 Plus
-- **qwen3.6-plus** — Qwen 3.6 Plus
-- **qwen3-coder-plus**, **qwen3-coder-next** — Qwen coding models
-- **GLM-5** — GLM models via Alibaba
-- **Kimi K2.5** — Moonshot AI via Alibaba
-- **MiniMax-M2.5** — MiniMax via Alibaba
+OpenClaw currently ships this bundled Model Studio catalog:
 
-Some models (qwen3.5-plus, qwen3.6-plus, kimi-k2.5) support image input. Context windows range from 200K to 1M tokens. Availability can vary by endpoint and billing plan.
+| Model ref                          | Input       | Context   | Notes                                              |
+| ---------------------------------- | ----------- | --------- | -------------------------------------------------- |
+| `modelstudio/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                      |
+| `modelstudio/qwen3.6-plus`         | text, image | 1,000,000 | Prefer Standard endpoints when you need this model |
+| `modelstudio/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                      |
+| `modelstudio/qwen3-coder-next`     | text        | 262,144   | Coding                                             |
+| `modelstudio/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                             |
+| `modelstudio/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning enabled                                  |
+| `modelstudio/glm-5`                | text        | 202,752   | GLM                                                |
+| `modelstudio/glm-4.7`              | text        | 202,752   | GLM                                                |
+| `modelstudio/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
+
+Availability can still vary by endpoint and billing plan even when a model is
+present in the bundled catalog.
 
 ## Qwen 3.6 Plus availability
 

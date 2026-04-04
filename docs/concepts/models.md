@@ -26,7 +26,10 @@ Related:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
-- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer a provider default from compatible auth-backed image-generation plugins. If you set a specific provider/model, also configure that provider's auth/API key.
+- `agents.defaults.pdfModel` is used by the `pdf` tool. If omitted, the tool
+  falls back to `agents.defaults.imageModel`, then the resolved session/default
+  model.
+- `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
@@ -50,6 +53,7 @@ subscription** (OAuth) and **Anthropic** (API key or Claude CLI).
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
+- `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)

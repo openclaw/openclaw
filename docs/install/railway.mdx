@@ -37,7 +37,9 @@ Then open:
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
-- Persistent storage via Railway Volume (`/data`) so config/credentials/workspace survive redeploys
+- Persistent storage via Railway Volume (`/data`) so `openclaw.json`,
+  per-agent `auth-profiles.json`, channel/provider state, sessions, and
+  workspace survive redeploys
 
 ## Required Railway settings
 
@@ -72,13 +74,14 @@ Use the Control UI at `/openclaw` or run `openclaw onboard` via Railway's shell 
 
 ## Backups & migration
 
-Export your configuration and workspace:
+Export your state, config, auth profiles, and workspace:
 
 ```bash
 openclaw backup create
 ```
 
-This creates a portable backup archive you can restore on any OpenClaw host. See [Backup](/cli/backup) for details.
+This creates a portable backup archive with OpenClaw state plus any configured
+workspace. See [Backup](/cli/backup) for details.
 
 ## Next steps
 

@@ -358,8 +358,18 @@ from generic OpenAI-compatible `/v1` proxies:
 - native `openai/*`, `openai-codex/*`, and Azure OpenAI routes keep
   `reasoning: { effort: "none" }` intact when you explicitly disable reasoning
 - native OpenAI-family routes default tool schemas to strict mode
+- hidden OpenClaw attribution headers (`originator`, `version`, and
+  `User-Agent`) are only attached on verified native OpenAI hosts
+  (`api.openai.com`) and native Codex hosts (`chatgpt.com/backend-api`)
+- native OpenAI/Codex routes keep OpenAI-only request shaping such as
+  `service_tier`, Responses `store`, OpenAI reasoning-compat payloads, and
+  prompt-cache hints
 - proxy-style OpenAI-compatible routes keep the looser compat behavior and do
-  not force strict tool schemas or native-only request shaping
+  not force strict tool schemas, native-only request shaping, or hidden
+  OpenAI/Codex attribution headers
+
+Azure OpenAI stays in the native-routing bucket for transport and compat
+behavior, but it does not receive the hidden OpenAI/Codex attribution headers.
 
 This preserves current native OpenAI Responses behavior without forcing older
 OpenAI-compatible shims onto third-party `/v1` backends.

@@ -104,7 +104,7 @@ function parseProviderModelRef(
 
 function isAnthropicCacheRetentionTarget(
   parsed: { provider: string; model: string } | null | undefined,
-) {
+): parsed is { provider: string; model: string } {
   return Boolean(
     parsed &&
     (parsed.provider === "anthropic" ||
@@ -190,7 +190,7 @@ export function applyAnthropicConfigDefaults(params: {
     );
     if (primary) {
       const parsedPrimary = parseProviderModelRef(primary, "anthropic");
-      if (isAnthropicCacheRetentionTarget(parsedPrimary)) {
+      if (parsedPrimary && isAnthropicCacheRetentionTarget(parsedPrimary)) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};

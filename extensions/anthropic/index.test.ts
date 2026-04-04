@@ -3,8 +3,8 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import anthropicPlugin from "./index.js";
 
 describe("anthropic provider replay hooks", () => {
-  it("owns native reasoning output mode for Claude transports", () => {
-    const provider = registerSingleProviderPlugin(anthropicPlugin);
+  it("owns native reasoning output mode for Claude transports", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     expect(
       provider.resolveReasoningOutputMode?.({
@@ -15,8 +15,8 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("native");
   });
 
-  it("owns replay policy for Claude transports", () => {
-    const provider = registerSingleProviderPlugin(anthropicPlugin);
+  it("owns replay policy for Claude transports", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     expect(
       provider.buildReplayPolicy?.({
@@ -36,8 +36,8 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("defaults provider api through plugin config normalization", () => {
-    const provider = registerSingleProviderPlugin(anthropicPlugin);
+  it("defaults provider api through plugin config normalization", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     expect(
       provider.normalizeConfig?.({
@@ -51,8 +51,8 @@ describe("anthropic provider replay hooks", () => {
     });
   });
 
-  it("applies Anthropic pruning defaults through plugin hooks", () => {
-    const provider = registerSingleProviderPlugin(anthropicPlugin);
+  it("applies Anthropic pruning defaults through plugin hooks", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     const next = provider.applyConfigDefaults?.({
       provider: "anthropic",

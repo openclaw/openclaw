@@ -27,16 +27,16 @@ This page covers the internal architecture of the OpenClaw plugin system.
 Capabilities are the public **native plugin** model inside OpenClaw. Every
 native OpenClaw plugin registers against one or more capability types:
 
-| Capability            | Registration method                           | Example plugins           |
-| --------------------- | --------------------------------------------- | ------------------------- |
-| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
-| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
-| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
-| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | `openai`                  |
-| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
-| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
-| Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
-| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
+| Capability            | Registration method                           | Example plugins                      |
+| --------------------- | --------------------------------------------- | ------------------------------------ |
+| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`                |
+| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`                |
+| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft`            |
+| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | `openai`                             |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`                   |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`, `fal`, `minimax` |
+| Web search            | `api.registerWebSearchProvider(...)`          | `google`                             |
+| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`                  |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That pattern is still fully supported.
@@ -976,6 +976,12 @@ Notes:
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
+- `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
+- `auth: "gateway"` routes run inside a Gateway request runtime scope, but that scope is intentionally conservative:
+  - shared-secret bearer auth (`gateway.auth.mode = "token"` / `"password"`) keeps plugin-route runtime scopes pinned to `operator.write`, even if the caller sends `x-openclaw-scopes`
+  - trusted identity-bearing HTTP modes (for example `trusted-proxy` or `gateway.auth.mode = "none"` on a private ingress) honor `x-openclaw-scopes` only when the header is explicitly present
+  - if `x-openclaw-scopes` is absent on those identity-bearing plugin-route requests, runtime scope falls back to `operator.write`
+- Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, require an identity-bearing auth mode and document the explicit `x-openclaw-scopes` header contract.
 
 ## Plugin SDK import paths
 
@@ -1029,6 +1035,9 @@ authoring plugins:
   `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
   `<plugin-package-root>/index.js` is the bundled plugin entry,
   and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
+- Facade-loaded public entry points prefer the active runtime config snapshot
+  when one exists, then fall back to the resolved config file on disk when
+  OpenClaw is not yet serving a runtime snapshot.
 - No bundled channel-branded public subpaths remain. Channel-specific helper and
   runtime seams live under `<plugin-package-root>/api.js` and `<plugin-package-root>/runtime-api.js`;
   the public SDK contract is the generic shared primitives instead.

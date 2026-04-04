@@ -6,7 +6,7 @@ summary: 安全更新 OpenClaw（全局安装或源码），以及回滚策略
 title: 更新
 x-i18n:
   generated_at: "2026-02-03T07:50:25Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 38cccac0839f0f22403b6508cd94ba1b401133ffc1d92d4f7640b8d04e082317
   source_path: install/updating.md

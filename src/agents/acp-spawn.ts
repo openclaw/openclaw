@@ -108,8 +108,7 @@ export const ACP_SPAWN_ERROR_CODES = [
 ] as const;
 export type SpawnAcpErrorCode = (typeof ACP_SPAWN_ERROR_CODES)[number];
 
-type SpawnAcpAcceptedResult = {
-  status: "accepted";
+type SpawnAcpResultFields = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
@@ -117,14 +116,24 @@ type SpawnAcpAcceptedResult = {
   note?: string;
 };
 
-type SpawnAcpFailedResult = {
+type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
+  status: "accepted";
+  childSessionKey: string;
+  runId: string;
+  mode: SpawnAcpMode;
+};
+
+type SpawnAcpFailedResult = SpawnAcpResultFields & {
   status: "forbidden" | "error";
-  childSessionKey?: string;
   error: string;
   errorCode: SpawnAcpErrorCode;
 };
 
 export type SpawnAcpResult = SpawnAcpAcceptedResult | SpawnAcpFailedResult;
+
+export function isSpawnAcpAcceptedResult(result: SpawnAcpResult): result is SpawnAcpAcceptedResult {
+  return result.status === "accepted";
+}
 
 export const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";

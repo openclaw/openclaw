@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
-import { LIVE_CACHE_REGRESSION_BASELINE } from "./live-cache-regression-baseline.js";
+import {
+  LIVE_CACHE_REGRESSION_BASELINE,
+  type LiveCacheFloor,
+} from "./live-cache-regression-baseline.js";
 import {
   buildAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -25,11 +28,17 @@ const LIVE_TEST_PNG_URL = new URL(
 type LiveResolvedModel = Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 type ProviderKey = keyof typeof LIVE_CACHE_REGRESSION_BASELINE;
 type CacheLane = "image" | "mcp" | "stable" | "tool";
+type CacheUsage = {
+  input?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+};
+type BaselineLane = CacheLane | "disabled";
 type CacheRun = {
   hitRate: number;
   suffix: string;
   text: string;
-  usage: AssistantMessage["usage"];
+  usage: CacheUsage;
 };
 type LaneResult = {
   best?: CacheRun;
@@ -86,6 +95,23 @@ function makeToolResultMessage(
 
 function extractFirstToolCall(message: AssistantMessage) {
   return message.content.find((block) => block.type === "toolCall");
+}
+
+function normalizeCacheUsage(usage: AssistantMessage["usage"] | undefined): CacheUsage {
+  const value = usage as Record<string, unknown> | null | undefined;
+  const readNumber = (key: keyof CacheUsage): number | undefined =>
+    typeof value?.[key] === "number" ? value[key] : undefined;
+  return {
+    input: readNumber("input"),
+    cacheRead: readNumber("cacheRead"),
+    cacheWrite: readNumber("cacheWrite"),
+  };
+}
+
+function resolveBaselineFloor(provider: ProviderKey, lane: string): LiveCacheFloor | undefined {
+  return LIVE_CACHE_REGRESSION_BASELINE[provider][
+    lane as keyof (typeof LIVE_CACHE_REGRESSION_BASELINE)[typeof provider]
+  ] as LiveCacheFloor | undefined;
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -194,11 +220,12 @@ async function completeCacheProbe(params: {
     text.toLowerCase().includes(params.suffix.toLowerCase()),
     `expected response to contain ${params.suffix}, got ${JSON.stringify(text)}`,
   );
+  const usage = normalizeCacheUsage(response.usage);
   return {
     suffix: params.suffix,
     text,
-    usage: response.usage,
-    hitRate: computeCacheHitRate(response.usage),
+    usage,
+    hitRate: computeCacheHitRate(usage),
   };
 }
 
@@ -318,20 +345,17 @@ async function runAnthropicDisabledLane(params: {
   return { disabled };
 }
 
-function formatUsage(usage: AssistantMessage["usage"]) {
-  return `cacheRead=${usage.cacheRead ?? 0} cacheWrite=${usage.cacheWrite ?? 0} input=${usage.input ?? 0}`;
+function formatUsage(usage: CacheUsage | undefined) {
+  return `cacheRead=${usage?.cacheRead ?? 0} cacheWrite=${usage?.cacheWrite ?? 0} input=${usage?.input ?? 0}`;
 }
 
 function assertAgainstBaseline(params: {
-  lane: string;
+  lane: BaselineLane;
   provider: ProviderKey;
   result: LaneResult;
   regressions: string[];
 }) {
-  const floor =
-    LIVE_CACHE_REGRESSION_BASELINE[params.provider][
-      params.lane as keyof (typeof LIVE_CACHE_REGRESSION_BASELINE)[typeof params.provider]
-    ];
+  const floor = resolveBaselineFloor(params.provider, params.lane);
   if (!floor) {
     params.regressions.push(`${params.provider}:${params.lane} missing baseline entry`);
     return;

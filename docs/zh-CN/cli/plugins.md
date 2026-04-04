@@ -6,7 +6,7 @@ summary: "`openclaw plugins` 的 CLI 参考（列出、安装、启用/禁用、
 title: plugins
 x-i18n:
   generated_at: "2026-02-03T07:45:08Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: c6bf76b1e766b912ec30a0101d455151c88f1a778bffa121cdd1d0b4fbe73e1c
   source_path: cli/plugins.md
