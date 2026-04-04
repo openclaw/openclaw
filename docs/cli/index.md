@@ -1024,6 +1024,10 @@ Options:
 - `--json`: emit line-delimited JSON
 - `--plain`: disable structured formatting
 - `--no-color`: disable ANSI colors
+- `--url <url>`: explicit Gateway WebSocket URL
+- `--token <token>`: Gateway token
+- `--timeout <ms>`: Gateway RPC timeout
+- `--expect-final`: wait for a final response when needed
 
 Examples:
 
@@ -1034,6 +1038,11 @@ openclaw logs --plain
 openclaw logs --json
 openclaw logs --no-color
 ```
+
+Notes:
+
+- If you pass `--url`, the CLI does not auto-apply config or environment credentials.
+- Local loopback pairing failures fall back to the configured local log file; explicit `--url` targets do not.
 
 ### `gateway <subcommand>`
 
