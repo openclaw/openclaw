@@ -80,7 +80,6 @@ import {
   type SkillSnapshot,
 } from "../skills.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "./extra-params.js";
 import { classifyCompactionReason, resolveCompactionFailureReason } from "./compact-reasons.js";
 import {
   asCompactionHookRunner,
@@ -100,6 +99,7 @@ import {
 } from "./compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
+import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -107,14 +107,15 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-disco
 import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
+import { truncateSessionAfterCompaction } from "./session-truncation.js";
+import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
-import { truncateSessionAfterCompaction } from "./session-truncation.js";
-import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -129,7 +130,6 @@ import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
-import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
