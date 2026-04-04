@@ -7,11 +7,13 @@
     "dev": "next dev",
     "lint": "next lint",
     "start": "next start",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "test:unit": "jest --testPathPattern=__tests__",
-    "test:integration": "jest --testPathPattern=integration",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:jest": "jest",
+    "test:jest:watch": "jest --watch",
+    "test:jest:coverage": "jest --coverage",
+    "test:jest:unit": "jest --testPathPattern=__tests__",
+    "test:jest:integration": "jest --testPathPattern=integration",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -90,14 +92,17 @@
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.1",
     "jest": "^30.2.0",
     "jest-environment-jsdom": "^30.2.0",
+    "jsdom": "^29.0.1",
     "postcss": "^8.5",
     "sharp": "^0.34.4",
     "tailwindcss": "^4.1.9",
     "tsx": "^4.20.6",
     "tw-animate-css": "1.3.3",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.2"
   },
   "packageManager": "pnpm@10.17.0+sha512.fce8a3dd29a4ed2ec566fb53efbb04d8c44a0f05bc6f24a73046910fb9c3ce7afa35a0980500668fa3573345bd644644fa98338fa168235c80f4aa17aa17fbef"
 }

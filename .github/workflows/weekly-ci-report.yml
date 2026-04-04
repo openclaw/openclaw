@@ -1,0 +1,107 @@
+name: Weekly CI Health Report
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday 9am UTC (5pm Taiwan)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Collect CI metrics
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 workspace/tools/ci-dashboard/collect-metrics.py
+
+      - name: Generate weekly report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - << 'PYEOF'
+          import json
+          import os
+          from datetime import datetime
+
+          with open("workspace/tools/ci-dashboard/metrics.json") as f:
+              metrics = json.load(f)
+
+          now = datetime.utcnow().strftime("%Y-%m-%d")
+          pass_rate = metrics.get("pass_rate", 0)
+          total = metrics.get("total_completed", 0)
+          successes = metrics.get("successes", 0)
+          failures = metrics.get("failures", 0)
+
+          # Status emoji
+          if pass_rate >= 99:
+              status = "🟢 Excellent"
+          elif pass_rate >= 95:
+              status = "🟡 Good"
+          elif pass_rate >= 90:
+              status = "🟠 Needs Attention"
+          else:
+              status = "🔴 Critical"
+
+          # Per-workflow breakdown
+          by_workflow = metrics.get("by_workflow", {})
+          workflow_rows = ""
+          for name, data in sorted(by_workflow.items()):
+              wr = data.get("pass_rate", 0)
+              ws = data.get("success", 0)
+              wf = data.get("failure", 0)
+              emoji = "✅" if wr >= 99 else "⚠️" if wr >= 90 else "❌"
+              workflow_rows += f"| {emoji} {name} | {wr:.1f}% | {ws} | {wf} |\n"
+
+          report = f"""## Weekly CI Health Report — {now}
+
+### Overall: {status} ({pass_rate:.1f}%)
+
+| Metric | Value |
+|--------|-------|
+| Total Runs | {total} |
+| Successes | {successes} |
+| Failures | {failures} |
+| Pass Rate | {pass_rate:.1f}% |
+
+### Per-Workflow Breakdown
+
+| Workflow | Pass Rate | Successes | Failures |
+|----------|-----------|-----------|----------|
+{workflow_rows}
+
+### SLO Status
+
+- Target: ≥ 99% pass rate (7-day rolling)
+- Current: {pass_rate:.1f}%
+- Status: {"✅ Within SLO" if pass_rate >= 99 else "⚠️ Below SLO target"}
+
+---
+*Generated automatically by Weekly CI Health Report workflow*
+"""
+
+          with open("/tmp/weekly-report.md", "w") as f:
+              f.write(report)
+
+          print(report)
+          PYEOF
+
+      - name: Create GitHub Issue with report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --repo ${{ github.repository }} \
+            --title "CI Health Report — $(date +%Y-%m-%d)" \
+            --body-file /tmp/weekly-report.md \
+            --label "ci-health" || true

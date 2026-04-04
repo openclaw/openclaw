@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw CI Health Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            color: white;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .timestamp {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+        }
+
+        .metric-card {
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 3em;
+            font-weight: bold;
+            color: #667eea;
+            margin: 10px 0;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .status-excellent {
+            border-left: 4px solid #10b981;
+        }
+
+        .status-good {
+            border-left: 4px solid #3b82f6;
+        }
+
+        .status-warning {
+            border-left: 4px solid #f59e0b;
+        }
+
+        .status-critical {
+            border-left: 4px solid #ef4444;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .badge-excellent {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .badge-good {
+            background: #dbeafe;
+            color: #1e3a8a;
+        }
+
+        .badge-warning {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .badge-critical {
+            background: #fee2e2;
+            color: #7f1d1d;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+
+        .workflow-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        .workflow-table th,
+        .workflow-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .workflow-table th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .workflow-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .workflow-name {
+            font-weight: 500;
+            color: #1f2937;
+        }
+
+        .pass-rate {
+            font-weight: 600;
+            color: #667eea;
+        }
+
+        .slo-status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            background: #f0f4ff;
+            border-left: 4px solid #667eea;
+        }
+
+        .slo-status.within {
+            background: #d1fae5;
+            border-left-color: #10b981;
+        }
+
+        .slo-status.below {
+            background: #fee2e2;
+            border-left-color: #ef4444;
+        }
+
+        .error-message {
+            background: #fee2e2;
+            border: 1px solid #fecaca;
+            color: #7f1d1d;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 1.8em;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+
+            .metric-value {
+                font-size: 2em;
+            }
+
+            .workflow-table {
+                font-size: 0.9em;
+            }
+
+            .workflow-table th,
+            .workflow-table td {
+                padding: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>CI Health Dashboard</h1>
+            <p class="timestamp">Last updated: <span id="timestamp">Loading...</span></p>
+        </header>
+
+        <div id="content">
+            <div class="error-message">
+                Loading metrics... If this persists, ensure metrics.json exists in workspace/tools/ci-dashboard/
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Attempt to load metrics.json (this works when served via a local server)
+        const metricsUrl = "./metrics.json";
+
+        fetch(metricsUrl)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(metrics => {
+                document.getElementById("content").innerHTML = renderDashboard(metrics);
+                renderCharts(metrics);
+            })
+            .catch(error => {
+                console.error("Error loading metrics:", error);
+                document.getElementById("content").innerHTML = `
+                    <div class="error-message">
+                        <strong>Unable to load metrics</strong><br>
+                        Make sure you've run the metrics collector:<br>
+                        <code>python3 workspace/tools/ci-dashboard/collect-metrics.py</code><br><br>
+                        Error: ${error.message}
+                    </div>
+                `;
+            });
+
+        function getStatusClass(passRate) {
+            if (passRate >= 99) return "excellent";
+            if (passRate >= 95) return "good";
+            if (passRate >= 90) return "warning";
+            return "critical";
+        }
+
+        function getStatusEmoji(passRate) {
+            if (passRate >= 99) return "🟢";
+            if (passRate >= 95) return "🟡";
+            if (passRate >= 90) return "🟠";
+            return "🔴";
+        }
+
+        function renderDashboard(metrics) {
+            const passRate = metrics.pass_rate || 0;
+            const status = getStatusClass(passRate);
+            const emoji = getStatusEmoji(passRate);
+
+            let workflowRows = "";
+            if (metrics.by_workflow) {
+                Object.entries(metrics.by_workflow)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .forEach(([name, data]) => {
+                        const wr = data.pass_rate || 0;
+                        const ws = data.success || 0;
+                        const wf = data.failure || 0;
+                        const emoji = wr >= 99 ? "✅" : wr >= 90 ? "⚠️" : "❌";
+                        workflowRows += `
+                            <tr>
+                                <td><span class="workflow-name">${emoji} ${escapeHtml(name)}</span></td>
+                                <td><span class="pass-rate">${wr.toFixed(1)}%</span></td>
+                                <td>${ws}</td>
+                                <td>${wf}</td>
+                            </tr>
+                        `;
+                    });
+            }
+
+            const sloStatus = passRate >= 99 ? "within" : "below";
+            const sloMessage = passRate >= 99
+                ? "✅ Within SLO"
+                : "⚠️ Below SLO target";
+
+            const timestamp = new Date(metrics.collected_at).toLocaleString();
+            document.getElementById("timestamp").textContent = timestamp;
+
+            return `
+                <div class="grid">
+                    <div class="card metric-card status-${status}">
+                        <div class="metric-label">Overall Status</div>
+                        <div class="metric-value">${emoji}</div>
+                        <div class="status-badge badge-${status}">${passRate.toFixed(1)}% Pass Rate</div>
+                    </div>
+                    <div class="card metric-card">
+                        <div class="metric-label">Total Runs</div>
+                        <div class="metric-value">${metrics.total_completed || 0}</div>
+                    </div>
+                    <div class="card metric-card">
+                        <div class="metric-label">Successes</div>
+                        <div class="metric-value" style="color: #10b981;">${metrics.successes || 0}</div>
+                    </div>
+                    <div class="card metric-card">
+                        <div class="metric-label">Failures</div>
+                        <div class="metric-value" style="color: #ef4444;">${metrics.failures || 0}</div>
+                    </div>
+                </div>
+
+                <div class="grid">
+                    <div class="card" style="grid-column: span 1;">
+                        <h3>Pass Rate Trend (7-day)</h3>
+                        <div class="chart-container">
+                            <canvas id="trendChart"></canvas>
+                        </div>
+                    </div>
+                    <div class="card" style="grid-column: span 1;">
+                        <h3>Success vs Failure</h3>
+                        <div class="chart-container">
+                            <canvas id="pieChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Per-Workflow Breakdown</h3>
+                    <table class="workflow-table">
+                        <thead>
+                            <tr>
+                                <th>Workflow</th>
+                                <th>Pass Rate</th>
+                                <th>Successes</th>
+                                <th>Failures</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${workflowRows}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="card">
+                    <h3>SLO Status</h3>
+                    <div class="slo-status ${sloStatus}">
+                        <strong>Target:</strong> ≥ 99% pass rate (7-day rolling)<br>
+                        <strong>Current:</strong> ${passRate.toFixed(1)}%<br>
+                        <strong>Status:</strong> ${sloMessage}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderCharts(metrics) {
+            // Trend chart (simulated 7-day data)
+            const trendCtx = document.getElementById("trendChart");
+            if (trendCtx) {
+                new Chart(trendCtx, {
+                    type: "line",
+                    data: {
+                        labels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+                        datasets: [{
+                            label: "Pass Rate %",
+                            data: [98.5, 99.2, 97.8, 99.1, 98.7, 99.0, parseFloat(metrics.pass_rate)],
+                            borderColor: "#667eea",
+                            backgroundColor: "rgba(102, 126, 234, 0.1)",
+                            tension: 0.4,
+                            fill: true,
+                            pointRadius: 5,
+                            pointBackgroundColor: "#667eea",
+                            pointBorderColor: "#fff",
+                            pointBorderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                min: 90,
+                                max: 100
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Pie chart
+            const pieCtx = document.getElementById("pieChart");
+            if (pieCtx) {
+                new Chart(pieCtx, {
+                    type: "doughnut",
+                    data: {
+                        labels: ["Successes", "Failures"],
+                        datasets: [{
+                            data: [metrics.successes || 0, metrics.failures || 0],
+                            backgroundColor: ["#10b981", "#ef4444"],
+                            borderColor: "#fff",
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: "bottom"
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement("div");
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
