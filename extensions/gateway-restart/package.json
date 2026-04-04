@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/gateway-restart-plugin",
+  "version": "2026.4.4-beta.1",
+  "private": true,
+  "description": "OpenClaw gateway restart plugin with session follow-up resume",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/gateway-restart-plugin"
+    }
+  }
+}
