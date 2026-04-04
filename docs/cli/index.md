@@ -509,6 +509,8 @@ Options:
   `qwen-standard-api-key-cn`, `qwen-standard-api-key`, `qwen-api-key-cn`, `qwen-api-key`,
   `modelstudio-standard-api-key-cn`, `modelstudio-standard-api-key`,
   `modelstudio-api-key-cn`, `modelstudio-api-key`, `custom-api-key`, `skip`
+- Qwen note: `qwen-*` is the canonical auth-choice family. `modelstudio-*`
+  ids remain accepted as legacy compatibility aliases only.
 - `--secret-input-mode <plaintext|ref>` (default `plaintext`; use `ref` to store provider default env refs instead of plaintext keys)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
