@@ -1046,6 +1046,9 @@ authoring plugins:
 - `openclaw/plugin-sdk/config-schema` for the root `openclaw.json` Zod schema
   export (`OpenClawSchema`).
 - Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
+  `openclaw/plugin-sdk/setup-runtime`,
+  `openclaw/plugin-sdk/setup-adapter-runtime`,
+  `openclaw/plugin-sdk/setup-tools`,
   `openclaw/plugin-sdk/channel-pairing`,
   `openclaw/plugin-sdk/channel-contract`,
   `openclaw/plugin-sdk/channel-feedback`,
@@ -1057,6 +1060,13 @@ authoring plugins:
   `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
   wiring. `channel-inbound` is the shared home for debounce, mention matching,
   envelope formatting, and inbound envelope context helpers.
+  `channel-setup` is the narrow optional-install setup seam.
+  `setup-runtime` is the runtime-safe setup surface used by `setupEntry` /
+  deferred startup.
+  `setup-adapter-runtime` is the env-aware account-setup adapter seam.
+  `setup-tools` is the small CLI/archive/docs helper seam (`formatCliCommand`,
+  `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`,
+  `CONFIG_DIR`).
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
