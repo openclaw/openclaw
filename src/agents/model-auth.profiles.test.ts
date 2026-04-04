@@ -806,6 +806,7 @@ describe("getApiKeyForModel", () => {
         GOOGLE_CLOUD_API_KEY: undefined,
         GOOGLE_CLOUD_PROJECT: undefined,
         GOOGLE_CLOUD_LOCATION: undefined,
+        GOOGLE_APPLICATION_CREDENTIALS: undefined,
       },
       async () => {
         const resolved = resolveEnvApiKey("google-vertex", {} as NodeJS.ProcessEnv);
