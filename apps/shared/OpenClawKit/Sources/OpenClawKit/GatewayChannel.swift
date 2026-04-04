@@ -109,6 +109,31 @@ public struct GatewayConnectOptions: Sendable {
     }
 }
 
+public struct GatewayChannelTimeoutProfile: Sendable {
+    public static let `default` = GatewayChannelTimeoutProfile(
+        connectTimeoutSeconds: 12,
+        connectChallengeTimeoutSeconds: 6,
+        loopbackConnectTimeoutSeconds: 18,
+        loopbackConnectChallengeTimeoutSeconds: 10)
+
+    public var connectTimeoutSeconds: Double
+    public var connectChallengeTimeoutSeconds: Double
+    public var loopbackConnectTimeoutSeconds: Double
+    public var loopbackConnectChallengeTimeoutSeconds: Double
+
+    public init(
+        connectTimeoutSeconds: Double,
+        connectChallengeTimeoutSeconds: Double,
+        loopbackConnectTimeoutSeconds: Double,
+        loopbackConnectChallengeTimeoutSeconds: Double)
+    {
+        self.connectTimeoutSeconds = connectTimeoutSeconds
+        self.connectChallengeTimeoutSeconds = connectChallengeTimeoutSeconds
+        self.loopbackConnectTimeoutSeconds = loopbackConnectTimeoutSeconds
+        self.loopbackConnectChallengeTimeoutSeconds = loopbackConnectChallengeTimeoutSeconds
+    }
+}
+
 public enum GatewayAuthSource: String, Sendable {
     case deviceToken = "device-token"
     case sharedToken = "shared-token"
@@ -182,10 +207,7 @@ public actor GatewayChannelActor {
     private var lastAuthSource: GatewayAuthSource = .none
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
-    // Connect now requires this nonce before we send device-auth.
-    private let connectTimeoutSeconds: Double = 12
-    private let connectChallengeTimeoutSeconds: Double = 6.0
+    private let timeoutProfile: GatewayChannelTimeoutProfile
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.
     private let keepaliveIntervalSeconds: Double = 15.0
@@ -206,6 +228,7 @@ public actor GatewayChannelActor {
         bootstrapToken: String? = nil,
         password: String? = nil,
         session: WebSocketSessionBox? = nil,
+        timeoutProfile: GatewayChannelTimeoutProfile = .default,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
         disconnectHandler: (@Sendable (String) async -> Void)? = nil)
@@ -215,12 +238,45 @@ public actor GatewayChannelActor {
         self.bootstrapToken = bootstrapToken
         self.password = password
         self.session = session?.session ?? URLSession(configuration: .default)
+        self.timeoutProfile = timeoutProfile
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
         self.disconnectHandler = disconnectHandler
         Task { [weak self] in
             await self?.startWatchdog()
         }
+    }
+
+    private var isLoopbackEndpoint: Bool {
+        guard let host = self.url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !host.isEmpty
+        else {
+            return false
+        }
+        if host == "localhost" || host == "::1" || host == "127.0.0.1" {
+            return true
+        }
+        return host.hasPrefix("127.")
+    }
+
+    // Local gateway boot can be briefly noisy while launchd, the gateway, and the app
+    // are all coming up together. Give loopback a wider budget than remote endpoints.
+    private var connectTimeoutSeconds: Double {
+        if self.isLoopbackEndpoint {
+            return max(
+                self.timeoutProfile.connectTimeoutSeconds,
+                self.timeoutProfile.loopbackConnectTimeoutSeconds)
+        }
+        return self.timeoutProfile.connectTimeoutSeconds
+    }
+
+    private var connectChallengeTimeoutSeconds: Double {
+        if self.isLoopbackEndpoint {
+            return max(
+                self.timeoutProfile.connectChallengeTimeoutSeconds,
+                self.timeoutProfile.loopbackConnectChallengeTimeoutSeconds)
+        }
+        return self.timeoutProfile.connectChallengeTimeoutSeconds
     }
 
     public func authSource() -> GatewayAuthSource { self.lastAuthSource }
