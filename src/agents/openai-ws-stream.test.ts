@@ -92,7 +92,7 @@ const { MockManager } = vi.hoisted(() => {
         type: "response.create",
         generate: false,
         model: params.model,
-        ...(params.tools ? { tools: params.tools } : {}),
+        ...(params.tools?.length ? { tools: params.tools } : {}),
         ...(params.instructions ? { instructions: params.instructions } : {}),
       });
     }
@@ -2049,6 +2049,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent).toHaveLength(2);
     expect(sent[0]?.type).toBe("response.create");
     expect(sent[0]?.generate).toBe(false);
+    expect(sent[0]?.tools).toBeUndefined();
     expect(sent[1]?.type).toBe("response.create");
   });
 

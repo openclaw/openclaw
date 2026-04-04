@@ -380,6 +380,19 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("sms.search");
   });
 
+  it("includes screen recording for macOS nodes by default", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "macOS 26.4.0",
+        deviceFamily: "Mac",
+      },
+    );
+
+    expect(allow.has("screen.record")).toBe(true);
+    expect(allow.has("camera.snap")).toBe(false);
+  });
+
   it("can explicitly allow dangerous commands via allowCommands", () => {
     const allow = resolveNodeCommandAllowlist(
       {

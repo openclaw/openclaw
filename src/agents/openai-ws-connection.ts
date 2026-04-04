@@ -570,7 +570,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
       type: "response.create",
       generate: false,
       model: params.model,
-      ...(params.tools ? { tools: params.tools } : {}),
+      ...(params.tools?.length ? { tools: params.tools } : {}),
       ...(params.instructions ? { instructions: params.instructions } : {}),
     };
     this.send(event);
