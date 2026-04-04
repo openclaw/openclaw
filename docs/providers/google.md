@@ -71,6 +71,20 @@ Environment variables:
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
 
+## Image generation
+
+The bundled `google` image-generation provider defaults to
+`google/gemini-3.1-flash-image-preview`.
+
+- Also supports `google/gemini-3-pro-image-preview`
+- Generate: up to 4 images per request
+- Edit mode: enabled, up to 5 input images
+- Geometry controls: `size`, `aspectRatio`, and `resolution`
+
+The OAuth-only `google-gemini-cli` provider is a separate text-inference
+surface. Image generation, media understanding, and Gemini Grounding stay on
+the `google` provider id.
+
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure `GEMINI_API_KEY`

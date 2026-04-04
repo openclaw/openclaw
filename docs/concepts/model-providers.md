@@ -275,6 +275,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `zai/glm-5`
 - CLI: `openclaw onboard --auth-choice zai-api-key`
   - Aliases: `z.ai/*` and `z-ai/*` normalize to `zai/*`
+  - `zai-api-key` auto-detects the matching Z.AI endpoint; `zai-coding-global`, `zai-coding-cn`, `zai-global`, and `zai-cn` force a specific surface
 
 ### Vercel AI Gateway
 
@@ -287,10 +288,14 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `kilocode`
 - Auth: `KILOCODE_API_KEY`
-- Example model: `kilocode/anthropic/claude-opus-4.6`
+- Example model: `kilocode/kilo/auto`
 - CLI: `openclaw onboard --auth-choice kilocode-api-key`
 - Base URL: `https://api.kilo.ai/api/gateway/`
-- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.7 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
+- Static fallback catalog ships `kilocode/kilo/auto`; live
+  `https://api.kilo.ai/api/gateway/models` discovery can expand the runtime
+  catalog further.
+- Exact upstream routing behind `kilocode/kilo/auto` is owned by Kilo Gateway,
+  not hard-coded in OpenClaw.
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
@@ -304,23 +309,36 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
   OpenAI-only request shaping (`serviceTier`, Responses `store`,
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
-- Example model: `kilocode/anthropic/claude-opus-4.6`
+- Example model: `kilocode/kilo/auto`
 - MiniMax: `minimax` (`MINIMAX_API_KEY`)
+- Example model: `minimax/MiniMax-M2.7`
+- MiniMax onboarding/API-key setup writes explicit M2.7 model definitions with
+  `input: ["text", "image"]`; the bundled provider catalog keeps the chat refs
+  text-only until that provider config is materialized
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
+- Example model: `moonshot/kimi-k2.5`
 - Kimi Coding: `kimi` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
+- Example model: `kimi/kimi-code`
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
+- Example model: `qianfan/deepseek-v3.2`
 - Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
+- Example model: `modelstudio/qwen3.5-plus`
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
+- Example model: `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 - StepFun: `stepfun` / `stepfun-plan` (`STEPFUN_API_KEY`)
 - Example models: `stepfun/step-3.5-flash`, `stepfun-plan/step-3.5-flash-2603`
 - Together: `together` (`TOGETHER_API_KEY`)
+- Example model: `together/moonshotai/Kimi-K2.5`
 - Venice: `venice` (`VENICE_API_KEY`)
 - Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
+- Example model: `xiaomi/mimo-v2-flash`
 - Vercel AI Gateway: `vercel-ai-gateway` (`AI_GATEWAY_API_KEY`)
 - Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`)
 - Cloudflare AI Gateway: `cloudflare-ai-gateway` (`CLOUDFLARE_AI_GATEWAY_API_KEY`)
 - Volcengine: `volcengine` (`VOLCANO_ENGINE_API_KEY`)
+- Example model: `volcengine-plan/ark-code-latest`
 - BytePlus: `byteplus` (`BYTEPLUS_API_KEY`)
+- Example model: `byteplus-plan/ark-code-latest`
 - xAI: `xai` (`XAI_API_KEY`)
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
@@ -350,17 +368,16 @@ need to override the base URL or model metadata:
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
 - Example model: `moonshot/kimi-k2.5`
-- CLI: `openclaw onboard --auth-choice moonshot-api-key`
+- CLI: `openclaw onboard --auth-choice moonshot-api-key` or `openclaw onboard --auth-choice moonshot-api-key-cn`
 
 Kimi K2 model IDs:
 
 [//]: # "moonshot-kimi-k2-model-refs:start"
 
 - `moonshot/kimi-k2.5`
-- `moonshot/kimi-k2-0905-preview`
-- `moonshot/kimi-k2-turbo-preview`
 - `moonshot/kimi-k2-thinking`
 - `moonshot/kimi-k2-thinking-turbo`
+- `moonshot/kimi-k2-turbo`
 
 [//]: # "moonshot-kimi-k2-model-refs:end"
 
@@ -408,16 +425,19 @@ Volcano Engine (火山引擎) provides access to Doubao and other models in Chin
 
 - Provider: `volcengine` (coding: `volcengine-plan`)
 - Auth: `VOLCANO_ENGINE_API_KEY`
-- Example model: `volcengine/doubao-seed-1-8-251228`
+- Example model: `volcengine-plan/ark-code-latest`
 - CLI: `openclaw onboard --auth-choice volcengine-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "volcengine/doubao-seed-1-8-251228" } },
+    defaults: { model: { primary: "volcengine-plan/ark-code-latest" } },
   },
 }
 ```
+
+Onboarding defaults to the coding surface, but the general `volcengine/*`
+catalog is registered at the same time.
 
 Available models:
 
@@ -441,16 +461,19 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 
 - Provider: `byteplus` (coding: `byteplus-plan`)
 - Auth: `BYTEPLUS_API_KEY`
-- Example model: `byteplus/seed-1-8-251228`
+- Example model: `byteplus-plan/ark-code-latest`
 - CLI: `openclaw onboard --auth-choice byteplus-api-key`
 
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "byteplus/seed-1-8-251228" } },
+    defaults: { model: { primary: "byteplus-plan/ark-code-latest" } },
   },
 }
 ```
+
+Onboarding defaults to the coding surface, but the general `byteplus/*`
+catalog is registered at the same time.
 
 Available models:
 
@@ -498,7 +521,10 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
 
-- MiniMax (Anthropic‑compatible): `--auth-choice minimax-api`
+- MiniMax OAuth (Global): `--auth-choice minimax-global-oauth`
+- MiniMax OAuth (CN): `--auth-choice minimax-cn-oauth`
+- MiniMax API key (Global): `--auth-choice minimax-global-api`
+- MiniMax API key (CN): `--auth-choice minimax-cn-api`
 - Auth: `MINIMAX_API_KEY`
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
