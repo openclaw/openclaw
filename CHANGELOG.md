@@ -109,6 +109,7 @@ Docs: https://docs.openclaw.ai
 - Infra/json-file: preserve symlink-backed JSON stores and Windows overwrite fallback when atomically saving small sync JSON state files. (#60589) Thanks @gumadeiras.
 - Matrix/credentials: read the current and legacy credential files directly during migration fallback so concurrent legacy rename races still resolve to the stored credentials. (#60591) Thanks @gumadeiras.
 - Providers/Anthropic Vertex: read ADC files directly during auth discovery so explicit Google credentials and default ADC no longer depend on `existsSync` preflight checks. (#60592) Thanks @gumadeiras.
+- Android/Talk Mode: restore spoken assistant replies on node-scoped sessions by keeping reply routing synced to the resolved node session key and pausing mic capture during reply playback. (#60306) Thanks @MKV21.
 
 ## 2026.4.2
 
