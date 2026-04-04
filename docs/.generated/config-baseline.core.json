@@ -1704,7 +1704,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: feishu, googlechat, nostr, msteams, mattermost, nextcloud-talk, matrix, bluebubbles, line, zalo, zalouser, synology-chat, tlon, discord, imessage, irc, qqbot, signal, slack, telegram, twitch, whatsapp.",
       "hasChildren": false
     },
     {
@@ -4532,7 +4532,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: feishu, googlechat, nostr, msteams, mattermost, nextcloud-talk, matrix, bluebubbles, line, zalo, zalouser, synology-chat, tlon, discord, imessage, irc, qqbot, signal, slack, telegram, twitch, whatsapp.",
       "hasChildren": false
     },
     {
@@ -14973,7 +14973,7 @@
         "models"
       ],
       "label": "Model Catalog Mode",
-      "help": "Controls provider catalog behavior: \"merge\" keeps built-ins and overlays your custom providers, while \"replace\" uses only your configured providers. In \"merge\", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, matching model contextWindow/maxTokens use the higher value between explicit and implicit entries, and explicit contextTokens runtime caps are preserved.",
+      "help": "Controls provider catalog behavior: \"merge\" keeps built-ins and overlays your custom providers, while \"replace\" uses only your configured providers. In \"merge\", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.",
       "hasChildren": false
     },
     {
