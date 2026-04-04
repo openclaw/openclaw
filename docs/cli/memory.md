@@ -64,6 +64,18 @@ openclaw memory index --agent main --verbose
 
 `memory promote`:
 
+Preview and apply short-term memory promotions.
+
+```bash
+openclaw memory promote [--apply] [--limit <n>] [--include-promoted]
+```
+
+- `--apply` -- write promotions to `MEMORY.md` (default: preview only).
+- `--limit <n>` -- cap the number of candidates shown.
+- `--include-promoted` -- include entries already promoted in previous cycles.
+
+Full options:
+
 - Ranks short-term candidates from `memory/YYYY-MM-DD.md` using weighted recall signals (`frequency`, `relevance`, `query diversity`, `recency`).
 - Uses recall events captured when `memory_search` returns daily-memory hits.
 - Optional auto-dreaming mode: when `plugins.entries.memory-core.config.dreaming.mode` is `core`, `deep`, or `rem`, `memory-core` auto-manages a cron job that triggers promotion in the background (no manual `openclaw cron add` required).

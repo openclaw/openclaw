@@ -37,23 +37,37 @@ Dreaming combines four signals:
 
 Promotion requires all configured threshold gates to pass, not just one signal.
 
+### Signal weights
+
+| Signal    | Weight | Description                                        |
+| --------- | ------ | -------------------------------------------------- |
+| Frequency | 0.35   | How often the same entry was recalled              |
+| Relevance | 0.35   | Average recall scores when retrieved               |
+| Diversity | 0.15   | Count of distinct query intents that surfaced it   |
+| Recency   | 0.15   | Temporal decay (14-day half-life)                  |
+
+## How it works
+
+1. **Recall tracking** -- Every `memory_search` hit is recorded to
+   `memory/.dreams/short-term-recall.json` with recall count, scores, and query
+   hash.
+2. **Scheduled scoring** -- On the configured cadence, candidates are ranked
+   using weighted signals. All threshold gates must pass simultaneously.
+3. **Promotion** -- Qualifying entries are appended to `MEMORY.md` with a
+   promoted timestamp.
+4. **Cleanup** -- Already-promoted entries are filtered from future cycles. A
+   file lock prevents concurrent runs.
+
 ## Modes
 
 `dreaming.mode` controls cadence and default thresholds:
 
-- `off`: dreaming disabled.
-- `core`: nightly cadence with balanced thresholds.
-- `rem`: more frequent cadence for active consolidation.
-- `deep`: stricter promotion gating with slower cadence.
-
-Default presets:
-
-- `core`: `0 3 * * *`, `minScore=0.75`, `minRecallCount=3`,
-  `minUniqueQueries=2`
-- `rem`: `0 */6 * * *`, `minScore=0.85`, `minRecallCount=4`,
-  `minUniqueQueries=3`
-- `deep`: `0 */12 * * *`, `minScore=0.8`, `minRecallCount=3`,
-  `minUniqueQueries=3`
+| Mode   | Cadence       | minScore | minRecallCount | minUniqueQueries |
+| ------ | ------------- | -------- | -------------- | ---------------- |
+| `off`  | Disabled      | --       | --             | --               |
+| `core` | Daily 3 AM    | 0.75     | 3              | 2                |
+| `rem`  | Every 6 hours | 0.85     | 4              | 3                |
+| `deep` | Every 12 hours | 0.80    | 3              | 3                |
 
 ## Scheduling model
 
@@ -87,13 +101,47 @@ You can still tune behavior with explicit overrides such as:
 }
 ```
 
-## Operational notes
+## Chat commands
 
-- Use `/dreaming off|core|rem|deep` to switch modes from chat.
-- Use `openclaw memory promote` to preview candidates and
-  `openclaw memory promote --apply` for manual promotion.
-- Use `openclaw memory status --deep` to inspect current memory and dreaming
-  status.
+Switch modes and check status from chat:
+
+```
+/dreaming core          # Switch to core mode (nightly)
+/dreaming rem           # Switch to rem mode (every 6h)
+/dreaming deep          # Switch to deep mode (every 12h)
+/dreaming off           # Disable dreaming
+/dreaming status        # Show current config and cadence
+/dreaming help          # Show mode guide
+```
+
+## CLI commands
+
+Preview and apply promotions from the command line:
+
+```bash
+# Preview promotion candidates
+openclaw memory promote
+
+# Apply promotions to MEMORY.md
+openclaw memory promote --apply
+
+# Limit preview count
+openclaw memory promote --limit 5
+
+# Include already-promoted entries
+openclaw memory promote --include-promoted
+
+# Check dreaming status
+openclaw memory status --deep
+```
+
+See [memory CLI](/cli/memory) for the full flag reference.
+
+## Dreams UI
+
+When dreaming is enabled, the Gateway sidebar shows a **Dreams** tab with
+memory stats (short-term count, long-term count, promoted count) and the next
+scheduled cycle time.
 
 ## Further reading
 
