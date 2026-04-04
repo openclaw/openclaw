@@ -81,7 +81,7 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
 
 async function resolveOAuthToken(params: {
   state: UsageAuthState;
-  provider: UsageProviderId;
+  provider: string;
 }): Promise<ProviderAuth | null> {
   const order = resolveAuthProfileOrder({
     cfg: params.state.cfg,
@@ -108,7 +108,7 @@ async function resolveOAuthToken(params: {
         continue;
       }
       return {
-        provider: params.provider,
+        provider: params.provider as UsageProviderId,
         token: resolved.apiKey,
         accountId:
           cred.type === "oauth" && "accountId" in cred
@@ -142,10 +142,10 @@ async function resolveProviderUsageAuthViaPlugin(params: {
           providerIds: options?.providerIds ?? [params.provider],
           envDirect: options?.envDirect,
         }),
-      resolveOAuthToken: async () => {
+      resolveOAuthToken: async (options) => {
         const auth = await resolveOAuthToken({
           state: params.state,
-          provider: params.provider,
+          provider: options?.provider ?? params.provider,
         });
         return auth
           ? {

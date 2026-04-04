@@ -35,6 +35,12 @@ const PROVIDER_LABEL = "MiniMax";
 const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
+const MINIMAX_USAGE_ENV_VAR_KEYS = [
+  "MINIMAX_OAUTH_TOKEN",
+  "MINIMAX_CODE_PLAN_KEY",
+  "MINIMAX_CODING_API_KEY",
+  "MINIMAX_API_KEY",
+] as const;
 const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "hybrid-anthropic-openai",
   anthropicModelDropThinkingBlocks: true,
@@ -238,12 +244,13 @@ export default definePluginEntry({
         run: async (ctx) => resolveApiCatalog(ctx),
       },
       resolveUsageAuth: async (ctx) => {
+        const portalOauth = await ctx.resolveOAuthToken({ provider: PORTAL_PROVIDER_ID });
+        if (portalOauth) {
+          return portalOauth;
+        }
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [
-            ctx.env.MINIMAX_CODE_PLAN_KEY,
-            ctx.env.MINIMAX_CODING_API_KEY,
-            ctx.env.MINIMAX_API_KEY,
-          ],
+          providerIds: [API_PROVIDER_ID, PORTAL_PROVIDER_ID],
+          envDirect: MINIMAX_USAGE_ENV_VAR_KEYS.map((name) => ctx.env[name]),
         });
         return apiKey ? { token: apiKey } : null;
       },

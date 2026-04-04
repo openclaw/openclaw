@@ -474,7 +474,8 @@ export type ProviderPreparedRuntimeAuth = {
  * The helper methods cover the common OpenClaw auth resolution paths:
  *
  * - `resolveApiKeyFromConfigAndStore`: env/config/plain token/api_key profiles
- * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store
+ * - `resolveOAuthToken`: oauth/token profiles resolved through the auth store,
+ *   optionally for an explicit provider override
  *
  * Plugins can still do extra provider-specific work on top (for example parse a
  * token blob, read a legacy credential file, or pick between aliases).
@@ -489,7 +490,7 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
-  resolveOAuthToken: () => Promise<ProviderResolvedUsageAuth | null>;
+  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderResolvedUsageAuth | null>;
 };
 
 /**
