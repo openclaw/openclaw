@@ -564,7 +564,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="What does onboarding actually do?">
     `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-    - **Model/auth setup** (provider OAuth, Claude CLI reuse, and API keys supported, plus local model options such as LM Studio)
+    - **Model/auth setup** (provider OAuth and API keys supported, plus local model options such as LM Studio)
     - **Workspace** location + bootstrap files
     - **Gateway settings** (bind/port/auth/tailscale)
     - **Channels** (WhatsApp, Telegram, Discord, Mattermost, Signal, iMessage, plus bundled channel plugins like QQ Bot)
@@ -577,14 +577,10 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   <Accordion title="Do I need a Claude or OpenAI subscription to run this?">
     No. You can run OpenClaw with **API keys** (Anthropic/OpenAI/others) or with
-    **local-only models** so your data stays on your device. Subscriptions (Claude
-    Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
+    **local-only models** so your data stays on your device. The OpenAI Codex
+    subscription is an optional way to authenticate that provider.
 
-    Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
-    PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
-    OpenClaw, and Anthropic subscription auth in OpenClaw now requires **Extra
-    Usage** billed separately from the subscription. OpenAI Codex OAuth is
-    explicitly supported for external tools like OpenClaw.
+    OpenAI Codex OAuth is explicitly supported for external tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
     **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
@@ -597,48 +593,28 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes, via a local **Claude CLI** login on the gateway host.
+  <Accordion title="Does my existing Claude subscription auth still work?">
+    Yes. Existing Claude CLI and legacy Anthropic token profiles continue to
+    run at runtime in OpenClaw. For new setup, use an **Anthropic API key**.
 
-    Claude Pro/Max subscriptions **do not include an API key**, so Claude CLI
-    reuse is the supported subscription-style path in OpenClaw. Anthropic
-    changed third-party harness billing on **April 4, 2026 at 12:00 PM PT /
-    8:00 PM BST**: Anthropic says OpenClaw now requires **Extra Usage** billed
-    separately from the subscription for this path. If you want the clearest
-    and safest supported path for production, use an Anthropic API key.
-
-  </Accordion>
-
-  <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes. Reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`.
-
-    Existing legacy Anthropic token profiles still run if they are already configured, but OpenClaw no longer offers Anthropic setup-token as a new setup path. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
-
-    Important: Anthropic changed third-party harness billing on **April 4, 2026
-    at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
-    longer cover OpenClaw, and Anthropic now requires **Extra Usage** billed
-    separately from the subscription for Claude CLI traffic through OpenClaw.
-
-    For production or multi-user workloads, Anthropic API key auth is the
-    safer, recommended choice. If you want other subscription-style hosted
-    options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and
-    [GLM Models](/providers/glm).
+    As of **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**, Anthropic changed
+    third-party harness billing. Anthropic says Claude subscription limits no
+    longer cover OpenClaw or other third-party harnesses, and this traffic
+    now requires **Extra Usage** (pay-as-you-go, billed separately from the
+    subscription).
 
   </Accordion>
 
 <a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
 <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
-That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-use **Claude CLI**, wait for the window to reset or upgrade your plan. If you
-use an **Anthropic API key**, check the Anthropic Console
-for usage/billing and raise limits as needed.
+That means your **Anthropic quota/rate limit** is exhausted for the current window.
+Check the Anthropic Console for usage/billing on your **Anthropic API key** and
+raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
     Anthropic's 1M context beta (`context1m: true`). That only works when your
-    credential is eligible for long-context billing (API key billing or Claude
-    CLI with Extra Usage enabled).
+    API key is eligible for long-context billing.
 
     Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
@@ -2507,9 +2483,7 @@ for usage/billing and raise limits as needed.
     This means the run is pinned to an Anthropic auth profile, but the Gateway
     can't find it in its auth store.
 
-    - **Use Claude CLI**
-      - Run `openclaw models auth login --provider anthropic --method cli --set-default` on the gateway host.
-    - **If you want to use an API key instead**
+    - **Add an Anthropic API key**
       - Put `ANTHROPIC_API_KEY` in `~/.openclaw/.env` on the **gateway host**.
       - Clear any pinned order that forces a missing profile:
 
@@ -2595,7 +2569,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - **OAuth** often leverages subscription access (where applicable).
     - **API keys** use pay-per-token billing.
 
-    The wizard explicitly supports Anthropic Claude CLI, OpenAI Codex OAuth, and API keys.
+    The wizard explicitly supports OpenAI Codex OAuth and Anthropic API keys.
 
   </Accordion>
 </AccordionGroup>

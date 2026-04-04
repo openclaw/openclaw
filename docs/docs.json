@@ -1228,7 +1228,6 @@
                   "providers/anthropic",
                   "providers/bedrock",
                   "providers/chutes",
-                  "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
                   "providers/deepseek",
@@ -1856,7 +1855,6 @@
                 "pages": [
                   "zh-CN/providers/anthropic",
                   "zh-CN/providers/bedrock",
-                  "zh-CN/providers/claude-max-api-proxy",
                   "zh-CN/providers/deepgram",
                   "zh-CN/providers/github-copilot",
                   "zh-CN/providers/glm",

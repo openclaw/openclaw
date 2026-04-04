@@ -41,10 +41,7 @@ x-i18n:
   - [可以让 OpenClaw 自行更新吗？](#can-i-ask-openclaw-to-update-itself)
   - [新手引导具体做了什么？](#新手引导具体做了什么)
   - [运行 OpenClaw 需要 Claude 或 OpenAI 订阅吗？](#do-i-need-a-claude-or-openai-subscription-to-run-this)
-  - [能否使用 Claude Max 订阅而不需要 API 密钥？](#can-i-use-claude-max-subscription-without-an-api-key)
-  - [Anthropic "setup-token" 认证如何工作？](#how-does-anthropic-setuptoken-auth-work)
-  - [在哪里获取 Anthropic setup-token？](#where-do-i-find-an-anthropic-setuptoken)
-  - [是否支持 Claude 订阅认证（Claude Code OAuth）？](#do-you-support-claude-subscription-auth-claude-code-oauth)
+  - [我现有的 Claude 订阅认证还能用吗？](#does-my-existing-claude-subscription-auth-still-work)
   - [为什么我看到 `HTTP 429: rate_limit_error`（来自 Anthropic）？](#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
   - [支持 AWS Bedrock 吗？](#is-aws-bedrock-supported)
   - [Codex 认证如何工作？](#how-does-codex-auth-work)
@@ -618,7 +615,7 @@ openclaw gateway restart
 
 `openclaw onboard` 是推荐的设置路径。在**本地模式**下，它引导你完成：
 
-- **模型/认证设置**（推荐使用 Anthropic **setup-token** 进行 Claude 订阅，支持 OpenAI Codex OAuth，API 密钥可选，支持 LM Studio 本地模型）
+- **模型/认证设置**（Anthropic API 密钥、OpenAI Codex OAuth、其他 API 密钥，以及 LM Studio 等本地模型）
 - **工作区**位置 + 引导文件
 - **Gateway 网关设置**（绑定/端口/认证/tailscale）
 - **渠道**（WhatsApp、Telegram、Discord、Mattermost（插件）、Signal、iMessage）
@@ -629,36 +626,16 @@ openclaw gateway restart
 
 ### 运行 OpenClaw 需要 Claude 或 OpenAI 订阅吗
 
-不需要。你可以使用 **API 密钥**（Anthropic/OpenAI/其他）或**纯本地模型**运行 OpenClaw，这样你的数据留在你的设备上。订阅（Claude Pro/Max 或 OpenAI Codex）是这些提供商的可选认证方式。
+不需要。你可以使用 **API 密钥**（Anthropic/OpenAI/其他）或**纯本地模型**运行 OpenClaw，这样你的数据留在你的设备上。OpenAI Codex 订阅是该提供商的可选认证方式。
 
 文档：[Anthropic](/providers/anthropic)、[OpenAI](/providers/openai)、
 [本地模型](/gateway/local-models)、[模型](/concepts/models)。
 
-### 能否使用 Claude Max 订阅而不需要 API 密钥
+### 我现有的 Claude 订阅认证还能用吗
 
-可以。你可以使用 **setup-token** 代替 API 密钥进行认证。这是订阅路径。
+可以。已配置的 Claude CLI 和旧版 Anthropic 令牌配置在 OpenClaw 中继续在运行时可用。新的设置请使用 **Anthropic API 密钥**。
 
-Claude Pro/Max 订阅**不包含 API 密钥**，因此这是订阅账户的正确方式。重要提示：你必须向 Anthropic 确认此用法是否符合其订阅政策和条款。如果你想要最明确、受支持的方式，请使用 Anthropic API 密钥。
-
-### Anthropic setup-token 认证如何工作
-
-`claude setup-token` 通过 Claude Code CLI 生成一个**令牌字符串**（在 Web 控制台中不可用）。你可以在**任何机器**上运行它。在新手引导中选择 **Anthropic token (paste setup-token)** 或使用 `openclaw models auth paste-token --provider anthropic` 粘贴。令牌作为 **anthropic** 提供商的认证配置文件存储，像 API 密钥一样使用（无自动刷新）。更多详情：[OAuth](/concepts/oauth)。
-
-### 在哪里获取 Anthropic setup-token
-
-它**不在** Anthropic Console 中。setup-token 由 **Claude Code CLI** 在**任何机器**上生成：
-
-```bash
-claude setup-token
-```
-
-复制它打印的令牌，然后在新手引导中选择 **Anthropic token (paste setup-token)**。如果你想在 Gateway 网关主机上运行，使用 `openclaw models auth setup-token --provider anthropic`。如果你在其他地方运行了 `claude setup-token`，在 Gateway 网关主机上使用 `openclaw models auth paste-token --provider anthropic` 粘贴。参阅 [Anthropic](/providers/anthropic)。
-
-### 是否支持 Claude 订阅认证（Claude Pro/Max）
-
-是的——通过 **setup-token**。OpenClaw 不再复用 Claude Code CLI OAuth 令牌；请使用 setup-token 或 Anthropic API 密钥。在任何地方生成令牌并在 Gateway 网关主机上粘贴。参阅 [Anthropic](/providers/anthropic) 和 [OAuth](/concepts/oauth)。
-
-注意：Claude 订阅访问受 Anthropic 条款约束。对于生产或多用户工作负载，API 密钥通常是更安全的选择。
+自 **2026 年 4 月 4 日中午 12:00 PT / 晚上 8:00 BST** 起，Anthropic 更改了第三方 harness 的计费方式。Anthropic 表示 Claude 订阅额度不再覆盖 OpenClaw 或其他第三方 harness，此类流量现在需要 **Extra Usage**（按量付费，与订阅单独计费）。
 
 ### 为什么我看到 HTTP 429 rate_limit_error（来自 Anthropic）
 

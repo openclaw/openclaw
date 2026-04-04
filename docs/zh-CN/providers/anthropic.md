@@ -1,8 +1,7 @@
 ---
 read_when:
   - 你想在 OpenClaw 中使用 Anthropic 模型
-  - 你想使用 setup-token 而不是 API 密钥
-summary: 在 OpenClaw 中通过 API 密钥或 setup-token 使用 Anthropic Claude
+summary: 在 OpenClaw 中通过 API 密钥使用 Anthropic Claude
 title: Anthropic
 x-i18n:
   generated_at: "2026-03-16T06:25:19Z"
@@ -16,11 +15,10 @@ x-i18n:
 # Anthropic（Claude）
 
 Anthropic 构建了 **Claude** 模型家族，并通过 API 提供访问。
-在 OpenClaw 中，你可以使用 API 密钥或 **setup-token** 进行身份验证。
+在 OpenClaw 中，请使用 **Anthropic API 密钥** 配置 Anthropic Claude。
 
-## 选项 A：Anthropic API 密钥
+## 设置（Anthropic API 密钥）
 
-**最适合：** 标准 API 访问和按使用量计费。
 请在 Anthropic Console 中创建你的 API 密钥。
 
 ### CLI 设置
@@ -184,78 +182,40 @@ OpenClaw 会将其映射为 Anthropic 请求上的 `anthropic-beta: context-1m-2
 此功能才会激活。
 
 要求：Anthropic 必须允许该凭证使用长上下文
-（通常是 API 密钥计费，或启用了 Extra Usage 的订阅账户）。
+（通常是启用了 Extra Usage 的 API 密钥计费）。
 否则 Anthropic 会返回：
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`。
 
-注意：Anthropic 当前在使用
-OAuth/订阅令牌（`sk-ant-oat-*`）时会拒绝 `context-1m-*` beta 请求。OpenClaw 会自动跳过
-OAuth 身份验证的 `context1m` beta 请求头，并保留所需的 OAuth beta 标志。
+## 旧版 Claude 订阅认证
 
-## 选项 B：Claude setup-token
+已配置的 Claude CLI 复用（OAuth）或 setup-token 认证在 OpenClaw 中继续在运行时可用。
+新的 Anthropic 设置使用 Anthropic API 密钥。
 
-**最适合：** 使用你的 Claude 订阅。
-
-### 如何获取 setup-token
-
-setup-token 由 **Claude Code CLI** 创建，而不是在 Anthropic Console 中创建。你可以在**任何机器**上运行：
-
-```bash
-claude setup-token
-```
-
-将该令牌粘贴到 OpenClaw 中（向导：**Anthropic token（粘贴 setup-token）**），或在 Gateway 网关主机上运行：
-
-```bash
-openclaw models auth setup-token --provider anthropic
-```
-
-如果你是在另一台机器上生成该令牌，请粘贴它：
-
-```bash
-openclaw models auth paste-token --provider anthropic
-```
-
-### CLI 设置（setup-token）
-
-```bash
-# Paste a setup-token during setup
-openclaw onboard --auth-choice setup-token
-```
-
-### 配置片段（setup-token）
-
-```json5
-{
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
-}
-```
+自 **2026 年 4 月 4 日中午 12:00 PT / 晚上 8:00 BST** 起，Anthropic 更改了第三方
+harness 的计费方式。Anthropic 表示 Claude 订阅额度不再覆盖 OpenClaw 或其他第三方
+harness，此类流量现在需要 **Extra Usage**（按量付费，与订阅单独计费）。
 
 ## 说明
 
-- 使用 `claude setup-token` 生成 setup-token 并粘贴它，或者在 Gateway 网关主机上运行 `openclaw models auth setup-token`。
-- 如果你在 Claude 订阅上看到 “OAuth token refresh failed …”，请使用 setup-token 重新进行身份验证。请参见 [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription)。
-- 身份验证详情和复用规则见 [/concepts/oauth](/concepts/oauth)。
+- 在 OpenClaw 中，新的 Anthropic 设置使用 **Anthropic API 密钥**。
+- 身份验证详情见 [/concepts/oauth](/concepts/oauth)。
 
 ## 故障排除
 
 **401 错误 / 令牌突然无效**
 
-- Claude 订阅身份验证可能会过期或被撤销。请重新运行 `claude setup-token`，
-  并将其粘贴到 **Gateway 网关主机** 上。
-- 如果 Claude CLI 登录位于另一台机器上，请在 Gateway 网关主机上使用
-  `openclaw models auth paste-token --provider anthropic`。
+- 请在 Anthropic Console 中验证你的 API 密钥，然后使用刷新后的密钥重新运行新手引导。
 
 **No API key found for provider "anthropic"**
 
 - 身份验证是**按智能体**区分的。新智能体不会继承主智能体的密钥。
 - 请为该智能体重新运行新手引导，或在
-  Gateway 网关主机上粘贴 setup-token / API 密钥，然后使用 `openclaw models status` 验证。
+  Gateway 网关主机上配置 API 密钥，然后使用 `openclaw models status` 验证。
 
 **No credentials found for profile `anthropic:default`**
 
 - 运行 `openclaw models status` 查看当前活动的 auth profile。
-- 重新运行新手引导，或为该配置档案粘贴 setup-token / API 密钥。
+- 重新运行新手引导，或为该配置档案配置 API 密钥。
 
 **No available auth profile (all in cooldown/unavailable)**
 

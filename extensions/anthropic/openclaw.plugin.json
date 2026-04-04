@@ -12,24 +12,12 @@
   "providerAuthChoices": [
     {
       "provider": "anthropic",
-      "method": "cli",
-      "choiceId": "anthropic-cli",
-      "deprecatedChoiceIds": ["claude-cli"],
-      "choiceLabel": "Anthropic Claude CLI",
-      "choiceHint": "Reuse a local Claude CLI login on this host",
-      "assistantPriority": -20,
-      "groupId": "anthropic",
-      "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + API key"
-    },
-    {
-      "provider": "anthropic",
       "method": "api-key",
       "choiceId": "apiKey",
       "choiceLabel": "Anthropic API key",
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + API key",
+      "groupHint": "Anthropic API key",
       "optionKey": "anthropicApiKey",
       "cliFlag": "--anthropic-api-key",
       "cliOption": "--anthropic-api-key <key>",
