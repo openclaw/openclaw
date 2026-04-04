@@ -21,7 +21,7 @@ Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
 ## Quick start (beginner)
 
 1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic Claude CLI or legacy token auth) or set your own cadence.
-2. Create a tiny `HEARTBEAT.md` checklist in the agent workspace (optional but recommended).
+2. Create a tiny `HEARTBEAT.md` checklist or `tasks:` block in the agent workspace (optional but recommended).
 3. Decide where heartbeat messages should go (`target: "none"` is the default; set `target: "last"` to route to the last contact).
 4. Optional: enable heartbeat reasoning delivery for transparency.
 5. Optional: use lightweight bootstrap context if heartbeat runs only need `HEARTBEAT.md`.
@@ -343,6 +343,39 @@ Example `HEARTBEAT.md`:
 - If it’s daytime, do a lightweight check-in if nothing else is pending.
 - If a task is blocked, write down _what is missing_ and ask Peter next time.
 ```
+
+### `tasks:` blocks
+
+`HEARTBEAT.md` also supports a small structured `tasks:` block for interval-based
+checks inside heartbeat itself.
+
+Example:
+
+```md
+tasks:
+
+- name: inbox-triage
+  interval: 30m
+  prompt: "Check for urgent unread emails and flag anything time sensitive."
+- name: calendar-scan
+  interval: 2h
+  prompt: "Check for upcoming meetings that need prep or follow-up."
+
+# Additional instructions
+
+- Keep alerts short.
+- If nothing needs attention after all due tasks, reply HEARTBEAT_OK.
+```
+
+Behavior:
+
+- OpenClaw parses the `tasks:` block and checks each task against its own `interval`.
+- Only **due** tasks are included in the heartbeat prompt for that tick.
+- If no tasks are due, the heartbeat is skipped entirely (`reason=no-tasks-due`) to avoid a wasted model call.
+- Non-task content in `HEARTBEAT.md` is preserved and appended as additional context after the due-task list.
+- Task last-run timestamps are stored in session state (`heartbeatTaskState`), so intervals survive normal restarts.
+
+Task mode is useful when you want one heartbeat file to hold several periodic checks without paying for all of them every tick.
 
 ### Can the agent update HEARTBEAT.md?
 
