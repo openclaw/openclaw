@@ -384,7 +384,6 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
             runtime: ctx.runtime,
           }),
       },
-      createProviderApiKeyAuthMethod({
       {
         id: "setup-token",
         label: "Anthropic setup-token",
