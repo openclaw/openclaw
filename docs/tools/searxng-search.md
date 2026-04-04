@@ -114,9 +114,9 @@ key wins first).
 - **No API key** -- works with any SearXNG instance out of the box
 - **Base URL validation** -- `baseUrl` must be a valid `http://` or `https://`
   URL; public hosts must use `https://`
-- **Auto-detection order** -- SearXNG is checked last (order 200) in auto-detection,
-  so any API-backed provider with a key takes priority over SearXNG, and SearXNG sits
-  behind DuckDuckGo (order 100) as well
+- **Auto-detection order** -- SearXNG is checked last (order 200) in
+  auto-detection. API-backed providers with configured keys run first, then
+  DuckDuckGo (order 100), then Ollama Web Search (order 110)
 - **Self-hosted** -- you control the instance, queries, and upstream search engines
 - **Categories** default to `general` when not configured
 

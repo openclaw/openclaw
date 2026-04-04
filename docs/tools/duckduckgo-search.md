@@ -85,8 +85,9 @@ parameters override config values per-query.
   under heavy or automated use
 - **HTML parsing** — results depend on page structure, which can change without
   notice
-- **Auto-detection order** — DuckDuckGo is checked last (order 100) in
-  auto-detection, so any API-backed provider with a key takes priority
+- **Auto-detection order** — DuckDuckGo is the first key-free fallback
+  (order 100) in auto-detection. API-backed providers with configured keys run
+  first, then Ollama Web Search (order 110), then SearXNG (order 200)
 - **SafeSearch defaults to moderate** when not configured
 
 <Tip>
