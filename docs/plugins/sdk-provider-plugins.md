@@ -317,6 +317,13 @@ API key auth, and dynamic model resolution.
     `contract-api.ts` seam. Those helpers remain Anthropic-specific because
     they also encode Claude OAuth beta handling and `context1m` gating.
 
+    The same package-root pattern also backs other bundled providers:
+
+    - `@openclaw/openai-provider`: `api.ts` exports provider builders,
+      default-model helpers, and realtime provider builders
+    - `@openclaw/openrouter-provider`: `api.ts` exports the provider builder
+      plus onboarding/config helpers
+
     <Tabs>
       <Tab title="Token exchange">
         For providers that need a token exchange before each inference call:

@@ -301,6 +301,13 @@ stream helpers in its own public `api.ts` / `contract-api.ts` seam instead of
 promoting Anthropic beta-header and `service_tier` logic into a generic
 `plugin-sdk/*` contract.
 
+Other current bundled examples:
+
+- `@openclaw/openai-provider`: `api.ts` exports provider builders,
+  default-model helpers, and realtime provider builders
+- `@openclaw/openrouter-provider`: `api.ts` exports the provider builder plus
+  onboarding/config helpers
+
 <Warning>
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
   imports. If a helper is truly shared, promote it to a neutral SDK subpath

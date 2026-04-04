@@ -245,6 +245,9 @@ barrels unless the seam is truly generic. Current bundled examples:
 - OpenAI: provider builders, default-model helpers, realtime providers
 - OpenRouter: provider builder plus onboarding/config helpers
 
+If a helper is only useful inside one bundled provider package, keep it on that
+package-root seam instead of promoting it into `openclaw/plugin-sdk/*`.
+
 ## Pre-submission checklist
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
