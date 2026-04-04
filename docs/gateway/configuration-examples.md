@@ -536,62 +536,19 @@ If more than one person can DM your bot (multiple entries in `allowFrom`, pairin
 For Discord/Slack/Google Chat/Microsoft Teams/Mattermost/IRC, sender authorization is ID-first by default.
 Only enable direct mutable name/email/nick matching with each channel's `dangerouslyAllowNameMatching: true` if you explicitly accept that risk.
 
-### OAuth with API key failover
+### Anthropic API key + MiniMax fallback
 
 ```json5
 {
   auth: {
     profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "me@example.com",
-      },
       "anthropic:api": {
         provider: "anthropic",
         mode: "api_key",
       },
     },
     order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
-    },
-  },
-  agent: {
-    workspace: "~/.openclaw/workspace",
-    model: {
-      primary: "anthropic/claude-sonnet-4-6",
-      fallbacks: ["anthropic/claude-opus-4-6"],
-    },
-  },
-}
-```
-
-### Anthropic setup-token + API key, MiniMax fallback
-
-<Warning>
-Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
-PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
-OpenClaw, and Anthropic setup-token traffic now requires **Extra Usage** billed
-separately from the subscription. Prefer an Anthropic API key if you want the
-clearest billing path.
-</Warning>
-
-```json5
-{
-  auth: {
-    profiles: {
-      "anthropic:subscription": {
-        provider: "anthropic",
-        mode: "oauth",
-        email: "user@example.com",
-      },
-      "anthropic:api": {
-        provider: "anthropic",
-        mode: "api_key",
-      },
-    },
-    order: {
-      anthropic: ["anthropic:subscription", "anthropic:api"],
+      anthropic: ["anthropic:api"],
     },
   },
   models: {

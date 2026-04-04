@@ -22,7 +22,7 @@ OpenClaw features that can generate provider usage or paid API calls.
 **Per-message cost footer**
 
 - `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
-- `/usage tokens` shows tokens only; OAuth/setup-token/CLI subscription flows hide dollar cost.
+- `/usage tokens` shows tokens only; subscription-style OAuth, legacy token, and CLI flows hide dollar cost.
 
 Anthropic note: starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
 Anthropic says OpenClaw no longer uses included Claude subscription limits.

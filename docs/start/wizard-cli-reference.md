@@ -139,14 +139,6 @@ What you set:
     On macOS, choose "Always Allow" so launchd starts do not block.
 
   </Accordion>
-  <Accordion title="Anthropic setup-token (manual)">
-    Supported for manual config, not shown as an interactive assistant choice.
-
-    - Generate on any machine: `claude setup-token`
-    - Run on the gateway host: `openclaw models auth setup-token --provider anthropic`
-    - Or paste an existing token: `openclaw models auth paste-token --provider anthropic`
-
-  </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.
     Reused Codex CLI credentials stay managed by Codex CLI; OpenClaw re-reads

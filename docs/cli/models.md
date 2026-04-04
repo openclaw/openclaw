@@ -67,7 +67,7 @@ openclaw models fallbacks list
 ```bash
 openclaw models auth add
 openclaw models auth login --provider <id>
-openclaw models auth setup-token
+openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token
 ```
 
@@ -85,6 +85,6 @@ Notes:
 
 - `login --provider anthropic --method cli --set-default` reuses a local Claude
   CLI login and rewrites the main Anthropic default-model path to `claude-cli/...`.
-- `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.
-- Anthropic billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and setup-token usage in OpenClaw now requires **Extra Usage** billed separately from the subscription.
+- Anthropic billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and Claude CLI traffic in OpenClaw now requires **Extra Usage** billed separately from the subscription.
+- Existing legacy Anthropic token profiles still run if already configured, but OpenClaw no longer offers Anthropic setup-token as a new auth path.

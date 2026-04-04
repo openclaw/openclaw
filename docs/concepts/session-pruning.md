@@ -39,10 +39,10 @@ cache-write size, directly lowering cost.
 
 OpenClaw auto-enables pruning for Anthropic profiles:
 
-| Profile type         | Pruning enabled | Heartbeat |
-| -------------------- | --------------- | --------- |
-| OAuth or setup-token | Yes             | 1 hour    |
-| API key              | Yes             | 30 min    |
+| Profile type                    | Pruning enabled | Heartbeat |
+| ------------------------------- | --------------- | --------- |
+| Claude CLI or legacy token auth | Yes             | 1 hour    |
+| API key                         | Yes             | 30 min    |
 
 If you set explicit values, OpenClaw does not override them.
 

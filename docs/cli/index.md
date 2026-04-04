@@ -426,7 +426,7 @@ Options:
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced|manual>` (manual is an alias for advanced)
 - `--auth-choice <choice>` where `<choice>` is one of:
-  `setup-token`, `token`, `chutes`, `deepseek-api-key`, `openai-codex`, `openai-api-key`,
+  `chutes`, `deepseek-api-key`, `openai-codex`, `openai-api-key`,
   `openrouter-api-key`, `kilocode-api-key`, `litellm-api-key`, `ai-gateway-api-key`,
   `cloudflare-ai-gateway-api-key`, `moonshot-api-key`, `moonshot-api-key-cn`,
   `kimi-code-api-key`, `synthetic-api-key`, `venice-api-key`, `together-api-key`,
@@ -437,10 +437,6 @@ Options:
   `mistral-api-key`, `volcengine-api-key`, `byteplus-api-key`, `qianfan-api-key`,
   `modelstudio-standard-api-key-cn`, `modelstudio-standard-api-key`,
   `modelstudio-api-key-cn`, `modelstudio-api-key`, `custom-api-key`, `skip`
-- `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
-- `--token <token>` (non-interactive; used with `--auth-choice token`)
-- `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
-- `--token-expires-in <duration>` (non-interactive; e.g. `365d`, `12h`)
 - `--secret-input-mode <plaintext|ref>` (default `plaintext`; use `ref` to store provider default env refs instead of plaintext keys)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
@@ -986,17 +982,9 @@ Tip: these config write RPCs preflight active SecretRef resolution for refs in t
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
-Anthropic setup-token (supported):
-
-```bash
-claude setup-token
-openclaw models auth setup-token --provider anthropic
-openclaw models status
-```
-
 Billing note: Anthropic changed third-party harness billing on **April 4, 2026
 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
-longer cover OpenClaw, and setup-token usage in OpenClaw now requires **Extra
+longer cover OpenClaw, and Claude CLI usage in OpenClaw now requires **Extra
 Usage** billed separately from the subscription. For production, prefer an
 Anthropic API key or another supported subscription-style provider such as
 OpenAI Codex, Alibaba Cloud Model Studio Coding Plan, MiniMax Coding Plan, or
@@ -1009,6 +997,9 @@ openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
 Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
+
+Existing legacy Anthropic token profiles still run if already configured, but
+OpenClaw no longer offers Anthropic setup-token as a new auth path.
 
 Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.
 Use `anthropic-cli` for onboarding, or use `models auth login` directly.
@@ -1107,7 +1098,7 @@ Options:
 - `add`: interactive auth helper
 - `login`: `--provider <name>`, `--method <method>`, `--set-default`
 - `login-github-copilot`: GitHub Copilot OAuth login flow
-- `setup-token`: `--provider <name>` (default `anthropic`), `--yes`
+- `setup-token`: `--provider <name>`, `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 
 ### `models auth order get|set|clear`
