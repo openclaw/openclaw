@@ -42,9 +42,13 @@ Protocol details:
 
 ## Discovery inputs (how clients learn where the gateway is)
 
-### 1) Bonjour / mDNS (LAN only)
+### 1) Bonjour / DNS-SD discovery
 
-Bonjour is best-effort and does not cross networks. It is only used for “same LAN” convenience.
+Multicast Bonjour is best-effort and does not cross networks. OpenClaw can also browse the
+same gateway beacon via a configured wide-area DNS-SD domain, so discovery can cover:
+
+- `local.` on the same LAN
+- a configured unicast DNS-SD domain for cross-network discovery
 
 Target direction:
 
@@ -113,7 +117,7 @@ See [Remote access](/gateway/remote).
 Recommended client behavior:
 
 1. If a paired direct endpoint is configured and reachable, use it.
-2. Else, if Bonjour finds a gateway on LAN, offer a one-tap “Use this gateway” choice and save it as the direct endpoint.
+2. Else, if discovery finds a gateway on `local.` or the configured wide-area domain, offer a one-tap “Use this gateway” choice and save it as the direct endpoint.
 3. Else, if a tailnet DNS/IP is configured, try direct.
    For mobile nodes on tailnet/public routes, direct means a secure endpoint, not plaintext remote `ws://`.
 4. Else, fall back to SSH.

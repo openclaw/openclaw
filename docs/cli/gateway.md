@@ -3,7 +3,7 @@ summary: "OpenClaw Gateway CLI (`openclaw gateway`) — run, query, and discover
 read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
-  - Discovering gateways via Bonjour (LAN + tailnet)
+  - Discovering gateways via Bonjour (local + wide-area DNS-SD)
 title: "gateway"
 ---
 
@@ -117,7 +117,7 @@ openclaw gateway status --require-rpc
 
 Options:
 
-- `--url <url>`: override the probe URL.
+- `--url <url>`: add an explicit probe target. Configured remote + localhost are still probed.
 - `--token <token>`: token auth for the probe.
 - `--password <password>`: password auth for the probe.
 - `--timeout <ms>`: probe timeout (default `10000`).
@@ -143,6 +143,13 @@ Notes:
 
 - your configured remote gateway (if set), and
 - localhost (loopback) **even if remote is configured**.
+
+If you pass `--url`, that explicit target is added ahead of both. Human output labels the
+targets as:
+
+- `URL (explicit)`
+- `Remote (configured)` or `Remote (configured, inactive)`
+- `Local loopback`
 
 If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
 
@@ -182,7 +189,9 @@ Options:
 
 - `--ssh <target>`: `user@host` or `user@host:port` (port defaults to `22`).
 - `--ssh-identity <path>`: identity file.
-- `--ssh-auto`: pick the first discovered gateway host as SSH target (LAN/WAB only).
+- `--ssh-auto`: pick the first discovered gateway host as SSH target from the resolved
+  discovery endpoint (`local.` plus the configured wide-area domain, if any). TXT-only
+  hints are ignored.
 
 Config (optional, used as defaults):
 
@@ -275,3 +284,9 @@ Examples:
 openclaw gateway discover --timeout 4000
 openclaw gateway discover --json | jq '.beacons[].wsUrl'
 ```
+
+Notes:
+
+- The CLI scans `local.` plus the configured wide-area domain when one is enabled.
+- `wsUrl` in JSON output is derived from the resolved service endpoint, not from TXT-only
+  hints such as `lanHost` or `tailnetDns`.
