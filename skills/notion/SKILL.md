@@ -1,6 +1,6 @@
 ---
 name: notion
-description: Notion API for creating and managing pages, databases, and blocks.
+description: Notion API for creating and managing pages, databases, blocks and using enhanced markdown.
 homepage: https://developers.notion.com
 metadata:
   {
@@ -34,11 +34,11 @@ All requests need:
 NOTION_KEY=$(cat ~/.config/notion/api_key)
 curl -X GET "https://api.notion.com/v1/..." \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json"
 ```
 
-> **Note:** The `Notion-Version` header is required. This skill uses `2025-09-03` (latest). In this version, databases are called "data sources" in the API.
+> **Note:** The `Notion-Version` header is required. This skill uses `2026-03-11` (latest). In this version, databases are called "data sources" in the API.
 
 ## Common Operations
 
@@ -47,7 +47,7 @@ curl -X GET "https://api.notion.com/v1/..." \
 ```bash
 curl -X POST "https://api.notion.com/v1/search" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{"query": "page title"}'
 ```
@@ -57,15 +57,17 @@ curl -X POST "https://api.notion.com/v1/search" \
 ```bash
 curl "https://api.notion.com/v1/pages/{page_id}" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
+  -H "Notion-Version: 2026-03-11"
 ```
 
 **Get page content (blocks):**
 
+> For simple content access, prefer the Markdown API (`GET /v1/pages/{page_id}/markdown`). Use the blocks API only when you need low-level block data or unsupported block types.
+
 ```bash
 curl "https://api.notion.com/v1/blocks/{page_id}/children" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03"
+  -H "Notion-Version: 2026-03-11"
 ```
 
 **Create page in a data source:**
@@ -73,7 +75,7 @@ curl "https://api.notion.com/v1/blocks/{page_id}/children" \
 ```bash
 curl -X POST "https://api.notion.com/v1/pages" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
     "parent": {"database_id": "xxx"},
@@ -89,7 +91,7 @@ curl -X POST "https://api.notion.com/v1/pages" \
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
     "filter": {"property": "Status", "select": {"equals": "Active"}},
@@ -102,7 +104,7 @@ curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
     "parent": {"page_id": "xxx"},
@@ -120,7 +122,7 @@ curl -X POST "https://api.notion.com/v1/data_sources" \
 ```bash
 curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{"properties": {"Status": {"select": {"name": "Done"}}}}'
 ```
@@ -130,7 +132,7 @@ curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
 ```bash
 curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
   -H "Authorization: Bearer $NOTION_KEY" \
-  -H "Notion-Version: 2025-09-03" \
+  -H "Notion-Version: 2026-03-11" \
   -H "Content-Type: application/json" \
   -d '{
     "children": [
@@ -138,6 +140,103 @@ curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
     ]
   }'
 ```
+
+## Markdown Page Operations
+
+Use the Markdown API to read and write page content as plain Markdown — no need to construct block JSON.
+
+**Create page with markdown:**
+
+```bash
+curl -X POST "https://api.notion.com/v1/pages" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2026-03-11" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent": {"page_id": "xxx"},
+    "markdown": "# Meeting Notes\n\nContent here.\n\n- item 1\n- item 2"
+  }'
+```
+
+Constraints:
+- `markdown` and `children` are mutually exclusive in the same request
+- If `properties.title` is omitted, the first `# h1` heading becomes the page title
+- Requires `insert_content` capability on the parent
+- Only works for pages under a parent page (not a database)
+
+**Read page as markdown:**
+
+```bash
+curl "https://api.notion.com/v1/pages/{page_id}/markdown" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2026-03-11"
+```
+
+Response: `{ "object": "page_markdown", "id": "...", "markdown": "...", "truncated": false, "unknown_block_ids": [] }`
+
+- Add `?include_transcript=true` to include meeting transcripts
+- If `truncated: true`, fetch remaining blocks using the IDs in `unknown_block_ids`
+
+**Update page markdown:**
+
+```bash
+# Search-and-replace (recommended)
+curl -X PATCH "https://api.notion.com/v1/pages/{page_id}/markdown" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2026-03-11" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": {
+      "type": "update_content",
+      "old_str": "old text",
+      "new_str": "new text"
+    }
+  }'
+
+# Full replacement
+curl -X PATCH "https://api.notion.com/v1/pages/{page_id}/markdown" \
+  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Notion-Version: 2026-03-11" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": {
+      "type": "replace_content",
+      "new_str": "# New Title\n\nReplaced content."
+    }
+  }'
+```
+
+Two command types:
+- `update_content` — search-and-replace (`old_str` → `new_str`); fails with `validation_error` if `old_str` appears multiple times (add `"replace_all_matches": true` to override)
+- `replace_content` — replaces all page content with `new_str`
+
+Both commands return the full updated page markdown. Constraints:
+- Matching is case-sensitive
+- Operations that would delete child pages/databases are rejected unless `"allow_deleting_content": true` is set
+- Synced pages cannot be updated
+
+## Supported Block Types (Markdown)
+
+| Block Type | Markdown Syntax |
+|---|---|
+| Paragraph | plain text |
+| Heading 1–4 | `# ` through `#### ` |
+| Bulleted list item | `- item` |
+| Numbered list item | `1. item` |
+| To-do | `- [ ]` / `- [x]` |
+| Toggle | `<details><summary>…</summary>…</details>` |
+| Quote | `> quote` |
+| Callout | `<callout>…</callout>` |
+| Divider | `---` |
+| Code block | ` ```language … ``` ` |
+| Equation | `$$ equation $$` |
+| Table | `<table><tr><td>…</td></tr></table>` |
+| Image | `![caption](url)` |
+| File / Video / Audio / PDF | `<file src="url">caption</file>` |
+| Child page | `<page url="…">title</page>` |
+| Columns | `<columns><column>…</column></columns>` |
+
+Unsupported block types render as `<unknown url="..." alt="block_type"/>` placeholder tags.
 
 ## Property Types
 
@@ -154,7 +253,7 @@ Common property formats for database items:
 - **Email:** `{"email": "a@b.com"}`
 - **Relation:** `{"relation": [{"id": "page_id"}]}`
 
-## Key Differences in 2025-09-03
+## Key Differences in 2026-03-11
 
 - **Databases → Data Sources:** Use `/data_sources/` endpoints for queries and retrieval
 - **Two IDs:** Each database now has both a `database_id` and a `data_source_id`
@@ -172,3 +271,7 @@ Common property formats for database items:
 - Append block children: up to 100 children per request, up to two levels of nesting in a single append request
 - Payload size limits: up to 1000 block elements and 500KB overall
 - Use `is_inline: true` when creating data sources to embed them in pages
+- `markdown` field in create/update is mutually exclusive with `children`
+- Markdown pages exceeding ~20,000 blocks will have `truncated: true`; fetch remaining content using block IDs in `unknown_block_ids`
+- All string matching in `update_content` is case-sensitive
+- In-page `\n` must be actual newlines in JSON; use single quotes in cURL
