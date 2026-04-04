@@ -1095,9 +1095,9 @@ Options:
 
 Options:
 
-- `add`: interactive token-auth helper
+- `add`: interactive auth helper (provider auth flow or token paste)
 - `login`: `--provider <name>`, `--method <method>`, `--set-default`
-- `login-github-copilot`: GitHub Copilot OAuth login flow
+- `login-github-copilot`: GitHub Copilot OAuth login flow (`--yes`)
 - `setup-token`: `--provider <name>`, `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 
@@ -1232,7 +1232,7 @@ Browser control CLI (dedicated Chrome/Brave/Edge/Chromium). See [`openclaw brows
 
 Common options:
 
-- `--url`, `--token`, `--timeout`, `--json`
+- `--url`, `--token`, `--timeout`, `--expect-final`, `--json`
 - `--browser-profile <name>`
 
 Manage:
@@ -1246,7 +1246,7 @@ Manage:
 - `browser focus <targetId>`
 - `browser close [targetId]`
 - `browser profiles`
-- `browser create-profile --name <name> [--color <hex>] [--cdp-url <url>]`
+- `browser create-profile --name <name> [--color <hex>] [--cdp-url <url>] [--driver existing-session] [--user-data-dir <path>]`
 - `browser delete-profile --name <name>`
 
 Inspect:
