@@ -110,7 +110,7 @@ describe("openai codex provider", () => {
             };
           }
           return undefined;
-        }),
+        },
       } as never,
     });
 
