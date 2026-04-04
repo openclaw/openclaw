@@ -63,7 +63,6 @@ import {
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
-import { collectDiscordSecurityAuditFindings } from "./security-audit.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
 import { discordSetupAdapter } from "./setup-core.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
@@ -87,6 +86,9 @@ let discordCarbonModuleCache: DiscordCarbonModule | null = null;
 
 const loadDiscordDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
+);
+const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
+  () => import("./security-audit.runtime.js"),
 );
 const loadDiscordResolveChannelsModule = createLazyRuntimeModule(
   () => import("./resolve-channels.js"),
@@ -793,7 +795,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
     security: {
       resolveDmPolicy: resolveDiscordDmPolicy,
       collectWarnings: collectDiscordSecurityWarnings,
-      collectAuditFindings: collectDiscordSecurityAuditFindings,
+      collectAuditFindings: async (params) =>
+        (await loadDiscordSecurityAuditModule()).collectDiscordSecurityAuditFindings(params),
     },
     threading: {
       scopedAccountReplyToMode: {
