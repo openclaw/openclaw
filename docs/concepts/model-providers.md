@@ -306,6 +306,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `openrouter/auto`
 - OpenClaw applies OpenRouter's documented app-attribution headers only when
   the request actually targets `openrouter.ai`
+- OpenRouter-specific Anthropic `cache_control` markers are likewise gated to
+  verified OpenRouter routes, not arbitrary proxy URLs
 - OpenRouter remains on the proxy-style OpenAI-compatible path, so native
   OpenAI-only request shaping (`serviceTier`, Responses `store`,
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
