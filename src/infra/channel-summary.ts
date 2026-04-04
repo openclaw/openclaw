@@ -58,6 +58,9 @@ const buildAccountDetails = (params: {
   if (snapshot.enabled === false) {
     details.push("disabled");
   }
+  if (snapshot.degraded) {
+    details.push(`degraded${snapshot.degradedReason ? `: ${snapshot.degradedReason}` : ""}`);
+  }
   if (snapshot.dmPolicy) {
     details.push(`dm:${snapshot.dmPolicy}`);
   }
@@ -206,22 +209,27 @@ export async function buildChannelSummary(
         ? summaryRecord.configured
         : configuredEntries.length > 0;
 
+    const hasDegraded = entries.some((entry) => entry.snapshot.degraded);
     const status = !anyEnabled
       ? "disabled"
-      : linked !== null
-        ? linked
-          ? "linked"
-          : "not linked"
-        : configured
-          ? "configured"
-          : "not configured";
+      : hasDegraded
+        ? "degraded"
+        : linked !== null
+          ? linked
+            ? "linked"
+            : "not linked"
+          : configured
+            ? "configured"
+            : "not configured";
 
     const statusColor =
       status === "linked" || status === "configured"
         ? theme.success
-        : status === "not linked"
-          ? theme.error
-          : theme.muted;
+        : status === "degraded"
+          ? theme.warn
+          : status === "not linked"
+            ? theme.error
+            : theme.muted;
     const baseLabel = plugin.meta.label ?? plugin.id;
     let line = `${baseLabel}: ${status}`;
 

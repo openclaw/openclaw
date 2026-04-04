@@ -7,6 +7,11 @@ import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
 import {
+  handleDoctorCommand,
+  handlePromptReportCommand,
+  handleCacheTraceCommand,
+} from "./commands-doctor.js";
+import {
   handleCommandsListCommand,
   handleExportSessionCommand,
   handleHelpCommand,
@@ -64,6 +69,9 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleModelsCommand,
     handleStopCommand,
     handleCompactCommand,
+    handleDoctorCommand,
+    handlePromptReportCommand,
+    handleCacheTraceCommand,
     handleAbortTrigger,
   ];
 }

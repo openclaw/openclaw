@@ -5,7 +5,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
-import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
   resolveSessionPluginStatusLines,
@@ -19,6 +19,8 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { TurnSummaryBuilder } from "../../infra/turn-summary.js";
+import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   estimateUsageCost,
@@ -1185,6 +1187,65 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
+    const turnId = crypto.randomUUID();
+    const turnBuilder = new TurnSummaryBuilder({
+      turnId,
+      runId: opts?.runId ?? "unknown",
+      sessionKey,
+      sessionId: followupRun.run.sessionId,
+      provider: followupRun.run.provider,
+      model: followupRun.run.model,
+    });
+
+    if (isDiagnosticsEnabled(cfg)) {
+      emitDiagnosticEvent({
+        type: "turn.started",
+        turnId,
+        runId: opts?.runId ?? "unknown",
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        provider: followupRun.run.provider,
+        model: followupRun.run.model,
+      });
+    }
+
+    let didEmitTurnCompleted = false;
+    const emitTurnCompleted = (params?: {
+      provider?: string;
+      model?: string;
+      usage?: NormalizedUsage;
+      outcome?: "success" | "error" | "aborted" | "compaction";
+      error?: string;
+    }) => {
+      if (!isDiagnosticsEnabled(cfg) || didEmitTurnCompleted) {
+        return;
+      }
+      if (params?.usage) {
+        turnBuilder.setUsage(params.usage);
+      }
+      if (params?.outcome || params?.error) {
+        turnBuilder.setOutcome(params.outcome ?? "error", params.error);
+      }
+      const summary = turnBuilder.freeze();
+      didEmitTurnCompleted = true;
+      emitDiagnosticEvent({
+        type: "turn.completed",
+        turnId,
+        runId: opts?.runId ?? "unknown",
+        sessionKey,
+        sessionId: followupRun.run.sessionId,
+        provider: params?.provider ?? followupRun.run.provider,
+        model: params?.model ?? followupRun.run.model,
+        durationMs: summary.durationMs ?? 0,
+        iterations: summary.iterations,
+        toolCallCount: summary.toolCalls.length,
+        toolErrors: summary.toolCalls.filter((t) => !t.success).length,
+        outcome: summary.outcome,
+        usage: summary.usage,
+        error: summary.error,
+      });
+    };
+
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -1214,6 +1275,9 @@ export async function runReplyAgent(params: {
       if (!replyOperation.result) {
         replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
       }
+      emitTurnCompleted({
+        outcome: replyOperation.result?.kind === "aborted" ? "aborted" : "error",
+      });
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -1337,6 +1401,12 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
+      emitTurnCompleted({
+        provider: providerUsed,
+        model: modelUsed,
+        usage,
+        outcome: autoCompactionCount > 0 ? "compaction" : "success",
+      });
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -1368,6 +1438,12 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
+      emitTurnCompleted({
+        provider: providerUsed,
+        model: modelUsed,
+        usage,
+        outcome: autoCompactionCount > 0 ? "compaction" : "success",
+      });
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -1431,6 +1507,13 @@ export async function runReplyAgent(params: {
         durationMs: Date.now() - runStartedAt,
       });
     }
+
+    emitTurnCompleted({
+      provider: providerUsed,
+      model: modelUsed,
+      usage,
+      outcome: autoCompactionCount > 0 ? "compaction" : "success",
+    });
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
@@ -1577,6 +1660,29 @@ export async function runReplyAgent(params: {
         verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
+    // Pre-op branch freshness warning (only on new sessions to avoid overhead)
+    if (verboseEnabled && activeIsNewSession) {
+      try {
+        const { checkGitUpdateStatus } = await import("../../infra/update-check.js");
+        const gitStatus = await checkGitUpdateStatus({
+          root: followupRun.run.workspaceDir,
+          timeoutMs: 3000,
+          fetch: false,
+        });
+        const warnings: string[] = [];
+        if (gitStatus.dirty) {
+          warnings.push("dirty worktree");
+        }
+        if (gitStatus.behind && gitStatus.behind > 0) {
+          warnings.push(`${gitStatus.behind} commit(s) behind upstream`);
+        }
+        if (warnings.length > 0) {
+          verboseNotices.push({ text: `⚠️ Git: ${warnings.join(", ")}` });
+        }
+      } catch {
+        // Best-effort: skip if git check fails
+      }
+    }
     const prefixPayloads = [...verboseNotices];
     const rawUserText =
       runResult.meta?.finalPromptText ??
@@ -1711,17 +1817,21 @@ export async function runReplyAgent(params: {
     }
     if (trailingPluginStatusPayload) {
       finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
-    }
-    if (responseUsageLine) {
-      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
-    }
-
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
       runFollowupTurn,
     );
   } catch (error) {
+    emitTurnCompleted({
+      outcome:
+        replyOperation.result?.kind === "aborted" ||
+        error instanceof GatewayDrainingError ||
+        error instanceof CommandLaneClearedError
+          ? "aborted"
+          : "error",
+      error: error instanceof Error ? error.message : String(error),
+    });
     if (
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"

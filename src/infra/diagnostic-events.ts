@@ -152,6 +152,39 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticTurnStartedEvent = DiagnosticBaseEvent & {
+  type: "turn.started";
+  turnId: string;
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+};
+
+export type DiagnosticTurnCompletedEvent = DiagnosticBaseEvent & {
+  type: "turn.completed";
+  turnId: string;
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  durationMs: number;
+  iterations: number;
+  toolCallCount: number;
+  toolErrors: number;
+  outcome: "success" | "error" | "aborted" | "compaction";
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  error?: string;
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -165,7 +198,9 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
-  | DiagnosticToolLoopEvent;
+  | DiagnosticToolLoopEvent
+  | DiagnosticTurnStartedEvent
+  | DiagnosticTurnCompletedEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
