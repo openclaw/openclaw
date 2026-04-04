@@ -403,8 +403,9 @@ export async function runEmbeddedAttempt(
       params.bootstrapContextRunKind !== "heartbeat";
     // When contextInjection is "always" (default), use reduced bootstrap
     // budgets on continuation turns to save context window space (~75%
-    // reduction). The session file existence check (post-lock here) is a
-    // reliable continuation signal.
+    // reduction). Skipped when isContinuationTurn is true (bootstrap already
+    // fully skipped). The worst case if session file is unexpectedly absent
+    // is using full budgets — no harm done.
     const isContinuationBudget =
       !isContinuationTurn &&
       (await fs
