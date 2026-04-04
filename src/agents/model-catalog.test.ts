@@ -247,6 +247,12 @@ describe("loadModelCatalog", () => {
         id: "gpt-5.4",
       }),
     );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4-mini",
+      }),
+    );
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {

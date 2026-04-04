@@ -122,6 +122,42 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("resolves gpt-5.4-mini from codex templates with codex-sized limits", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4-mini",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.1-codex-mini") {
+            return {
+              id: "gpt-5.1-codex-mini",
+              name: "gpt-5.1-codex-mini",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return null;
+        },
+      } as never,
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4-mini",
+      contextWindow: 272_000,
+      maxTokens: 128_000,
+      cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
+    });
+    expect(model).not.toHaveProperty("contextTokens");
+  });
+
   it("augments catalog with gpt-5.4 native contextWindow and runtime cap", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -144,6 +180,12 @@ describe("openai codex provider", () => {
         id: "gpt-5.4",
         contextWindow: 1_050_000,
         contextTokens: 272_000,
+      }),
+    );
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4-mini",
+        contextWindow: 272_000,
       }),
     );
   });
