@@ -86,7 +86,8 @@ export function createWebOnMessageHandler(params: {
 
     // Same-phone mode logging retained
     if (msg.from === msg.to) {
-      logVerbose(`📱 Same-phone mode detected (from === to: ${msg.from})`);
+      logVerbose(`📱 Skipping self-message (from === to: ${msg.from}) to prevent infinite loop`);
+      return;
     }
 
     // Skip if this is a message we just sent (echo detection)
