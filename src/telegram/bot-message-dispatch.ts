@@ -1,10 +1,12 @@
 import type { Bot } from "grammy";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import {
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
 } from "../agents/model-catalog.js";
+import { EmptyResponseError } from "../agents/model-fallback.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
@@ -18,6 +20,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { isAbortError } from "../infra/unhandled-rejections.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -41,7 +44,12 @@ import {
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
-const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const EMPTY_RESPONSE_FALLBACK =
+  "I wasn't able to generate a response. Please try rephrasing your question.";
+const RATE_LIMIT_FALLBACK =
+  "Sorry, the service is currently rate limited. Please try again in a few minutes.";
+const GENERAL_ERROR_FALLBACK =
+  "Sorry, I encountered an error while processing your request. Please try again later.";
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -486,6 +494,8 @@ export const dispatchTelegramMessage = async ({
   });
 
   let queuedFinal = false;
+  let lastError: unknown = null;
+  let caughtDispatchError: unknown = null;
 
   if (statusReactionController) {
     void statusReactionController.setThinking();
@@ -504,178 +514,192 @@ export const dispatchTelegramMessage = async ({
   });
 
   try {
-    ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg,
-      dispatcherOptions: {
-        ...prefixOptions,
-        typingCallbacks,
-        deliver: async (payload, info) => {
-          if (info.kind === "final") {
-            // Assistant callbacks are fire-and-forget; ensure queued boundary
-            // rotations/partials are applied before final delivery mapping.
-            await enqueueDraftLaneEvent(async () => {});
-          }
-          const previewButtons = (
-            payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
-          )?.buttons;
-          const split = splitTextIntoLaneSegments(payload.text);
-          const segments = split.segments;
-          const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+    try {
+      ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
+        cfg,
+        dispatcherOptions: {
+          ...prefixOptions,
+          typingCallbacks,
+          deliver: async (payload, info) => {
+            if (info.kind === "final") {
+              // Assistant callbacks are fire-and-forget; ensure queued boundary
+              // rotations/partials are applied before final delivery mapping.
+              await enqueueDraftLaneEvent(async () => {});
+            }
+            const previewButtons = (
+              payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
+            )?.buttons;
+            const split = splitTextIntoLaneSegments(payload.text);
+            const segments = split.segments;
+            const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
-          const flushBufferedFinalAnswer = async () => {
-            const buffered = reasoningStepState.takeBufferedFinalAnswer();
-            if (!buffered) {
+            const flushBufferedFinalAnswer = async () => {
+              const buffered = reasoningStepState.takeBufferedFinalAnswer();
+              if (!buffered) {
+                return;
+              }
+              const bufferedButtons = (
+                buffered.payload.channelData?.telegram as
+                  | { buttons?: TelegramInlineButtons }
+                  | undefined
+              )?.buttons;
+              await deliverLaneText({
+                laneName: "answer",
+                text: buffered.text,
+                payload: buffered.payload,
+                infoKind: "final",
+                previewButtons: bufferedButtons,
+              });
+              reasoningStepState.resetForNextStep();
+            };
+
+            for (const segment of segments) {
+              if (
+                segment.lane === "answer" &&
+                info.kind === "final" &&
+                reasoningStepState.shouldBufferFinalAnswer()
+              ) {
+                reasoningStepState.bufferFinalAnswer({ payload, text: segment.text });
+                continue;
+              }
+              if (segment.lane === "reasoning") {
+                reasoningStepState.noteReasoningHint();
+              }
+              const result = await deliverLaneText({
+                laneName: segment.lane,
+                text: segment.text,
+                payload,
+                infoKind: info.kind,
+                previewButtons,
+                allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
+              });
+              if (segment.lane === "reasoning") {
+                if (result !== "skipped") {
+                  reasoningStepState.noteReasoningDelivered();
+                  await flushBufferedFinalAnswer();
+                }
+                continue;
+              }
+              if (info.kind === "final") {
+                if (reasoningLane.hasStreamedMessage) {
+                  finalizedPreviewByLane.reasoning = true;
+                }
+                reasoningStepState.resetForNextStep();
+              }
+            }
+            if (segments.length > 0) {
               return;
             }
-            const bufferedButtons = (
-              buffered.payload.channelData?.telegram as
-                | { buttons?: TelegramInlineButtons }
-                | undefined
-            )?.buttons;
-            await deliverLaneText({
-              laneName: "answer",
-              text: buffered.text,
-              payload: buffered.payload,
-              infoKind: "final",
-              previewButtons: bufferedButtons,
-            });
-            reasoningStepState.resetForNextStep();
-          };
-
-          for (const segment of segments) {
-            if (
-              segment.lane === "answer" &&
-              info.kind === "final" &&
-              reasoningStepState.shouldBufferFinalAnswer()
-            ) {
-              reasoningStepState.bufferFinalAnswer({ payload, text: segment.text });
-              continue;
-            }
-            if (segment.lane === "reasoning") {
-              reasoningStepState.noteReasoningHint();
-            }
-            const result = await deliverLaneText({
-              laneName: segment.lane,
-              text: segment.text,
-              payload,
-              infoKind: info.kind,
-              previewButtons,
-              allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
-            });
-            if (segment.lane === "reasoning") {
-              if (result !== "skipped") {
-                reasoningStepState.noteReasoningDelivered();
+            if (split.suppressedReasoningOnly) {
+              if (hasMedia) {
+                const payloadWithoutSuppressedReasoning =
+                  typeof payload.text === "string" ? { ...payload, text: "" } : payload;
+                await sendPayload(payloadWithoutSuppressedReasoning);
+              }
+              if (info.kind === "final") {
                 await flushBufferedFinalAnswer();
               }
-              continue;
+              return;
             }
+
             if (info.kind === "final") {
-              if (reasoningLane.hasStreamedMessage) {
-                finalizedPreviewByLane.reasoning = true;
-              }
+              await answerLane.stream?.stop();
+              await reasoningLane.stream?.stop();
               reasoningStepState.resetForNextStep();
             }
-          }
-          if (segments.length > 0) {
-            return;
-          }
-          if (split.suppressedReasoningOnly) {
-            if (hasMedia) {
-              const payloadWithoutSuppressedReasoning =
-                typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+            const canSendAsIs =
+              hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
+            if (!canSendAsIs) {
+              if (info.kind === "final") {
+                await flushBufferedFinalAnswer();
+              }
+              return;
             }
+            await sendPayload(payload);
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
             }
-            return;
-          }
-
-          if (info.kind === "final") {
-            await answerLane.stream?.stop();
-            await reasoningLane.stream?.stop();
-            reasoningStepState.resetForNextStep();
-          }
-          const canSendAsIs =
-            hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
-          if (!canSendAsIs) {
-            if (info.kind === "final") {
-              await flushBufferedFinalAnswer();
+          },
+          onSkip: (_payload, info) => {
+            if (info.reason !== "silent") {
+              deliveryState.markNonSilentSkip();
             }
-            return;
-          }
-          await sendPayload(payload);
-          if (info.kind === "final") {
-            await flushBufferedFinalAnswer();
-          }
+          },
+          onError: (err, info) => {
+            deliveryState.markNonSilentFailure();
+            lastError = err;
+            runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
+          },
         },
-        onSkip: (_payload, info) => {
-          if (info.reason !== "silent") {
-            deliveryState.markNonSilentSkip();
-          }
-        },
-        onError: (err, info) => {
-          deliveryState.markNonSilentFailure();
-          runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
-        },
-      },
-      replyOptions: {
-        skillFilter,
-        disableBlockStreaming,
-        onPartialReply:
-          answerLane.stream || reasoningLane.stream
+        replyOptions: {
+          skillFilter,
+          disableBlockStreaming,
+          onPartialReply:
+            answerLane.stream || reasoningLane.stream
+              ? (payload) =>
+                  enqueueDraftLaneEvent(async () => {
+                    await ingestDraftLaneSegments(payload.text);
+                  })
+              : undefined,
+          onReasoningStream: reasoningLane.stream
             ? (payload) =>
                 enqueueDraftLaneEvent(async () => {
+                  // Split between reasoning blocks only when the next reasoning
+                  // stream starts. Splitting at reasoning-end can orphan the active
+                  // preview and cause duplicate reasoning sends on reasoning final.
+                  if (splitReasoningOnNextStream) {
+                    reasoningLane.stream?.forceNewMessage();
+                    resetDraftLaneState(reasoningLane);
+                    splitReasoningOnNextStream = false;
+                  }
                   await ingestDraftLaneSegments(payload.text);
                 })
             : undefined,
-        onReasoningStream: reasoningLane.stream
-          ? (payload) =>
-              enqueueDraftLaneEvent(async () => {
-                // Split between reasoning blocks only when the next reasoning
-                // stream starts. Splitting at reasoning-end can orphan the active
-                // preview and cause duplicate reasoning sends on reasoning final.
-                if (splitReasoningOnNextStream) {
-                  reasoningLane.stream?.forceNewMessage();
-                  resetDraftLaneState(reasoningLane);
-                  splitReasoningOnNextStream = false;
-                }
-                await ingestDraftLaneSegments(payload.text);
-              })
-          : undefined,
-        onAssistantMessageStart: answerLane.stream
-          ? () =>
-              enqueueDraftLaneEvent(async () => {
-                reasoningStepState.resetForNextStep();
-                if (skipNextAnswerMessageStartRotation) {
-                  skipNextAnswerMessageStartRotation = false;
+          onAssistantMessageStart: answerLane.stream
+            ? () =>
+                enqueueDraftLaneEvent(async () => {
+                  reasoningStepState.resetForNextStep();
+                  if (skipNextAnswerMessageStartRotation) {
+                    skipNextAnswerMessageStartRotation = false;
+                    finalizedPreviewByLane.answer = false;
+                    return;
+                  }
+                  await rotateAnswerLaneForNewAssistantMessage();
+                  // Message-start is an explicit assistant-message boundary.
+                  // Even when no forceNewMessage happened (e.g. prior answer had no
+                  // streamed partials), the next partial belongs to a fresh lifecycle
+                  // and must not trigger late pre-rotation mid-message.
                   finalizedPreviewByLane.answer = false;
-                  return;
-                }
-                await rotateAnswerLaneForNewAssistantMessage();
-                // Message-start is an explicit assistant-message boundary.
-                // Even when no forceNewMessage happened (e.g. prior answer had no
-                // streamed partials), the next partial belongs to a fresh lifecycle
-                // and must not trigger late pre-rotation mid-message.
-                finalizedPreviewByLane.answer = false;
-              })
-          : undefined,
-        onReasoningEnd: reasoningLane.stream
-          ? () =>
-              enqueueDraftLaneEvent(async () => {
-                // Split when/if a later reasoning block begins.
-                splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
-              })
-          : undefined,
-        onToolStart: statusReactionController
-          ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
-            }
-          : undefined,
-        onModelSelected,
-      },
-    }));
+                })
+            : undefined,
+          onReasoningEnd: reasoningLane.stream
+            ? () =>
+                enqueueDraftLaneEvent(async () => {
+                  // Split when/if a later reasoning block begins.
+                  splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
+                })
+            : undefined,
+          onToolStart: statusReactionController
+            ? async (payload) => {
+                await statusReactionController.setTool(payload.name);
+              }
+            : undefined,
+          onModelSelected,
+        },
+      }));
+    } catch (err) {
+      // Intentional cancellations and timeouts must not produce a fallback reply
+      if (isAbortError(err) || isTimeoutError(err)) {
+        throw err;
+      }
+      // Capture error so the fallback message can run; re-throw after cleanup
+      // so callers still see the failure for logging/alerting
+      lastError = err;
+      caughtDispatchError = err;
+      deliveryState.markNonSilentFailure();
+      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    }
   } finally {
     // Upstream assistant callbacks are fire-and-forget; drain queued lane work
     // before stream cleanup so boundary rotations/materialization complete first.
@@ -746,8 +770,19 @@ export const dispatchTelegramMessage = async ({
     !deliverySummary.delivered &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)
   ) {
+    let errorMessage = GENERAL_ERROR_FALLBACK;
+
+    if (lastError) {
+      const failoverReason = resolveFailoverReasonFromError(lastError);
+      if (failoverReason === "rate_limit") {
+        errorMessage = RATE_LIMIT_FALLBACK;
+      } else if (lastError instanceof EmptyResponseError) {
+        errorMessage = EMPTY_RESPONSE_FALLBACK;
+      }
+    }
+
     const result = await deliverReplies({
-      replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
+      replies: [{ text: errorMessage }],
       ...deliveryBaseOptions,
     });
     sentFallback = result.delivered;
@@ -790,4 +825,8 @@ export const dispatchTelegramMessage = async ({
     });
   }
   clearGroupHistory();
+  // Re-throw dispatcher crashes after fallback/cleanup so callers can log/alert
+  if (caughtDispatchError) {
+    throw caughtDispatchError;
+  }
 };

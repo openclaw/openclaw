@@ -8,7 +8,11 @@ import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
-import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import {
+  EmptyResponseError,
+  runWithImageModelFallback,
+  runWithModelFallback,
+} from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -1201,6 +1205,53 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5"); // Rate limit allows attempt
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });
+  });
+
+  it("treats empty content array (no meta) as failure and falls back to next candidate", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4.1-mini", fallbacks: ["fallback/ok-model"] },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ content: [] }) // primary: empty, no meta → EmptyResponseError
+      .mockResolvedValueOnce("ok"); // fallback succeeds
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts a result with meta field even when content is empty", async () => {
+    const cfg = makeCfg({
+      agents: { defaults: { model: { primary: "openai/gpt-4.1-mini" } } },
+    });
+    const payload = { content: [], meta: { usage: { input_tokens: 10, output_tokens: 0 } } };
+    const run = vi.fn().mockResolvedValueOnce(payload);
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(result.result).toEqual(payload);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("EmptyResponseError", () => {
+  it("is an instance of Error with correct name", () => {
+    const err = new EmptyResponseError();
+    expect(err).toBeInstanceOf(Error);
+    expect(err.name).toBe("EmptyResponseError");
+    expect(err.message).toBe("Empty response content received from provider");
   });
 });
 

@@ -28,6 +28,13 @@ import {
 import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
+export class EmptyResponseError extends Error {
+  constructor() {
+    super("Empty response content received from provider");
+    this.name = "EmptyResponseError";
+  }
+}
+
 type ModelCandidate = {
   provider: string;
   model: string;
@@ -153,6 +160,23 @@ async function runFallbackAttempt<T>(params: {
     model: params.model,
   });
   if (runResult.ok) {
+    // Check for empty raw provider response content array (treat as failure)
+    // Do NOT check EmbeddedPiRunResult payloads here - that should be handled upstream
+    // to avoid breaking valid use cases like memory flush which intentionally return empty
+    const result = runResult.result;
+    if (
+      result &&
+      typeof result === "object" &&
+      "content" in result &&
+      Array.isArray(result.content) &&
+      result.content.length === 0 &&
+      // Only apply to raw provider responses (not wrapped in EmbeddedPiRunResult)
+      !("meta" in result)
+    ) {
+      return {
+        error: new EmptyResponseError(),
+      };
+    }
     return {
       success: buildFallbackSuccess({
         result: runResult.result,
