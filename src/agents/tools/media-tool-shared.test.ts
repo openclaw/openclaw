@@ -12,6 +12,19 @@ describe("resolveMediaToolLocalRoots", () => {
     vi.unstubAllEnvs();
   });
 
+  it("honors workspaceOnly for legacy call sites", () => {
+    const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const roots = resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), {
+      workspaceOnly: true,
+    });
+
+    expect(roots.map(normalizeHostPath)).toEqual([
+      normalizeHostPath(path.join(stateDir, "workspace-agent")),
+    ]);
+  });
+
   it("does not widen default local roots from media sources", () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =

@@ -75,8 +75,12 @@ export function resolveMediaToolLocalRoots(
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw) ?? undefined;
   const policy = options?.fsPolicy;
 
+  // Back-compat: older call sites passed { workspaceOnly: true } directly.
+  // Treat it as fsPolicy.workspaceOnly.
+  const workspaceOnly = policy?.workspaceOnly === true || options?.workspaceOnly === true;
+
   // For workspace-only mode we must hard-limit roots to workspace.
-  if (policy?.workspaceOnly) {
+  if (workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
 
