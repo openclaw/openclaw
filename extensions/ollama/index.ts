@@ -24,6 +24,7 @@ import {
   createConfiguredOllamaStreamFn,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
+import { checkWsl2CrashLoopRisk } from "./src/wsl2-crash-loop-check.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
@@ -40,6 +41,9 @@ export default definePluginEntry({
   name: "Ollama Provider",
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
+    if (api.registrationMode === "full") {
+      void checkWsl2CrashLoopRisk(api.logger);
+    }
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({
       id: PROVIDER_ID,

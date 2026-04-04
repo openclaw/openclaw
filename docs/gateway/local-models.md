@@ -13,6 +13,10 @@ Local is doable, but OpenClaw expects large context + strong defenses against pr
 
 If you want the lowest-friction local setup, start with [Ollama](/providers/ollama) and `openclaw onboard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
 
+<Warning>
+**WSL2 + Ollama users:** Ollama installs with `Restart=always` and auto-starts on WSL2 boot, pinning RAM via CUDA. This conflicts with the Hyper-V `hv_balloon` memory driver and can cause a crash-restart loop. See [WSL2 crash loop](/providers/ollama#wsl2-crash-loop-repeated-reboots) in the Ollama troubleshooting guide.
+</Warning>
+
 ## Recommended: LM Studio + large local model (Responses API)
 
 Best current local stack. Load a large model in LM Studio (for example, a full-size Qwen, DeepSeek, or Llama build), enable the local server (default `http://127.0.0.1:1234`), and use Responses API to keep reasoning separate from final text.

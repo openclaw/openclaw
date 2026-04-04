@@ -372,6 +372,55 @@ ps aux | grep ollama
 ollama serve
 ```
 
+### WSL2 crash loop (repeated reboots)
+
+<Warning>
+**WSL2 users:** If you experience repeated WSL2 reboots (sometimes 10+ per day) shortly after starting the gateway, you may be hitting a Hyper-V balloon memory conflict with Ollama.
+</Warning>
+
+**Root cause:** Ollama installs with `Restart=always` in systemd and loads the last model on boot via `cudaMallocHost`, which **pins physical RAM pages**. The Hyper-V `hv_balloon` dynamic memory driver cannot reclaim pinned pages, so Windows forcibly terminates the WSL2 VM — which then restarts and repeats the cycle.
+
+**Symptoms:**
+
+- Repeated WSL2 reboots (check with `wsl --status` or Event Viewer on Windows)
+- High CPU in `app.slice` at startup (`systemd-cgls` shows Ollama consuming >100% CPU)
+- All terminations are SIGTERM from systemd (not OOM killer)
+
+OpenClaw will log a warning at startup when this risky configuration is detected.
+
+See: [ollama/ollama#11317](https://github.com/ollama/ollama/issues/11317)
+
+**Fix — apply all three steps:**
+
+1. Disable Ollama autostart:
+
+   ```bash
+   sudo systemctl disable ollama
+   ```
+
+2. Disable Hyper-V dynamic memory reclaim. Add the following to `%USERPROFILE%\.wslconfig` on the **Windows** side:
+
+   ```ini
+   [wsl2]
+   autoMemoryReclaim=disabled
+   ```
+
+   Then restart WSL2: `wsl --shutdown`
+
+3. Set a model keep-alive timeout so Ollama releases VRAM when idle:
+
+   ```bash
+   # Add to /etc/systemd/system/ollama.service.d/override.conf
+   # or your shell profile
+   export OLLAMA_KEEP_ALIVE=5m
+   ```
+
+   With autostart disabled, start Ollama manually when you need it:
+
+   ```bash
+   ollama serve &
+   ```
+
 ## See Also
 
 - [Model Providers](/concepts/model-providers) - Overview of all providers
