@@ -215,6 +215,55 @@ Examples:
 - `~/.local/bin/*`
 - `/opt/homebrew/bin/rg`
 
+### Subcommand patterns (argPattern)
+
+> New in OpenClaw: **Fine-grained subcommand control** via `argPattern`.
+> This works on **all platforms** (Linux, macOS, Windows).
+
+The `argPattern` field restricts **which arguments** are allowed for a binary.
+Useful for commands like `git` where `git add` is safe but `git push --force` is dangerous.
+
+#### Pattern format
+
+```json
+{
+  "pattern": "/usr/bin/git",
+  "argPattern": "^add$"
+}
+```
+
+The `argPattern` is a **regex** matched against the full argv (joined with space).
+
+#### Convenience glob syntax
+
+You can write subcommand patterns directly in the `pattern` field:
+
+| Pattern | Meaning | Example matching |
+|---------|---------|-----------------|
+| `git *` | Any subcommand | `git add`, `git commit -m hi` |
+| `git add:*` | `add` + its args | `git add foo.txt` |
+
+- `*` → any single token (subcommand name)
+- `:*` → subcommand followed by its arguments
+
+`git add:*` expands to: base pattern=`/usr/bin/git`, argPattern=`^add\s+.*$`
+
+#### Practical examples
+
+```json
+// Allow safe git operations only
+{ "pattern": "git add:*", "description": "git add with args" },
+{ "pattern": "git commit:*", "description": "git commit with args" },
+{ "pattern": "git status", "description": "git status (no args)" }
+
+// Allow npm safe operations
+{ "pattern": "npm run:*", "description": "npm run scripts" },
+{ "pattern": "npm install:*", "description": "npm install packages" }
+```
+
+**Note:** Previously `argPattern` only worked on Windows. Now it works on all platforms.
+Existing entries without `argPattern` continue to match all arguments (path-only match preserved).
+
 Each allowlist entry tracks:
 
 - **id** stable UUID used for UI identity (optional)
