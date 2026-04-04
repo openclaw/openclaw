@@ -111,6 +111,7 @@ Docs: https://docs.openclaw.ai
 - Matrix/credentials: read the current and legacy credential files directly during migration fallback so concurrent legacy rename races still resolve to the stored credentials. (#60591) Thanks @gumadeiras.
 - Providers/Anthropic Vertex: read ADC files directly during auth discovery so explicit Google credentials and default ADC no longer depend on `existsSync` preflight checks. (#60592) Thanks @gumadeiras.
 - Android/Talk Mode: restore spoken assistant replies on node-scoped sessions by keeping reply routing synced to the resolved node session key and pausing mic capture during reply playback. (#60306) Thanks @MKV21.
+- Cron: replay interrupted recurring jobs on the first gateway restart instead of clearing the stale running marker and skipping catch-up until a second restart. (#60583) Thanks @joelnishanth.
 
 ## 2026.4.2
 
