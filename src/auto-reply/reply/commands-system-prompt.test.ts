@@ -26,10 +26,15 @@ vi.mock("../../agents/skills/refresh.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentIds: vi.fn(() => ({ sessionAgentId: "main" })),
+  resolveAgentConfig: vi.fn(() => undefined),
 }));
 
 vi.mock("../../agents/model-selection.js", () => ({
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5" })),
+}));
+
+vi.mock("../../agents/pi-embedded-runner/run/attempt.prompt-helpers.js", () => ({
+  resolvePromptModeForSession: vi.fn(() => "full"),
 }));
 
 vi.mock("../../agents/system-prompt-params.js", () => ({

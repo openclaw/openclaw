@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { AgentSystemPromptConfig } from "../shared/system-prompt-config.js";
 import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
@@ -76,6 +77,8 @@ export type AgentConfig = {
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
+  /** Optional per-agent system prompt composition overrides. */
+  systemPrompt?: AgentSystemPromptConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;

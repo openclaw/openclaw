@@ -215,6 +215,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.list[].fastModeDefault":
     "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+  "agents.list[].systemPrompt":
+    "Optional per-agent system prompt composition overrides. Use mode=custom with sections to select exactly which built-in prompt sections are included for that agent.",
+  "agents.list[].systemPrompt.mode":
+    'Prompt composition mode override for this agent: "full", "minimal", "none", or "custom". Custom mode requires sections and only applies on full-session prompts; subagent/cron minimal prompts still stay minimal.',
+  "agents.list[].systemPrompt.sections":
+    "Built-in system prompt sections to include when agents.list[].systemPrompt.mode is custom. Use this to keep only the sections that matter for a given agent without rewriting the whole system prompt.",
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":

@@ -1424,6 +1424,10 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         thinkingDefault: "high", // per-agent thinking level override
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
+        systemPrompt: {
+          mode: "custom",
+          sections: ["tooling", "safety", "workspace", "runtime"],
+        },
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         identity: {
           name: "Samantha",
@@ -1462,12 +1466,32 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
+- `systemPrompt`: optional per-agent system prompt composition override.
+  - `mode`: `full`, `minimal`, `none`, or `custom`.
+  - `sections`: only valid with `mode: "custom"`. Selects exactly which built-in sections are included for normal full-session prompts for that agent.
+  - `custom` only applies when the base run would use the full prompt. Sub-agent and other minimal prompt runs still stay minimal.
+  - Available section ids: `tooling`, `toolCallStyle`, `safety`, `cli`, `skills`, `memory`, `selfUpdate`, `modelAliases`, `workspace`, `docs`, `sandbox`, `authorizedSenders`, `currentDateTime`, `workspaceFiles`, `replyTags`, `messaging`, `voice`, `extraContext`, `reactions`, `reasoningFormat`, `projectContext`, `silentReplies`, `heartbeats`, `runtime`.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
+
+Example: keep a routing/status agent on a very small prompt without rewriting the entire system prompt:
+
+```yaml
+agents:
+  list:
+    - id: "router"
+      systemPrompt:
+        mode: "custom"
+        sections:
+          - tooling
+          - safety
+          - messaging
+          - runtime
+```
 
 ---
 

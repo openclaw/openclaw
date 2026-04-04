@@ -20,6 +20,25 @@ function extractBetween(
   return { text: input.slice(start, end), found: true };
 }
 
+function extractProjectContextText(systemPrompt: string): { text: string; found: boolean } {
+  const startMarker = "\n# Project Context\n";
+  const start = systemPrompt.indexOf(startMarker);
+  if (start === -1) {
+    return { text: "", found: false };
+  }
+
+  const candidateEndMarkers = ["\n## Silent Replies\n", "\n## Heartbeats\n", "\n## Runtime\n"];
+  const end = candidateEndMarkers
+    .map((marker) => systemPrompt.indexOf(marker, start + startMarker.length))
+    .filter((index) => index !== -1)
+    .toSorted((left, right) => left - right)[0];
+
+  if (end === undefined) {
+    return { text: systemPrompt.slice(start), found: true };
+  }
+  return { text: systemPrompt.slice(start, end), found: true };
+}
+
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
   const prompt = skillsPrompt.trim();
   if (!prompt) {
@@ -96,11 +115,7 @@ export function buildSystemPromptReport(params: {
   tools: AgentTool[];
 }): SessionSystemPromptReport {
   const systemPrompt = params.systemPrompt.trim();
-  const projectContext = extractBetween(
-    systemPrompt,
-    "\n# Project Context\n",
-    "\n## Silent Replies\n",
-  );
+  const projectContext = extractProjectContextText(systemPrompt);
   const projectContextChars = projectContext.text.length;
   const toolListText = extractToolListText(systemPrompt);
   const toolListChars = toolListText.length;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
+import { buildAgentSystemPrompt } from "./system-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile {
@@ -111,5 +112,37 @@ describe("buildSystemPromptReport", () => {
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
+  });
+
+  it("stops project-context counting at runtime when silent replies are omitted", () => {
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "custom",
+      promptSections: ["projectContext", "runtime"],
+      contextFiles: [{ path: "AGENTS.md", content: "Alpha" }],
+    });
+
+    const runtimeIndex = systemPrompt.indexOf("\n## Runtime\n");
+    expect(runtimeIndex).toBeGreaterThan(0);
+
+    const projectContextStart = systemPrompt.indexOf("\n# Project Context\n");
+    const expectedProjectContextChars = systemPrompt.slice(
+      projectContextStart,
+      runtimeIndex,
+    ).length;
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt,
+      bootstrapFiles: [],
+      injectedFiles: [{ path: "AGENTS.md", content: "Alpha" }],
+      skillsPrompt: "",
+      tools: [],
+    });
+
+    expect(report.systemPrompt.projectContextChars).toBe(expectedProjectContextChars);
+    expect(report.systemPrompt.projectContextChars).toBeLessThan(report.systemPrompt.chars);
   });
 });

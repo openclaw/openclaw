@@ -3917,6 +3917,46 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   additionalProperties: false,
                 },
+                systemPrompt: {
+                  type: "object",
+                  properties: {
+                    mode: {
+                      enum: ["full", "minimal", "none", "custom"],
+                    },
+                    sections: {
+                      type: "array",
+                      items: {
+                        enum: [
+                          "tooling",
+                          "toolCallStyle",
+                          "safety",
+                          "cli",
+                          "skills",
+                          "memory",
+                          "selfUpdate",
+                          "modelAliases",
+                          "workspace",
+                          "docs",
+                          "sandbox",
+                          "authorizedSenders",
+                          "currentDateTime",
+                          "workspaceFiles",
+                          "replyTags",
+                          "messaging",
+                          "voice",
+                          "extraContext",
+                          "reactions",
+                          "reasoningFormat",
+                          "projectContext",
+                          "silentReplies",
+                          "heartbeats",
+                          "runtime",
+                        ],
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
                 heartbeat: {
                   type: "object",
                   properties: {
@@ -11621,6 +11661,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.list[].fastModeDefault": {
       label: "Agent Fast Mode Default",
       help: "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+      tags: ["advanced"],
+    },
+    "agents.list[].systemPrompt": {
+      label: "Agent System Prompt",
+      help: "Optional per-agent system prompt composition overrides. Use mode=custom with sections to select exactly which built-in prompt sections are included for that agent.",
+      tags: ["advanced"],
+    },
+    "agents.list[].systemPrompt.mode": {
+      label: "Agent Prompt Mode",
+      help: 'Prompt composition mode override for this agent: "full", "minimal", "none", or "custom". Custom mode requires sections and only applies on full-session prompts; subagent/cron minimal prompts still stay minimal.',
+      tags: ["advanced"],
+    },
+    "agents.list[].systemPrompt.sections": {
+      label: "Agent Prompt Sections",
+      help: "Built-in system prompt sections to include when agents.list[].systemPrompt.mode is custom. Use this to keep only the sections that matter for a given agent without rewriting the whole system prompt.",
       tags: ["advanced"],
     },
     "agents.defaults": {

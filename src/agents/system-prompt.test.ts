@@ -98,6 +98,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       promptMode: "minimal",
       ownerNumbers: ["+123"],
+      userTimezone: "America/Chicago",
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
       heartbeatPrompt: "ping",
@@ -118,6 +119,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
+    expect(prompt).toContain("## Current Date & Time");
+    expect(prompt).toContain("session_status");
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
@@ -211,6 +214,29 @@ describe("buildAgentSystemPrompt", () => {
       promptMode: "minimal",
     });
 
+    expect(prompt).not.toContain("## Skills");
+  });
+
+  it("supports custom prompt mode section selection", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "custom",
+      promptSections: ["tooling", "voice", "runtime"],
+      toolNames: ["exec"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+      docsPath: "/tmp/openclaw/docs",
+      userTimezone: "America/Chicago",
+      ttsHint: "Voice (TTS) is enabled.",
+    });
+
+    expect(prompt).toContain("## Tooling");
+    expect(prompt).toContain("## Voice (TTS)");
+    expect(prompt).toContain("## Runtime");
+    expect(prompt).not.toContain("## Safety");
+    expect(prompt).not.toContain("## Workspace");
+    expect(prompt).not.toContain("## Documentation");
+    expect(prompt).not.toContain("## Current Date & Time");
     expect(prompt).not.toContain("## Skills");
   });
 

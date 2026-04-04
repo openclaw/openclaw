@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { PROMPT_MODES, PROMPT_SECTION_IDS } from "../shared/system-prompt-config.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
   GroupChatSchema,
@@ -771,6 +772,31 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
+const AgentSystemPromptSchema = z
+  .object({
+    mode: z.enum(PROMPT_MODES).optional(),
+    sections: z.array(z.enum(PROMPT_SECTION_IDS)).min(1).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode === "custom" && !value.sections?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sections"],
+        message: 'sections is required when systemPrompt.mode is "custom"',
+      });
+    }
+
+    if (value.sections?.length && value.mode !== "custom") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mode"],
+        message: 'systemPrompt.sections can only be used when systemPrompt.mode is "custom"',
+      });
+    }
+  })
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -787,6 +813,7 @@ export const AgentEntrySchema = z
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
+    systemPrompt: AgentSystemPromptSchema,
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

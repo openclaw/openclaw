@@ -44,9 +44,63 @@ OpenClaw can render smaller system prompts for sub-agents. The runtime sets a
   Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected
   context stay available.
 - `none`: returns only the base identity line.
+- `custom`: available through per-agent config at `agents.list[].systemPrompt`.
+  It lets you keep only selected built-in sections for that agent's normal
+  full-session prompt, without replacing the whole prompt text.
 
 When `promptMode=minimal`, extra injected prompts are labeled **Subagent
 Context** instead of **Group Chat Context**.
+
+`agents.list[].systemPrompt.mode: "custom"` only applies when the base run
+would have used the full prompt. It does not force sub-agents or other
+minimal-mode runs back to full.
+
+### Custom section selection
+
+Per-agent custom prompt composition uses:
+
+```yaml
+agents:
+  list:
+    - id: "router"
+      systemPrompt:
+        mode: "custom"
+        sections:
+          - tooling
+          - safety
+          - messaging
+          - runtime
+```
+
+Available section ids:
+
+- `tooling`
+- `toolCallStyle`
+- `safety`
+- `cli`
+- `skills`
+- `memory`
+- `selfUpdate`
+- `modelAliases`
+- `workspace`
+- `docs`
+- `sandbox`
+- `authorizedSenders`
+- `currentDateTime`
+- `workspaceFiles`
+- `replyTags`
+- `messaging`
+- `voice`
+- `extraContext`
+- `reactions`
+- `reasoningFormat`
+- `projectContext`
+- `silentReplies`
+- `heartbeats`
+- `runtime`
+
+This is useful for tightly scoped agents such as routers, notification agents,
+or voice-only agents that do not need the full default prompt surface.
 
 ## Workspace bootstrap injection
 

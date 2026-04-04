@@ -139,6 +139,7 @@ export async function prepareCliRunContext(
     tools: [],
     contextFiles,
     modelDisplay,
+    sessionKey: params.sessionKey,
     agentId: sessionAgentId,
   });
   const systemPromptReport = buildSystemPromptReport({

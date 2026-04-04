@@ -90,6 +90,47 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.list[].systemPrompt custom section selection", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "ops",
+            systemPrompt: {
+              mode: "custom",
+              sections: ["tooling", "runtime", "workspace"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('rejects agents.list[].systemPrompt.sections without mode="custom"', () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "ops",
+            systemPrompt: {
+              mode: "full",
+              sections: ["tooling", "runtime"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "agents.list.0.systemPrompt.mode")).toBe(
+        true,
+      );
+    }
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

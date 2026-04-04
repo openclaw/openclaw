@@ -9,11 +9,14 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
+import { resolveEffectivePromptConfig } from "../../shared/system-prompt-config.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
+import { resolvePromptModeForSession } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
@@ -38,11 +41,19 @@ export function buildSystemPrompt(params: {
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
+  sessionKey?: string;
   agentId?: string;
 }) {
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
+  });
+  const { mode: promptMode, sections: promptSections } = resolveEffectivePromptConfig({
+    baseMode: resolvePromptModeForSession(params.sessionKey),
+    override:
+      params.config && params.agentId
+        ? resolveAgentConfig(params.config, params.agentId)?.systemPrompt
+        : undefined,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
@@ -73,6 +84,8 @@ export function buildSystemPrompt(params: {
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     acpEnabled: params.config?.acp?.enabled !== false,
+    promptMode,
+    promptSections,
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     modelAliasLines: buildModelAliasLines(params.config),

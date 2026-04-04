@@ -24,12 +24,13 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { resolveEffectivePromptConfig } from "../../../shared/system-prompt-config.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createAnthropicVertexStreamFnForModel } from "../../anthropic-vertex-stream.js";
 import {
@@ -647,10 +648,17 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode = resolvePromptModeForSession(params.sessionKey);
+    const { mode: effectivePromptMode, sections: effectivePromptSections } =
+      resolveEffectivePromptConfig({
+        baseMode: params.toolsAllow?.length
+          ? ("minimal" as const)
+          : resolvePromptModeForSession(params.sessionKey),
+        override:
+          params.toolsAllow?.length || !params.config
+            ? undefined
+            : resolveAgentConfig(params.config, sessionAgentId)?.systemPrompt,
+      });
 
-    // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
     const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
@@ -683,6 +691,7 @@ export async function runEmbeddedAttempt(
       workspaceNotes,
       reactionGuidance,
       promptMode: effectivePromptMode,
+      promptSections: effectivePromptSections,
       acpEnabled: params.config?.acp?.enabled !== false,
       runtimeInfo,
       messageToolHints,

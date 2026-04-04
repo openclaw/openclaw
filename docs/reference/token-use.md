@@ -25,6 +25,10 @@ OpenClaw assembles its own system prompt on every run. It includes:
 
 See the full breakdown in [System Prompt](/concepts/system-prompt).
 
+For narrowly scoped agents, you can also reduce system prompt overhead with
+per-agent prompt composition at `agents.list[].systemPrompt`, including
+`mode: "custom"` plus a selected `sections` list.
+
 ## What counts in the context window
 
 Everything the model receives counts toward the context limit:
