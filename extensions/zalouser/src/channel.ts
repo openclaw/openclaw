@@ -12,23 +12,6 @@ import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import type {
-  ChannelAccountSnapshot,
-  ChannelDirectoryEntry,
-  ChannelGroupContext,
-  ChannelMessageActionAdapter,
-  ChannelPlugin,
-  OpenClawConfig,
-  GroupToolPolicyConfig,
-} from "../runtime-api.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  chunkTextForOutbound,
-  isDangerousNameMatchingEnabled,
-  isNumericTargetId,
-  normalizeAccountId,
-  sendPayloadWithChunkedTextAndMedia,
-} from "../runtime-api.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -37,6 +20,23 @@ import {
   checkZcaAuthenticated,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
+import type {
+  ChannelAccountSnapshot,
+  ChannelDirectoryEntry,
+  ChannelGroupContext,
+  ChannelMessageActionAdapter,
+  ChannelPlugin,
+  OpenClawConfig,
+  GroupToolPolicyConfig,
+} from "./channel-api.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  chunkTextForOutbound,
+  isDangerousNameMatchingEnabled,
+  isNumericTargetId,
+  normalizeAccountId,
+  sendPayloadWithChunkedTextAndMedia,
+} from "./channel-api.js";
 import { buildZalouserGroupCandidates, findZalouserGroupEntry } from "./group-policy.js";
 import { resolveZalouserReactionMessageIds } from "./message-sid.js";
 import { probeZalouser, type ZalouserProbeResult } from "./probe.js";
@@ -184,7 +184,9 @@ const zalouserMessageActions: ChannelMessageActionAdapter = {
     const accounts = accountId
       ? [resolveZalouserAccountSync({ cfg, accountId })].filter((account) => account.enabled)
       : listZalouserAccountIds(cfg)
-          .map((resolvedAccountId) => resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId }))
+          .map((resolvedAccountId) =>
+            resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId }),
+          )
           .filter((account) => account.enabled);
     if (accounts.length === 0) {
       return null;
