@@ -26,6 +26,12 @@ export type AgentWaitResult = {
   endedAt?: number;
 };
 
+export type AgentRunsQuiescentResult = {
+  timedOut: boolean;
+  pendingRunIds: string[];
+  deadlineAtMs: number;
+};
+
 type RawAgentWaitResponse = {
   status?: string;
   error?: string;
@@ -43,6 +49,18 @@ function normalizeAgentWaitResult(
     startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
     endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
   };
+}
+
+function normalizePendingRunIds(runIds: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  for (const runId of runIds) {
+    const normalized = runId.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+  }
+  return [...seen];
 }
 
 function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantReplySnapshot {
@@ -158,6 +176,38 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   return {
     status: "ok",
     replyText,
+  };
+}
+
+export async function waitForAgentRunsUntilQuiescent(params: {
+  getPendingRunIds: () => Iterable<string>;
+  timeoutMs?: number;
+  deadlineAtMs?: number;
+  callGateway?: GatewayCaller;
+}): Promise<AgentRunsQuiescentResult> {
+  const deadlineAtMs =
+    params.deadlineAtMs ?? Date.now() + Math.max(1, Math.floor(params.timeoutMs ?? 0));
+
+  let pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+
+  while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
+    const remainingMs = Math.max(1, deadlineAtMs - Date.now());
+    await Promise.allSettled(
+      [...pendingRunIds].map((runId) =>
+        waitForAgentRun({
+          runId,
+          timeoutMs: remainingMs,
+          callGateway: params.callGateway,
+        }),
+      ),
+    );
+    pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+  }
+
+  return {
+    timedOut: pendingRunIds.size > 0,
+    pendingRunIds: [...pendingRunIds],
+    deadlineAtMs,
   };
 }
 

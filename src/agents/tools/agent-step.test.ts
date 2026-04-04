@@ -10,6 +10,7 @@ import {
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
+  waitForAgentRunsUntilQuiescent,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "./agent-step.js";
 
@@ -177,5 +178,71 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       status: "ok",
       replyText: "fresh reply",
     });
+  });
+});
+
+describe("waitForAgentRunsUntilQuiescent", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear();
+    __testing.setDepsForTest({
+      callGateway: async (opts) => await callGatewayMock(opts),
+    });
+  });
+
+  it("waits across rounds until descendant runs stop changing", async () => {
+    let activeRunIds = ["run-1"];
+    callGatewayMock.mockImplementation(async (opts) => {
+      const request = opts as { method?: string; params?: { runId?: string } };
+      if (request.method !== "agent.wait") {
+        throw new Error(`unexpected method: ${String(request.method)}`);
+      }
+      if (request.params?.runId === "run-1") {
+        activeRunIds = ["run-2"];
+      } else if (request.params?.runId === "run-2") {
+        activeRunIds = [];
+      }
+      return { status: "ok" };
+    });
+
+    const result = await waitForAgentRunsUntilQuiescent({
+      timeoutMs: 1_000,
+      getPendingRunIds: () => activeRunIds,
+    });
+
+    expect(result).toEqual({
+      timedOut: false,
+      pendingRunIds: [],
+      deadlineAtMs: expect.any(Number),
+    });
+    expect(callGatewayMock.mock.calls.map((call) => call[0])).toEqual([
+      {
+        method: "agent.wait",
+        params: {
+          runId: "run-1",
+          timeoutMs: expect.any(Number),
+        },
+        timeoutMs: expect.any(Number),
+      },
+      {
+        method: "agent.wait",
+        params: {
+          runId: "run-2",
+          timeoutMs: expect.any(Number),
+        },
+        timeoutMs: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("deduplicates and trims pending run ids", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRunsUntilQuiescent({
+      timeoutMs: 1_000,
+      getPendingRunIds: () => [" run-1 ", "run-1", "", "run-2"],
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(callGatewayMock.mock.calls).toHaveLength(2);
   });
 });

@@ -15,9 +15,15 @@ vi.mock("../../agents/subagent-registry-read.js", () => ({
   listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock("../../agents/tools/agent-step.js", () => ({
-  readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock("../../agents/tools/agent-step.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/tools/agent-step.js")>(
+    "../../agents/tools/agent-step.js",
+  );
+  return {
+    ...actual,
+    readLatestAssistantReply: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: vi.fn().mockResolvedValue({ status: "ok" }),
