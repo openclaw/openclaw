@@ -33,7 +33,7 @@ const requiredPathGroups = [
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
 ];
-const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
+const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/", "docs/.generated/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
 // startup/doctor OOM reports. Keep enough headroom for the current pack with
 // restored bundled upgrade surfaces and Control UI assets while still catching

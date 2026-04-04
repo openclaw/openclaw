@@ -15,6 +15,7 @@ import {
   type WebhookTarget,
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -24,8 +25,7 @@ import {
   resolveRequestClientIp,
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
-} from "./runtime-api.js";
-import { getBlueBubblesRuntime } from "./runtime.js";
+} from "./webhook-ingress.js";
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({

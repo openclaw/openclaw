@@ -1,26 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../config/config.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
-import { loadGatewaySessionRow } from "./session-utils.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
-vi.mock("./session-lifecycle-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-lifecycle-state.js")>();
-  return {
-    ...actual,
-    persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
-      persistGatewaySessionLifecycleEventMock(...args),
-  };
-});
-
-import {
-  createAgentEventHandler,
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createToolEventRecipientRegistry,
-} from "./server-chat.js";
+vi.mock("./server-chat.persist-session-lifecycle.runtime.js", () => ({
+  persistGatewaySessionLifecycleEvent: (...args: unknown[]) =>
+    persistGatewaySessionLifecycleEventMock(...args),
+}));
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({})),
@@ -34,13 +20,19 @@ vi.mock("../infra/heartbeat-visibility.js", () => ({
   })),
 }));
 
-vi.mock("./session-utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./session-utils.js")>();
-  return {
-    ...actual,
-    loadGatewaySessionRow: vi.fn(),
-  };
-});
+vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
+  loadGatewaySessionRow: vi.fn(),
+}));
+
+import { loadConfig } from "../config/config.js";
+import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import {
+  createAgentEventHandler,
+  createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createToolEventRecipientRegistry,
+} from "./server-chat.js";
+import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 
 describe("agent event handler", () => {
   beforeEach(() => {

@@ -6,7 +6,11 @@ import {
   resolvePluginSnapshotCacheTtlMs,
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
-import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "./loader.js";
+import {
+  loadOpenClawPlugins,
+  resolveCompatibleRuntimePluginRegistry,
+  resolveRuntimePluginRegistry,
+} from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
@@ -104,10 +108,11 @@ function resolveWebFetchLoadOptions(params: {
   cache?: boolean;
 }) {
   const env = params.env ?? process.env;
-  const { config } = resolveBundledWebFetchResolutionConfig({
-    ...params,
-    env,
-  });
+  const { config, activationSourceConfig, autoEnabledReasons } =
+    resolveBundledWebFetchResolutionConfig({
+      ...params,
+      env,
+    });
   const onlyPluginIds = resolveWebFetchCandidatePluginIds({
     config,
     workspaceDir: params.workspaceDir,
@@ -117,6 +122,8 @@ function resolveWebFetchLoadOptions(params: {
   return {
     env,
     config,
+    activationSourceConfig,
+    autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     cache: params.cache ?? false,
     activate: params.activate ?? false,
@@ -170,8 +177,11 @@ export function resolvePluginWebFetchProviders(params: {
     }
   }
   const loadOptions = resolveWebFetchLoadOptions(params);
+  // Keep repeated runtime reads on the already-compatible active registry when
+  // possible, then fall back to a fresh snapshot load only when necessary.
   const resolved = mapRegistryWebFetchProviders({
-    registry: loadOpenClawPlugins(loadOptions),
+    registry:
+      resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
   });
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);

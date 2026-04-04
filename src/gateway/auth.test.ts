@@ -4,6 +4,7 @@ import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   authorizeHttpGatewayConnect,
+  resolveEffectiveSharedGatewayAuth,
   authorizeWsControlUiGatewayConnect,
   resolveGatewayAuth,
 } from "./auth.js";
@@ -102,6 +103,56 @@ describe("gateway auth", () => {
       token: "env-token",
       password: "env-password",
     });
+  });
+
+  it("resolves the active shared token auth only", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "token",
+          token: "config-token",
+          password: "config-password",
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      mode: "token",
+      secret: "config-token",
+    });
+  });
+
+  it("resolves the active shared password auth only", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "password",
+          token: "config-token",
+          password: "config-password",
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toEqual({
+      mode: "password",
+      secret: "config-password",
+    });
+  });
+
+  it("returns null for non-shared gateway auth modes", () => {
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: { mode: "none" },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toBeNull();
+    expect(
+      resolveEffectiveSharedGatewayAuth({
+        authConfig: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-user" },
+        },
+        env: {} as NodeJS.ProcessEnv,
+      }),
+    ).toBeNull();
   });
 
   it("keeps gateway auth config values ahead of env overrides", () => {

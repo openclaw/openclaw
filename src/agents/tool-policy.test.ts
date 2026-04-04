@@ -6,6 +6,7 @@ import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { TOOL_POLICY_CONFORMANCE } from "./tool-policy.conformance.js";
 import {
   applyOwnerOnlyToolPolicy,
+  collectExplicitAllowlist,
   expandToolGroups,
   isOwnerOnlyToolName,
   normalizeToolName,
@@ -131,6 +132,16 @@ describe("tool-policy", () => {
     ] as unknown as AnyAgentTool[];
     expect(applyOwnerOnlyToolPolicy(tools, false)).toEqual([]);
     expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
+  });
+
+  it("preserves explicit alsoAllow hints when allow is empty", () => {
+    expect(
+      collectExplicitAllowlist([
+        {
+          allow: ["*", "optional-demo"],
+        },
+      ]),
+    ).toContain("optional-demo");
   });
 
   it("strips nodes for non-owner senders via fallback policy", () => {

@@ -27,8 +27,12 @@ Main agent credentials are **not** shared automatically. Never reuse `agentDir`
 across agents (it causes auth/session collisions). If you want to share creds,
 copy `auth-profiles.json` into the other agent's `agentDir`.
 
-Skills are per-agent via each workspace’s `skills/` folder, with shared skills
-available from `~/.openclaw/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+Skills are loaded from each agent workspace plus shared roots such as
+`~/.openclaw/skills`, then filtered by the effective agent skill allowlist when
+configured. Use `agents.defaults.skills` for a shared baseline and
+`agents.list[].skills` for per-agent replacement. See
+[Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and
+[Skills: agent skill allowlists](/tools/skills#agent-skill-allowlists).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 

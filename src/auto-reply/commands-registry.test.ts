@@ -354,12 +354,10 @@ describe("commands registry args", () => {
       args: [{ name: "model", description: "model", type: "string", captureRemaining: true }],
     };
 
-    expect(serializeCommandArgs(command, { raw: "gpt-5.2-codex" })).toBe("gpt-5.2-codex");
-    expect(serializeCommandArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "gpt-5.2-codex",
-    );
-    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.2-codex" } })).toBe(
-      "/model gpt-5.2-codex",
+    expect(serializeCommandArgs(command, { raw: "gpt-5.4" })).toBe("gpt-5.4");
+    expect(serializeCommandArgs(command, { values: { model: "gpt-5.4" } })).toBe("gpt-5.4");
+    expect(buildCommandTextFromArgs(command, { values: { model: "gpt-5.4" } })).toBe(
+      "/model gpt-5.4",
     );
   });
 

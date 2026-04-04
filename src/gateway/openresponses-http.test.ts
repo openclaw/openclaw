@@ -238,7 +238,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "openclaw", input: "hi" }),
       });
-      expect(resMissingAuth.status).toBe(403);
+      expect(resMissingAuth.status).toBe(200);
       await ensureResponseConsumed(resMissingAuth);
 
       const resMissingModel = await postResponses(port, { input: "hi" });
@@ -714,7 +714,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it("treats HTTP callers as non-owner regardless of requested scopes", async () => {
+  it("treats write-scoped HTTP callers as non-owner and admin-scoped callers as owner", async () => {
     const port = enabledPort;
 
     agentCommand.mockClear();
@@ -743,8 +743,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const adminScopeOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    // Requested HTTP scopes do not prove owner identity for owner-only tools.
-    expect(adminScopeOpts?.senderIsOwner).toBe(false);
+    expect(adminScopeOpts?.senderIsOwner).toBe(true);
     await ensureResponseConsumed(adminScopeResponse);
 
     agentCommand.mockClear();
@@ -765,7 +764,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const streamingOpts = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
       | { senderIsOwner?: boolean }
       | undefined;
-    expect(streamingOpts?.senderIsOwner).toBe(false);
+    expect(streamingOpts?.senderIsOwner).toBe(true);
     const streamingEvents = parseSseEvents(await streamingResponse.text());
     expect(streamingEvents.some((event) => event.event === "response.completed")).toBe(true);
   });

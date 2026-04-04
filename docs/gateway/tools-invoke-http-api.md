@@ -35,7 +35,7 @@ Treat this endpoint as a **full operator-access** surface for the gateway instan
 - A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
 - For shared-secret auth modes (`token` and `password`), the endpoint restores the normal full operator defaults even if the caller sends a narrower `x-openclaw-scopes` header.
 - Shared-secret auth also treats direct tool invokes on this endpoint as owner-sender turns.
-- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"` on a private ingress) still honor the declared operator scopes on the request.
+- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"` on a private ingress) honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set.
 - Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
 
 Auth matrix:
@@ -47,8 +47,9 @@ Auth matrix:
   - treats direct tool invokes on this endpoint as owner-sender turns
 - trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
   - authenticate some outer trusted identity or deployment boundary
-  - honor the declared `x-openclaw-scopes` header
-  - only get owner semantics when `operator.admin` is actually present in those declared scopes
+  - honor `x-openclaw-scopes` when the header is present
+  - fall back to the normal operator default scope set when the header is absent
+  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 ## Request body
 

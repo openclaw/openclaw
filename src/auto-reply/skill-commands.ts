@@ -17,10 +17,12 @@ export {
 export function listSkillCommandsForWorkspace(params: {
   workspaceDir: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   skillFilter?: string[];
 }): SkillCommandSpec[] {
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
+    agentId: params.agentId,
     skillFilter: params.skillFilter,
     eligibility: { remote: getRemoteSkillEligibility() },
     reservedNames: listReservedChatSlashCommandNames(),

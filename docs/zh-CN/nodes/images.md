@@ -5,7 +5,7 @@ summary: 发送、Gateway 网关和智能体回复的图像和媒体处理规则
 title: 图像和媒体支持
 x-i18n:
   generated_at: "2026-02-03T07:50:42Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 971aed398ea01078efbad7a8a4bca17f2a975222a2c4db557565e4334c9450e0
   source_path: nodes/images.md

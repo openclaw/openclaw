@@ -218,6 +218,19 @@ For actions/directory reads, user token can be preferred when configured. For wr
   - if encoded option values exceed Slack limits, the flow falls back to buttons
 - For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
 
+Default slash command settings:
+
+- `enabled: false`
+- `name: "openclaw"`
+- `sessionPrefix: "slack:slash"`
+- `ephemeral: true`
+
+Slash sessions use isolated keys:
+
+- `agent:<agentId>:slack:slash:<userId>`
+
+and still route command execution against the target conversation session (`CommandTargetSessionKey`).
+
 ## Interactive replies
 
 Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
@@ -266,19 +279,6 @@ Notes:
 - This is Slack-specific UI. Other channels do not translate Slack Block Kit directives into their own button systems.
 - The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
 - If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
-
-Default slash command settings:
-
-- `enabled: false`
-- `name: "openclaw"`
-- `sessionPrefix: "slack:slash"`
-- `ephemeral: true`
-
-Slash sessions use isolated keys:
-
-- `agent:<agentId>:slack:slash:<userId>`
-
-and still route command execution against the target conversation session (`CommandTargetSessionKey`).
 
 ## Threading, sessions, and reply tags
 
@@ -354,6 +354,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
+- Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
 - Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
@@ -391,7 +392,7 @@ Notes:
 ## Manifest and scope checklist
 
 <AccordionGroup>
-  <Accordion title="Slack app manifest example">
+  <Accordion title="Slack app manifest example" defaultOpen>
 
 ```json
 {
@@ -402,7 +403,7 @@ Notes:
   "features": {
     "bot_user": {
       "display_name": "OpenClaw",
-      "always_online": false
+      "always_online": true
     },
     "app_home": {
       "messages_tab_enabled": true,
@@ -419,27 +420,28 @@ Notes:
   "oauth_config": {
     "scopes": {
       "bot": [
-        "chat:write",
+        "app_mentions:read",
+        "assistant:write",
         "channels:history",
         "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
         "groups:history",
+        "groups:read",
         "im:history",
         "im:read",
         "im:write",
         "mpim:history",
         "mpim:read",
         "mpim:write",
-        "users:read",
-        "app_mentions:read",
-        "assistant:write",
-        "reactions:read",
-        "reactions:write",
         "pins:read",
         "pins:write",
-        "emoji:read",
-        "commands",
-        "files:read",
-        "files:write"
+        "reactions:read",
+        "reactions:write",
+        "users:read"
       ]
     }
   },
@@ -448,17 +450,17 @@ Notes:
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
         "message.channels",
         "message.groups",
         "message.im",
         "message.mpim",
-        "reaction_added",
-        "reaction_removed",
-        "member_joined_channel",
-        "member_left_channel",
-        "channel_rename",
         "pin_added",
-        "pin_removed"
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     }
   }

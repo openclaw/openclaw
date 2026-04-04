@@ -11,6 +11,7 @@ import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
+import ai.openclaw.app.gateway.isPrivateLanGatewayHost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -107,12 +108,26 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_discoveryNonLoopbackWithoutHintsStillRequiresTls() {
+  fun resolveTlsParamsForEndpoint_manualPrivateLanCanStayCleartextWhenToggleIsOff() {
+    val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryTailnetWithoutHintsStillRequiresTls() {
     val endpoint =
       GatewayEndpoint(
         stableId = "_openclaw-gw._tcp.|local.|Test",
         name = "Test",
-        host = "10.0.0.2",
+        host = "100.64.0.9",
         port = 18789,
         tlsEnabled = false,
         tlsFingerprintSha256 = null,
@@ -128,6 +143,28 @@ class ConnectionManagerTest {
     assertEquals(true, params?.required)
     assertNull(params?.expectedFingerprint)
     assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryPrivateLanWithoutHintsCanStayCleartext() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "192.168.1.20",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
   }
 
   @Test
@@ -200,6 +237,14 @@ class ConnectionManagerTest {
   fun isLoopbackGatewayHost_onlyTreatsEmulatorBridgeAsLocalWhenAllowed() {
     assertTrue(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = true))
     assertFalse(isLoopbackGatewayHost("10.0.2.2", allowEmulatorBridgeAlias = false))
+  }
+
+  @Test
+  fun isPrivateLanGatewayHost_acceptsLanHostsButRejectsTailnetHosts() {
+    assertTrue(isPrivateLanGatewayHost("192.168.1.20"))
+    assertTrue(isPrivateLanGatewayHost("gateway.local"))
+    assertFalse(isPrivateLanGatewayHost("100.64.0.9"))
+    assertFalse(isPrivateLanGatewayHost("gateway.tailnet.ts.net"))
   }
 
   @Test

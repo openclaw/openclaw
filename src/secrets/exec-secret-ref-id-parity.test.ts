@@ -42,9 +42,10 @@ describe("exec SecretRef id parity", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
+          type: "talk.providers.*.apiKey",
+          path: "talk.providers.elevenlabs.apiKey",
+          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          providerId: "elevenlabs",
           ref: { source: "exec", provider: "vault", id },
         },
       ],
@@ -88,6 +89,9 @@ describe("exec SecretRef id parity", () => {
     }
     if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".headers.")) {
       return "models.headers";
+    }
+    if (canonicalId.startsWith("models.providers.") && canonicalId.includes(".request.")) {
+      return "models.request";
     }
     if (canonicalId.startsWith("models.providers.")) {
       return "models.apiKey";

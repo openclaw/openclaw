@@ -1,7 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig } from "../../config/types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
@@ -12,6 +12,7 @@ import {
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
 } from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -22,7 +23,11 @@ import {
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import { resolveProviderRequestConfig } from "../provider-request-config.js";
+import {
+  attachModelProviderRequestTransport,
+  resolveProviderRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "../provider-request-config.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
 type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
@@ -37,6 +42,7 @@ type InlineProviderConfig = {
   models?: ModelDefinitionConfig[];
   headers?: unknown;
   authHeader?: boolean;
+  request?: ModelProviderConfig["request"];
 };
 
 type ProviderRuntimeHooks = {
@@ -49,6 +55,7 @@ type ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
+  clearProviderRuntimeHookCache: () => void;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
@@ -65,6 +72,7 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
+  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
@@ -75,6 +83,7 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
@@ -286,12 +295,12 @@ function resolveConfiguredProviderConfig(
 
 function applyConfiguredProviderOverrides(params: {
   provider: string;
-  discoveredModel: Model<Api>;
+  discoveredModel: ProviderRuntimeModel;
   providerConfig?: InlineProviderConfig;
   modelId: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
-}): Model<Api> {
+}): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
   if (!providerConfig) {
     return {
@@ -307,10 +316,17 @@ function applyConfiguredProviderOverrides(params: {
   const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
-  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
+  if (
+    !configuredModel &&
+    !providerConfig.baseUrl &&
+    !providerConfig.api &&
+    !providerHeaders &&
+    !providerRequest
+  ) {
     return {
       ...discoveredModel,
       headers: discoveredHeaders,
@@ -340,21 +356,26 @@ function applyConfiguredProviderOverrides(params: {
     providerHeaders,
     modelHeaders: configuredHeaders,
     authHeader: providerConfig.authHeader,
+    request: providerRequest,
     capability: "llm",
     transport: "stream",
   });
-  return {
-    ...discoveredModel,
-    api: requestConfig.api ?? "openai-responses",
-    baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-    reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
-    input: normalizedInput,
-    cost: configuredModel?.cost ?? discoveredModel.cost,
-    contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
-    maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
-    headers: requestConfig.headers,
-    compat: configuredModel?.compat ?? discoveredModel.compat,
-  };
+  return attachModelProviderRequestTransport(
+    {
+      ...discoveredModel,
+      api: requestConfig.api ?? "openai-responses",
+      baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+      reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
+      input: normalizedInput,
+      cost: configuredModel?.cost ?? discoveredModel.cost,
+      contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+      contextTokens: configuredModel?.contextTokens ?? discoveredModel.contextTokens,
+      maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
+      headers: requestConfig.headers,
+      compat: configuredModel?.compat ?? discoveredModel.compat,
+    },
+    providerRequest,
+  );
 }
 
 export function buildInlineProviderModels(
@@ -368,6 +389,7 @@ export function buildInlineProviderModels(
     const providerHeaders = sanitizeModelHeaders(entry?.headers, {
       stripSecretRefMarkers: true,
     });
+    const providerRequest = sanitizeConfiguredModelProviderRequest(entry?.request);
     return (entry?.models ?? []).map((model) => {
       const transport = resolveProviderTransport({
         provider: trimmed,
@@ -384,16 +406,20 @@ export function buildInlineProviderModels(
         providerHeaders,
         modelHeaders,
         authHeader: entry?.authHeader,
+        request: providerRequest,
         capability: "llm",
         transport: "stream",
       });
-      return {
-        ...model,
-        provider: trimmed,
-        baseUrl: requestConfig.baseUrl,
-        api: requestConfig.api ?? model.api,
-        headers: requestConfig.headers,
-      };
+      return attachModelProviderRequestTransport(
+        {
+          ...model,
+          provider: trimmed,
+          baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+          api: requestConfig.api ?? model.api,
+          headers: requestConfig.headers,
+        },
+        providerRequest,
+      );
     });
   });
 }
@@ -528,6 +554,7 @@ function resolveConfiguredFallbackModel(params: {
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -548,6 +575,7 @@ function resolveConfiguredFallbackModel(params: {
     providerHeaders,
     modelHeaders,
     authHeader: providerConfig?.authHeader,
+    request: providerRequest,
     capability: "llm",
     transport: "stream",
   });
@@ -555,25 +583,29 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     cfg,
     agentDir,
-    model: {
-      id: modelId,
-      name: modelId,
-      api: requestConfig.api ?? "openai-responses",
-      provider,
-      baseUrl: requestConfig.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers: requestConfig.headers,
-    } as Model<Api>,
+    model: attachModelProviderRequestTransport(
+      {
+        id: modelId,
+        name: modelId,
+        api: requestConfig.api ?? "openai-responses",
+        provider,
+        baseUrl: requestConfig.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        contextTokens: configuredModel?.contextTokens ?? providerConfig?.models?.[0]?.contextTokens,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        headers: requestConfig.headers,
+      } as Model<Api>,
+      providerRequest,
+    ),
     runtimeHooks,
   });
 }
@@ -694,7 +726,7 @@ export async function resolveModelAsync(
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
-      clearProviderRuntimeHookCache();
+      runtimeHooks.clearProviderRuntimeHookCache();
     }
     await runtimeHooks.prepareProviderDynamicModel({
       provider,

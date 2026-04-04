@@ -5,7 +5,7 @@ summary: 唤醒词与按键说话重叠时的语音浮层生命周期
 title: 语音浮层
 x-i18n:
   generated_at: "2026-02-01T21:33:26Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3be1a60aa7940b2368ff62cd49f04b2b8422876030e8ea206b467f66a5a6bd4d
   source_path: platforms/mac/voice-overlay.md

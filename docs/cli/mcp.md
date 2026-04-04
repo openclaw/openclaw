@@ -382,6 +382,13 @@ Commands:
 - `openclaw mcp set <name> <json>`
 - `openclaw mcp unset <name>`
 
+Notes:
+
+- `list` sorts server names.
+- `show` without a name prints the full configured MCP server object.
+- `set` expects one JSON object value on the command line.
+- `unset` fails if the named server does not exist.
+
 Examples:
 
 ```bash

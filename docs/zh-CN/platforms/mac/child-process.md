@@ -5,7 +5,7 @@ summary: macOS 上的 Gateway 网关生命周期（launchd）
 title: Gateway 网关生命周期
 x-i18n:
   generated_at: "2026-02-03T07:52:31Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 9b910f574b723bc194ac663a5168e48d95f55cb468ce34c595d8ca60d3463c6a
   source_path: platforms/mac/child-process.md

@@ -113,11 +113,11 @@ When validation fails:
         defaults: {
           model: {
             primary: "anthropic/claude-sonnet-4-6",
-            fallbacks: ["openai/gpt-5.2"],
+            fallbacks: ["openai/gpt-5.4"],
           },
           models: {
             "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "openai/gpt-5.2": { alias: "GPT" },
+            "openai/gpt-5.4": { alias: "GPT" },
           },
         },
       },
@@ -172,6 +172,33 @@ When validation fails:
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
     - See [full reference](/gateway/configuration-reference#group-chat-mention-gating) for per-channel overrides and self-chat mode.
+
+  </Accordion>
+
+  <Accordion title="Restrict skills per agent">
+    Use `agents.defaults.skills` for a shared baseline, then override specific
+    agents with `agents.list[].skills`:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [
+          { id: "writer" }, // inherits github, weather
+          { id: "docs", skills: ["docs-search"] }, // replaces defaults
+          { id: "locked-down", skills: [] }, // no skills
+        ],
+      },
+    }
+    ```
+
+    - Omit `agents.defaults.skills` for unrestricted skills by default.
+    - Omit `agents.list[].skills` to inherit the defaults.
+    - Set `agents.list[].skills: []` for no skills.
+    - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
+      the [Configuration Reference](/gateway/configuration-reference#agentsdefaultsskills).
 
   </Accordion>
 

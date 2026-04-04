@@ -24,7 +24,12 @@ import {
 } from "../shared/subagents-format.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
+import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { abortEmbeddedPiRun } from "./pi-embedded.js";
+import {
+  readLatestAssistantReplySnapshot,
+  waitForAgentRunAndReadUpdatedAssistantReply,
+} from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import {
   clearSubagentRunSteerRestart,
@@ -38,12 +43,7 @@ import {
   replaceSubagentRunAfterSteer,
   type SubagentRunRecord,
 } from "./subagent-registry.js";
-import {
-  extractAssistantText,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  stripToolMessages,
-} from "./tools/sessions-helpers.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
@@ -196,27 +196,6 @@ export function isActiveSubagentRun(
   return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
 }
 
-function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
-  text?: string;
-  fingerprint?: string;
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const text = extractAssistantText(message);
-    if (!text) {
-      continue;
-    }
-    let fingerprint: string | undefined;
-    try {
-      fingerprint = JSON.stringify(message);
-    } catch {
-      fingerprint = text;
-    }
-    return { text, fingerprint };
-  }
-  return {};
-}
-
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
   const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
   if (pendingDescendants > 0) {
@@ -236,46 +215,24 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
   return status;
 }
 
-function resolveModelRef(entry?: SessionEntry) {
-  const model = typeof entry?.model === "string" ? entry.model.trim() : "";
-  const provider = typeof entry?.modelProvider === "string" ? entry.modelProvider.trim() : "";
-  if (model.includes("/")) {
-    return model;
-  }
-  if (model && provider) {
-    return `${provider}/${model}`;
-  }
-  if (model) {
-    return model;
-  }
-  if (provider) {
-    return provider;
-  }
-  const overrideModel = typeof entry?.modelOverride === "string" ? entry.modelOverride.trim() : "";
-  const overrideProvider =
-    typeof entry?.providerOverride === "string" ? entry.providerOverride.trim() : "";
-  if (overrideModel.includes("/")) {
-    return overrideModel;
-  }
-  if (overrideModel && overrideProvider) {
-    return `${overrideProvider}/${overrideModel}`;
-  }
-  if (overrideModel) {
-    return overrideModel;
-  }
-  return overrideProvider || undefined;
+function resolveModelRef(entry?: SessionEntry, fallbackModel?: string) {
+  return resolveModelDisplayRef({
+    runtimeProvider: entry?.modelProvider,
+    runtimeModel: entry?.model,
+    overrideProvider: entry?.providerOverride,
+    overrideModel: entry?.modelOverride,
+    fallbackModel,
+  });
 }
 
 function resolveModelDisplay(entry?: SessionEntry, fallbackModel?: string) {
-  const modelRef = resolveModelRef(entry) || fallbackModel || undefined;
-  if (!modelRef) {
-    return "model n/a";
-  }
-  const slash = modelRef.lastIndexOf("/");
-  if (slash >= 0 && slash < modelRef.length - 1) {
-    return modelRef.slice(slash + 1);
-  }
-  return modelRef;
+  return resolveModelDisplayName({
+    runtimeProvider: entry?.modelProvider,
+    runtimeModel: entry?.model,
+    overrideProvider: entry?.providerOverride,
+    overrideModel: entry?.modelOverride,
+    fallbackModel,
+  });
 }
 
 function buildListText(params: {
@@ -361,7 +318,7 @@ export function buildSubagentList(params: {
       runtime,
       runtimeMs,
       ...(childSessions.length > 0 ? { childSessions } : {}),
-      model: resolveModelRef(sessionEntry) || entry.model,
+      model: resolveModelRef(sessionEntry, entry.model),
       totalTokens,
       startedAt: getSubagentSessionStartedAt(entry),
       ...(entry.endedAt ? { endedAt: entry.endedAt } : {}),
@@ -901,13 +858,11 @@ export async function sendControlledSubagentMessage(params: {
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
   try {
-    const historyBefore = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
-      method: "chat.history",
-      params: { sessionKey: targetSessionKey, limit: SUBAGENT_REPLY_HISTORY_LIMIT },
+    const baselineReply = await readLatestAssistantReplySnapshot({
+      sessionKey: targetSessionKey,
+      limit: SUBAGENT_REPLY_HISTORY_LIMIT,
+      callGateway: subagentControlDeps.callGateway,
     });
-    const baselineReply = resolveLatestAssistantReplySnapshot(
-      stripToolMessages(Array.isArray(historyBefore?.messages) ? historyBefore.messages : []),
-    );
 
     const response = await subagentControlDeps.callGateway<{ runId: string }>({
       method: "agent",
@@ -928,32 +883,25 @@ export async function sendControlledSubagentMessage(params: {
       runId = responseRunId;
     }
 
-    const waitMs = 30_000;
-    const wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
-      method: "agent.wait",
-      params: { runId, timeoutMs: waitMs },
-      timeoutMs: waitMs + 2_000,
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId,
+      sessionKey: targetSessionKey,
+      timeoutMs: 30_000,
+      limit: SUBAGENT_REPLY_HISTORY_LIMIT,
+      baseline: baselineReply,
+      callGateway: subagentControlDeps.callGateway,
     });
-    if (wait?.status === "timeout") {
+    if (result.status === "timeout") {
       return { status: "timeout" as const, runId };
     }
-    if (wait?.status === "error") {
-      const waitError = typeof wait.error === "string" ? wait.error : "unknown error";
-      return { status: "error" as const, runId, error: waitError };
+    if (result.status === "error") {
+      return {
+        status: "error" as const,
+        runId,
+        error: result.error ?? "unknown error",
+      };
     }
-
-    const history = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
-      method: "chat.history",
-      params: { sessionKey: targetSessionKey, limit: SUBAGENT_REPLY_HISTORY_LIMIT },
-    });
-    const latestReply = resolveLatestAssistantReplySnapshot(
-      stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
-    );
-    const replyText =
-      latestReply.text && latestReply.fingerprint !== baselineReply.fingerprint
-        ? latestReply.text
-        : undefined;
-    return { status: "ok" as const, runId, replyText };
+    return { status: "ok" as const, runId, replyText: result.replyText };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     return { status: "error" as const, runId, error };

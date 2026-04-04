@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw security` (audit and fix common security footguns)"
 read_when:
   - You want to run a quick security audit on config/state
-  - You want to apply safe “fix” suggestions (chmod, tighten defaults)
+  - You want to apply safe “fix” suggestions (permissions, tighten defaults)
 title: "security"
 ---
 
@@ -68,8 +68,15 @@ openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summa
 `--fix` applies safe, deterministic remediations:
 
 - flips common `groupPolicy="open"` to `groupPolicy="allowlist"` (including account variants in supported channels)
+- when WhatsApp group policy flips to `allowlist`, seeds `groupAllowFrom` from
+  the stored `allowFrom` file when that list exists and config does not already
+  define `allowFrom`
 - sets `logging.redactSensitive` from `"off"` to `"tools"`
-- tightens permissions for state/config and common sensitive files (`credentials/*.json`, `auth-profiles.json`, `sessions.json`, session `*.jsonl`)
+- tightens permissions for state/config and common sensitive files
+  (`credentials/*.json`, `auth-profiles.json`, `sessions.json`, session
+  `*.jsonl`)
+- also tightens config include files referenced from `openclaw.json`
+- uses `chmod` on POSIX hosts and `icacls` resets on Windows
 
 `--fix` does **not**:
 

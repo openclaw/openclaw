@@ -16,6 +16,8 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.GatewayTlsProbeFailure
+import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.*
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
@@ -44,7 +46,7 @@ import java.util.concurrent.atomic.AtomicLong
 class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
-  private val tlsFingerprintProbe: suspend (String, Int) -> String? = ::probeGatewayTlsFingerprint,
+  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
 ) {
   data class GatewayConnectAuth(
     val token: String?,
@@ -69,6 +71,7 @@ class NodeRuntime(
 
   private val identityStore = DeviceIdentityStore(appContext)
   private var connectedEndpoint: GatewayEndpoint? = null
+  private var activeGatewayAuth: GatewayConnectAuth? = null
 
   private val cameraHandler: CameraHandler = CameraHandler(
     appContext = appContext,
@@ -297,6 +300,11 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
         updateStatus()
         showLocalCanvasOnConnect()
+        val endpoint = connectedEndpoint
+        val auth = activeGatewayAuth
+        if (endpoint != null && auth != null) {
+          maybeStartOperatorSessionAfterNodeConnect(endpoint, auth)
+        }
       },
       onDisconnected = { message ->
         _nodeConnected.value = false
@@ -343,6 +351,8 @@ class NodeRuntime(
       session = operatorSession,
       supportsChatSubscribe = false,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     ).also { speaker ->
       speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
     }
@@ -414,14 +424,19 @@ class NodeRuntime(
       session = operatorSession,
       supportsChatSubscribe = true,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     )
   }
 
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
+    // Always push the resolved session key into TalkMode, even when the
+    // state flow value is unchanged, so lazy TalkMode instances do not
+    // stay on the default "main" session key.
+    talkMode.setMainSessionKey(resolvedKey)
     if (_mainSessionKey.value == resolvedKey) return
     _mainSessionKey.value = resolvedKey
-    talkMode.setMainSessionKey(resolvedKey)
     chat.applyMainSessionKey(resolvedKey)
     updateHomeCanvasState()
   }
@@ -791,15 +806,14 @@ class NodeRuntime(
     auth: GatewayConnectAuth,
     reconnect: Boolean = false,
   ) {
+    activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
-    val connectOperator =
-      shouldConnectOperatorSession(
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
-        loadStoredRoleDeviceToken("operator"),
+    val operatorAuth =
+      resolveOperatorSessionConnectAuth(
+        auth = auth,
+        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
       )
-    if (!connectOperator) {
+    if (operatorAuth == null) {
       operatorConnected = false
       operatorStatusText = "Offline"
       operatorSession.disconnect()
@@ -807,9 +821,9 @@ class NodeRuntime(
     } else {
       operatorSession.connect(
         endpoint,
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
+        operatorAuth.token,
+        operatorAuth.bootstrapToken,
+        operatorAuth.password,
         connectionManager.buildOperatorConnectOptions(),
         tls,
       )
@@ -822,7 +836,7 @@ class NodeRuntime(
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    if (reconnect && connectOperator) {
+    if (reconnect && operatorAuth != null) {
       operatorSession.reconnect()
     }
     if (reconnect) {
@@ -839,8 +853,9 @@ class NodeRuntime(
       // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
-        val fp = tlsFingerprintProbe(endpoint.host, endpoint.port) ?: run {
-          _statusText.value = "Failed: can't read TLS fingerprint"
+        val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
+        val fp = tlsProbe.fingerprintSha256 ?: run {
+          _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
           return@launch
         }
         _pendingGatewayTrust.value =
@@ -888,6 +903,15 @@ class NodeRuntime(
     _statusText.value = "Offline"
   }
 
+  private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String {
+    return when (failure) {
+      GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
+        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
+        "Failed: couldn't reach the secure gateway endpoint for this host."
+    }
+  }
+
   private fun hasRecordAudioPermission(): Boolean {
     return (
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
@@ -910,8 +934,33 @@ class NodeRuntime(
     return deviceAuthStore.loadToken(deviceId, role)
   }
 
+  private fun maybeStartOperatorSessionAfterNodeConnect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
+    if (operatorConnected || operatorStatusText == "Connecting…") {
+      return
+    }
+    val operatorAuth =
+      resolveOperatorSessionConnectAuth(
+        auth = auth,
+        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
+      ) ?: return
+    operatorStatusText = "Connecting…"
+    updateStatus()
+    operatorSession.connect(
+      endpoint,
+      operatorAuth.token,
+      operatorAuth.bootstrapToken,
+      operatorAuth.password,
+      connectionManager.buildOperatorConnectOptions(),
+      connectionManager.resolveTlsParams(endpoint),
+    )
+  }
+
   fun disconnect() {
     connectedEndpoint = null
+    activeGatewayAuth = null
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
@@ -1247,18 +1296,47 @@ class NodeRuntime(
 
 }
 
+internal fun resolveOperatorSessionConnectAuth(
+  auth: NodeRuntime.GatewayConnectAuth,
+  storedOperatorToken: String?,
+): NodeRuntime.GatewayConnectAuth? {
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = explicitToken,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitPassword != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = null,
+      password = explicitPassword,
+    )
+  }
+
+  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (storedToken != null) {
+    // Bootstrap can seed the operator token, but operator should reconnect
+    // through the stored device-token path rather than bootstrap auth itself.
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  return null
+}
+
 internal fun shouldConnectOperatorSession(
-  token: String?,
-  bootstrapToken: String?,
-  password: String?,
+  auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
 ): Boolean {
-  return (
-    !token.isNullOrBlank() ||
-      !bootstrapToken.isNullOrBlank() ||
-      !password.isNullOrBlank() ||
-      !storedOperatorToken.isNullOrBlank()
-    )
+  return resolveOperatorSessionConnectAuth(auth, storedOperatorToken) != null
 }
 
 private enum class HomeCanvasGatewayState {

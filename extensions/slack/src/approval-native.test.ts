@@ -309,6 +309,7 @@ describe("slack native approval adapter", () => {
     expect(
       shouldSuppress({
         cfg: buildConfig(),
+        approvalKind: "exec",
         target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
         request: {
           id: "approval-1",
@@ -326,6 +327,7 @@ describe("slack native approval adapter", () => {
     expect(
       shouldSuppress({
         cfg: buildConfig(),
+        approvalKind: "exec",
         target: { channel: "slack", to: "channel:C123ROOM", accountId: "default" },
         request: {
           id: "approval-1",

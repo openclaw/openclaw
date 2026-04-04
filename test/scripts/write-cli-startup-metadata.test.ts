@@ -20,22 +20,11 @@ describe("write-cli-startup-metadata", () => {
     }
   });
 
-  it("captures async root help bundle output", async () => {
-    const distDir = createTempDir("openclaw-root-help-");
-    tempDirs.push(distDir);
-    writeFileSync(
-      path.join(distDir, "root-help-async.js"),
-      [
-        "export async function outputRootHelp() {",
-        "  await Promise.resolve();",
-        "  process.stdout.write('OpenClaw help\\n');",
-        "}",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+  it("captures bundled root help text from the CLI program", async () => {
+    const rootHelpText = await renderBundledRootHelpText();
 
-    await expect(renderBundledRootHelpText(distDir)).resolves.toBe("OpenClaw help\n");
+    expect(rootHelpText).toContain("Usage:");
+    expect(rootHelpText).toContain("openclaw");
   });
 
   it("writes startup metadata with populated root help text", async () => {
@@ -47,11 +36,6 @@ describe("write-cli-startup-metadata", () => {
 
     mkdirSync(distDir, { recursive: true });
     mkdirSync(path.join(extensionsDir, "matrix"), { recursive: true });
-    writeFileSync(
-      path.join(distDir, "root-help-fixture.js"),
-      "export async function outputRootHelp() { process.stdout.write('Usage: openclaw\\n'); }\n",
-      "utf8",
-    );
     writeFileSync(
       path.join(extensionsDir, "matrix", "package.json"),
       JSON.stringify({
@@ -73,6 +57,7 @@ describe("write-cli-startup-metadata", () => {
       rootHelpText: string;
     };
     expect(written.channelOptions).toContain("matrix");
-    expect(written.rootHelpText).toBe("Usage: openclaw\n");
+    expect(written.rootHelpText).toContain("Usage:");
+    expect(written.rootHelpText).toContain("openclaw");
   });
 });

@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
+  shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -110,6 +111,18 @@ export function hasUsableCustomProviderApiKey(
   env?: NodeJS.ProcessEnv,
 ): boolean {
   return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
+}
+
+export function shouldPreferExplicitConfigApiKeyAuth(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): boolean {
+  const providerConfig = resolveProviderConfig(cfg, provider);
+  return (
+    resolveProviderAuthOverride(cfg, provider) === "api-key" &&
+    providerConfig !== undefined &&
+    hasExplicitProviderApiKeyConfig(providerConfig)
+  );
 }
 
 function resolveProviderAuthOverride(
@@ -304,6 +317,26 @@ function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   return { mode: "aws-sdk", source: "aws-sdk default chain" };
 }
 
+function shouldDeferSyntheticProfileAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  resolvedApiKey: string | undefined;
+}): boolean {
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  return (
+    shouldDeferProviderSyntheticProfileAuthWithPlugin({
+      provider: params.provider,
+      config: params.cfg,
+      context: {
+        config: params.cfg,
+        provider: params.provider,
+        providerConfig,
+        resolvedApiKey: params.resolvedApiKey,
+      },
+    }) === true
+  );
+}
+
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -311,6 +344,9 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  /** When true, treat profileId as a user-locked selection that must not be
+   *  silently overridden by env/config credentials (e.g. ollama-local). */
+  lockedProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
@@ -326,25 +362,54 @@ export async function resolveApiKeyForProvider(params: {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const mode = store.profiles[profileId]?.type;
-    return {
+    const result: ResolvedProviderAuth = {
       apiKey: resolved.apiKey,
       profileId,
       source: `profile:${profileId}`,
       mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
     };
+    // When the resolved key is a provider-owned synthetic profile marker and
+    // the caller has not locked this profile, fall through to env/config
+    // resolution so provider-owned real credentials take precedence. The auth
+    // controller iterates profile candidates and passes each as an explicit
+    // profileId, so we cannot assume explicit === user-locked.
+    if (
+      !params.lockedProfile &&
+      shouldDeferSyntheticProfileAuth({
+        cfg,
+        provider,
+        resolvedApiKey: resolved.apiKey,
+      })
+    ) {
+      return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
+        .catch(() => result);
+    }
+    return result;
   }
 
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
   }
+  if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
+    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+    if (customKey) {
+      return {
+        apiKey: customKey.apiKey,
+        source: customKey.source,
+        mode: "api-key",
+      };
+    }
+  }
 
+  const providerConfig = resolveProviderConfig(cfg, provider);
   const order = resolveAuthProfileOrder({
     cfg,
     store,
     provider,
     preferredProfile,
   });
+  let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   for (const candidate of order) {
     try {
       const resolved = await resolveApiKeyForProfile({
@@ -363,6 +428,16 @@ export async function resolveApiKeyForProvider(params: {
           source: `profile:${candidate}`,
           mode: resolvedMode,
         };
+        if (
+          shouldDeferSyntheticProfileAuth({
+            cfg,
+            provider,
+            resolvedApiKey: resolved.apiKey,
+          })
+        ) {
+          deferredAuthProfileResult ??= result;
+          continue;
+        }
         return result;
       }
     } catch (err) {
@@ -389,6 +464,10 @@ export async function resolveApiKeyForProvider(params: {
     return result;
   }
 
+  if (deferredAuthProfileResult) {
+    return deferredAuthProfileResult;
+  }
+
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
@@ -399,7 +478,6 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  const providerConfig = resolveProviderConfig(cfg, provider);
   const hasInlineConfiguredModels =
     Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
   const owningPluginIds = !hasInlineConfiguredModels
@@ -554,6 +632,7 @@ export async function getApiKeyForModel(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  lockedProfile?: boolean;
 }): Promise<ResolvedProviderAuth> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -562,6 +641,7 @@ export async function getApiKeyForModel(params: {
     preferredProfile: params.preferredProfile,
     store: params.store,
     agentDir: params.agentDir,
+    lockedProfile: params.lockedProfile,
   });
 }
 

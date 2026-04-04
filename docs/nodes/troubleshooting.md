@@ -80,6 +80,11 @@ If pairing is fine but `system.run` fails, fix exec approvals/allowlist on that 
 
 Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's exec approvals file (`openclaw approvals get --node ...`), not in the gateway pairing record.
 
+For approval-backed `host=node` runs, the gateway also binds execution to the
+prepared canonical `systemRunPlan`. If a later caller mutates command/cwd or
+session metadata before the approved run is forwarded, the gateway rejects the
+run as an approval mismatch instead of trusting the edited payload.
+
 ## Common node error codes
 
 - `NODE_BACKGROUND_UNAVAILABLE` → app is backgrounded; bring it foreground.

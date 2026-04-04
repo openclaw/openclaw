@@ -34,9 +34,10 @@ vi.mock("./openai-codex-oauth.js", () => ({
 }));
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
-vi.mock("../plugins/provider-auth-choice.runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/provider-auth-choice.runtime.js")>();
+vi.mock("../plugins/provider-auth-choice.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-auth-choice.runtime.js")>(
+    "../plugins/provider-auth-choice.runtime.js",
+  );
   return {
     ...actual,
     resolvePluginProviders,
@@ -649,6 +650,27 @@ describe("applyAuthChoice", () => {
   });
 
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
+
+  it("rejects legacy Anthropic token setup aliases", async () => {
+    await setupTempState();
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "token",
+        config: {} as OpenClawConfig,
+        prompter: createPrompter({}),
+        runtime: createExitThrowingRuntime(),
+        setDefaultModel: true,
+        opts: { tokenProvider: "anthropic" },
+      }),
+    ).rejects.toThrow(
+      [
+        'Auth choice "token" is no longer supported for Anthropic setup in OpenClaw.',
+        "Existing Anthropic token profiles still run if they are already configured.",
+        'Use "anthropic-cli" or "apiKey" instead.',
+      ].join("\n"),
+    );
+  });
 
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();

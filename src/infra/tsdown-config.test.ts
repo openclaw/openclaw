@@ -47,7 +47,6 @@ describe("tsdown config", () => {
         "index",
         "commands/status.summary.runtime",
         "plugins/provider-runtime.runtime",
-        "plugins/runtime/runtime-line.contract",
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",

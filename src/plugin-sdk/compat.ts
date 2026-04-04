@@ -49,4 +49,4 @@ export {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
 } from "./bluebubbles-policy.js";
-export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
+export { collectBlueBubblesStatusIssues } from "./bluebubbles.js";

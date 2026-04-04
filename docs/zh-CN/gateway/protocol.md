@@ -7,7 +7,7 @@ summary: Gateway 网关 WebSocket 协议：握手、帧、版本控制
 title: Gateway 网关协议
 x-i18n:
   generated_at: "2026-02-03T07:48:42Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: bdafac40d53565901b2df450617287664d77fe4ff52681fa00cab9046b2fd850
   source_path: gateway/protocol.md

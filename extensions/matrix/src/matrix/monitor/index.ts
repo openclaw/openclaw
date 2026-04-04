@@ -1,4 +1,5 @@
 import { format } from "node:util";
+import { MatrixExecApprovalHandler } from "../../exec-approvals-handler.js";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -10,8 +11,8 @@ import {
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
-import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
+import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,
@@ -145,6 +146,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   setActiveMatrixClient(client, auth.accountId);
   let cleanedUp = false;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  let execApprovalsHandler: MatrixExecApprovalHandler | null = null;
   const inboundDeduper = await createMatrixInboundEventDeduper({
     auth,
     env: process.env,
@@ -164,6 +166,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       client.stopSyncWithoutPersist();
       await client.drainPendingDecryptions("matrix monitor shutdown");
       await waitForInFlightRoomMessages();
+      await execApprovalsHandler?.stop();
       threadBindingManager?.stop();
       await inboundDeduper.stop();
       await releaseSharedClientInstance(client, "persist");
@@ -342,6 +345,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
     // Shared client is already started via resolveSharedMatrixClient.
     logger.info(`matrix: logged in as ${auth.userId}`);
+
+    execApprovalsHandler = new MatrixExecApprovalHandler({
+      client,
+      accountId: effectiveAccountId,
+      cfg,
+    });
+    await execApprovalsHandler.start();
 
     await runMatrixStartupMaintenance({
       client,

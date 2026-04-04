@@ -7,7 +7,7 @@ summary: 在 Oracle Cloud 上运行 OpenClaw（Always Free ARM）
 title: Oracle Cloud
 x-i18n:
   generated_at: "2026-02-03T07:53:25Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d3cc337b40ea512b5756ac15ec4341fecad417ede75f717fea3035678c7c6697
   source_path: platforms/oracle.md
