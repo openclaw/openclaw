@@ -125,7 +125,7 @@ describe("buildAgentSystemPrompt", () => {
       "Use exec/process only for commands that start now and continue running in the background.",
     );
     expect(prompt).toContain(
-      "For long-running work that starts now, start it once and rely on automatic completion wake when the command emits output or fails; use process to confirm quiet successful completions and for logs, status, input, or intervention.",
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
     );
     expect(prompt).toContain(
       "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
@@ -302,7 +302,7 @@ describe("buildAgentSystemPrompt", () => {
       "Use exec/process only for commands that start now and continue running in the background.",
     );
     expect(prompt).toContain(
-      "For long-running work that starts now, start it once and rely on automatic completion wake when the command emits output or fails; use process to confirm quiet successful completions and for logs, status, input, or intervention.",
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");

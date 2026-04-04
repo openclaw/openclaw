@@ -120,7 +120,7 @@ function resetPollRetrySuggestion(sessionId: string): void {
 export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
     "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",
-    "Use poll/log when you need status, logs, input, intervention, or quiet-success confirmation; silent successful completions do not always auto-wake by default.",
+    "Use poll/log when you need status, logs, input, intervention, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable.",
     params?.hasCronTool
       ? "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups."
       : undefined,
