@@ -40,6 +40,17 @@ Details: [Plugins](/tools/plugin)
    - Direct: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 5. Restart gateway and send a DM to the Synology Chat bot.
 
+Webhook auth details:
+
+- OpenClaw accepts the outgoing webhook token from `body.token`, then
+  `?token=...`, then headers.
+- Accepted header forms:
+  - `x-synology-token`
+  - `x-webhook-token`
+  - `x-openclaw-token`
+  - `Authorization: Bearer <token>`
+- Empty or missing tokens fail closed.
+
 Minimal config:
 
 ```json5
@@ -137,9 +148,27 @@ but duplicate exact paths are still rejected fail-closed. Prefer explicit per-ac
 - Keep `token` secret and rotate it if leaked.
 - Keep `allowInsecureSsl: false` unless you explicitly trust a self-signed local NAS cert.
 - Inbound webhook requests are token-verified and rate-limited per sender.
+- Invalid token checks use constant-time secret comparison and fail closed.
 - Prefer `dmPolicy: "allowlist"` for production.
 - Keep `dangerouslyAllowNameMatching` off unless you explicitly need legacy username-based reply delivery.
 - Keep `dangerouslyAllowInheritedWebhookPath` off unless you explicitly accept shared-path routing risk in a multi-account setup.
+
+## Troubleshooting
+
+- `Missing required fields (token, user_id, text)`:
+  - the outgoing webhook payload is missing one of the required fields
+  - if Synology sends the token in headers, make sure the gateway/proxy preserves those headers
+- `Invalid token`:
+  - the outgoing webhook secret does not match `channels.synology-chat.token`
+  - the request is hitting the wrong account/webhook path
+  - a reverse proxy stripped the token header before the request reached OpenClaw
+- `Rate limit exceeded`:
+  - too many invalid token attempts from the same source can temporarily lock that source out
+  - authenticated senders also have a separate per-user message rate limit
+- `Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.`:
+  - `dmPolicy="allowlist"` is enabled but no users are configured
+- `User not authorized`:
+  - the sender's numeric `user_id` is not in `allowedUserIds`
 
 ## Related
 
