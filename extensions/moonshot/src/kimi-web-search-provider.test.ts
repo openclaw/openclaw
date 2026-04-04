@@ -34,9 +34,7 @@ describe("kimi web search provider", () => {
       models: { providers: { moonshot: { baseUrl: "https://proxy.example/v1" } } },
     } as unknown as OpenClawConfig;
 
-    expect(__testing.resolveKimiBaseUrl(undefined, proxyConfig)).toBe(
-      "https://api.moonshot.ai/v1",
-    );
+    expect(__testing.resolveKimiBaseUrl(undefined, proxyConfig)).toBe("https://api.moonshot.ai/v1");
   });
 
   it("keeps explicit kimi baseUrl over models.providers.moonshot.baseUrl", () => {

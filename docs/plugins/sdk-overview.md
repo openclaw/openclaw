@@ -80,10 +80,10 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
     | `plugin-sdk/provider-model-shared` | `normalizeModelCompat`, `buildProviderReplayFamilyHooks`, `sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode` |
-    | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog` |
+    | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-tools` | `buildProviderToolCompatFamilyHooks`, Gemini schema helpers |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
-    | `plugin-sdk/provider-stream` | Stream wrapper types + provider stream wrappers |
+    | `plugin-sdk/provider-stream` | `buildProviderStreamFamilyHooks`, stream wrapper types, provider stream wrappers, shared OpenAI/OpenRouter stream-family helpers |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
     | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
   </Accordion>

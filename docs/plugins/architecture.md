@@ -721,13 +721,18 @@ api.registerProvider({
   because it owns GPT-5.4 forward-compat, the direct OpenAI
   `openai-completions` -> `openai-responses` normalization, Codex-aware auth
   hints, Spark suppression, synthetic OpenAI list rows, and GPT-5 thinking /
-  live-model policy.
+  live-model policy; the `openai-responses-defaults` stream family owns the
+  shared native OpenAI Responses wrappers for attribution headers,
+  `/fast`/`serviceTier`, text verbosity, native Codex web search,
+  reasoning-compat payload shaping, and Responses context management.
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates; it also uses
   `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible` to keep
   provider-specific request headers, routing metadata, reasoning patches, and
-  prompt-cache policy out of core.
+  prompt-cache policy out of core. Its replay policy comes from the
+  `passthrough-gemini` family, while the `openrouter-thinking` stream family
+  owns proxy reasoning injection and the unsupported-model / `auto` skips.
 - GitHub Copilot uses `catalog`, `auth`, `resolveDynamicModel`, and
   `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
   needs provider-owned device login, model fallback behavior, Claude transcript
@@ -738,15 +743,18 @@ api.registerProvider({
   `prepareExtraParams`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
   still runs on core OpenAI transports but owns its transport/base URL
   normalization, OAuth refresh fallback policy, default transport choice,
-  synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
+  synthetic Codex catalog rows, and ChatGPT usage endpoint integration; it
+  shares the same `openai-responses-defaults` stream family as direct OpenAI.
 - Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel`,
   `buildReplayPolicy`, `sanitizeReplayHistory`,
-  `resolveReasoningOutputMode`, and `isModernModelRef` because the
+  `resolveReasoningOutputMode`, `wrapStreamFn`, and `isModernModelRef` because the
   `google-gemini` replay family owns Gemini 3.1 forward-compat fallback,
   native Gemini replay validation, bootstrap replay sanitation, tagged
-  reasoning-output mode, and modern-model matching; Gemini CLI OAuth also uses
-  `formatApiKey`, `resolveUsageAuth`, and `fetchUsageSnapshot` for token
-  formatting, token parsing, and quota endpoint wiring.
+  reasoning-output mode, and modern-model matching, while the
+  `google-thinking` stream family owns Gemini thinking payload normalization;
+  Gemini CLI OAuth also uses `formatApiKey`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot` for token formatting, token parsing, and quota endpoint
+  wiring.
 - Anthropic Vertex uses `buildReplayPolicy` through the
   `anthropic-by-model` replay family so Claude-specific replay cleanup stays
   scoped to Claude ids instead of every `anthropic-messages` transport.
@@ -764,9 +772,12 @@ api.registerProvider({
   `hybrid-anthropic-openai` replay family because one provider owns both
   Anthropic-message and OpenAI-compatible semantics; it keeps Claude-only
   thinking-block dropping on the Anthropic side while overriding reasoning
-  output mode back to native.
+  output mode back to native, and the `minimax-fast-mode` stream family owns
+  fast-mode model rewrites on the shared stream path.
 - Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
-  OpenAI transport but needs provider-owned thinking payload normalization.
+  OpenAI transport but needs provider-owned thinking payload normalization; the
+  `moonshot-thinking` stream family maps config plus `/think` state onto its
+  native binary thinking payload.
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
   `isCacheTtlEligible` because it needs provider-owned request headers,
   reasoning payload normalization, Gemini transcript hints, and Anthropic
@@ -775,7 +786,8 @@ api.registerProvider({
   `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
   `tool_stream` defaults, binary thinking UX, modern-model matching, and both
-  usage auth + quota fetching.
+  usage auth + quota fetching; the `tool-stream-default-on` stream family keeps
+  the default-on `tool_stream` wrapper out of per-provider handwritten glue.
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,

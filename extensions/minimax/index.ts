@@ -12,7 +12,7 @@ import {
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
@@ -39,6 +39,7 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "hybrid-anthropic-openai",
   anthropicModelDropThinkingBlocks: true,
 });
+const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
 
 function resolveMinimaxReasoningOutputMode(): "native" {
   // Keep MiniMax on native reasoning mode. Tagged enforcement previously
@@ -247,8 +248,7 @@ export default definePluginEntry({
         return apiKey ? { token: apiKey } : null;
       },
       ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-      wrapStreamFn: (ctx) =>
-        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
       fetchUsageSnapshot: async (ctx) =>
@@ -300,8 +300,7 @@ export default definePluginEntry({
         },
       ],
       ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-      wrapStreamFn: (ctx) =>
-        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     });

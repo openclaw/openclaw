@@ -523,13 +523,14 @@ describe("legacy migrate channel streaming aliases", () => {
       (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
     ).toBeUndefined();
     expect(
-      (
-        validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined
-      )?.streamMode,
+      (validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
     ).toBeUndefined();
 
     const res = migrateLegacyConfig(raw);
-    expect(res.changes).toContain("Removed channels.googlechat.streamMode (legacy key no longer used).");
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.streamMode (legacy key no longer used).",
+    );
     expect(res.changes).toContain(
       "Removed channels.googlechat.accounts.work.streamMode (legacy key no longer used).",
     );

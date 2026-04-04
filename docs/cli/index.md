@@ -1214,7 +1214,7 @@ Notes:
 - Data comes directly from provider usage endpoints (no estimates).
 - Human-readable output is normalized to `X% left` across providers.
 - Providers with current usage windows: Anthropic, GitHub Copilot, Gemini CLI, OpenAI Codex, MiniMax, and z.ai.
-- MiniMax note: raw `usage_percent` / `usagePercent` means remaining quota, so OpenClaw inverts it before display; count-based fields still win when present.
+- MiniMax note: raw `usage_percent` / `usagePercent` means remaining quota, so OpenClaw inverts it before display; count-based fields still win when present. `model_remains` responses prefer the chat-model entry, derive the window label from timestamps when needed, and include the model name in the plan label.
 - If no matching credentials exist, usage is hidden.
 - Details: see [Usage tracking](/concepts/usage-tracking).
 

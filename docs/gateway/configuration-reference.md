@@ -2338,10 +2338,10 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
             id: "kimi-k2.5",
             name: "Kimi K2.5",
             reasoning: false,
-            input: ["text"],
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 256000,
-            maxTokens: 8192,
+            contextWindow: 262144,
+            maxTokens: 262144,
           },
         ],
       },
@@ -2352,6 +2352,10 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
 
 For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw onboard --auth-choice moonshot-api-key-cn`.
 
+Native Moonshot endpoints advertise streaming usage compatibility on the shared
+`openai-completions` transport, and OpenClaw now keys that off endpoint
+capabilities rather than the built-in provider id alone.
+
 </Accordion>
 
 <Accordion title="Kimi Coding">
@@ -2361,8 +2365,8 @@ For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw onb
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kimi-coding/k2p5" },
-      models: { "kimi-coding/k2p5": { alias: "Kimi K2.5" } },
+      model: { primary: "kimi/kimi-code" },
+      models: { "kimi/kimi-code": { alias: "Kimi Code" } },
     },
   },
 }
@@ -2451,6 +2455,10 @@ Set `MINIMAX_API_KEY`. Shortcuts:
 `openclaw onboard --auth-choice minimax-global-api` or
 `openclaw onboard --auth-choice minimax-cn-api`.
 The model catalog now defaults to M2.7 only.
+On the Anthropic-compatible streaming path, OpenClaw disables MiniMax thinking
+by default unless you explicitly set `thinking` yourself. `/fast on` or
+`params.fastMode: true` rewrites `MiniMax-M2.7` to
+`MiniMax-M2.7-highspeed`.
 
 </Accordion>
 
@@ -2691,6 +2699,9 @@ See [Plugins](/tools/plugin).
 - `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
   - `gateway.auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
 - Browser-origin WS auth attempts are always throttled with loopback exemption disabled (defense-in-depth against browser-based localhost brute force).
+- On loopback, those browser-origin lockouts are isolated per normalized `Origin`
+  value, so repeated failures from one localhost origin do not automatically
+  lock out a different origin.
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required when browser clients are expected from non-loopback origins.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.

@@ -23,6 +23,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 
 - `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
 - `/usage tokens` shows tokens only; subscription-style OAuth, legacy token, and CLI flows hide dollar cost.
+- Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
+  `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
+  from `stats.input_tokens - stats.cached` when needed.
 
 Anthropic note: starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
 Anthropic says OpenClaw no longer uses included Claude subscription limits.
@@ -37,7 +40,9 @@ per-message dollar estimate that OpenClaw can show in `/usage full`.
 - Human output is normalized to `X% left` across providers.
 - MiniMax note: its raw `usage_percent` / `usagePercent` fields mean remaining
   quota, so OpenClaw inverts them before display. Count-based fields still win
-  when present.
+  when present. If the provider returns `model_remains`, OpenClaw prefers the
+  chat-model entry, derives the window label from timestamps when needed, and
+  includes the model name in the plan label.
 
 See [Token use & costs](/reference/token-use) for details and examples.
 

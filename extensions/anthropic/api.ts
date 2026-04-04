@@ -6,4 +6,5 @@ export {
   resolveAnthropicBetas,
   resolveAnthropicFastMode,
   resolveAnthropicServiceTier,
+  wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";

@@ -214,11 +214,18 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                                                             | Notes                                                                                |
-| ---------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Z.AI, config providers | Vendor plugins register image support; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                            |
-| Video      | Google, Moonshot                                                                 | Provider video understanding via vendor plugins.                                     |
+| Capability | Provider integration                                                             | Notes                                                                                                                                    |
+| ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Z.AI, config providers | Vendor plugins register image support; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                |
+| Video      | Google, Moonshot                                                                 | Provider video understanding via vendor plugins.                                                                                         |
+
+MiniMax note:
+
+- `minimax` and `minimax-portal` image understanding comes from the plugin-owned
+  `MiniMax-VL-01` media provider.
+- The bundled MiniMax text catalog still starts text-only; explicit
+  `models.providers.minimax` entries materialize image-capable M2.7 chat refs.
 
 ## Model selection guidance
 

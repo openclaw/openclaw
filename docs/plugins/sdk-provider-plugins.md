@@ -208,6 +208,14 @@ API key auth, and dynamic model resolution.
     `createDefaultModelsPresetAppliers(...)`, and
     `createModelCatalogPresetAppliers(...)`.
 
+    When a provider's native endpoint supports streamed usage blocks on the
+    normal `openai-completions` transport, prefer the shared catalog helpers in
+    `openclaw/plugin-sdk/provider-catalog-shared` instead of hardcoding
+    provider-id checks. `supportsNativeStreamingUsageCompat(...)` and
+    `applyProviderNativeStreamingUsageCompat(...)` detect support from the
+    endpoint capability map, so native Moonshot/DashScope-style endpoints still
+    opt in even when a plugin is using a custom provider id.
+
   </Step>
 
   <Step title="Add dynamic model resolution">
@@ -247,13 +255,12 @@ API key auth, and dynamic model resolution.
 
     ```typescript
     import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+    import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
     import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-    import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
 
     const GOOGLE_FAMILY_HOOKS = {
       ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
-      wrapStreamFn: (ctx) =>
-        createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
+      ...buildProviderStreamFamilyHooks("google-thinking"),
       ...buildProviderToolCompatFamilyHooks("gemini"),
     };
 
@@ -281,6 +288,26 @@ API key auth, and dynamic model resolution.
     - `anthropic-vertex`: `anthropic-by-model`
     - `minimax`: `hybrid-anthropic-openai`
     - `moonshot`, `ollama`, `xai`, and `zai`: `openai-compatible`
+
+    Available stream families today:
+
+    | Family | What it wires in |
+    | --- | --- |
+    | `google-thinking` | Gemini thinking payload normalization on the shared stream path |
+    | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level |
+    | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path |
+    | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management |
+    | `openrouter-thinking` | OpenRouter reasoning wrapper for proxy routes, with unsupported-model/`auto` skips handled centrally |
+    | `tool-stream-default-on` | Default-on `tool_stream` wrapper for providers like Z.AI that want tool streaming unless explicitly disabled |
+
+    Real bundled examples:
+
+    - `google` and `google-gemini-cli`: `google-thinking`
+    - `moonshot`: `moonshot-thinking`
+    - `minimax` and `minimax-portal`: `minimax-fast-mode`
+    - `openai` and `openai-codex`: `openai-responses-defaults`
+    - `openrouter`: `openrouter-thinking`
+    - `zai`: `tool-stream-default-on`
 
     <Tabs>
       <Tab title="Token exchange">

@@ -45,9 +45,9 @@ vi.mock("./remote-media.js", () => ({
 }));
 
 import { fetchWithSsrFGuard } from "../../runtime-api.js";
+import { downloadMSTeamsGraphMedia } from "./graph.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import { safeFetchWithPolicy } from "./shared.js";
-import { downloadMSTeamsGraphMedia } from "./graph.js";
 
 function mockFetchResponse(body: unknown, status = 200) {
   const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
@@ -279,35 +279,37 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
   });
 
   it("adds the OpenClaw User-Agent to guarded Graph attachment fetches", async () => {
-    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string; init?: RequestInit }) => {
-      const url = params.url;
-      if (url.endsWith("/messages/msg-ua") && !url.includes("hostedContents")) {
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(
+      async (params: { url: string; init?: RequestInit }) => {
+        const url = params.url;
+        if (url.endsWith("/messages/msg-ua") && !url.includes("hostedContents")) {
+          return {
+            response: mockFetchResponse({ body: {}, attachments: [] }),
+            release: async () => {},
+            finalUrl: params.url,
+          };
+        }
+        if (url.endsWith("/hostedContents")) {
+          return {
+            response: mockFetchResponse({ value: [] }),
+            release: async () => {},
+            finalUrl: params.url,
+          };
+        }
+        if (url.endsWith("/attachments")) {
+          return {
+            response: mockFetchResponse({ value: [] }),
+            release: async () => {},
+            finalUrl: params.url,
+          };
+        }
         return {
-          response: mockFetchResponse({ body: {}, attachments: [] }),
+          response: mockFetchResponse({}, 404),
           release: async () => {},
           finalUrl: params.url,
         };
-      }
-      if (url.endsWith("/hostedContents")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      if (url.endsWith("/attachments")) {
-        return {
-          response: mockFetchResponse({ value: [] }),
-          release: async () => {},
-          finalUrl: params.url,
-        };
-      }
-      return {
-        response: mockFetchResponse({}, 404),
-        release: async () => {},
-        finalUrl: params.url,
-      };
-    });
+      },
+    );
 
     await downloadMSTeamsGraphMedia({
       messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-ua",

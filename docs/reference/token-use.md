@@ -65,6 +65,9 @@ Usage surfaces normalize common provider-native field aliases before display.
 For OpenAI-family Responses traffic, that includes both `input_tokens` /
 `output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
 field names do not change `/status`, `/usage`, or session summaries.
+Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
+`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
+used when the CLI omits an explicit `stats.input` field.
 
 ## Cost estimation (when shown)
 

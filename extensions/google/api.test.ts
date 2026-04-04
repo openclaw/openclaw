@@ -95,7 +95,9 @@ describe("google generative ai helpers", () => {
   });
 
   it("parses project-aware oauth auth payloads into bearer headers", () => {
-    expect(parseGeminiAuth(JSON.stringify({ token: "oauth-token", projectId: "project-1" }))).toEqual({
+    expect(
+      parseGeminiAuth(JSON.stringify({ token: "oauth-token", projectId: "project-1" })),
+    ).toEqual({
       headers: {
         Authorization: "Bearer oauth-token",
         "Content-Type": "application/json",
