@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# If invoked from a linked worktree copy of this script, re-exec the canonical
+# script from the repository root so behavior stays consistent across worktrees.
+script_self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+script_parent_dir="$(dirname "$script_self")"
+if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  canonical_repo_root="$(dirname "$common_git_dir")"
+  canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
+  if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
+    exec "$canonical_self" "$@"
+  fi
+fi
+
+usage() {
+  cat <<USAGE
+Usage:
+  scripts/pr ls
+  scripts/pr gc [--dry-run]
+  scripts/pr review-init <PR>
+  scripts/pr review-checkout-main <PR>
+  scripts/pr review-checkout-pr <PR>
+  scripts/pr review-claim <PR>
+  scripts/pr review-guard <PR>
+  scripts/pr review-artifacts-init <PR>
+  scripts/pr review-validate-artifacts <PR>
+  scripts/pr review-tests <PR> <test-file> [<test-file> ...]
+  scripts/pr prepare-init <PR>
+  scripts/pr prepare-validate-commit <PR>
+  scripts/pr prepare-gates <PR>
+  scripts/pr prepare-push <PR>
+  scripts/pr prepare-sync-head <PR>
+  scripts/pr prepare-run <PR>
+  scripts/pr merge-verify <PR>
+  scripts/pr merge-run <PR>
+USAGE
+}
+
+require_cmds() {
+  local missing=()
+  local cmd
+  for cmd in git gh jq rg pnpm node; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing+=("$cmd")
+    fi
+  done
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "Missing required command(s): ${missing[*]}"
+    exit 1
+  fi
+}
+
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/worktree.sh"
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/common.sh"
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/changelog.sh"
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/gates.sh"
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/push.sh"
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/review.sh"
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/prepare-core.sh"
+# shellcheck disable=SC1091
+source "$script_parent_dir/pr-lib/merge.sh"
+
+main() {
+  if [ "$#" -lt 1 ]; then
+    usage
+    exit 2
+  fi
+
+  require_cmds
+
+  local cmd="${1-}"
+  shift || true
+
+  case "$cmd" in
+    ls)
+      list_pr_worktrees
+      ;;
+    gc)
+      local dry_run=false
+      if [ "${1-}" = "--dry-run" ]; then
+        dry_run=true
+      fi
+      gc_pr_worktrees "$dry_run"
+      ;;
+    review-init)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      review_init "$pr"
+      ;;
+    review-checkout-main)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      review_checkout_main "$pr"
+      ;;
+    review-checkout-pr)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      review_checkout_pr "$pr"
+      ;;
+    review-claim)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      review_claim "$pr"
+      ;;
+    review-guard)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      review_guard "$pr"
+      ;;
+    review-artifacts-init)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      review_artifacts_init "$pr"
+      ;;
+    review-validate-artifacts)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      review_validate_artifacts "$pr"
+      ;;
+    review-tests)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      shift || true
+      review_tests "$pr" "$@"
+      ;;
+    prepare-init)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      prepare_init "$pr"
+      ;;
+    prepare-validate-commit)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      prepare_validate_commit "$pr"
+      ;;
+    prepare-gates)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      prepare_gates "$pr"
+      ;;
+    prepare-push)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      prepare_push "$pr"
+      ;;
+    prepare-sync-head)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      prepare_sync_head "$pr"
+      ;;
+    prepare-run)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      prepare_run "$pr"
+      ;;
+    merge-verify)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      merge_verify "$pr"
+      ;;
+    merge-run)
+      local pr="${1-}"
+      [ -n "$pr" ] || { usage; exit 2; }
+      merge_run "$pr"
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

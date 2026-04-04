@@ -1,0 +1,36 @@
+import type { Command } from "commander";
+
+export type GatewayRpcOpts = {
+  url?: string;
+  token?: string;
+  timeout?: string;
+  expectFinal?: boolean;
+  json?: boolean;
+};
+
+type GatewayRpcRuntimeModule = typeof import("./gateway-rpc.runtime.js");
+
+let gatewayRpcRuntimePromise: Promise<GatewayRpcRuntimeModule> | undefined;
+
+async function loadGatewayRpcRuntime(): Promise<GatewayRpcRuntimeModule> {
+  gatewayRpcRuntimePromise ??= import("./gateway-rpc.runtime.js");
+  return gatewayRpcRuntimePromise;
+}
+
+export function addGatewayClientOptions(cmd: Command) {
+  return cmd
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--timeout <ms>", "Timeout in ms", "30000")
+    .option("--expect-final", "Wait for final response (agent)", false);
+}
+
+export async function callGatewayFromCli(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+  extra?: { expectFinal?: boolean; progress?: boolean },
+) {
+  const runtime = await loadGatewayRpcRuntime();
+  return await runtime.callGatewayFromCliRuntime(method, opts, params, extra);
+}
