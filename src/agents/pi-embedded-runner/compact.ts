@@ -799,21 +799,10 @@ export async function compactEmbeddedPiSessionDirect(
         effectiveModel,
         agentDir,
       );
-      const agentTransportOverride = resolveAgentTransportOverride({
+      resolveAgentTransportOverride({
         settingsManager,
         effectiveExtraParams,
       });
-      if (
-        agentTransportOverride &&
-        typeof (session.agent as { setTransport?: unknown }).setTransport === "function" &&
-        (session.agent as { transport?: unknown }).transport !== agentTransportOverride
-      ) {
-        (
-          session.agent as {
-            setTransport(nextTransport: string): void;
-          }
-        ).setTransport(agentTransportOverride);
-      }
 
       try {
         const prior = await sanitizeSessionHistory({
@@ -844,7 +833,7 @@ export async function compactEmbeddedPiSessionDirect(
         });
         // Apply validated transcript to the live session even when no history limit is configured,
         // so compaction and hook metrics are based on the same message set.
-        session.agent.replaceMessages(validated);
+        session.agent.state.messages = validated;
         // "Original" compaction metrics should describe the validated transcript that enters
         // limiting/compaction, not the raw on-disk session snapshot.
         const originalMessages = session.messages.slice();
@@ -861,7 +850,7 @@ export async function compactEmbeddedPiSessionDirect(
             })
           : truncated;
         if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+          session.agent.state.messages = limited;
         }
         const hookRunner = asCompactionHookRunner(getGlobalHookRunner());
         const observedTokenCount = normalizeObservedTokenCount(params.currentTokenCount);

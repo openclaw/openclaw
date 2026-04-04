@@ -56,6 +56,14 @@
     "target": "Qwen"
   },
   {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
   },
@@ -172,6 +180,10 @@
     "target": "投票"
   },
   {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
+  },
+  {
     "source": "Release Policy",
     "target": "发布策略"
   },
@@ -218,6 +230,14 @@
   {
     "source": "CLI",
     "target": "CLI"
+  },
+  {
+    "source": "/cli/gateway",
+    "target": "/cli/gateway"
+  },
+  {
+    "source": "/gateway#multiple-gateways-same-host",
+    "target": "/gateway#multiple-gateways-same-host"
   },
   {
     "source": "install sanity",

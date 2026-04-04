@@ -694,6 +694,9 @@ tool calls. Reduce the blast radius by:
   `gateway.http.endpoints.responses.images.urlAllowlist`, and keep `maxUrlParts` low.
   Empty allowlists are treated as unset; use `files.allowUrl: false` / `images.allowUrl: false`
   if you want to disable URL fetching entirely.
+- For OpenResponses file inputs, decoded `input_file` text is still injected as
+  **untrusted external content**. Do not rely on file text being trusted just because
+  the Gateway decoded it locally.
 - Enabling sandboxing and strict tool allowlists for any agent that touches untrusted input.
 - Keeping secrets out of prompts; pass them via env/config on the gateway host instead.
 
@@ -893,10 +896,12 @@ paths, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break
 
 Local device pairing:
 
-- Device pairing is auto‑approved for **local** connects (loopback or the
-  gateway host’s own tailnet address) to keep same‑host clients smooth.
-- Other tailnet peers are **not** treated as local; they still need pairing
-  approval.
+- Device pairing is auto-approved for direct local loopback connects to keep
+  same-host clients smooth.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Tailnet and LAN connects, including same-host tailnet binds, are treated as
+  remote for pairing and still need approval.
 
 Auth modes:
 
@@ -932,7 +937,7 @@ Important boundary note:
 
 - Gateway HTTP bearer auth is effectively all-or-nothing operator access.
 - Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, or `/api/channels/*` as full-access operator secrets for that gateway.
-- On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
+- On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes (`operator.admin`, `operator.approvals`, `operator.pairing`, `operator.read`, `operator.talk.secrets`, `operator.write`) and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
 - Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth or `gateway.auth.mode="none"` on a private ingress.
 - In those identity-bearing modes, omitting `x-openclaw-scopes` falls back to the normal operator default scope set; send the header explicitly when you want a narrower scope set.
 - `/tools/invoke` follows the same shared-secret rule: token/password bearer auth is treated as full operator access there too, while identity-bearing modes still honor declared scopes.
@@ -1105,7 +1110,7 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "ro"` mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`)
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 
-Important: `tools.elevated` is the global baseline escape hatch that runs exec on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+Important: `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
 
 ### Sub-agent delegation guardrail
 

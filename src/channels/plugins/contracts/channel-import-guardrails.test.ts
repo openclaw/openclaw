@@ -41,6 +41,8 @@ const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "zalo",
   "zalouser",
 ]);
+// Shared config validation intentionally consumes this curated Telegram contract.
+const ALLOWED_CORE_CHANNEL_SDK_SUBPATHS = new Set(["telegram-command-config"]);
 
 type GuardedSource = {
   path: string;
@@ -221,6 +223,8 @@ const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
   // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> plugin api barrel -> accounts.ts
   bundledPluginFile("matrix", "src/matrix/accounts.ts"),
+  // Config schema stays on the public SDK seam and is covered by dedicated config guardrails.
+  bundledPluginFile("msteams", "src/config-schema.ts"),
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
@@ -480,8 +484,11 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
       continue;
     }
     const targetSubpath = specifier.split("/plugin-sdk/")[1]?.replace(/\.[cm]?[jt]sx?$/u, "") ?? "";
+    if (ALLOWED_CORE_CHANNEL_SDK_SUBPATHS.has(targetSubpath)) {
+      continue;
+    }
     const targetExtensionId =
-      BUNDLED_EXTENSION_IDS.find(
+      [...GUARDED_CHANNEL_EXTENSIONS].find(
         (extensionId) =>
           targetSubpath === extensionId || targetSubpath.startsWith(`${extensionId}-`),
       ) ?? null;

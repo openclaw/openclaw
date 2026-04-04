@@ -42,7 +42,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    openclaw status --deep
    ```
 
-   Runs gateway health checks + provider probes (requires a reachable gateway). See [Health](/gateway/health).
+   Runs a live gateway health probe, including channel probes when supported
+   (requires a reachable gateway). See [Health](/gateway/health).
 
 5. **Tail the latest log**
 
@@ -181,7 +182,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     They control different layers:
 
     - `approvals.exec`: forwards approval prompts to chat destinations
-    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client for exec approvals
 
     The host exec policy is still the real approval gate. Chat config only controls where approval
     prompts appear and how people can answer them.
@@ -192,6 +193,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
     - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+    - Plugin approvals are separate again: they use same-chat `/approve` by default, optional `approvals.plugin` forwarding, and only some native channels keep plugin-approval-native handling on top.
 
     Short version: forwarding is for routing, native client config is for richer channel-specific UX.
     See [Exec Approvals](/tools/exec-approvals).
@@ -550,7 +552,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - **Model/auth setup** (provider OAuth, Claude CLI reuse, and API keys supported, plus local model options such as LM Studio)
     - **Workspace** location + bootstrap files
     - **Gateway settings** (bind/port/auth/tailscale)
-    - **Providers** (WhatsApp, Telegram, Discord, Mattermost (plugin), Signal, iMessage)
+    - **Channels** (WhatsApp, Telegram, Discord, Mattermost, Signal, iMessage, plus bundled channel plugins like QQ Bot)
     - **Daemon install** (LaunchAgent on macOS; systemd user unit on Linux/WSL2)
     - **Health checks** and **skills** selection
 
@@ -651,10 +653,13 @@ for usage/billing and raise limits as needed.
 
     Steps:
 
-    1. Enable the plugin: `openclaw plugins enable google`
-    2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    3. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
-    4. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
+    1. Install Gemini CLI locally so `gemini` is on `PATH`
+       - Homebrew: `brew install gemini-cli`
+       - npm: `npm install -g @google/gemini-cli`
+    2. Enable the plugin: `openclaw plugins enable google`
+    3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
@@ -814,7 +819,7 @@ for usage/billing and raise limits as needed.
     - **Pros:** always-on, stable network, no laptop sleep issues, easier to keep running.
     - **Cons:** often run headless (use screenshots), remote file access only, you must SSH for updates.
 
-    **OpenClaw-specific note:** WhatsApp/Telegram/Slack/Mattermost (plugin)/Discord all work fine from a VPS. The only real trade-off is **headless browser** vs a visible window. See [Browser](/tools/browser).
+    **OpenClaw-specific note:** WhatsApp/Telegram/Slack/Mattermost/Discord all work fine from a VPS. The only real trade-off is **headless browser** vs a visible window. See [Browser](/tools/browser).
 
     **Recommended default:** VPS if you had gateway disconnects before. Local is great when you're actively using the Mac and want local file access or UI automation with a visible browser.
 
@@ -864,7 +869,7 @@ for usage/billing and raise limits as needed.
 
 <AccordionGroup>
   <Accordion title="What is OpenClaw, in one paragraph?">
-    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Google Chat, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
+    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost, Discord, Google Chat, Signal, iMessage, WebChat, and bundled channel plugins such as QQ Bot) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
   </Accordion>
 
   <Accordion title="Value proposition">
@@ -1002,6 +1007,24 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
+  <Accordion title="A subagent finished, but the completion update went to the wrong place or never posted. What should I check?">
+    Check the resolved requester route first:
+
+    - Completion-mode subagent delivery prefers any bound thread or conversation route when one exists.
+    - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
+    - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
+    - Invalid or stale targets can still force queue fallback or final delivery failure.
+
+    Debug:
+
+    ```bash
+    openclaw tasks show <runId-or-sessionKey>
+    ```
+
+    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks), [Session Tools](/concepts/session-tool).
+
+  </Accordion>
+
   <Accordion title="Cron or reminders do not fire. What should I check?">
     Cron runs inside the Gateway process. If the Gateway is not running continuously,
     scheduled jobs will not run.
@@ -1020,6 +1043,59 @@ for usage/billing and raise limits as needed.
     ```
 
     Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
+
+  </Accordion>
+
+  <Accordion title="Cron fired, but nothing was sent to the channel. Why?">
+    Check the delivery mode first:
+
+    - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
+    - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
+    - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
+    - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so the runner also suppresses queued fallback delivery.
+
+    For isolated cron jobs, the runner owns final delivery. The agent is expected
+    to return a plain-text summary for the runner to send. `--no-deliver` keeps
+    that result internal; it does not let the agent send directly with the
+    message tool instead.
+
+    Debug:
+
+    ```bash
+    openclaw cron runs --id <jobId> --limit 50
+    openclaw tasks show <runId-or-sessionKey>
+    ```
+
+    Docs: [Cron jobs](/automation/cron-jobs), [Background Tasks](/automation/tasks).
+
+  </Accordion>
+
+  <Accordion title="Why did an isolated cron run switch models or retry once?">
+    That is usually the live model-switch path, not duplicate scheduling.
+
+    Isolated cron can persist a runtime model handoff and retry when the active
+    run throws `LiveSessionModelSwitchError`. The retry keeps the switched
+    provider/model, and if the switch carried a new auth profile override, cron
+    persists that too before retrying.
+
+    Related selection rules:
+
+    - Gmail hook model override wins first when applicable.
+    - Then per-job `model`.
+    - Then any stored cron-session model override.
+    - Then the normal agent/default model selection.
+
+    The retry loop is bounded. After the initial attempt plus 2 switch retries,
+    cron aborts instead of looping forever.
+
+    Debug:
+
+    ```bash
+    openclaw cron runs --id <jobId> --limit 50
+    openclaw tasks show <runId-or-sessionKey>
+    ```
+
+    Docs: [Cron jobs](/automation/cron-jobs), [cron CLI](/cli/cron).
 
   </Accordion>
 
@@ -1382,14 +1458,14 @@ for usage/billing and raise limits as needed.
     - `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
     - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
     - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
-    - The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
+    - Shared-secret Control UI setups authenticate via `connect.params.auth.token` or `connect.params.auth.password` (stored in app/UI settings). Identity-bearing modes such as Tailscale Serve or `trusted-proxy` use request headers instead. Avoid putting shared secrets in URLs.
 
   </Accordion>
 
   <Accordion title="Why do I need a token on localhost now?">
-    OpenClaw enforces token auth by default, including loopback. If no token is configured, gateway startup auto-generates one and saves it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
+    OpenClaw enforces gateway auth by default, including loopback. In the normal default path that means token auth: if no explicit auth path is configured, gateway startup resolves to token mode and auto-generates one, saving it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
 
-    If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
+    If you prefer a different auth path, you can explicitly choose password mode (or, for non-loopback identity-aware reverse proxies, `trusted-proxy`). If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
 
   </Accordion>
 
@@ -2055,7 +2131,7 @@ for usage/billing and raise limits as needed.
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw currently assumes the configured default provider (currently `openai`) as a temporary deprecation fallback - but you should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -2362,6 +2438,35 @@ for usage/billing and raise limits as needed.
 
     Cooldowns apply to failing profiles (exponential backoff), so OpenClaw can keep responding even when a provider is rate-limited or temporarily failing.
 
+    The rate-limit bucket includes more than plain `429` responses. OpenClaw
+    also treats messages like `Too many concurrent requests`,
+    `ThrottlingException`, `resource exhausted`, and periodic usage-window
+    limits (`weekly/monthly limit reached`) as failover-worthy rate limits.
+
+    Some billing-looking responses are not `402`, and some HTTP `402`
+    responses also stay in that transient bucket. If a provider returns
+    explicit billing text on `401` or `403` (for example OpenRouter
+    `Key limit exceeded`), OpenClaw keeps that in the billing lane. If a `402`
+    message instead looks like a retryable usage-window or
+    organization/workspace spend limit (`daily limit reached, resets tomorrow`,
+    `organization spending limit exceeded`), OpenClaw treats it as
+    `rate_limit`, not a long billing disable.
+
+    Context-overflow errors are different: signatures such as
+    `request_too_large`, `input exceeds the maximum number of tokens`, or
+    `input is too long for the model` stay on the compaction/retry path instead
+    of advancing model fallback.
+
+    Generic server-error text is intentionally narrower than "anything with
+    unknown/error in it". OpenClaw does treat provider-scoped transient shapes
+    such as Anthropic bare `An unknown error occurred`, stop-reason errors like
+    `Unhandled stop reason: error`, and JSON `api_error` payloads with
+    transient server text (`internal server error`, `unknown error, 520`,
+    `upstream error`, `backend error`) as timeout/failover signals. But generic
+    internal fallback text like `LLM request failed with an unknown error.` or
+    a bare `Provider returned error` stays conservative and does not trigger
+    model fallback by itself.
+
   </Accordion>
 
   <Accordion title='What does "No credentials found for profile anthropic:default" mean?'>
@@ -2555,6 +2660,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
+    - Bootstrap token scope checks are role-prefixed. The built-in bootstrap operator allowlist only satisfies operator requests; node or other non-operator roles still need scopes under their own role prefix.
 
     Fix:
 
@@ -2567,6 +2673,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - If mismatch persists after the one retry, rotate/re-approve the paired device token:
       - `openclaw devices list`
       - `openclaw devices rotate --device <id> --role operator`
+    - If that rotate call says it was denied, check two things:
+      - paired-device sessions can rotate only their **own** device unless they also have `operator.admin`
+      - explicit `--scope` values cannot exceed the caller's current operator scopes
     - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
   </Accordion>

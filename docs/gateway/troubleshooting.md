@@ -27,7 +27,8 @@ Expected healthy signals:
 
 - `openclaw gateway status` shows `Runtime: running` and `RPC probe: ok`.
 - `openclaw doctor` reports no blocking config/service issues.
-- `openclaw channels status --probe` shows connected/ready channels.
+- `openclaw channels status --probe` shows live per-account transport status and,
+  where supported, probe/audit results such as `works` or `audit ok`.
 
 ## Anthropic 429 extra usage required for long context
 
@@ -158,6 +159,13 @@ If logs show nonce/signature errors, update the connecting client and verify it:
 2. signs the challenge-bound payload
 3. sends `connect.params.device.nonce` with the same challenge nonce
 
+If `openclaw devices rotate` / `revoke` / `remove` is denied unexpectedly:
+
+- paired-device token sessions can manage only **their own** device unless the
+  caller also has `operator.admin`
+- `openclaw devices rotate --scope ...` can only request operator scopes that
+  the caller session already holds
+
 Related:
 
 - [/web/control-ui](/web/control-ui)
@@ -175,7 +183,7 @@ openclaw gateway status
 openclaw status
 openclaw logs --follow
 openclaw doctor
-openclaw gateway status --deep
+openclaw gateway status --deep   # also scan system-level services
 ```
 
 Look for:
@@ -183,18 +191,49 @@ Look for:
 - `Runtime: stopped` with exit hints.
 - Service config mismatch (`Config (cli)` vs `Config (service)`).
 - Port/listener conflicts.
+- Extra launchd/systemd/schtasks installs when `--deep` is used.
+- `Other gateway-like services detected (best effort)` cleanup hints.
 
 Common signatures:
 
 - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → local gateway mode is not enabled, or the config file was clobbered and lost `gateway.mode`. Fix: set `gateway.mode="local"` in your config, or re-run `openclaw onboard --mode local` / `openclaw setup` to restamp the expected local-mode config. If you are running OpenClaw via Podman, the default config path is `~/.openclaw/openclaw.json`.
 - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
 - `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
+- `Other gateway-like services detected (best effort)` → stale or parallel launchd/systemd/schtasks units exist. Most setups should keep one gateway per machine; if you do need more than one, isolate ports + config/state/workspace. See [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
 
 Related:
 
 - [/gateway/background-process](/gateway/background-process)
 - [/gateway/configuration](/gateway/configuration)
 - [/gateway/doctor](/gateway/doctor)
+
+## Gateway probe warnings
+
+Use this when `openclaw gateway probe` reaches something, but still prints a warning block.
+
+```bash
+openclaw gateway probe
+openclaw gateway probe --json
+openclaw gateway probe --ssh user@gateway-host
+```
+
+Look for:
+
+- `warnings[].code` and `primaryTargetId` in JSON output.
+- Whether the warning is about SSH fallback, multiple gateways, missing scopes, or unresolved auth refs.
+
+Common signatures:
+
+- `SSH tunnel failed to start; falling back to direct probes.` → SSH setup failed, but the command still tried direct configured/loopback targets.
+- `multiple reachable gateways detected` → more than one target answered. Usually this means an intentional multi-gateway setup or stale/duplicate listeners.
+- `Probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
+- unresolved `gateway.auth.*` / `gateway.remote.*` SecretRef warning text → auth material was unavailable in this command path for the failed target.
+
+Related:
+
+- [/cli/gateway](/cli/gateway)
+- [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host)
+- [/gateway/remote](/gateway/remote)
 
 ## Channel connected messages not flowing
 
@@ -243,13 +282,15 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
 
 Common signatures:
 
 - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
 - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
 - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
+- `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
+- `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
 - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
 - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
 

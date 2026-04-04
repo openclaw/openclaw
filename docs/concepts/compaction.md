@@ -18,6 +18,11 @@ into a summary so the chat can continue.
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
+When OpenClaw splits history into compaction chunks, it keeps assistant tool
+calls paired with their matching `toolResult` entries. If a split point lands
+inside a tool block, OpenClaw moves the boundary so the pair stays together and
+the current unsummarized tail is preserved.
+
 The full conversation history stays on disk. Compaction only changes what the
 model sees on the next turn.
 
@@ -25,7 +30,9 @@ model sees on the next turn.
 
 Auto-compaction is on by default. It runs when the session nears the context
 limit, or when the model returns a context-overflow error (in which case
-OpenClaw compacts and retries).
+OpenClaw compacts and retries). Typical overflow signatures include
+`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, and `input is too long for the model`.
 
 <Info>
 Before compacting, OpenClaw automatically reminds the agent to save important

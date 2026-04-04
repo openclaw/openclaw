@@ -28,6 +28,10 @@ be reviewed before you approve.
 
 Remove one paired device entry.
 
+When you are authenticated with a paired device token, non-admin callers can
+remove only **their own** device entry. Removing some other device requires
+`operator.admin`.
+
 ```
 openclaw devices remove <deviceId>
 openclaw devices remove <deviceId> --json
@@ -75,6 +79,10 @@ rotation cannot mint a new unapproved role.
 If you omit `--scope`, later reconnects with the stored rotated token reuse that
 token's cached approved scopes. If you pass explicit `--scope` values, those
 become the stored scope set for future cached-token reconnects.
+Non-admin paired-device callers can rotate only their **own** device token.
+Also, any explicit `--scope` values must stay within the caller session's own
+operator scopes; rotation cannot mint a broader operator token than the caller
+already has.
 
 ```
 openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
@@ -85,6 +93,9 @@ Returns the new token payload as JSON.
 ### `openclaw devices revoke --device <id> --role <role>`
 
 Revoke a device token for a specific role.
+
+Non-admin paired-device callers can revoke only their **own** device token.
+Revoking some other device's token requires `operator.admin`.
 
 ```
 openclaw devices revoke --device <deviceId> --role node
@@ -110,6 +121,9 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 - Token rotation stays inside the approved pairing role set and approved scope
   baseline for that device. A stray cached token entry does not grant a new
   rotate target.
+- For paired-device token sessions, cross-device management is admin-only:
+  `remove`, `rotate`, and `revoke` are self-only unless the caller has
+  `operator.admin`.
 - `devices clear` is intentionally gated by `--yes`.
 - If pairing scope is unavailable on local loopback (and no explicit `--url` is passed), list/approve can use a local pairing fallback.
 - `devices approve` picks the newest pending request automatically when you omit `requestId` or pass `--latest`.
