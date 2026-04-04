@@ -221,8 +221,8 @@ vi.mock("../../channels/plugins/pairing.js", async () => {
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
-    { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
     { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
     { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
@@ -2443,7 +2443,7 @@ describe("handleCommands /allowlist", () => {
 describe("/models command", () => {
   const cfg = {
     commands: { text: true },
-    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
+    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
   } as unknown as OpenClawConfig;
 
   it.each(["discord", "whatsapp"])("lists providers on %s (text)", async (surface) => {
@@ -2487,7 +2487,7 @@ describe("/models command", () => {
         includes: [
           "Models (anthropic",
           "page 1/",
-          "anthropic/claude-opus-4-6",
+          "anthropic/claude-opus-4-5",
           "Switch: /model <provider/model>",
           "All: /models anthropic all",
         ],
@@ -2496,7 +2496,7 @@ describe("/models command", () => {
       {
         name: "ignores page argument when all flag is present",
         command: "/models anthropic 3 all",
-        includes: ["Models (anthropic", "page 1/1", "anthropic/claude-opus-4-6"],
+        includes: ["Models (anthropic", "page 1/1", "anthropic/claude-opus-4-5"],
         excludes: ["Page out of range"],
       },
       {
@@ -2538,7 +2538,7 @@ describe("/models command", () => {
         defaults: {
           model: {
             primary: "localai/ultra-chat",
-            fallbacks: ["anthropic/claude-opus-4-6"],
+            fallbacks: ["anthropic/claude-opus-4-5"],
           },
           imageModel: "visionpro/studio-v1",
         },
@@ -2565,7 +2565,7 @@ describe("/models command", () => {
     const scopedCfg = {
       commands: { text: true },
       agents: {
-        defaults: { model: { primary: "anthropic/claude-opus-4-6" } },
+        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
         list: [{ id: "support", model: "localai/ultra-chat" }],
       },
     } as unknown as OpenClawConfig;
@@ -2589,6 +2589,7 @@ describe("handleCommands plugin commands", () => {
     clearPluginCommands();
     let receivedCtx:
       | {
+          gatewayClientScopes?: string[];
           sessionKey?: string;
           sessionId?: string;
         }
@@ -2607,7 +2608,9 @@ describe("handleCommands plugin commands", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/card", cfg);
+    const params = buildParams("/card", cfg, {
+      GatewayClientScopes: ["operator.write", "operator.pairing"],
+    });
     params.sessionKey = "agent:main:whatsapp:direct:test-user";
     params.sessionEntry = {
       sessionId: "session-plugin-command",
@@ -2618,6 +2621,7 @@ describe("handleCommands plugin commands", () => {
     expect(commandResult.shouldContinue).toBe(false);
     expect(commandResult.reply?.text).toBe("from plugin");
     expect(receivedCtx).toMatchObject({
+      gatewayClientScopes: ["operator.write", "operator.pairing"],
       sessionKey: "agent:main:whatsapp:direct:test-user",
       sessionId: "session-plugin-command",
     });

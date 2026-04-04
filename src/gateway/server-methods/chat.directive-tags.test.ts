@@ -1397,6 +1397,38 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("ops update");
   });
 
+  it("forwards gateway caller scopes into the dispatch context", async () => {
+    createTranscriptFixture("openclaw-chat-send-gateway-client-scopes-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-gateway-client-scopes",
+      message: "/scopecheck",
+      client: {
+        connect: {
+          scopes: ["operator.write", "operator.pairing"],
+          client: {
+            id: "openclaw-cli",
+            mode: "cli",
+            displayName: "openclaw-cli",
+            version: "1.0.0",
+          },
+        },
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toEqual([
+      "operator.write",
+      "operator.pairing",
+    ]);
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
+  });
+
   it("injects ACP system provenance into the agent-visible body", async () => {
     createTranscriptFixture("openclaw-chat-send-system-provenance-acp-");
     mockState.finalText = "ok";
