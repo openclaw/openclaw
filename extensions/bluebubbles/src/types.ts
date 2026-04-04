@@ -88,8 +88,8 @@ export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
   accounts?: Record<string, BlueBubblesAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
-  /** Channel-level default per-action tool gating (default: true for all). */
-  channelActions?: BlueBubblesActionConfig;
+  /** Per-action tool gating (default: true for all). */
+  actions?: BlueBubblesActionConfig;
 };
 
 export type BlueBubblesSendTarget =

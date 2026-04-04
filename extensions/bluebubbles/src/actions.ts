@@ -22,7 +22,7 @@ import {
   normalizeBlueBubblesMessagingTarget,
   parseBlueBubblesTarget,
 } from "./targets.js";
-import type { BlueBubblesConfig, BlueBubblesSendTarget } from "./types.js";
+import type { BlueBubblesSendTarget } from "./types.js";
 
 const loadBlueBubblesActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
@@ -77,8 +77,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
     if (!account.enabled || !account.configured) {
       return null;
     }
-    const channelCfg = cfg.channels?.bluebubbles as BlueBubblesConfig | undefined;
-    const gate = createActionGate(account.config.actions ?? channelCfg?.channelActions);
+    const gate = createActionGate(account.config.actions);
     const actions = new Set<ChannelMessageActionName>();
     const macOS26 = isMacOS26OrHigher(account.accountId);
     const privateApiStatus = getCachedBlueBubblesPrivateApiStatus(account.accountId);
