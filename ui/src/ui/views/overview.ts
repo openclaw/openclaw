@@ -197,10 +197,7 @@ export function renderOverview(props: OverviewProps) {
       return null;
     }
     const lower = props.lastError.toLowerCase();
-    const authFailed =
-      lower.includes("unauthorized") ||
-      lower.includes("connect failed") ||
-      lower.includes("device identity required");
+    const authFailed = lower.includes("unauthorized") || lower.includes("device identity required");
     if (!authFailed) {
       return null;
     }
