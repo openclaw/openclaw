@@ -256,24 +256,28 @@ export default defineSingleProviderPluginEntry({
     },
     buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
     prepareExtraParams: (ctx) => {
-      if (ctx.extraParams?.tool_stream !== undefined) {
-        return ctx.extraParams;
+      const extraParams = ctx.extraParams;
+      if (extraParams && extraParams.tool_stream !== undefined) {
+        return extraParams;
       }
       return {
-        ...ctx.extraParams,
+        ...(extraParams ?? {}),
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) =>
-      composeProviderStreamWrappers(
-        ctx.streamFn,
-        (streamFn) => createXaiToolPayloadCompatibilityWrapper(streamFn),
-        typeof ctx.extraParams?.fastMode === "boolean"
-          ? (streamFn) => createXaiFastModeWrapper(streamFn, ctx.extraParams.fastMode)
-          : undefined,
-        (streamFn) => createXaiToolCallArgumentDecodingWrapper(streamFn),
-        (streamFn) => createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false),
-      ),
+    wrapStreamFn: (ctx) => {
+      const extraParams = ctx.extraParams;
+      const fastMode = extraParams?.fastMode;
+      const toolStreamEnabled = extraParams?.tool_stream !== false;
+      return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
+        let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
+        if (typeof fastMode === "boolean") {
+          wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
+        }
+        wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
+        return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
+      });
+    },
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
