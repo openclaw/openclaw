@@ -88,6 +88,7 @@ class MicCaptureManager(
   val isSending: StateFlow<Boolean> = _isSending
 
   private val messageQueue = ArrayDeque<String>()
+  private val messageQueueLock = Any()
   private var flushedPartialTranscript: String? = null
   private var pendingRunId: String? = null
   private var pendingAssistantEntryId: String? = null
@@ -99,6 +100,42 @@ class MicCaptureManager(
   private var transcriptFlushJob: Job? = null
   private var pendingRunTimeoutJob: Job? = null
   private var stopRequested = false
+
+  private fun enqueueMessage(message: String) {
+    synchronized(messageQueueLock) {
+      messageQueue.addLast(message)
+    }
+  }
+
+  private fun snapshotMessageQueue(): List<String> {
+    return synchronized(messageQueueLock) {
+      messageQueue.toList()
+    }
+  }
+
+  private fun hasQueuedMessages(): Boolean {
+    return synchronized(messageQueueLock) {
+      messageQueue.isNotEmpty()
+    }
+  }
+
+  private fun firstQueuedMessage(): String? {
+    return synchronized(messageQueueLock) {
+      messageQueue.firstOrNull()
+    }
+  }
+
+  private fun removeFirstQueuedMessage(): String? {
+    return synchronized(messageQueueLock) {
+      if (messageQueue.isEmpty()) null else messageQueue.removeFirst()
+    }
+  }
+
+  private fun queuedMessageCount(): Int {
+    return synchronized(messageQueueLock) {
+      messageQueue.size
+    }
+  }
 
   fun setMicEnabled(enabled: Boolean) {
     if (_micEnabled.value == enabled) return
@@ -278,7 +315,7 @@ class MicCaptureManager(
       role = VoiceConversationRole.User,
       text = message,
     )
-    messageQueue.addLast(message)
+    enqueueMessage(message)
     publishQueue()
   }
 
@@ -297,12 +334,12 @@ class MicCaptureManager(
   }
 
   private fun publishQueue() {
-    _queuedMessages.value = messageQueue.toList()
+    _queuedMessages.value = snapshotMessageQueue()
   }
 
   private fun sendQueuedIfIdle() {
     if (_isSending.value) return
-    if (messageQueue.isEmpty()) {
+    if (!hasQueuedMessages()) {
       if (_micEnabled.value) {
         _statusText.value = "Listening"
       } else {
@@ -315,7 +352,7 @@ class MicCaptureManager(
       return
     }
 
-    val next = messageQueue.first()
+    val next = firstQueuedMessage() ?: return
     _isSending.value = true
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
@@ -333,7 +370,7 @@ class MicCaptureManager(
         if (runId == null) {
           pendingRunTimeoutJob?.cancel()
           pendingRunTimeoutJob = null
-          messageQueue.removeFirst()
+          removeFirstQueuedMessage()
           publishQueue()
           _isSending.value = false
           pendingAssistantEntryId = null
@@ -379,8 +416,7 @@ class MicCaptureManager(
   private fun completePendingTurn() {
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
-    if (messageQueue.isNotEmpty()) {
-      messageQueue.removeFirst()
+    if (removeFirstQueuedMessage() != null) {
       publishQueue()
     }
     pendingRunId = null
@@ -390,7 +426,7 @@ class MicCaptureManager(
   }
 
   private fun queuedWaitingStatus(): String {
-    return "${messageQueue.size} queued · waiting for gateway"
+    return "${queuedMessageCount()} queued · waiting for gateway"
   }
 
   private fun appendConversation(
