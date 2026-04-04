@@ -10,6 +10,11 @@ title: "MiniMax"
 
 OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
+MiniMax also provides:
+
+- bundled speech synthesis via T2A v2
+- bundled `web_search` through the MiniMax Coding Plan search API
+
 ## Model lineup
 
 - `MiniMax-M2.7`: default hosted reasoning model.
@@ -44,8 +49,24 @@ When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
 `MiniMax-M2.7-highspeed` with `input: ["text", "image"]`.
 
-The bundled MiniMax provider catalog itself currently advertises those chat
-refs as text-only metadata until explicit provider config is materialized.
+The bundled MiniMax provider catalog also advertises image input on those M2.7
+chat refs, so image-capable routing can use MiniMax without requiring explicit
+provider config first.
+
+## Web search
+
+The MiniMax plugin also registers `web_search` through the MiniMax Coding Plan
+search API.
+
+- Provider id: `minimax`
+- Structured results: titles, URLs, snippets, related queries
+- Preferred env var: `MINIMAX_CODE_PLAN_KEY`
+- Accepted env alias: `MINIMAX_CODING_API_KEY`
+- Compatibility fallback: `MINIMAX_API_KEY` when it already points at a coding-plan token
+- Region reuse: `plugins.entries.minimax.config.webSearch.region`, then `MINIMAX_API_HOST`, then MiniMax provider base URLs
+
+Config lives under `plugins.entries.minimax.config.webSearch.*`.
+See [MiniMax Search](/tools/minimax-search).
 
 ## Choose a setup
 

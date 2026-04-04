@@ -257,6 +257,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
+- Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent`
+  (or legacy `cached_content`) to forward a provider-native
+  `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
 ### Google Vertex and Gemini CLI
 
@@ -266,8 +269,10 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
   - Enable: `openclaw plugins enable google`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+  - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
+  - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
 
 ### Z.AI (GLM)
 

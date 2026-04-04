@@ -68,7 +68,7 @@ describe("session MCP runtime", () => {
       { toolName: "alpha?", description: "question" },
       { toolName: "alpha!", description: "bang" },
     ];
-    const catalogB = [...catalogA].reverse();
+    const catalogB = catalogA.toReversed();
 
     const materializedA = await materializeBundleMcpToolsForRun({
       runtime: makeRuntime(catalogA),

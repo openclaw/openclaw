@@ -112,7 +112,10 @@ Notes:
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
 - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
 - `/model <#>` selects from that picker.
-- `/model` updates the session selection immediately. If the agent is idle, the next run uses the new model right away. If the agent is busy, the in-flight run finishes first and queued/future work uses the new model after that.
+- `/model` persists the new session selection immediately.
+- If the agent is idle, the next run uses the new model right away.
+- If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
+- If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - If the model ID itself contains `/` (OpenRouter-style), you must include the provider prefix (example: `/model openrouter/moonshotai/kimi-k2`).

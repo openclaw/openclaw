@@ -14,17 +14,58 @@ let agentStepDeps: {
   callGateway: GatewayCaller;
 } = defaultAgentStepDeps;
 
-export async function readLatestAssistantReply(params: {
-  sessionKey: string;
-  limit?: number;
-}): Promise<string | undefined> {
-  const history = await agentStepDeps.callGateway<{ messages: Array<unknown> }>({
-    method: "chat.history",
-    params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
-  });
-  const filtered = stripToolMessages(Array.isArray(history?.messages) ? history.messages : []);
-  for (let i = filtered.length - 1; i >= 0; i -= 1) {
-    const candidate = filtered[i];
+export type AssistantReplySnapshot = {
+  text?: string;
+  fingerprint?: string;
+};
+
+export type AgentWaitResult = {
+  status: "ok" | "timeout" | "error";
+  error?: string;
+  startedAt?: number;
+  endedAt?: number;
+};
+
+export type AgentRunsQuiescentResult = {
+  timedOut: boolean;
+  pendingRunIds: string[];
+  deadlineAtMs: number;
+};
+
+type RawAgentWaitResponse = {
+  status?: string;
+  error?: string;
+  startedAt?: unknown;
+  endedAt?: unknown;
+};
+
+function normalizeAgentWaitResult(
+  status: AgentWaitResult["status"],
+  wait?: RawAgentWaitResponse,
+): AgentWaitResult {
+  return {
+    status,
+    error: typeof wait?.error === "string" ? wait.error : undefined,
+    startedAt: typeof wait?.startedAt === "number" ? wait.startedAt : undefined,
+    endedAt: typeof wait?.endedAt === "number" ? wait.endedAt : undefined,
+  };
+}
+
+function normalizePendingRunIds(runIds: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  for (const runId of runIds) {
+    const normalized = runId.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+  }
+  return [...seen];
+}
+
+function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantReplySnapshot {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const candidate = messages[i];
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
@@ -35,9 +76,139 @@ export async function readLatestAssistantReply(params: {
     if (!text?.trim()) {
       continue;
     }
-    return text;
+    let fingerprint: string | undefined;
+    try {
+      fingerprint = JSON.stringify(candidate);
+    } catch {
+      fingerprint = text;
+    }
+    return { text, fingerprint };
   }
-  return undefined;
+  return {};
+}
+
+export async function readLatestAssistantReplySnapshot(params: {
+  sessionKey: string;
+  limit?: number;
+  callGateway?: GatewayCaller;
+}): Promise<AssistantReplySnapshot> {
+  const history = await (params.callGateway ?? agentStepDeps.callGateway)<{
+    messages: Array<unknown>;
+  }>({
+    method: "chat.history",
+    params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+  });
+  return resolveLatestAssistantReplySnapshot(
+    stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
+  );
+}
+
+export async function readLatestAssistantReply(params: {
+  sessionKey: string;
+  limit?: number;
+}): Promise<string | undefined> {
+  return (
+    await readLatestAssistantReplySnapshot({
+      sessionKey: params.sessionKey,
+      limit: params.limit,
+    })
+  ).text;
+}
+
+export async function waitForAgentRun(params: {
+  runId: string;
+  timeoutMs: number;
+  callGateway?: GatewayCaller;
+}): Promise<AgentWaitResult> {
+  const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
+  try {
+    const wait = await (params.callGateway ?? agentStepDeps.callGateway)<RawAgentWaitResponse>({
+      method: "agent.wait",
+      params: {
+        runId: params.runId,
+        timeoutMs,
+      },
+      timeoutMs: timeoutMs + 2000,
+    });
+    if (wait?.status === "timeout") {
+      return normalizeAgentWaitResult("timeout", wait);
+    }
+    if (wait?.status === "error") {
+      return normalizeAgentWaitResult("error", wait);
+    }
+    return normalizeAgentWaitResult("ok", wait);
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return {
+      status: error.includes("gateway timeout") ? "timeout" : "error",
+      error,
+    };
+  }
+}
+
+export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
+  runId: string;
+  sessionKey: string;
+  timeoutMs: number;
+  limit?: number;
+  baseline?: AssistantReplySnapshot;
+  callGateway?: GatewayCaller;
+}): Promise<AgentWaitResult & { replyText?: string }> {
+  const wait = await waitForAgentRun({
+    runId: params.runId,
+    timeoutMs: params.timeoutMs,
+    callGateway: params.callGateway,
+  });
+  if (wait.status !== "ok") {
+    return wait;
+  }
+
+  const latestReply = await readLatestAssistantReplySnapshot({
+    sessionKey: params.sessionKey,
+    limit: params.limit,
+    callGateway: params.callGateway,
+  });
+  const baselineFingerprint = params.baseline?.fingerprint;
+  const replyText =
+    latestReply.text && (!baselineFingerprint || latestReply.fingerprint !== baselineFingerprint)
+      ? latestReply.text
+      : undefined;
+  return {
+    status: "ok",
+    replyText,
+  };
+}
+
+export async function waitForAgentRunsUntilQuiescent(params: {
+  getPendingRunIds: () => Iterable<string>;
+  timeoutMs?: number;
+  deadlineAtMs?: number;
+  callGateway?: GatewayCaller;
+}): Promise<AgentRunsQuiescentResult> {
+  const deadlineAtMs =
+    params.deadlineAtMs ?? Date.now() + Math.max(1, Math.floor(params.timeoutMs ?? 0));
+
+  let pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+
+  while (pendingRunIds.size > 0 && Date.now() < deadlineAtMs) {
+    const remainingMs = Math.max(1, deadlineAtMs - Date.now());
+    await Promise.allSettled(
+      [...pendingRunIds].map((runId) =>
+        waitForAgentRun({
+          runId,
+          timeoutMs: remainingMs,
+          callGateway: params.callGateway,
+        }),
+      ),
+    );
+    pendingRunIds = new Set<string>(normalizePendingRunIds(params.getPendingRunIds()));
+  }
+
+  return {
+    timedOut: pendingRunIds.size > 0,
+    pendingRunIds: [...pendingRunIds],
+    deadlineAtMs,
+  };
 }
 
 export async function runAgentStep(params: {
@@ -74,19 +245,15 @@ export async function runAgentStep(params: {
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";
   const resolvedRunId = stepRunId || stepIdem;
-  const stepWaitMs = Math.min(params.timeoutMs, 60_000);
-  const wait = await agentStepDeps.callGateway<{ status?: string }>({
-    method: "agent.wait",
-    params: {
-      runId: resolvedRunId,
-      timeoutMs: stepWaitMs,
-    },
-    timeoutMs: stepWaitMs + 2000,
+  const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+    runId: resolvedRunId,
+    sessionKey: params.sessionKey,
+    timeoutMs: Math.min(params.timeoutMs, 60_000),
   });
-  if (wait?.status !== "ok") {
+  if (result.status !== "ok") {
     return undefined;
   }
-  return await readLatestAssistantReply({ sessionKey: params.sessionKey });
+  return result.replyText;
 }
 
 export const __testing = {

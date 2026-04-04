@@ -426,6 +426,7 @@ export function createSessionStatusTool(opts?: {
                   model: selection.model,
                   isDefault: selection.isDefault,
                 },
+          markLiveSwitchPending: true,
         });
         if (applied.updated) {
           store[resolved.key] = nextEntry;

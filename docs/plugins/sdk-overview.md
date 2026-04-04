@@ -163,6 +163,11 @@ methods:
 | `api.registerService(service)`                 | Background service    |
 | `api.registerInteractiveHandler(registration)` | Interactive handler   |
 
+Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
+`update.*`) always stay `operator.admin`, even if a plugin tries to assign a
+narrower gateway method scope. Prefer plugin-specific prefixes for
+plugin-owned methods.
+
 ### CLI registration metadata
 
 `api.registerCli(registrar, opts?)` accepts two kinds of top-level metadata:

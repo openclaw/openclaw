@@ -111,6 +111,10 @@ export default defineChannelPluginEntry({
   when you want the command to stay lazy-loaded without disappearing from the
   root CLI parse tree. For channel plugins, prefer registering those descriptors
   from `registerCliMetadata(...)` and keep `registerFull(...)` focused on runtime-only work.
+- If `registerFull(...)` also registers gateway RPC methods, keep them on a
+  plugin-specific prefix. Reserved core admin namespaces (`config.*`,
+  `exec.approvals.*`, `wizard.*`, `update.*`) are always coerced to
+  `operator.admin`.
 
 ## `defineSetupPluginEntry`
 

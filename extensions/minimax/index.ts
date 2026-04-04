@@ -27,6 +27,7 @@ import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -237,7 +238,11 @@ export default definePluginEntry({
       },
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.MINIMAX_CODE_PLAN_KEY, ctx.env.MINIMAX_API_KEY],
+          envDirect: [
+            ctx.env.MINIMAX_CODE_PLAN_KEY,
+            ctx.env.MINIMAX_CODING_API_KEY,
+            ctx.env.MINIMAX_API_KEY,
+          ],
         });
         return apiKey ? { token: apiKey } : null;
       },
@@ -303,5 +308,6 @@ export default definePluginEntry({
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
     api.registerSpeechProvider(buildMinimaxSpeechProvider());
+    api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },
 });
