@@ -112,6 +112,7 @@
 
 /* Light theme tokens apply to every light-mode family. */
 :root[data-theme-mode="light"] {
+  --selection-fg: #fff;
   --bg: #f8f9fa;
   --bg-accent: #f1f3f5;
   --bg-elevated: #ffffff;
@@ -270,6 +271,7 @@
 }
 
 :root[data-theme="openknot-light"] {
+  --selection-fg: #fff;
   /*
    * Accent — deep red on cool white
    *
@@ -404,6 +406,7 @@
 }
 
 :root[data-theme="dash-light"] {
+  --selection-fg: #fff;
   /*
    * Accent — deep chocolate on warm parchment
    *
@@ -551,8 +554,8 @@ select {
 }
 
 ::selection {
-  background: var(--accent-subtle);
-  color: var(--text-strong);
+  background: var(--selection-bg, var(--accent));
+  color: var(--selection-fg, #000);
 }
 
 /* Scrollbar styling - Minimal, barely visible */
