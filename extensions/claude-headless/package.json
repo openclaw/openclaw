@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/claude-headless-provider",
+  "version": "2026.4.4",
+  "private": true,
+  "description": "OpenClaw Claude headless CLI provider plugin (no Anthropic API key required)",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
