@@ -61,5 +61,6 @@ describe("provider env vars", () => {
     expect(getProviderEnvVars("__proto__")).toEqual([]);
     expect(getProviderEnvVars("constructor")).toEqual([]);
     expect(getProviderEnvVars("openai")).toEqual(["OPENAI_API_KEY"]);
+    expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
   });
 });

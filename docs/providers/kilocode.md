@@ -60,7 +60,7 @@ Any model available on the gateway can be used with the `kilocode/` prefix:
 ```
 kilocode/kilo/auto              (default - smart routing)
 kilocode/anthropic/claude-sonnet-4
-kilocode/openai/gpt-5.2
+kilocode/openai/gpt-5.4
 kilocode/google/gemini-3-pro-preview
 ...and many more
 ```
