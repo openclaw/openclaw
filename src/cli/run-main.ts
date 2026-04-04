@@ -172,13 +172,25 @@ export async function runCli(argv: string[] = process.argv) {
 
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();
-    const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
+    const { installUnhandledRejectionHandler, isAbortError, isTransientNetworkError } =
+      await import("../infra/unhandled-rejections.js");
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
     // These log the error and exit gracefully instead of crashing without trace.
     installUnhandledRejectionHandler();
 
     process.on("uncaughtException", (error) => {
+      if (isAbortError(error)) {
+        console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
+        return;
+      }
+      if (isTransientNetworkError(error)) {
+        console.warn(
+          "[openclaw] Non-fatal uncaught exception (continuing):",
+          formatUncaughtError(error),
+        );
+        return;
+      }
       console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
       process.exit(1);
     });

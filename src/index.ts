@@ -3,7 +3,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  isAbortError,
+  isTransientNetworkError,
+} from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
   installGaxiosFetchCompat: () => Promise<void>;
@@ -88,6 +92,17 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    if (isAbortError(error)) {
+      console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
+      return;
+    }
+    if (isTransientNetworkError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
