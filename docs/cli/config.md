@@ -48,7 +48,14 @@ openclaw config validate --json
 
 ### `config schema`
 
-Print the generated JSON schema for `openclaw.json` to stdout as plain text.
+Print the generated JSON schema for `openclaw.json` to stdout as JSON.
+
+What it includes:
+
+- The current root config schema, plus a root `$schema` string field for editor tooling
+- Field `title` and `description` metadata derived from the same labels/help used by the Control UI
+- Best-effort live plugin + channel schema metadata when runtime manifests can be loaded
+- A clean fallback schema even when the current config is invalid
 
 ```bash
 openclaw config schema
