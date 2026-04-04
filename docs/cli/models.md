@@ -119,7 +119,8 @@ openclaw models auth login --provider openai-codex --set-default
 Notes:
 
 - `login --provider anthropic --method cli --set-default` reuses a local Claude
-  CLI login and rewrites the main Anthropic default-model path to `claude-cli/...`.
+  CLI login and rewrites the main Anthropic default-model path to a canonical
+  `claude-cli/claude-*` ref.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth
