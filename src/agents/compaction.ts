@@ -133,6 +133,22 @@ export function splitMessagesByTokenShare(
   let currentTokens = 0;
 
   let pendingToolCallIds = new Set<string>();
+  let pendingChunkStartIndex: number | null = null;
+
+  const splitCurrentAtPendingBoundary = (): boolean => {
+    if (
+      pendingChunkStartIndex === null ||
+      pendingChunkStartIndex <= 0 ||
+      chunks.length >= normalizedParts - 1
+    ) {
+      return false;
+    }
+    chunks.push(current.slice(0, pendingChunkStartIndex));
+    current = current.slice(pendingChunkStartIndex);
+    currentTokens = current.reduce((sum, msg) => sum + estimateCompactionMessageTokens(msg), 0);
+    pendingChunkStartIndex = 0;
+    return true;
+  };
 
   for (const message of messages) {
     const messageTokens = estimateCompactionMessageTokens(message);
@@ -146,6 +162,7 @@ export function splitMessagesByTokenShare(
       chunks.push(current);
       current = [];
       currentTokens = 0;
+      pendingChunkStartIndex = null;
     }
 
     current.push(message);
@@ -154,14 +171,15 @@ export function splitMessagesByTokenShare(
     if (message.role === "assistant") {
       const toolCalls = extractToolCallsFromAssistant(message);
       const stopReason = (message as { stopReason?: unknown }).stopReason;
-      pendingToolCallIds =
-        stopReason === "aborted" || stopReason === "error"
-          ? new Set()
-          : new Set(toolCalls.map((t) => t.id));
+      const keepsPending =
+        stopReason !== "aborted" && stopReason !== "error" && toolCalls.length > 0;
+      pendingToolCallIds = keepsPending ? new Set(toolCalls.map((t) => t.id)) : new Set();
+      pendingChunkStartIndex = keepsPending ? current.length - 1 : null;
     } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
       const resultId = extractToolResultId(message);
       if (!resultId) {
         pendingToolCallIds = new Set();
+        pendingChunkStartIndex = null;
       } else {
         pendingToolCallIds.delete(resultId);
       }
@@ -173,8 +191,13 @@ export function splitMessagesByTokenShare(
         chunks.push(current);
         current = [];
         currentTokens = 0;
+        pendingChunkStartIndex = null;
       }
     }
+  }
+
+  if (pendingToolCallIds.size > 0 && currentTokens > targetTokens) {
+    splitCurrentAtPendingBoundary();
   }
 
   if (current.length > 0) {

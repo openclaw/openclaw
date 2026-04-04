@@ -183,6 +183,20 @@ describe("splitMessagesByTokenShare", () => {
     expect(parts.length).toBe(2);
     expect(parts.flat().length).toBe(messages.length);
   });
+
+  it("splits before unfinished tool-call turns that never get a result", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeAssistantToolCall(2, "call_missing"),
+      makeMessage(3, 4000),
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    expect(parts.length).toBe(2);
+    expect(parts[0]?.map((m) => m.timestamp)).toEqual([1]);
+    expect(parts[1]?.map((m) => m.timestamp)).toEqual([2, 3]);
+  });
 });
 
 describe("pruneHistoryForContextShare", () => {
