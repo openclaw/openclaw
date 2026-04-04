@@ -9,6 +9,7 @@ import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const log = createSubsystemLogger("compaction");
 
@@ -131,9 +132,13 @@ export function splitMessagesByTokenShare(
   let current: AgentMessage[] = [];
   let currentTokens = 0;
 
+  let pendingToolCallIds = new Set<string>();
+
   for (const message of messages) {
     const messageTokens = estimateCompactionMessageTokens(message);
+
     if (
+      pendingToolCallIds.size === 0 &&
       chunks.length < normalizedParts - 1 &&
       current.length > 0 &&
       currentTokens + messageTokens > targetTokens
@@ -145,6 +150,31 @@ export function splitMessagesByTokenShare(
 
     current.push(message);
     currentTokens += messageTokens;
+
+    if (message.role === "assistant") {
+      const toolCalls = extractToolCallsFromAssistant(message);
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      pendingToolCallIds =
+        stopReason === "aborted" || stopReason === "error"
+          ? new Set()
+          : new Set(toolCalls.map((t) => t.id));
+    } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
+      const resultId = extractToolResultId(message);
+      if (!resultId) {
+        pendingToolCallIds = new Set();
+      } else {
+        pendingToolCallIds.delete(resultId);
+      }
+      if (
+        pendingToolCallIds.size === 0 &&
+        chunks.length < normalizedParts - 1 &&
+        currentTokens > targetTokens
+      ) {
+        chunks.push(current);
+        current = [];
+        currentTokens = 0;
+      }
+    }
   }
 
   if (current.length > 0) {
