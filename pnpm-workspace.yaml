@@ -7,6 +7,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "acpx"
   - "openclaw"
   - "@mariozechner/*"
   - "@typescript/native-preview*"
