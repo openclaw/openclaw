@@ -217,8 +217,9 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
     }
     seenIds.add(manifest.id);
 
+    let sourcePath = candidate.source;
     try {
-      const sourcePath = resolvePreferredBundledChannelSource(candidate, manifest);
+      sourcePath = resolvePreferredBundledChannelSource(candidate, manifest);
       const entry = resolveChannelPluginModuleEntry(
         loadBundledModule(sourcePath, candidate.rootDir),
       );
@@ -243,7 +244,7 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
       });
     } catch (error) {
       log.warn(
-        `[channels] failed to load bundled channel ${manifest.id} from ${candidate.source}: ${String(error)}`,
+        `[channels] failed to load bundled channel ${manifest.id} from ${sourcePath}: ${String(error)}`,
       );
     }
   }
