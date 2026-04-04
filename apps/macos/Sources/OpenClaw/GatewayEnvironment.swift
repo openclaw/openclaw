@@ -299,7 +299,11 @@ enum GatewayEnvironment {
         if normalized.lowercased().hasPrefix("openclaw ") {
             normalized = String(normalized.dropFirst("openclaw ".count))
         }
-        return normalized
+        // Strip trailing commit metadata (e.g., "(d74a122)" or "(abc123)")
+        if let range = normalized.range(of: "\\s*\\([^)]+\\)\\s*$", options: .regularExpression) {
+            normalized = String(normalized[..<range.lowerBound])
+        }
+        return normalized.trimmingCharacters(in: .whitespaces)
     }
 
     private static func readGatewayVersion(binary: String) -> Semver? {
