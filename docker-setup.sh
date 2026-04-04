@@ -187,8 +187,21 @@ validate_mount_spec() {
   if [[ "$mount" == *","* ]]; then
     fail "Invalid mount format '$mount'. Commas are not allowed in mount specs."
   fi
+  # Reject leading/trailing whitespace so the generated YAML stays unambiguous.
+  if [[ "$mount" =~ ^[[:space:]] || "$mount" =~ [[:space:]]$ ]]; then
+    fail "Invalid mount format '$mount'. Mount specs cannot start or end with whitespace."
+  fi
   if [[ "$mount" != *":"* || "$mount" == ":"* || "$mount" == *":" ]]; then
     fail "Invalid mount format '$mount'. Expected source:target[:options]."
+  fi
+  # Reject empty segments (e.g. source::ro) to keep errors actionable.
+  if [[ "$mount" == *"::"* ]]; then
+    fail "Invalid mount format '$mount'. Empty mount path segments are not allowed."
+  fi
+  # Prevent YAML from interpreting the volume string as a mapping item.
+  # Example: '- source: target' becomes a mapping instead of a volume string.
+  if [[ "$mount" == *": "* || "$mount" == *" :"* ]]; then
+    fail "Invalid mount format '$mount'. Do not put spaces around ':' in mount specs."
   fi
 }
 
