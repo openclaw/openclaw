@@ -1,7 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
 import { TELEGRAM_COMMAND_NAME_PATTERN as bundledTelegramCommandNamePattern } from "../../extensions/telegram/src/command-config.ts";
 
-const getBundledChannelContractSurfaceModule = vi.fn(() => null);
+type BundledChannelContractSurfaceParams = Parameters<
+  (typeof import("../channels/plugins/contract-surfaces.js"))["getBundledChannelContractSurfaceModule"]
+>[0];
+
+type TelegramCommandConfigContract = Pick<
+  typeof import("./telegram-command-config.js"),
+  | "TELEGRAM_COMMAND_NAME_PATTERN"
+  | "normalizeTelegramCommandName"
+  | "normalizeTelegramCommandDescription"
+  | "resolveTelegramCustomCommands"
+>;
+
+const getBundledChannelContractSurfaceModule = vi.fn<
+  (params: BundledChannelContractSurfaceParams) => TelegramCommandConfigContract | null
+>(() => null);
 
 vi.mock("../channels/plugins/contract-surfaces.js", () => ({
   getBundledChannelContractSurfaceModule,
