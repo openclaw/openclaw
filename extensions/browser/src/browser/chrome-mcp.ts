@@ -31,6 +31,34 @@ type ChromeMcpSessionFactory = (
   userDataDir?: string,
 ) => Promise<ChromeMcpSession>;
 
+export function formatChromeMcpAttachFailureMessage(params: {
+  profileName: string;
+  userDataDir?: string;
+  details: string;
+}): string {
+  const details = params.details.trim();
+  const targetLabel = params.userDataDir
+    ? `the configured Chromium user data dir (${params.userDataDir})`
+    : "Google Chrome's default profile";
+
+  const base =
+    `Chrome MCP existing-session attach failed for profile "${params.profileName}". ` +
+    `Make sure ${targetLabel} is running locally with remote debugging enabled.`;
+
+  const lower = details.toLowerCase();
+  if (lower.includes("devtoolsactiveport")) {
+    return (
+      `${base} ` +
+      `Chrome did not expose a DevTools endpoint (DevToolsActivePort missing). ` +
+      `Start/keep Chrome running with remote debugging enabled (e.g. ` +
+      `--remote-debugging-port=9222 or --remote-debugging-port=0) and try again. ` +
+      `Details: ${details}`
+    );
+  }
+
+  return `${base} Details: ${details}`;
+}
+
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_ARGS = [
   "-y",
@@ -246,13 +274,12 @@ async function createRealSession(
       }
     } catch (err) {
       await client.close().catch(() => {});
-      const targetLabel = userDataDir
-        ? `the configured Chromium user data dir (${userDataDir})`
-        : "Google Chrome's default profile";
       throw new BrowserProfileUnavailableError(
-        `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
-          `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
-          `Details: ${String(err)}`,
+        formatChromeMcpAttachFailureMessage({
+          profileName,
+          userDataDir,
+          details: String(err),
+        }),
       );
     }
   })();
