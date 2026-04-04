@@ -26,6 +26,7 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
 - Cron tasks stay live while the cron runtime still owns the job; chat-backed CLI tasks stay live only while their owning run context is still active.
+- Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
 - `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
 - Terminal records are kept for 7 days, then automatically pruned.
@@ -204,6 +205,12 @@ Reconciliation is runtime-aware:
 - ACP/subagent tasks check their backing child session.
 - Cron tasks check whether the cron runtime still owns the job.
 - Chat-backed CLI tasks check the owning live run context, not just the chat session row.
+
+Completion cleanup is also runtime-aware:
+
+- Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
+- Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
+- Cleanup failures do not mask the real task outcome.
 
 ### `tasks flow list|show|cancel`
 
