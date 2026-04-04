@@ -1,0 +1,24 @@
+{
+  "id": "gateway-restart",
+  "enabledByDefault": false,
+  "contracts": {
+    "tools": ["gateway_restart"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowedCommands": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Allowlist of commands that can be run before restart. Empty = no pre-commands allowed.",
+        "default": ["openclaw gateway install --force"]
+      },
+      "markerFileName": {
+        "type": "string",
+        "description": "Name of the restart marker file",
+        "default": "restart-pending.json"
+      }
+    }
+  }
+}

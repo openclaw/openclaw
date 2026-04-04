@@ -127,4 +127,26 @@ export type PluginRuntimeCore = {
       cfg?: import("../../config/config.js").OpenClawConfig;
     }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
   };
+  followup: {
+    /**
+     * Schedule a proactive agent turn for a session.
+     * The turn runs asynchronously — the returned boolean indicates whether
+     * the item was successfully enqueued (false if session not found or deduped).
+     */
+    enqueueFollowupTurn: (params: {
+      sessionKey: string;
+      prompt: string;
+      agentId?: string;
+      originatingChannel?: string;
+      originatingTo?: string;
+      originatingAccountId?: string;
+      originatingThreadId?: string | number;
+      originatingChatType?: string;
+      model?: string;
+      provider?: string;
+      extraSystemPrompt?: string;
+      timeoutMs?: number;
+      source?: string;
+    }) => Promise<boolean>;
+  };
 };

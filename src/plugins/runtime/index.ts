@@ -20,6 +20,7 @@ import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
+import { createRuntimeFollowup } from "./runtime-followup.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
@@ -209,6 +210,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     state: { resolveStateDir },
     tasks,
     taskFlow,
+    followup: createRuntimeFollowup(),
   } satisfies Omit<
     PluginRuntime,
     "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration" | "videoGeneration"
