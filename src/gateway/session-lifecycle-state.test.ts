@@ -87,6 +87,33 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("maps phase end events with aborted stop reason to killed", () => {
+    expect(
+      deriveGatewaySessionLifecycleSnapshot({
+        session: {
+          updatedAt: 1_000,
+          status: "running",
+          startedAt: 1_100,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "end",
+            endedAt: 1_700,
+            stopReason: "aborted",
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_700,
+      status: "killed",
+      startedAt: 1_100,
+      endedAt: 1_700,
+      runtimeMs: 600,
+      abortedLastRun: true,
+    });
+  });
+
   it("maps aborted lifecycle end events without stopReason to timeout", () => {
     expect(
       derivePersistedSessionLifecyclePatch({

@@ -11,6 +11,8 @@ export type GuardedSessionManager = SessionManager & {
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
+  /** Mark the owning assistant turn aborted and clear pending tool calls. Idempotent. */
+  abortPendingToolCalls?: () => void;
 };
 
 /**
@@ -73,5 +75,6 @@ export function guardSessionManager(
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
+  (sessionManager as GuardedSessionManager).abortPendingToolCalls = guard.abortPendingToolCalls;
   return sessionManager as GuardedSessionManager;
 }

@@ -22,6 +22,21 @@ type SessionManagerWithRawAppend = SessionManager & {
   [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];
 };
 
+type SessionMessageEntryLike = {
+  type?: string;
+  id?: string;
+  parentId?: string | null;
+  message?: AgentMessage;
+};
+
+type SessionManagerWithRewrite = {
+  fileEntries?: Array<{ type?: string } | SessionMessageEntryLike>;
+  byId?: Map<string, SessionMessageEntryLike>;
+  leafId?: string | null;
+  _rewriteFile?: () => void;
+  getSessionFile?: () => string | null | undefined;
+};
+
 /**
  * Truncate oversized text content blocks in a tool result message.
  * Returns the original message if under the limit, or a new message with
@@ -122,6 +137,7 @@ export function installSessionToolResultGuard(
 ): {
   flushPendingToolResults: () => void;
   clearPendingToolResults: () => void;
+  abortPendingToolCalls: () => void;
   getPendingIds: () => string[];
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
@@ -184,6 +200,70 @@ export function installSessionToolResultGuard(
   };
 
   const clearPendingToolResults = () => {
+    pendingState.clear();
+  };
+
+  const abortPendingToolCalls = () => {
+    if (pendingState.size() === 0) {
+      return;
+    }
+
+    const pendingIds = new Set(pendingState.getPendingIds());
+    const sessionManagerWithRewrite = sessionManager as unknown as SessionManagerWithRewrite;
+    const byId = sessionManagerWithRewrite.byId;
+    const sessionFile = sessionManagerWithRewrite.getSessionFile?.();
+
+    const findMatchingAssistant = (): SessionMessageEntryLike | undefined => {
+      let current =
+        typeof sessionManagerWithRewrite.leafId === "string" && sessionManagerWithRewrite.leafId
+          ? byId?.get(sessionManagerWithRewrite.leafId)
+          : undefined;
+
+      while (current) {
+        if (current.type === "message" && current.message?.role === "assistant") {
+          const toolCalls = extractToolCallsFromAssistant(current.message);
+          if (toolCalls.some((toolCall) => pendingIds.has(toolCall.id))) {
+            return current;
+          }
+        }
+        const parentId =
+          typeof current.parentId === "string" && current.parentId.trim() ? current.parentId : null;
+        current = parentId ? byId?.get(parentId) : undefined;
+      }
+
+      const fileEntries = sessionManagerWithRewrite.fileEntries ?? [];
+      for (let i = fileEntries.length - 1; i >= 0; i -= 1) {
+        const entry = fileEntries[i] as SessionMessageEntryLike | undefined;
+        if (entry?.type !== "message" || entry.message?.role !== "assistant") {
+          continue;
+        }
+        const toolCalls = extractToolCallsFromAssistant(entry.message);
+        if (toolCalls.some((toolCall) => pendingIds.has(toolCall.id))) {
+          return entry;
+        }
+      }
+      return undefined;
+    };
+
+    const matchingAssistant = findMatchingAssistant();
+    if (!matchingAssistant || matchingAssistant.message?.role !== "assistant") {
+      pendingState.clear();
+      return;
+    }
+
+    const assistant = matchingAssistant.message;
+    if (assistant.stopReason !== "aborted") {
+      matchingAssistant.message = { ...assistant, stopReason: "aborted" };
+      sessionManagerWithRewrite._rewriteFile?.();
+      if (sessionFile && matchingAssistant.id) {
+        emitSessionTranscriptUpdate({
+          sessionFile,
+          sessionKey: opts?.sessionKey,
+          message: matchingAssistant.message,
+          messageId: matchingAssistant.id,
+        });
+      }
+    }
     pendingState.clear();
   };
 
@@ -284,6 +364,7 @@ export function installSessionToolResultGuard(
   return {
     flushPendingToolResults,
     clearPendingToolResults,
+    abortPendingToolCalls,
     getPendingIds: pendingState.getPendingIds,
   };
 }

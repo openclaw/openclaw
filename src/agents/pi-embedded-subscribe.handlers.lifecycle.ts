@@ -38,6 +38,10 @@ export function handleAgentStart(ctx: EmbeddedPiSubscribeContext) {
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
+  const stopReason =
+    isAssistantMessage(lastAssistant) && typeof lastAssistant.stopReason === "string"
+      ? lastAssistant.stopReason
+      : undefined;
 
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
@@ -93,11 +97,15 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       data: {
         phase: "end",
         endedAt: Date.now(),
+        ...(stopReason ? { stopReason } : {}),
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
-      data: { phase: "end" },
+      data: {
+        phase: "end",
+        ...(stopReason ? { stopReason } : {}),
+      },
     });
   }
 

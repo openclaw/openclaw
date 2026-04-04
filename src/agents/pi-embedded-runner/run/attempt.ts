@@ -727,6 +727,10 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let aborted = Boolean(params.abortSignal?.aborted);
+    let yieldAborted = false;
+    let timedOut = false;
+    let timedOutDuringCompaction = false;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -1208,19 +1212,18 @@ export async function runEmbeddedAttempt(
           }
         }
       } catch (err) {
+        const abortPendingCleanup = Boolean(params.abortSignal?.aborted);
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
-          clearPendingOnTimeout: true,
+          clearPendingOnTimeout: !abortPendingCleanup,
+          abortPendingOnTimeout: abortPendingCleanup,
+          flushMode: abortPendingCleanup ? "abort" : "flush",
         });
         activeSession.dispose();
         throw err;
       }
 
-      let aborted = Boolean(params.abortSignal?.aborted);
-      let yieldAborted = false;
-      let timedOut = false;
-      let timedOutDuringCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
       const makeTimeoutAbortReason = (): Error => {
@@ -2031,10 +2034,13 @@ export async function runEmbeddedAttempt(
           /* best-effort */
         }
         try {
+          const abortPendingCleanup = aborted && !timedOut && !yieldAborted;
           await flushPendingToolResultsAfterIdle({
             agent: session?.agent,
             sessionManager,
-            clearPendingOnTimeout: true,
+            clearPendingOnTimeout: !abortPendingCleanup,
+            abortPendingOnTimeout: abortPendingCleanup,
+            flushMode: abortPendingCleanup ? "abort" : "flush",
           });
         } catch {
           /* best-effort */

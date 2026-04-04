@@ -124,6 +124,51 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(getMessages(sm).map((m) => m.role)).toEqual(["assistant", "user"]);
   });
 
+  it("marks the pending assistant turn aborted when abort flush is requested", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    const idle = deferred<void>();
+    const agent = { waitForIdle: () => idle.promise };
+
+    appendMessage(assistantToolCall("call_abort_1"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 1_000,
+      flushMode: "abort",
+    });
+    idle.resolve();
+    await flushPromise;
+
+    const messages = getMessages(sm) as Array<{ role: string; stopReason?: string }>;
+    expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+    expect(messages[0]?.stopReason).toBe("aborted");
+  });
+
+  it("marks the pending assistant turn aborted after timeout when abort cleanup is requested", async () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+    vi.useFakeTimers();
+    const agent = { waitForIdle: () => new Promise<void>(() => {}) };
+
+    appendMessage(assistantToolCall("call_abort_2"));
+
+    const flushPromise = flushPendingToolResultsAfterIdle({
+      agent,
+      sessionManager: sm,
+      timeoutMs: 30,
+      abortPendingOnTimeout: true,
+      flushMode: "abort",
+    });
+    await vi.advanceTimersByTimeAsync(30);
+    await flushPromise;
+
+    const messages = getMessages(sm) as Array<{ role: string; stopReason?: string }>;
+    expect(messages.map((m) => m.role)).toEqual(["assistant"]);
+    expect(messages[0]?.stopReason).toBe("aborted");
+  });
+
   it("clears timeout handle when waitForIdle resolves first", async () => {
     const sm = guardSessionManager(SessionManager.inMemory());
     vi.useFakeTimers();

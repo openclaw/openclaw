@@ -122,6 +122,40 @@ describe("installSessionToolResultGuard", () => {
     expect(guard.getPendingIds()).toEqual([]);
   });
 
+  it("marks the matching assistant turn aborted when pending tool calls are aborted", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    guard.abortPendingToolCalls();
+
+    const messages = expectPersistedRoles(sm, ["assistant"]) as Array<{
+      role: string;
+      stopReason?: string;
+    }>;
+    expect(messages[0]?.stopReason).toBe("aborted");
+    expect(guard.getPendingIds()).toEqual([]);
+  });
+
+  it("does not append a synthetic tool result when aborting pending tool calls", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm);
+
+    sm.appendMessage(toolCallMessage);
+    guard.abortPendingToolCalls();
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "hello?",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const messages = getPersistedMessages(sm);
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(messages.some((message) => message.role === "toolResult")).toBe(false);
+  });
+
   it("clears pending on user interruption when synthetic tool results are disabled", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm, {

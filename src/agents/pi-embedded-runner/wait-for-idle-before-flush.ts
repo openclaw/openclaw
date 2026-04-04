@@ -5,6 +5,7 @@ type IdleAwareAgent = {
 type ToolResultFlushManager = {
   flushPendingToolResults?: (() => void) | undefined;
   clearPendingToolResults?: (() => void) | undefined;
+  abortPendingToolCalls?: (() => void) | undefined;
 };
 
 export const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
@@ -45,13 +46,23 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   sessionManager: ToolResultFlushManager | null | undefined;
   timeoutMs?: number;
   clearPendingOnTimeout?: boolean;
+  abortPendingOnTimeout?: boolean;
+  flushMode?: "flush" | "abort";
 }): Promise<void> {
   const timedOut = await waitForAgentIdleBestEffort(
     opts.agent,
     opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
   );
+  if (timedOut && opts.abortPendingOnTimeout && opts.sessionManager?.abortPendingToolCalls) {
+    opts.sessionManager.abortPendingToolCalls();
+    return;
+  }
   if (timedOut && opts.clearPendingOnTimeout && opts.sessionManager?.clearPendingToolResults) {
     opts.sessionManager.clearPendingToolResults();
+    return;
+  }
+  if (opts.flushMode === "abort") {
+    opts.sessionManager?.abortPendingToolCalls?.();
     return;
   }
   opts.sessionManager?.flushPendingToolResults?.();

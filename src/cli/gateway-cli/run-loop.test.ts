@@ -200,7 +200,35 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+      expect(abortEmbeddedPiRun).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("aborts active runs and waits briefly before closing on SIGTERM", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      getActiveTaskCount.mockReturnValueOnce(1);
+      getActiveEmbeddedRunCount.mockReturnValueOnce(2);
+      waitForActiveTasks.mockResolvedValueOnce({ drained: true });
+      waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
+
+      const { close, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(waitForActiveTasks).toHaveBeenCalledWith(5_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(5_000);
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
     });
   });
 

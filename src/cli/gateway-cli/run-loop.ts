@@ -101,8 +101,71 @@ export async function runGatewayLoop(params: {
   };
 
   const DRAIN_TIMEOUT_MS = 90_000;
+  const STOP_ABORT_SETTLE_TIMEOUT_MS = 5_000;
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
+
+  const drainBeforeShutdown = async (isRestart: boolean) => {
+    // Reject new enqueues immediately during the drain window so sessions get
+    // an explicit restart/stop failure instead of silent task loss.
+    markGatewayDraining();
+    const activeTasks = getActiveTaskCount();
+    const activeRuns = getActiveEmbeddedRunCount();
+
+    if (isRestart) {
+      // Best-effort abort for compacting runs so long compaction operations
+      // don't hold session write locks across restart boundaries.
+      if (activeRuns > 0) {
+        abortEmbeddedPiRun(undefined, { mode: "compacting" });
+      }
+
+      if (activeTasks > 0 || activeRuns > 0) {
+        gatewayLog.info(
+          `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
+        );
+        const [tasksDrain, runsDrain] = await Promise.all([
+          activeTasks > 0
+            ? waitForActiveTasks(DRAIN_TIMEOUT_MS)
+            : Promise.resolve({ drained: true }),
+          activeRuns > 0
+            ? waitForActiveEmbeddedRuns(DRAIN_TIMEOUT_MS)
+            : Promise.resolve({ drained: true }),
+        ]);
+        if (tasksDrain.drained && runsDrain.drained) {
+          gatewayLog.info("all active work drained");
+        } else {
+          gatewayLog.warn("drain timeout reached; proceeding with restart");
+          // Final best-effort abort to avoid carrying active runs into the
+          // next lifecycle when drain time budget is exhausted.
+          abortEmbeddedPiRun(undefined, { mode: "all" });
+        }
+      }
+      return;
+    }
+
+    if (activeRuns > 0) {
+      abortEmbeddedPiRun(undefined, { mode: "all" });
+    }
+
+    if (activeTasks > 0 || activeRuns > 0) {
+      gatewayLog.info(
+        `settling ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before shutdown (timeout ${STOP_ABORT_SETTLE_TIMEOUT_MS}ms)`,
+      );
+      const [tasksDrain, runsDrain] = await Promise.all([
+        activeTasks > 0
+          ? waitForActiveTasks(STOP_ABORT_SETTLE_TIMEOUT_MS)
+          : Promise.resolve({ drained: true }),
+        activeRuns > 0
+          ? waitForActiveEmbeddedRuns(STOP_ABORT_SETTLE_TIMEOUT_MS)
+          : Promise.resolve({ drained: true }),
+      ]);
+      if (tasksDrain.drained && runsDrain.drained) {
+        gatewayLog.info("all active work settled before shutdown");
+      } else {
+        gatewayLog.warn("shutdown settle timeout reached; proceeding with stop");
+      }
+    }
+  };
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
     if (shuttingDown) {
@@ -125,43 +188,7 @@ export async function runGatewayLoop(params: {
 
     void (async () => {
       try {
-        // On restart, wait for in-flight agent turns to finish before
-        // tearing down the server so buffered messages are delivered.
-        if (isRestart) {
-          // Reject new enqueues immediately during the drain window so
-          // sessions get an explicit restart error instead of silent task loss.
-          markGatewayDraining();
-          const activeTasks = getActiveTaskCount();
-          const activeRuns = getActiveEmbeddedRunCount();
-
-          // Best-effort abort for compacting runs so long compaction operations
-          // don't hold session write locks across restart boundaries.
-          if (activeRuns > 0) {
-            abortEmbeddedPiRun(undefined, { mode: "compacting" });
-          }
-
-          if (activeTasks > 0 || activeRuns > 0) {
-            gatewayLog.info(
-              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
-            );
-            const [tasksDrain, runsDrain] = await Promise.all([
-              activeTasks > 0
-                ? waitForActiveTasks(DRAIN_TIMEOUT_MS)
-                : Promise.resolve({ drained: true }),
-              activeRuns > 0
-                ? waitForActiveEmbeddedRuns(DRAIN_TIMEOUT_MS)
-                : Promise.resolve({ drained: true }),
-            ]);
-            if (tasksDrain.drained && runsDrain.drained) {
-              gatewayLog.info("all active work drained");
-            } else {
-              gatewayLog.warn("drain timeout reached; proceeding with restart");
-              // Final best-effort abort to avoid carrying active runs into the
-              // next lifecycle when drain time budget is exhausted.
-              abortEmbeddedPiRun(undefined, { mode: "all" });
-            }
-          }
-        }
+        await drainBeforeShutdown(isRestart);
 
         await server?.close({
           reason: isRestart ? "gateway restarting" : "gateway stopping",
