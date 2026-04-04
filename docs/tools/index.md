@@ -39,9 +39,10 @@ OpenClaw has three layers that work together:
 
   <Step title="Plugins package everything together">
     A plugin is a package that can register any combination of capabilities:
-    channels, model providers, tools, skills, speech, image generation, and more.
-    Some plugins are **core** (shipped with OpenClaw), others are **external**
-    (published on npm by the community).
+    channels, model providers, tools, skills, speech, realtime transcription,
+    realtime voice, media understanding, image generation, video generation,
+    web fetch, web search, and more. Some plugins are **core** (shipped with
+    OpenClaw), others are **external** (published on npm by the community).
 
     [Install and configure plugins](/tools/plugin) | [Build your own](/plugins/building-plugins)
 

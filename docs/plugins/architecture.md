@@ -235,13 +235,16 @@ That means:
 Examples:
 
 - the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
-  speech + media-understanding + image-generation behavior
+  speech + realtime-voice + media-understanding + image-generation behavior
 - the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
 - the bundled `microsoft` plugin owns Microsoft speech behavior
 - the bundled `google` plugin owns Google model-provider behavior plus Google
   media-understanding + image-generation + web-search behavior
+- the bundled `firecrawl` plugin owns Firecrawl web-fetch behavior
 - the bundled `minimax`, `mistral`, `moonshot`, and `zai` plugins own their
   media-understanding backends
+- the bundled `qwen` plugin owns Qwen text-provider behavior plus
+  media-understanding and video-generation behavior
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
   CLI, routes, and Twilio media-stream bridging, but it consumes shared speech
   plus realtime-transcription and realtime-voice capabilities instead of
