@@ -1,5 +1,5 @@
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { isReservedAdminGatewayMethod } from "../shared/gateway-method-prefixes.js";
+import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
@@ -161,8 +161,9 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (explicitScope) {
     return explicitScope;
   }
-  if (isReservedAdminGatewayMethod(method)) {
-    return ADMIN_SCOPE;
+  const reservedScope = resolveReservedGatewayMethodScope(method);
+  if (reservedScope) {
+    return reservedScope;
   }
   const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
   if (pluginScope) {

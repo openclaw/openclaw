@@ -1992,6 +1992,13 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
+  /**
+   * Register a gateway RPC method for this plugin.
+   *
+   * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
+   * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
+   * narrower scope is requested.
+   */
   registerGatewayMethod: (
     method: string,
     handler: GatewayRequestHandler,

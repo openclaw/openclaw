@@ -9,6 +9,16 @@ import {
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
+const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+
+function setPluginGatewayMethodScope(method: string, scope: "operator.read" | "operator.write") {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayMethodScopes = {
+    [method]: scope,
+  };
+  setActivePluginRegistry(registry);
+}
+
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
@@ -52,13 +62,9 @@ describe("method scope resolution", () => {
   });
 
   it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayMethodScopes = {
-      "config.plugin.inspect": "operator.read",
-    };
-    setActivePluginRegistry(registry);
+    setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
 
-    expect(resolveLeastPrivilegeOperatorScopesForMethod("config.plugin.inspect")).toEqual([
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(RESERVED_ADMIN_PLUGIN_METHOD)).toEqual([
       "operator.admin",
     ]);
   });
@@ -119,13 +125,11 @@ describe("operator scope authorization", () => {
   });
 
   it("requires admin for reserved admin namespaces even if a plugin registered a narrower scope", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.gatewayMethodScopes = {
-      "config.plugin.inspect": "operator.read",
-    };
-    setActivePluginRegistry(registry);
+    setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
 
-    expect(authorizeOperatorScopesForMethod("config.plugin.inspect", ["operator.read"])).toEqual({
+    expect(
+      authorizeOperatorScopesForMethod(RESERVED_ADMIN_PLUGIN_METHOD, ["operator.read"]),
+    ).toEqual({
       allowed: false,
       missingScope: "operator.admin",
     });

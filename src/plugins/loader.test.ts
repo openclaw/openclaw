@@ -74,6 +74,10 @@ function memoryPluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register() {} };`;
 }
 
+const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+const RESERVED_ADMIN_SCOPE_WARNING =
+  "gateway method scope coerced to operator.admin for reserved core namespace";
+
 function writeBundledPlugin(params: {
   id: string;
   body?: string;
@@ -975,7 +979,7 @@ describe("loadOpenClawPlugins", () => {
   id: "reserved-gateway-scope",
   register(api) {
     api.registerGatewayMethod(
-      "config.plugin.inspect",
+      ${JSON.stringify(RESERVED_ADMIN_PLUGIN_METHOD)},
       ({ respond }) => respond(true, { ok: true }),
       { scope: "operator.read" },
     );
@@ -994,12 +998,12 @@ describe("loadOpenClawPlugins", () => {
           },
         });
 
-        expect(Object.keys(registry.gatewayHandlers)).toContain("config.plugin.inspect");
-        expect(registry.gatewayMethodScopes?.["config.plugin.inspect"]).toBe("operator.admin");
+        expect(Object.keys(registry.gatewayHandlers)).toContain(RESERVED_ADMIN_PLUGIN_METHOD);
+        expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
         expect(
           registry.diagnostics.some((diag) =>
             String(diag.message).includes(
-              "gateway method scope coerced to operator.admin for reserved core namespace: config.plugin.inspect",
+              `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
             ),
           ),
         ).toBe(true);
