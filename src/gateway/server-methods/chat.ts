@@ -391,6 +391,7 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
 function appendAssistantTranscriptMessage(params: {
   message: string;
   label?: string;
+  role?: "assistant" | "user";
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
@@ -434,6 +435,7 @@ function appendAssistantTranscriptMessage(params: {
     transcriptPath,
     message: params.message,
     label: params.label,
+    role: params.role,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
   });
@@ -1089,6 +1091,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       message: string;
       label?: string;
+      role?: "assistant" | "user";
     };
 
     // Load session to find transcript file
@@ -1103,6 +1106,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const appended = appendAssistantTranscriptMessage({
       message: p.message,
       label: p.label,
+      role: p.role,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,

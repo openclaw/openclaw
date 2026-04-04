@@ -19,6 +19,7 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
   message: string;
   label?: string;
+  role?: "assistant" | "user";
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
@@ -39,18 +40,23 @@ export function appendInjectedAssistantMessageToTranscript(params: {
       total: 0,
     },
   };
+  const role = params.role ?? "assistant";
   const messageBody: AppendMessageArg & Record<string, unknown> = {
-    role: "assistant",
+    role,
     content: [{ type: "text", text: `${labelPrefix}${params.message}` }],
     timestamp: now,
-    // Pi stopReason is a strict enum; this is not model output, but we still store it as a
-    // normal assistant message so it participates in the session parentId chain.
-    stopReason: "stop",
-    usage,
-    // Make these explicit so downstream tooling never treats this as model output.
-    api: "openai-responses",
-    provider: "openclaw",
-    model: "gateway-injected",
+    ...(role === "assistant"
+      ? {
+          // Pi stopReason is a strict enum; this is not model output, but we still store it as a
+          // normal assistant message so it participates in the session parentId chain.
+          stopReason: "stop",
+          usage,
+          // Make these explicit so downstream tooling never treats this as model output.
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-injected",
+        }
+      : {}),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.abortMeta
       ? {
