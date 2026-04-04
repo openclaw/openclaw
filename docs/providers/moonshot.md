@@ -184,7 +184,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 
 ## Notes
 
- - Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi/<modelId>`.
+- Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi/<modelId>`.
 - Current Kimi Coding default model ref is `kimi/kimi-code`. Legacy `kimi/k2p5` remains accepted as a compatibility model id.
 - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.5`.
 - Override pricing and context metadata in `models.providers` if needed.
