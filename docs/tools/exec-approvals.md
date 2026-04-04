@@ -518,7 +518,8 @@ Generic model:
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
 - the channel supports native approval delivery
-- approvers can be resolved from explicit `execApprovals.approvers` or existing owner config
+- approvers can be resolved from explicit `execApprovals.approvers` or that
+  channel's documented fallback sources
 - `channels.<channel>.execApprovals.enabled` is unset or `"auto"`
 
 Set `enabled: false` to disable a native approval client explicitly. Set `enabled: true` to force
