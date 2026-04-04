@@ -1,11 +1,11 @@
 ---
-summary: "Backstory and lore of OpenClaw for context and tone"
+summary: "Backstory and lore of VeriClaw for context and tone"
 read_when:
   - Writing docs or UX copy that reference lore
-title: "OpenClaw Lore"
+title: "VeriClaw Lore"
 ---
 
-# The Lore of OpenClaw 🦞📖
+# The Lore of VeriClaw 🦞📖
 
 _A tale of lobsters, molting shells, and too many tokens._
 

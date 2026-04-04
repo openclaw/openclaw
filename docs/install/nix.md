@@ -1,5 +1,5 @@
 ---
-summary: "Install OpenClaw declaratively with Nix"
+summary: "Install VeriClaw declaratively with Nix"
 read_when:
   - You want reproducible, rollback-able installs
   - You're already using Nix/NixOS/Home Manager
@@ -9,7 +9,7 @@ title: "Nix"
 
 # Nix Installation
 
-The recommended way to run OpenClaw with Nix is via **[nix-openclaw](https://github.com/openclaw/nix-openclaw)** — a batteries-included Home Manager module.
+The recommended way to run VeriClaw with Nix is via **[nix-openclaw](https://github.com/openclaw/nix-openclaw)** — a batteries-included Home Manager module.
 
 ## Quick Start
 
@@ -47,7 +47,7 @@ Reference the nix-openclaw README for module options.
 
 When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw):
 
-OpenClaw supports a **Nix mode** that makes configuration deterministic and disables auto-install flows.
+VeriClaw supports a **Nix mode** that makes configuration deterministic and disables auto-install flows.
 Enable it by exporting:
 
 ```bash
@@ -63,7 +63,7 @@ defaults write ai.openclaw.mac openclaw.nixMode -bool true
 
 ### Config + state paths
 
-OpenClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data in `OPENCLAW_STATE_DIR`.
+VeriClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data in `OPENCLAW_STATE_DIR`.
 When needed, you can also set `OPENCLAW_HOME` to control the base home directory used for internal path resolution.
 
 - `OPENCLAW_HOME` (default precedence: `HOME` / `USERPROFILE` / `os.homedir()`)
