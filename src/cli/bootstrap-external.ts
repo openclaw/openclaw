@@ -2489,6 +2489,20 @@ async function applyDenchCloudBootstrapConfig(params: {
       }
     }
   }
+
+  await runOpenClawOrThrow({
+    openclawCommand: params.openclawCommand,
+    args: [
+      "--profile",
+      params.profile,
+      "config",
+      "set",
+      "agents.defaults.reasoningDefault",
+      "on",
+    ],
+    timeoutMs: 30_000,
+    errorMessage: "Failed to enable reasoning visibility for Dench Cloud.",
+  });
 }
 
 async function resolveDenchCloudBootstrapSelection(params: {
