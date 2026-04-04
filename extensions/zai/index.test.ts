@@ -77,7 +77,7 @@ describe("zai provider plugin", () => {
           provider: "zai",
           modelId: testCase.modelId,
           modelRegistry: {
-            find: (_provider, modelId) => (modelId === "glm-4.7" ? template : null),
+            find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
           },
         } as never),
       ).toMatchObject({
@@ -122,7 +122,7 @@ describe("zai provider plugin", () => {
         provider: "zai",
         modelId: "glm-5-turbo",
         modelRegistry: {
-          find: (_provider, modelId) =>
+          find: (_provider: string, modelId: string) =>
             modelId === "glm-5-turbo" ? registered : modelId === "glm-4.7" ? template : null,
         },
       } as never),
@@ -149,7 +149,7 @@ describe("zai provider plugin", () => {
         provider: "zai",
         modelId: "glm-5-turbo",
         modelRegistry: {
-          find: (_provider, modelId) => (modelId === "glm-4.7" ? template : null),
+          find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
         },
       } as never),
     ).toMatchObject({
