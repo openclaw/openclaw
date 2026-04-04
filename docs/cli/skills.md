@@ -54,3 +54,6 @@ Notes:
   slug.
 - `update --all` only updates tracked ClawHub installs in the active workspace.
 - `list` is the default action when no subcommand is provided.
+- `list`, `info`, and `check` write their rendered output to stdout. With
+  `--json`, that means the machine-readable payload stays on stdout for pipes
+  and scripts.

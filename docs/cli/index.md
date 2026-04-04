@@ -776,12 +776,12 @@ Subcommands:
 - `skills install <slug> --force`: overwrite an existing workspace skill folder.
 - `skills update <slug|--all>`: update tracked ClawHub skills.
 - `skills list`: list skills (default when no subcommand).
-- `skills list --json`: emit machine-readable skill inventory.
+- `skills list --json`: emit machine-readable skill inventory on stdout.
 - `skills list --verbose`: include missing requirements in the table.
 - `skills info <name>`: show details for one skill.
-- `skills info <name> --json`: emit machine-readable details.
+- `skills info <name> --json`: emit machine-readable details on stdout.
 - `skills check`: summary of ready vs missing requirements.
-- `skills check --json`: emit machine-readable readiness output.
+- `skills check --json`: emit machine-readable readiness output on stdout.
 
 Options:
 
