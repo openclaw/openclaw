@@ -219,13 +219,7 @@ export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
 }) {
-  if (params.requestedTarget === params.configuredTarget) {
-    return true;
-  }
-  if (params.configuredTarget === "auto") {
-    return true;
-  }
-  return false;
+  return params.requestedTarget === params.configuredTarget;
 }
 
 export function resolveExecTarget(params: {
