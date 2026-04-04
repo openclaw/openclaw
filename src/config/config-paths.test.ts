@@ -117,7 +117,8 @@ describe("unsetConfigValueAtPath", () => {
     const root = { foo: { bar: "value" } };
     const result = unsetConfigValueAtPath(root as any, ["foo", "bar"]);
     expect(result).toBe(true);
-    expect(root).toEqual({ foo: {} });
+    // Implementation cleans up empty parent objects
+    expect(root).toEqual({});
   });
 
   it("returns false for non-existent path", () => {
@@ -135,6 +136,7 @@ describe("unsetConfigValueAtPath", () => {
     const root = { foo: { bar: { baz: 1 }, qux: 2 } };
     const result = unsetConfigValueAtPath(root as any, ["foo", "bar", "baz"]);
     expect(result).toBe(true);
+    // Implementation cleans up empty parent chain, leaving only sibling
     expect(root).toEqual({ foo: { qux: 2 } });
   });
 
