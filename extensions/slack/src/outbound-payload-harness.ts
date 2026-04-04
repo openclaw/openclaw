@@ -1,8 +1,10 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  loadBundledPluginTestApiSync,
+  primeChannelOutboundSendMock,
+} from "openclaw/plugin-sdk/testing";
 import { vi, type Mock } from "vitest";
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import { primeChannelOutboundSendMock } from "../../../src/channels/plugins/contracts/test-helpers.js";
-import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
-import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 type OutboundSendMock = Mock<(...args: unknown[]) => Promise<Record<string, unknown>>>;
 

@@ -1455,6 +1455,40 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
   });
 
+  it("falls back to HTTP when OpenAI sends a nested websocket error payload", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback-nested");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "error",
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        code: "previous_response_not_found",
+        message: "Previous response with id 'resp_abc' not found.",
+        param: "previous_response_id",
+      },
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+    expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
+  });
+
   it("tracks previous_response_id across turns (incremental send)", async () => {
     const sessionId = "sess-incremental";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);

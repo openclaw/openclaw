@@ -441,6 +441,7 @@ export async function compactEmbeddedPiSessionDirect(
       cfg: params.config,
       provider,
       modelId,
+      modelContextTokens: runtimeModel.contextTokens,
       modelContextWindow: runtimeModel.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
@@ -1031,6 +1032,7 @@ export async function compactEmbeddedPiSession(
           cfg: params.config,
           provider: ceProvider,
           modelId: ceModelId,
+          modelContextTokens: ceModel?.contextTokens,
           modelContextWindow: ceModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });

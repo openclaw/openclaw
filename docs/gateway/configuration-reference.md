@@ -2186,6 +2186,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 128000,
+            contextTokens: 96000,
             maxTokens: 32000,
           },
         ],
@@ -2204,6 +2205,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
   - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
   - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
   - Matching model `contextWindow`/`maxTokens` use the higher value between explicit config and implicit catalog values.
+  - Matching model `contextTokens` preserves an explicit runtime cap when present; use it to limit effective context without changing native model metadata.
   - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
   - Marker persistence is source-authoritative: markers are written from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 
@@ -2219,6 +2221,8 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 - `models.providers.*.models`: explicit provider model catalog entries.
+- `models.providers.*.models.*.contextWindow`: native model context window metadata.
+- `models.providers.*.models.*.contextTokens`: optional runtime context cap. Use this when you want a smaller effective context budget than the model's native `contextWindow`.
 - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
 - `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
 - `models.bedrockDiscovery.enabled`: turn discovery polling on/off.

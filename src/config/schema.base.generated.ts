@@ -2318,6 +2318,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "number",
                         exclusiveMinimum: 0,
                       },
+                      contextTokens: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                       maxTokens: {
                         type: "number",
                         exclusiveMinimum: 0,
@@ -22333,7 +22338,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "models.mode": {
       label: "Model Catalog Mode",
-      help: 'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
+      help: 'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, matching model contextWindow/maxTokens use the higher value between explicit and implicit entries, and explicit contextTokens runtime caps are preserved.',
       tags: ["models"],
     },
     "models.providers": {

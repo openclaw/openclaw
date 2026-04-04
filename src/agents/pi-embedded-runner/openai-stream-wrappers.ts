@@ -359,7 +359,7 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
     const mergedOptions = {
       ...options,
       transport: options?.transport ?? "auto",
-      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? false,
+      openaiWsWarmup: typedOptions?.openaiWsWarmup ?? true,
     } as SimpleStreamOptions;
     return underlying(model, context, mergedOptions);
   };
