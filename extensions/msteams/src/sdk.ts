@@ -28,11 +28,16 @@ function buildFederatedAuthConfig(
   sdk: MSTeamsSdk,
 ): MSTeamsAuthConfig {
   if (creds.useManagedIdentity) {
-    // Managed identity: no secret, no certificate — the SDK/runtime handles
-    // token acquisition via the IMDS endpoint.
+    // Workload Identity (AKS): the projected service-account token is at the
+    // path in AZURE_FEDERATED_TOKEN_FILE.  The @microsoft/agents-hosting SDK
+    // accepts this via its WIDAssertionFile config key, which MSAL Node then
+    // uses for the client-credentials assertion grant against Entra ID.
+    const assertionFile =
+      process.env.AZURE_FEDERATED_TOKEN_FILE || process.env.WIDAssertionFile;
     return sdk.getAuthConfigWithDefaults({
       clientId: creds.managedIdentityClientId || creds.appId,
       tenantId: creds.tenantId,
+      ...(assertionFile ? { WIDAssertionFile: assertionFile } : {}),
     });
   }
 
