@@ -29,8 +29,10 @@ title: "Usage Tracking"
 - **Anthropic (Claude)**: OAuth tokens in auth profiles.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
 - **Gemini CLI**: OAuth tokens in auth profiles.
+  - JSON usage falls back to `stats`; `stats.cached` is normalized into
+    `cacheRead`.
 - **OpenAI Codex**: OAuth tokens in auth profiles (accountId used when present).
-- **MiniMax**: API key (coding plan key; `MINIMAX_CODE_PLAN_KEY` or `MINIMAX_API_KEY`); uses the 5‑hour coding plan window. MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining** quota, so OpenClaw inverts them before display; count-based fields win when present.
+- **MiniMax**: API key (coding plan key; `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`); uses the 5‑hour coding plan window. MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining** quota, so OpenClaw inverts them before display; count-based fields win when present.
 - **z.ai**: API key via env/config/auth store.
 
 Usage is hidden if no matching OAuth/API credentials exist.

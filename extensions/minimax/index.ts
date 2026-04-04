@@ -12,7 +12,7 @@ import {
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import {
@@ -27,6 +27,7 @@ import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider.js";
+import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
@@ -38,6 +39,7 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "hybrid-anthropic-openai",
   anthropicModelDropThinkingBlocks: true,
 });
+const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
 
 function resolveMinimaxReasoningOutputMode(): "native" {
   // Keep MiniMax on native reasoning mode. Tagged enforcement previously
@@ -237,13 +239,16 @@ export default definePluginEntry({
       },
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-          envDirect: [ctx.env.MINIMAX_CODE_PLAN_KEY, ctx.env.MINIMAX_API_KEY],
+          envDirect: [
+            ctx.env.MINIMAX_CODE_PLAN_KEY,
+            ctx.env.MINIMAX_CODING_API_KEY,
+            ctx.env.MINIMAX_API_KEY,
+          ],
         });
         return apiKey ? { token: apiKey } : null;
       },
       ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-      wrapStreamFn: (ctx) =>
-        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
       fetchUsageSnapshot: async (ctx) =>
@@ -295,13 +300,13 @@ export default definePluginEntry({
         },
       ],
       ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-      wrapStreamFn: (ctx) =>
-        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      ...MINIMAX_FAST_MODE_STREAM_HOOKS,
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
       isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
     api.registerSpeechProvider(buildMinimaxSpeechProvider());
+    api.registerWebSearchProvider(createMiniMaxWebSearchProvider());
   },
 });

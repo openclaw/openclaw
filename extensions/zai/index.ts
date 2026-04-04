@@ -20,7 +20,7 @@ import {
   buildProviderReplayFamilyHooks,
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -33,6 +33,7 @@ const PROFILE_ID = "zai:default";
 const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
 });
+const ZAI_TOOL_STREAM_HOOKS = buildProviderStreamFamilyHooks("tool-stream-default-on");
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -288,8 +289,7 @@ export default definePluginEntry({
           tool_stream: true,
         };
       },
-      wrapStreamFn: (ctx) =>
-        createZaiToolStreamWrapper(ctx.streamFn, ctx.extraParams?.tool_stream !== false),
+      ...ZAI_TOOL_STREAM_HOOKS,
       isBinaryThinking: () => true,
       isModernModelRef: ({ modelId }) => {
         const lower = modelId.trim().toLowerCase();

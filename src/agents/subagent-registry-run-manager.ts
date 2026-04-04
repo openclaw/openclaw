@@ -3,6 +3,7 @@ import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -74,23 +75,11 @@ export function createSubagentRunManager(params: {
 }) {
   const waitForSubagentCompletion = async (runId: string, waitTimeoutMs: number) => {
     try {
-      const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-      const wait = await params.callGateway<{
-        status?: string;
-        startedAt?: number;
-        endedAt?: number;
-        error?: string;
-      }>({
-        method: "agent.wait",
-        params: {
-          runId,
-          timeoutMs,
-        },
-        timeoutMs: timeoutMs + 10_000,
+      const wait = await waitForAgentRun({
+        runId,
+        timeoutMs: Math.max(1, Math.floor(waitTimeoutMs)),
+        callGateway: params.callGateway,
       });
-      if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
-        return;
-      }
       const entry = params.runs.get(runId);
       if (!entry) {
         return;

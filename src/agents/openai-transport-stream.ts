@@ -22,7 +22,7 @@ import type {
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
-import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
+import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -1113,24 +1113,9 @@ async function processOpenAICompletionsStream(
 
 function detectCompat(model: OpenAIModeModel) {
   const provider = model.provider;
-  const capabilities = resolveProviderRequestCapabilities({
-    provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-    capability: "llm",
-    transport: "stream",
-    modelId: model.id,
-    compat:
-      model.compat && typeof model.compat === "object"
-        ? (model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
+  const { capabilities, defaults: compatDefaults } = detectOpenAICompletionsCompat(model);
   const endpointClass = capabilities.endpointClass;
   const isDefaultRoute = endpointClass === "default";
-  const compatDefaults = resolveOpenAICompletionsCompatDefaultsFromCapabilities({
-    provider,
-    ...capabilities,
-  });
   const isGroq = endpointClass === "groq-native" || (isDefaultRoute && provider === "groq");
   const reasoningEffortMap: Record<string, string> =
     isGroq && model.id === "qwen/qwen3-32b"

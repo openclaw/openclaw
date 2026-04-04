@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { AuthChoice } from "./onboard-types.js";
 import {
   resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
+import type { AuthChoice } from "./onboard-types.js";
 
 function resolveLegacyCliBackendChoice(
   choice: string,

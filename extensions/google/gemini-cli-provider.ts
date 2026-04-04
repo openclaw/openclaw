@@ -2,11 +2,10 @@ import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderFetchUsageSnapshotContext,
-  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { fetchGeminiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { formatGoogleOauthApiKey, parseGoogleUsageToken } from "./oauth-token-shared.js";
@@ -24,8 +23,7 @@ const ENV_VARS = [
 
 const GOOGLE_GEMINI_CLI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
-  wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
-    createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
+  ...buildProviderStreamFamilyHooks("google-thinking"),
   ...buildProviderToolCompatFamilyHooks("gemini"),
 };
 

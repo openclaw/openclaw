@@ -119,13 +119,13 @@ export async function captureScreenshot(opts: {
       format === "jpeg" ? Math.max(0, Math.min(100, Math.round(opts.quality ?? 85))) : undefined;
 
     try {
-      // fromSurface: false avoids a Chromium compositor bug where cross-origin
-      // image textures are lost when fromSurface: true + captureBeyondViewport: true
-      // extends the capture surface (see https://issues.chromium.org/40760789).
+      // Chromium bug 40760789 (cross-origin textures missing with
+      // fromSurface: true + captureBeyondViewport: true) was fixed around
+      // Chrome 130. Chrome 146+ managed/headful browsers now reject
+      // fromSurface: false, so we omit it and keep captureBeyondViewport: true.
       const result = (await send("Page.captureScreenshot", {
         format,
         ...(quality !== undefined ? { quality } : {}),
-        fromSurface: false,
         captureBeyondViewport: true,
       })) as { data?: string };
 

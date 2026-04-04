@@ -3,6 +3,7 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import type { ConnectParams } from "../../protocol/schema/types.js";
 import {
+  BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX,
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
@@ -36,9 +37,18 @@ describe("handshake auth helpers", () => {
     expect(resolved).toMatchObject({
       hasBrowserOriginHeader: true,
       enforceOriginCheckForAnyClient: true,
-      rateLimitClientIp: BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
+      rateLimitClientIp: `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}https://app.example`,
       authRateLimiter: browserRateLimiter,
     });
+  });
+
+  it("falls back to the legacy synthetic ip when the browser origin is invalid", () => {
+    const resolved = resolveHandshakeBrowserSecurityContext({
+      requestOrigin: "not a url",
+      clientIp: "127.0.0.1",
+    });
+
+    expect(resolved.rateLimitClientIp).toBe(BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP);
   });
 
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {

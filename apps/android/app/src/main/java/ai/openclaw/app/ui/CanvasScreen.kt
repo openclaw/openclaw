@@ -163,7 +163,7 @@ private fun disableForceDarkIfSupported(settings: WebSettings) {
   WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
 }
 
-private class CanvasA2UIActionBridge(
+internal class CanvasA2UIActionBridge(
   private val isTrustedPage: () -> Boolean,
   private val onMessage: (String) -> Unit,
 ) {

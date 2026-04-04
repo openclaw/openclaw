@@ -71,6 +71,14 @@ If Gemini CLI OAuth requests fail after login, set
 `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and
 retry.
 
+Gemini CLI JSON usage notes:
+
+- Reply text comes from the CLI JSON `response` field.
+- Usage falls back to `stats` when the CLI leaves `usage` empty.
+- `stats.cached` is normalized into OpenClaw `cacheRead`.
+- If `stats.input` is missing, OpenClaw derives input tokens from
+  `stats.input_tokens - stats.cached`.
+
 ## Capabilities
 
 | Capability             | Supported         |
@@ -82,6 +90,36 @@ retry.
 | Video understanding    | Yes               |
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
+
+## Direct Gemini cache reuse
+
+For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw now
+passes a configured `cachedContent` handle through to Gemini requests.
+
+- Configure per-model or global params with either
+  `cachedContent` or legacy `cached_content`
+- If both are present, `cachedContent` wins
+- Example value: `cachedContents/prebuilt-context`
+- Gemini cache-hit usage is normalized into OpenClaw `cacheRead` from
+  upstream `cachedContentTokenCount`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "google/gemini-2.5-pro": {
+          params: {
+            cachedContent: "cachedContents/prebuilt-context",
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 ## Image generation
 

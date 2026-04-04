@@ -1,7 +1,6 @@
+import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
-import { readLatestAssistantReply } from "../../agents/tools/agent-step.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { callGateway } from "../../gateway/call.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 export { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -98,29 +97,13 @@ export async function waitForDescendantSubagentSummary(params: {
     return initialReply;
   }
 
-  // --- Push-based wait for all active descendants ---
-  // We iterate in case first-level descendants spawn their own subagents while
-  // we wait, so new active runs can appear between rounds.
-  let pendingRunIds = new Set<string>(initialActiveRuns.map((e) => e.runId));
-
-  while (pendingRunIds.size > 0 && Date.now() < deadline) {
-    const remainingMs = Math.max(1, deadline - Date.now());
-    // Wait for all currently pending runs concurrently.  If any fails or times
-    // out, allSettled absorbs the error so we proceed to the next iteration.
-    await Promise.allSettled(
-      [...pendingRunIds].map((runId) =>
-        callGateway<{ status?: string }>({
-          method: "agent.wait",
-          params: { runId, timeoutMs: remainingMs },
-          timeoutMs: remainingMs + 2_000,
-        }).catch(() => undefined),
-      ),
-    );
-
-    // Refresh: check for newly created active descendants (e.g. spawned by
-    // the runs that just finished) and keep looping if any exist.
-    pendingRunIds = new Set<string>(getActiveRuns().map((e) => e.runId));
-  }
+  // Wait until no descendant runs remain active. Descendants can finish and
+  // spawn more descendants, so the helper refreshes the run set until it drains.
+  await waitForAgentRunsToDrain({
+    deadlineAtMs: deadline,
+    initialPendingRunIds: initialActiveRuns.map((entry) => entry.runId),
+    getPendingRunIds: () => getActiveRuns().map((entry) => entry.runId),
+  });
 
   // --- Grace period: wait for the cron agent's synthesis ---
   // After the subagent announces fire and the cron agent processes them, it

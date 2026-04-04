@@ -17,6 +17,10 @@ const lifecycleEventMocks = vi.hoisted(() => ({
   emitSessionLifecycleEvent: vi.fn(),
 }));
 
+const browserLifecycleCleanupMocks = vi.hoisted(() => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
+}));
+
 vi.mock("../tasks/task-executor.js", () => ({
   completeTaskRunByRunId: taskExecutorMocks.completeTaskRunByRunId,
   failTaskRunByRunId: taskExecutorMocks.failTaskRunByRunId,
@@ -25,6 +29,11 @@ vi.mock("../tasks/task-executor.js", () => ({
 
 vi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: lifecycleEventMocks.emitSessionLifecycleEvent,
+}));
+
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd:
+    browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
 }));
 
 vi.mock("./subagent-registry-helpers.js", async () => {
@@ -58,6 +67,7 @@ describe("subagent registry lifecycle hardening", () => {
   beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
+    browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockClear();
     mod = await import("./subagent-registry-lifecycle.js");
   });
 
@@ -163,5 +173,91 @@ describe("subagent registry lifecycle hardening", () => {
     );
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
     expect(persist).toHaveBeenCalled();
+  });
+
+  it("cleans up tracked browser sessions before subagent cleanup flow", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+
+    const controller = mod.createSubagentRegistryLifecycleController({
+      runs: new Map([[entry.runId, entry]]),
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      persist,
+      clearPendingLifecycleError: vi.fn(),
+      countPendingDescendantRuns: () => 0,
+      suppressAnnounceForSteerRestart: () => false,
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun: vi.fn(async () => {}),
+      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+      resumeSubagentRun: vi.fn(),
+      captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+      runSubagentAnnounceFlow,
+      warn: vi.fn(),
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
+      {
+        sessionKeys: [entry.childSessionKey],
+        onWarn: expect.any(Function),
+      },
+    );
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionKey: entry.childSessionKey,
+      }),
+    );
+  });
+
+  it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+
+    const controller = mod.createSubagentRegistryLifecycleController({
+      runs: new Map([[entry.runId, entry]]),
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      persist: vi.fn(),
+      clearPendingLifecycleError: vi.fn(),
+      countPendingDescendantRuns: () => 0,
+      suppressAnnounceForSteerRestart: () => true,
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun: vi.fn(async () => {}),
+      notifyContextEngineSubagentEnded: vi.fn(async () => {}),
+      resumeSubagentRun: vi.fn(),
+      captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+      runSubagentAnnounceFlow,
+      warn: vi.fn(),
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    ).not.toHaveBeenCalled();
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 });

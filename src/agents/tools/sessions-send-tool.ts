@@ -9,17 +9,19 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import {
+  readLatestAssistantReplySnapshot,
+  waitForAgentRunAndReadUpdatedAssistantReply,
+} from "../run-wait.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
-  extractAssistantText,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSessionToolContext,
   resolveVisibleSessionReference,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
@@ -34,27 +36,6 @@ const SessionsSendToolSchema = Type.Object({
 
 type GatewayCaller = typeof callGateway;
 const SESSIONS_SEND_REPLY_HISTORY_LIMIT = 50;
-
-function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
-  text?: string;
-  fingerprint?: string;
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const text = extractAssistantText(message);
-    if (!text) {
-      continue;
-    }
-    let fingerprint: string | undefined;
-    try {
-      fingerprint = JSON.stringify(message);
-    } catch {
-      fingerprint = text;
-    }
-    return { text, fingerprint };
-  }
-  return {};
-}
 
 async function startAgentRun(params: {
   callGateway: GatewayCaller;
@@ -334,66 +315,37 @@ export function createSessionsSendTool(opts?: {
       }
       runId = start.runId;
 
-      const historyBefore = await gatewayCall<{ messages: Array<unknown> }>({
-        method: "chat.history",
-        params: { sessionKey: resolvedKey, limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT },
+      const baselineReply = await readLatestAssistantReplySnapshot({
+        sessionKey: resolvedKey,
+        limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+        callGateway: gatewayCall,
       });
-      const baselineReply = resolveLatestAssistantReplySnapshot(
-        stripToolMessages(Array.isArray(historyBefore?.messages) ? historyBefore.messages : []),
-      );
+      const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+        runId,
+        sessionKey: resolvedKey,
+        timeoutMs,
+        limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+        baseline: baselineReply,
+        callGateway: gatewayCall,
+      });
 
-      let waitStatus: string | undefined;
-      let waitError: string | undefined;
-      try {
-        const wait = await gatewayCall<{ status?: string; error?: string }>({
-          method: "agent.wait",
-          params: {
-            runId,
-            timeoutMs,
-          },
-          timeoutMs: timeoutMs + 2000,
-        });
-        waitStatus = typeof wait?.status === "string" ? wait.status : undefined;
-        waitError = typeof wait?.error === "string" ? wait.error : undefined;
-      } catch (err) {
-        const messageText =
-          err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-        return jsonResult({
-          runId,
-          status: messageText.includes("gateway timeout") ? "timeout" : "error",
-          error: messageText,
-          sessionKey: displayKey,
-        });
-      }
-
-      if (waitStatus === "timeout") {
+      if (result.status === "timeout") {
         return jsonResult({
           runId,
           status: "timeout",
-          error: waitError,
+          error: result.error,
           sessionKey: displayKey,
         });
       }
-      if (waitStatus === "error") {
+      if (result.status === "error") {
         return jsonResult({
           runId,
           status: "error",
-          error: waitError ?? "agent error",
+          error: result.error ?? "agent error",
           sessionKey: displayKey,
         });
       }
-
-      const history = await gatewayCall<{ messages: Array<unknown> }>({
-        method: "chat.history",
-        params: { sessionKey: resolvedKey, limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT },
-      });
-      const latestReply = resolveLatestAssistantReplySnapshot(
-        stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
-      );
-      const reply =
-        latestReply.text && latestReply.fingerprint !== baselineReply.fingerprint
-          ? latestReply.text
-          : undefined;
+      const reply = result.replyText;
       startA2AFlow(reply ?? undefined);
 
       return jsonResult({

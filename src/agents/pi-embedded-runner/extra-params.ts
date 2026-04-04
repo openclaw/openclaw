@@ -12,6 +12,7 @@ import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
+import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
 import {
   createSiliconFlowThinkingWrapper,
   shouldApplySiliconFlowThinkingOffCompat,
@@ -91,11 +92,22 @@ export function resolveExtraParams(params: {
     delete merged.textVerbosity;
   }
 
+  const resolvedCachedContent = resolveAliasedParamValue(
+    [defaultParams, globalParams, agentParams],
+    "cached_content",
+    "cachedContent",
+  );
+  if (resolvedCachedContent !== undefined) {
+    merged.cachedContent = resolvedCachedContent;
+    delete merged.cached_content;
+  }
+
   return merged;
 }
 
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
+  cachedContent?: string;
   openaiWsWarmup?: boolean;
 };
 type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
@@ -137,6 +149,15 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  const resolvedCachedContent = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "cached_content",
+    "cachedContent",
+  );
+  if (resolvedCachedContent !== undefined) {
+    merged.cachedContent = resolvedCachedContent;
+    delete merged.cached_content;
+  }
   return (
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
@@ -206,6 +227,15 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
+  const cachedContent =
+    typeof extraParams.cachedContent === "string"
+      ? extraParams.cachedContent
+      : typeof extraParams.cached_content === "string"
+        ? extraParams.cached_content
+        : undefined;
+  if (typeof cachedContent === "string" && cachedContent.trim()) {
+    streamParams.cachedContent = cachedContent.trim();
   }
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
@@ -344,6 +374,11 @@ function applyPostPluginStreamWrappers(
       ctx.effectiveExtraParams,
     );
   }
+
+  // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
+  // visible reply path because it does not emit native Anthropic thinking
+  // blocks. Disable thinking unless an earlier wrapper already set it.
+  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.resolvedExtraParams, ctx.override],
