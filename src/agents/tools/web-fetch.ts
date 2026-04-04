@@ -9,6 +9,7 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { retry } from "./retry.js";
 import {
   extractBasicHtmlContent,
   extractReadableContent,
@@ -534,22 +535,52 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
-  try {
-    const result = await fetchWithWebToolsNetworkGuard({
-      url: params.url,
-      maxRedirects: params.maxRedirects,
-      timeoutSeconds: params.timeoutSeconds,
-      init: {
-        headers: {
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
-          "User-Agent": params.userAgent,
-          "Accept-Language": "en-US,en;q=0.9",
+
+  // Wrap fetch with retry for transient errors (network issues, rate limits, 503s)
+  const fetchResult = await retry(
+    async () => {
+      const result = await fetchWithWebToolsNetworkGuard({
+        url: params.url,
+        maxRedirects: params.maxRedirects,
+        timeoutSeconds: params.timeoutSeconds,
+        init: {
+          headers: {
+            Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
+            "User-Agent": params.userAgent,
+            "Accept-Language": "en-US,en;q=0.9",
+          },
         },
-      },
+      });
+      return result;
+    },
+    {
+      maxAttempts: 3,
+      baseDelayMs: 1000,
+      maxDelayMs: 10000,
+      throwOnFailure: false,
+    },
+  );
+
+  if (!fetchResult) {
+    // Retry failed, try Firecrawl fallback
+    const payload = await maybeFetchFirecrawlWebFetchPayload({
+      ...params,
+      urlToFetch: finalUrl,
+      finalUrlFallback: finalUrl,
+      statusFallback: 200,
+      cacheKey,
+      tookMs: Date.now() - start,
     });
-    res = result.response;
-    finalUrl = result.finalUrl;
-    release = result.release;
+    if (payload) {
+      return payload;
+    }
+    throw new Error(`Web fetch failed after 3 attempts: ${params.url}`);
+  }
+
+  try {
+    res = fetchResult.response;
+    finalUrl = fetchResult.finalUrl;
+    release = fetchResult.release;
 
     // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");

@@ -14,6 +14,8 @@ export interface RetryOptions {
   multiplier?: number;
   /** Custom error message formatter */
   formatError?: (error: Error, attempt: number, maxAttempts: number) => string;
+  /** Throw on failure (default: true) */
+  throwOnFailure?: boolean;
 }
 
 export type RetryResult<T> =
@@ -68,23 +70,20 @@ export async function withRetry<T>(
  */
 export async function retry<T>(
   fn: () => Promise<T>,
-  options: RetryOptions & { throwOnFailure?: true } = {},
+  options?: RetryOptions & { throwOnFailure?: true },
 ): Promise<T>;
 export async function retry<T>(
   fn: () => Promise<T>,
   options: RetryOptions & { throwOnFailure: false },
 ): Promise<T | null>;
-export async function retry<T>(
-  fn: () => Promise<T>,
-  options: RetryOptions = {},
-): Promise<T | null> {
-  const result = await withRetry(fn, options);
+export async function retry<T>(fn: () => Promise<T>, options?: RetryOptions): Promise<T | null> {
+  const result = await withRetry(fn, options ?? {});
 
   if (result.success) {
     return result.data;
   }
 
-  if (options.throwOnFailure !== false) {
+  if (options?.throwOnFailure !== false) {
     throw result.error;
   }
 
