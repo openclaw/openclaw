@@ -30,11 +30,17 @@ import type {
   MemoryPromoteCommandOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
+import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import {
   applyShortTermPromotions,
+  auditShortTermPromotionArtifacts,
+  repairShortTermPromotionArtifacts,
   recordShortTermRecalls,
   rankShortTermPromotionCandidates,
+  resolveShortTermRecallLockPath,
   resolveShortTermRecallStorePath,
+  type RepairShortTermPromotionArtifactsResult,
+  type ShortTermAuditSummary,
 } from "./short-term-promotion.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
@@ -58,6 +64,13 @@ type LoadedMemoryCommandConfig = {
   config: OpenClawConfig;
   diagnostics: string[];
 };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
 
 function getMemoryCommandSecretTargetIds(): Set<string> {
   return new Set([
@@ -94,6 +107,57 @@ function emitMemorySecretResolveDiagnostics(
       defaultRuntime.log(message);
     }
   }
+}
+
+function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
+  const entry = asRecord(cfg.plugins?.entries?.["memory-core"]);
+  return asRecord(entry?.config) ?? {};
+}
+
+function formatDreamingSummary(cfg: OpenClawConfig): string {
+  const pluginConfig = resolveMemoryPluginConfig(cfg);
+  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  if (!dreaming.enabled) {
+    return "off";
+  }
+  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
+  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries}`;
+}
+
+function formatAuditCounts(audit: ShortTermAuditSummary): string {
+  const scriptCoverage = audit.conceptTagScripts
+    ? [
+        audit.conceptTagScripts.latinEntryCount > 0
+          ? `${audit.conceptTagScripts.latinEntryCount} latin`
+          : null,
+        audit.conceptTagScripts.cjkEntryCount > 0
+          ? `${audit.conceptTagScripts.cjkEntryCount} cjk`
+          : null,
+        audit.conceptTagScripts.mixedEntryCount > 0
+          ? `${audit.conceptTagScripts.mixedEntryCount} mixed`
+          : null,
+        audit.conceptTagScripts.otherEntryCount > 0
+          ? `${audit.conceptTagScripts.otherEntryCount} other`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", ")
+    : "";
+  const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
+  return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
+}
+
+function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
+  const actions: string[] = [];
+  if (repair.rewroteStore) {
+    actions.push(
+      `rewrote store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
+    );
+  }
+  if (repair.removedStaleLock) {
+    actions.push("removed stale lock");
+  }
+  return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
 
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
@@ -367,6 +431,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
     indexError?: string;
     scan?: MemorySourceScan;
+    audit?: ShortTermAuditSummary;
+    repair?: RepairShortTermPromotionArtifactsResult;
   }> = [];
 
   for (const agentId of agentIds) {
@@ -440,7 +506,28 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
               extraPaths: status.extraPaths,
             })
           : undefined;
-        allResults.push({ agentId, status, embeddingProbe, indexError, scan });
+        let audit: ShortTermAuditSummary | undefined;
+        let repair: RepairShortTermPromotionArtifactsResult | undefined;
+        if (workspaceDir) {
+          if (opts.fix) {
+            repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+          }
+          const customQmd = asRecord(asRecord(status.custom)?.qmd);
+          audit = await auditShortTermPromotionArtifacts({
+            workspaceDir,
+            qmd:
+              status.backend === "qmd"
+                ? {
+                    dbPath: status.dbPath,
+                    collections:
+                      typeof customQmd?.collections === "number"
+                        ? customQmd.collections
+                        : undefined,
+                  }
+                : undefined,
+          });
+        }
+        allResults.push({ agentId, status, embeddingProbe, indexError, scan, audit, repair });
       },
     });
   }
@@ -460,7 +547,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const label = (text: string) => muted(`${text}:`);
 
   for (const result of allResults) {
-    const { agentId, status, embeddingProbe, indexError, scan } = result;
+    const { agentId, status, embeddingProbe, indexError, scan, audit, repair } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
@@ -490,6 +577,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(storePath)}`,
       `${label("Workspace")} ${info(workspacePath)}`,
+      `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
@@ -580,6 +668,24 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Batch error")} ${warn(status.batch.lastError)}`);
       }
     }
+    if (audit) {
+      lines.push(`${label("Recall store")} ${info(formatAuditCounts(audit))}`);
+      lines.push(`${label("Recall path")} ${info(shortenHomePath(audit.storePath))}`);
+      if (audit.updatedAt) {
+        lines.push(`${label("Recall updated")} ${info(audit.updatedAt)}`);
+      }
+      if (status.backend === "qmd" && audit.qmd) {
+        const qmdBits = [
+          audit.qmd.dbPath ? shortenHomePath(audit.qmd.dbPath) : "<unknown>",
+          typeof audit.qmd.dbBytes === "number" ? `${audit.qmd.dbBytes} bytes` : null,
+          typeof audit.qmd.collections === "number" ? `${audit.qmd.collections} collections` : null,
+        ].filter(Boolean);
+        lines.push(`${label("QMD audit")} ${info(qmdBits.join(" · "))}`);
+      }
+    }
+    if (repair) {
+      lines.push(`${label("Repair")} ${info(formatRepairSummary(repair))}`);
+    }
     if (status.fallback?.reason) {
       lines.push(muted(status.fallback.reason));
     }
@@ -590,6 +696,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(label("Issues"));
       for (const issue of scan.issues) {
         lines.push(`  ${warn(issue)}`);
+      }
+    }
+    if (audit?.issues.length) {
+      if (!scan?.issues.length) {
+        lines.push(label("Issues"));
+      }
+      for (const issue of audit.issues) {
+        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
+      }
+      if (!opts.fix) {
+        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }
     defaultRuntime.log(lines.join("\n"));
@@ -846,11 +963,26 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       }
 
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const lockPath = resolveShortTermRecallLockPath(workspaceDir);
+      const customQmd = asRecord(asRecord(status.custom)?.qmd);
+      const audit = await auditShortTermPromotionArtifacts({
+        workspaceDir,
+        qmd:
+          status.backend === "qmd"
+            ? {
+                dbPath: status.dbPath,
+                collections:
+                  typeof customQmd?.collections === "number" ? customQmd.collections : undefined,
+              }
+            : undefined,
+      });
 
       if (opts.json) {
         defaultRuntime.writeJson({
           workspaceDir,
           storePath,
+          lockPath,
+          audit,
           candidates,
           apply: applyResult
             ? {
@@ -866,6 +998,11 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
       if (candidates.length === 0) {
         defaultRuntime.log("No short-term recall candidates.");
         defaultRuntime.log(`Recall store: ${shortenHomePath(storePath)}`);
+        if (audit.issues.length > 0) {
+          for (const issue of audit.issues) {
+            defaultRuntime.log(issue.message);
+          }
+        }
         return;
       }
 
@@ -879,6 +1016,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         )}`,
       );
       lines.push(`${colorize(rich, theme.muted, "Recall store:")} ${shortenHomePath(storePath)}`);
+      lines.push(colorize(rich, theme.muted, `Store health: ${formatAuditCounts(audit)}`));
       for (const candidate of candidates) {
         lines.push(
           `${colorize(rich, theme.success, candidate.score.toFixed(3))} ${colorize(
@@ -891,11 +1029,23 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           colorize(
             rich,
             theme.muted,
-            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d`,
+            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
+        if (candidate.conceptTags.length > 0) {
+          lines.push(colorize(rich, theme.muted, `concepts=${candidate.conceptTags.join(", ")}`));
+        }
         if (candidate.snippet) {
           lines.push(colorize(rich, theme.muted, candidate.snippet));
+        }
+        lines.push("");
+      }
+      if (audit.issues.length > 0) {
+        lines.push(colorize(rich, theme.warn, "Audit issues:"));
+        for (const issue of audit.issues) {
+          lines.push(
+            colorize(rich, issue.severity === "error" ? theme.warn : theme.muted, issue.message),
+          );
         }
         lines.push("");
       }
