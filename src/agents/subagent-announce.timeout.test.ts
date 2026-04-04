@@ -34,6 +34,18 @@ let fallbackRequesterResolution: {
 } | null = null;
 let chatHistoryMessages: Array<Record<string, unknown>> = [];
 
+async function createSessionsModuleMock() {
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
+  return {
+    ...actual,
+    loadSessionStore: () => sessionStore,
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
+  };
+}
+
 function createGatewayCallModuleMock() {
   return {
     callGateway: vi.fn(async (request: GatewayCall) => {

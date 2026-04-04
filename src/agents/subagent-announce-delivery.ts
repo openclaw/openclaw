@@ -1,4 +1,5 @@
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
