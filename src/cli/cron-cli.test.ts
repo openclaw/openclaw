@@ -425,6 +425,33 @@ describe("cron cli", () => {
     });
   });
 
+  it("accepts uppercase SESSION: targets for cron add thread delivery", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "topic add uppercase session",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--session",
+      "SESSION:project-alpha",
+      "--channel",
+      "telegram",
+      "--to",
+      "19098680",
+      "--thread-id",
+      "48",
+    ]);
+
+    expect(params?.sessionTarget).toBe("SESSION:project-alpha");
+    expect(params?.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "19098680:topic:48",
+      accountId: undefined,
+    });
+  });
+
   it.each([
     {
       label: "main systemEvent",

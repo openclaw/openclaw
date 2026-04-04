@@ -25,7 +25,11 @@ export function isNonMainSessionTarget(target: string | undefined): boolean {
   if (target === "isolated" || target === "current") {
     return true;
   }
-  return target.startsWith("session:") && target.slice(8).trim().length > 0;
+  const trimmedTarget = target.trim();
+  return (
+    trimmedTarget.slice(0, 8).toLowerCase() === "session:" &&
+    trimmedTarget.slice(8).trim().length > 0
+  );
 }
 
 export function normalizeThreadIdInputs(opts: ThreadInputOpts): NormalizedThreadInputs {
