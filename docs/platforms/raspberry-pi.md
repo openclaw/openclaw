@@ -217,7 +217,7 @@ Notes:
 
 ### systemd startup tuning (optional)
 
-If this Pi is mostly running OpenClaw, add a service drop-in to reduce restart
+If this Pi is mostly running VeriClaw, add a service drop-in to reduce restart
 jitter and keep startup env stable:
 
 ```bash
@@ -240,7 +240,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart openclaw
 ```
 
-If possible, keep OpenClaw state/cache on SSD-backed storage to avoid SD-card
+If possible, keep VeriClaw state/cache on SSD-backed storage to avoid SD-card
 random-I/O bottlenecks during cold starts.
 
 How `Restart=` policies help automated recovery:
@@ -275,7 +275,7 @@ htop
 
 ### Binary Compatibility
 
-Most OpenClaw features work on ARM64, but some external binaries may need ARM builds:
+Most VeriClaw features work on ARM64, but some external binaries may need ARM builds:
 
 | Tool               | ARM64 Status | Notes                               |
 | ------------------ | ------------ | ----------------------------------- |

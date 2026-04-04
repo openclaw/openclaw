@@ -13,7 +13,7 @@ title: "GCP"
 
 Run a persistent VeriClaw Gateway on a GCP Compute Engine VM using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
-If you want "OpenClaw 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
+If you want "VeriClaw 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
 Pricing varies by machine type and region; pick the smallest VM that fits your workload and scale up if you hit OOMs.
 
 ## What are we doing (simple terms)?
@@ -21,7 +21,7 @@ Pricing varies by machine type and region; pick the smallest VM that fits your w
 - Create a GCP project and enable billing
 - Create a Compute Engine VM
 - Install Docker (isolated app runtime)
-- Start the OpenClaw Gateway in Docker
+- Start the VeriClaw Gateway in Docker
 - Persist `~/.openclaw` + `~/.openclaw/workspace` on the host (survives restarts/rebuilds)
 - Access the Control UI from your laptop via an SSH tunnel
 
@@ -42,7 +42,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 2. Create Compute Engine VM (e2-small, Debian 12, 20GB)
 3. SSH into the VM
 4. Install Docker
-5. Clone OpenClaw repository
+5. Clone the repository
 6. Create persistent host directories
 7. Configure `.env` and `docker-compose.yml`
 8. Bake required binaries, build, and launch
@@ -188,7 +188,7 @@ docker compose version
 
 ---
 
-## 6) Clone the OpenClaw repository
+## 6) Clone the repository
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git

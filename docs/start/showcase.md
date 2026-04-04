@@ -94,9 +94,9 @@ Full setup walkthrough (28m) by VelvetShark.
 <Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
-OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and replies in Telegram with “minor suggestions” plus a clear merge verdict (including critical fixes to apply first).
+OpenCode finishes the change → opens a PR → VeriClaw reviews the diff and replies in Telegram with “minor suggestions” plus a clear merge verdict (including critical fixes to apply first).
 
-  <img src="/assets/showcase/pr-review-telegram.jpg" alt="OpenClaw PR review feedback delivered in Telegram" />
+  <img src="/assets/showcase/pr-review-telegram.jpg" alt="VeriClaw PR review feedback delivered in Telegram" />
 </Card>
 
 <Card title="Wine Cellar Skill in Minutes" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
@@ -104,7 +104,7 @@ OpenCode finishes the change → opens a PR → OpenClaw reviews the diff and re
 
 Asked “Robby” (@openclaw) for a local wine cellar skill. It requests a sample CSV export + where to store it, then builds/tests the skill fast (962 bottles in the example).
 
-  <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw building a local wine cellar skill from CSV" />
+  <img src="/assets/showcase/wine-cellar-skill.jpg" alt="VeriClaw building a local wine cellar skill from CSV" />
 </Card>
 
 <Card title="Tesco Shop Autopilot" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
@@ -126,7 +126,7 @@ Hotkey a screen region → Gemini vision → instant Markdown in your clipboard.
 <Card title="Agents UI" icon="window-maximize" href="https://releaseflow.net/kitze/agents-ui">
   **@kitze** • `ui` `skills` `sync`
 
-Desktop app to manage skills/commands across Agents, Claude, Codex, and OpenClaw.
+Desktop app to manage skills/commands across Agents, Claude, Codex, and VeriClaw.
 
   <img src="/assets/showcase/agents-ui.jpg" alt="Agents UI app" />
 </Card>
@@ -172,7 +172,7 @@ Automated UK school meal booking via ParentPay. Uses mouse coordinates for relia
 <Card title="R2 Upload (Send Me My Files)" icon="cloud-arrow-up" href="https://clawhub.com/skills/r2-upload">
   **@julianengel** • `files` `r2` `presigned-urls`
 
-Upload to Cloudflare R2/S3 and generate secure presigned download links. Perfect for remote OpenClaw instances.
+Upload to Cloudflare R2/S3 and generate secure presigned download links. Perfect for remote VeriClaw instances.
 </Card>
 
 <Card title="iOS App via Telegram" icon="mobile" href="#">
@@ -199,7 +199,7 @@ Personal AI health assistant integrating Oura ring data with calendar, appointme
 <Card title="Linear CLI" icon="terminal" href="https://github.com/Finesssee/linear-cli">
   **@NessZerra** • `devtools` `linear` `cli` `issues`
 
-CLI for Linear that integrates with agentic workflows (Claude Code, OpenClaw). Manage issues, projects, and workflows from the terminal. First external PR merged!
+CLI for Linear that integrates with agentic workflows (Claude Code, VeriClaw). Manage issues, projects, and workflows from the terminal. First external PR merged!
 </Card>
 
 <Card title="Beeper CLI" icon="message" href="https://github.com/blqke/beepcli">
@@ -217,23 +217,23 @@ Read, send, and archive messages via Beeper Desktop. Uses Beeper local MCP API s
 <Card title="Winix Air Purifier Control" icon="wind" href="https://x.com/antonplex/status/2010518442471006253">
   **@antonplex** • `automation` `hardware` `air-quality`
 
-Claude Code discovered and confirmed the purifier controls, then OpenClaw takes over to manage room air quality.
+Claude Code discovered and confirmed the purifier controls, then VeriClaw takes over to manage room air quality.
 
-  <img src="/assets/showcase/winix-air-purifier.jpg" alt="Winix air purifier control via OpenClaw" />
+  <img src="/assets/showcase/winix-air-purifier.jpg" alt="Winix air purifier control via VeriClaw" />
 </Card>
 
 <Card title="Pretty Sky Camera Shots" icon="camera" href="https://x.com/signalgaining/status/2010523120604746151">
   **@signalgaining** • `automation` `camera` `skill` `images`
 
-Triggered by a roof camera: ask OpenClaw to snap a sky photo whenever it looks pretty — it designed a skill and took the shot.
+Triggered by a roof camera: ask VeriClaw to snap a sky photo whenever it looks pretty — it designed a skill and took the shot.
 
-  <img src="/assets/showcase/roof-camera-sky.jpg" alt="Roof camera sky snapshot captured by OpenClaw" />
+  <img src="/assets/showcase/roof-camera-sky.jpg" alt="Roof camera sky snapshot captured by VeriClaw" />
 </Card>
 
 <Card title="Visual Morning Briefing Scene" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
   **@buddyhadry** • `automation` `briefing` `images` `telegram`
 
-A scheduled prompt generates a single "scene" image each morning (weather, tasks, date, favorite post/quote) via a OpenClaw persona.
+A scheduled prompt generates a single "scene" image each morning (weather, tasks, date, favorite post/quote) via a VeriClaw persona.
 </Card>
 
 <Card title="Padel Court Booking" icon="calendar-check" href="https://github.com/joshp123/padel-cli">
@@ -265,13 +265,13 @@ Searches job listings, matches against CV keywords, and returns relevant opportu
 <Card title="Jira Skill Builder" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
   **@jdrhyne** • `automation` `jira` `skill` `devtools`
 
-OpenClaw connected to Jira, then generated a new skill on the fly (before it existed on ClawHub).
+VeriClaw connected to Jira, then generated a new skill on the fly (before it existed on ClawHub).
 </Card>
 
 <Card title="Todoist Skill via Telegram" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
   **@iamsubhrajyoti** • `automation` `todoist` `skill` `telegram`
 
-Automated Todoist tasks and had OpenClaw generate the skill directly in Telegram chat.
+Automated Todoist tasks and had VeriClaw generate the skill directly in Telegram chat.
 </Card>
 
 <Card title="TradingView Analysis" icon="chart-line">
@@ -295,7 +295,7 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 <Card title="xuezh Chinese Learning" icon="language" href="https://github.com/joshp123/xuezh">
   **@joshp123** • `learning` `voice` `skill`
   
-  Chinese learning engine with pronunciation feedback and study flows via OpenClaw.
+  Chinese learning engine with pronunciation feedback and study flows via VeriClaw.
   
   <img src="/assets/showcase/xuezh-pronunciation.jpeg" alt="xuezh pronunciation feedback" />
 </Card>
@@ -327,7 +327,7 @@ Watches company Slack channel, responds helpfully, and forwards notifications to
 <Card title="Clawdia Phone Bridge" icon="phone" href="https://github.com/alejandroOPI/clawdia-bridge">
   **@alejandroOPI** • `voice` `vapi` `bridge`
   
-  Vapi voice assistant ↔ OpenClaw HTTP bridge. Near real-time phone calls with your agent.
+  Vapi voice assistant ↔ VeriClaw HTTP bridge. Near real-time phone calls with your agent.
 </Card>
 
 <Card title="OpenRouter Transcription" icon="microphone" href="https://clawhub.com/obviyus/openrouter-transcribe">
@@ -345,7 +345,7 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 <Card title="Home Assistant Add-on" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
   **@ngutman** • `homeassistant` `docker` `raspberry-pi`
   
-  OpenClaw gateway running on Home Assistant OS with SSH tunnel support and persistent state.
+  VeriClaw gateway running on Home Assistant OS with SSH tunnel support and persistent state.
 </Card>
 
 <Card title="Home Assistant Skill" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
@@ -357,7 +357,7 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 <Card title="Nix Packaging" icon="snowflake" href="https://github.com/openclaw/nix-openclaw">
   **@openclaw** • `nix` `packaging` `deployment`
   
-  Batteries-included nixified OpenClaw configuration for reproducible deployments.
+  Batteries-included nixified VeriClaw configuration for reproducible deployments.
 </Card>
 
 <Card title="CalDAV Calendar" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
@@ -375,7 +375,7 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 <Card title="GoHome Automation" icon="house-signal" href="https://github.com/joshp123/gohome">
   **@joshp123** • `home` `nix` `grafana`
   
-  Nix-native home automation with OpenClaw as the interface, plus beautiful Grafana dashboards.
+  Nix-native home automation with VeriClaw as the interface, plus beautiful Grafana dashboards.
   
   <img src="/assets/showcase/gohome-grafana.png" alt="GoHome Grafana dashboard" />
 </Card>
@@ -397,7 +397,7 @@ Multi-lingual audio transcription via OpenRouter (Gemini, etc). Available on Cla
 <Card title="StarSwap Marketplace" icon="star" href="https://star-swap.com/">
   **Community** • `marketplace` `astronomy` `webapp`
   
-  Full astronomy gear marketplace. Built with/around the OpenClaw ecosystem.
+  Full astronomy gear marketplace. Built with/around the VeriClaw ecosystem.
 </Card>
 
 </CardGroup>

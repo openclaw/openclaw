@@ -43,7 +43,7 @@ go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-cont
 ## Plugin install fails with missing openclaw extensions
 
 If install fails with `package.json missing openclaw.extensions`, the plugin package
-is using an old shape that OpenClaw no longer accepts.
+is using an old shape that the current VeriClaw runtime no longer accepts.
 
 Fix in the plugin package:
 

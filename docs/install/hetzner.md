@@ -29,7 +29,7 @@ See [Security](/gateway/security) and [VPS hosting](/vps).
 
 - Rent a small Linux server (Hetzner VPS)
 - Install Docker (isolated app runtime)
-- Start the OpenClaw Gateway in Docker
+- Start the VeriClaw Gateway in Docker
 - Persist `~/.openclaw` + `~/.openclaw/workspace` on the host (survives restarts/rebuilds)
 - Access the Control UI from your laptop via an SSH tunnel
 
@@ -48,7 +48,7 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 1. Provision Hetzner VPS
 2. Install Docker
-3. Clone OpenClaw repository
+3. Clone the repository
 4. Create persistent host directories
 5. Configure `.env` and `docker-compose.yml`
 6. Bake required binaries into the image
@@ -104,7 +104,7 @@ docker compose version
 
 ---
 
-## 3) Clone the OpenClaw repository
+## 3) Clone the repository
 
 ```bash
 git clone https://github.com/openclaw/openclaw.git
