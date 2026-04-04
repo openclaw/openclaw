@@ -1266,7 +1266,7 @@ for usage/billing and raise limits as needed.
     - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
       `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
       `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
-    - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
+    - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs,
       and shared skills (`~/.openclaw/skills`).
 
     Default workspace is `~/.openclaw/workspace`, configurable via:

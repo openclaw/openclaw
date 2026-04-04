@@ -117,7 +117,8 @@ openclaw health
 
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
-  - Credentials: `~/.openclaw/credentials/`
+  - Channel/provider state: `~/.openclaw/credentials/`
+  - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
   - Sessions: `~/.openclaw/agents/<agentId>/sessions/`
   - Logs: `/tmp/openclaw/`
 
