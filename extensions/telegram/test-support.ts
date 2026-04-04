@@ -1,6 +1,6 @@
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { splitChannelApprovalCapability } from "openclaw/plugin-sdk/approval-runtime";
-import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/telegram-core";
+import { splitChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import type { ResolvedTelegramAccount } from "./src/accounts.js";
 import { resolveTelegramAccount } from "./src/accounts.js";
 import { telegramApprovalCapability } from "./src/approval-native.js";

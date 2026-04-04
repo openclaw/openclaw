@@ -6,7 +6,7 @@ summary: 节点的位置命令（location.get）、权限模式和后台行为
 title: 位置命令
 x-i18n:
   generated_at: "2026-02-03T07:50:59Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 23124096256384d2b28157352b072309c61c970a20e009aac5ce4a8250dc3764
   source_path: nodes/location-command.md

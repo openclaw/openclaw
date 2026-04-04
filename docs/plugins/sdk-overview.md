@@ -26,11 +26,21 @@ Always import from a specific subpath:
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 ```
 
 Each subpath is a small, self-contained module. This keeps startup fast and
-prevents circular dependency issues.
+prevents circular dependency issues. For channel-specific entry/build helpers,
+prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
+the broader umbrella surface and shared helpers such as
+`buildChannelConfigSchema`.
+
+Do not add or depend on provider-named convenience seams such as
+`openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
+`openclaw/plugin-sdk/signal`, or `openclaw/plugin-sdk/whatsapp`. Bundled plugins should compose generic SDK
+subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
+either use those plugin-local barrels or add a narrow generic SDK contract when
+the need is truly cross-channel.
 
 ## Subpath reference
 
@@ -48,6 +58,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
   <Accordion title="Channel subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
     | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
@@ -79,7 +90,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
   <Accordion title="Auth and security subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/command-auth` | `resolveControlCommandGate` |
+    | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
@@ -121,15 +132,17 @@ methods:
 
 ### Capability registration
 
-| Method                                        | What it registers              |
-| --------------------------------------------- | ------------------------------ |
-| `api.registerProvider(...)`                   | Text inference (LLM)           |
-| `api.registerCliBackend(...)`                 | Local CLI inference backend    |
-| `api.registerChannel(...)`                    | Messaging channel              |
-| `api.registerSpeechProvider(...)`             | Text-to-speech / STT synthesis |
-| `api.registerMediaUnderstandingProvider(...)` | Image/audio/video analysis     |
-| `api.registerImageGenerationProvider(...)`    | Image generation               |
-| `api.registerWebSearchProvider(...)`          | Web search                     |
+| Method                                           | What it registers                |
+| ------------------------------------------------ | -------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)             |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
+| `api.registerChannel(...)`                       | Messaging channel                |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
+| `api.registerImageGenerationProvider(...)`       | Image generation                 |
+| `api.registerWebSearchProvider(...)`             | Web search                       |
 
 ### Tools and commands
 
@@ -237,20 +250,20 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                      |
-| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                        |
-| `api.name`               | `string`                  | Display name                                                     |
-| `api.version`            | `string?`                 | Plugin version (optional)                                        |
-| `api.description`        | `string?`                 | Plugin description (optional)                                    |
-| `api.source`             | `string`                  | Plugin source path                                               |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                 |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                          |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                             |
+| Field                    | Type                      | Description                                                                |
+| ------------------------ | ------------------------- | -------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                  |
+| `api.name`               | `string`                  | Display name                                                               |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                  |
+| `api.description`        | `string?`                 | Plugin description (optional)                                              |
+| `api.source`             | `string`                  | Plugin source path                                                         |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                           |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available) |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                  |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                    |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                           |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"`           |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                       |
 
 ## Internal module convention
 
@@ -269,6 +282,11 @@ my-plugin/
   from production code. Route internal imports through `./api.ts` or
   `./runtime-api.ts`. The SDK path is the external contract only.
 </Warning>
+
+Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
+`index.ts`, `setup-entry.ts`, and similar public entry files) now prefer the
+active runtime config snapshot when OpenClaw is already running. If no runtime
+snapshot exists yet, they fall back to the resolved config file on disk.
 
 <Warning>
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`

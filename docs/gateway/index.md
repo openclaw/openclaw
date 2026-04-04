@@ -179,6 +179,43 @@ For persistence after logout, enable lingering:
 sudo loginctl enable-linger <user>
 ```
 
+Manual user-unit example when you need a custom install path:
+
+```ini
+[Unit]
+Description=OpenClaw Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/openclaw gateway --port 18789
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+TimeoutStartSec=30
+SuccessExitStatus=0 143
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
+```
+
+  </Tab>
+
+  <Tab title="Windows (native)">
+
+```powershell
+openclaw gateway install
+openclaw gateway status --json
+openclaw gateway restart
+openclaw gateway stop
+```
+
+Native Windows managed startup uses a Scheduled Task named `OpenClaw Gateway`
+(or `OpenClaw Gateway (<profile>)` for named profiles). If Scheduled Task
+creation is denied, OpenClaw falls back to a per-user Startup-folder launcher
+that points at `gateway.cmd` inside the state directory.
+
   </Tab>
 
   <Tab title="Linux (system service)">
@@ -189,6 +226,10 @@ Use a system unit for multi-user/always-on hosts.
 sudo systemctl daemon-reload
 sudo systemctl enable --now openclaw-gateway[-<profile>].service
 ```
+
+Use the same service body as the user unit, but install it under
+`/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
+`ExecStart=` if your `openclaw` binary lives elsewhere.
 
   </Tab>
 </Tabs>
@@ -259,12 +300,12 @@ Events are not replayed. On sequence gaps, refresh state (`health`, `system-pres
 
 ## Common failure signatures
 
-| Signature                                                      | Likely issue                             |
-| -------------------------------------------------------------- | ---------------------------------------- |
-| `refusing to bind gateway ... without auth`                    | Non-loopback bind without token/password |
-| `another gateway instance is already listening` / `EADDRINUSE` | Port conflict                            |
-| `Gateway start blocked: set gateway.mode=local`                | Config set to remote mode                |
-| `unauthorized` during connect                                  | Auth mismatch between client and gateway |
+| Signature                                                      | Likely issue                                                                    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `refusing to bind gateway ... without auth`                    | Non-loopback bind without token/password                                        |
+| `another gateway instance is already listening` / `EADDRINUSE` | Port conflict                                                                   |
+| `Gateway start blocked: set gateway.mode=local`                | Config set to remote mode, or local-mode stamp is missing from a damaged config |
+| `unauthorized` during connect                                  | Auth mismatch between client and gateway                                        |
 
 For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooting).
 

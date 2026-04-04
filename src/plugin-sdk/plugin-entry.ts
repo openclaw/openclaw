@@ -11,7 +11,6 @@ import type {
   OpenClawPluginServiceContext,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
-  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAugmentModelCatalogContext,
   ProviderAuthContext,
@@ -19,6 +18,7 @@ import type {
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
+  ProviderApplyConfigDefaultsContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
@@ -26,8 +26,10 @@ import type {
   ProviderCacheTtlEligibilityContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
+  ProviderDeferSyntheticProfileAuthContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderDiscoveryContext,
+  ProviderFailoverErrorContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
@@ -44,17 +46,26 @@ import type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
+  ProviderReplaySessionEntry,
+  ProviderReplaySessionState,
+  RealtimeTranscriptionProviderPlugin,
   ProviderResolvedUsageAuth,
   ProviderResolveDynamicModelContext,
+  ProviderResolveTransportTurnStateContext,
+  ProviderResolveWebSocketSessionPolicyContext,
   ProviderSanitizeReplayHistoryContext,
+  ProviderTransportTurnState,
+  ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
+  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
   SpeechProviderPlugin,
   PluginCommandContext,
 } from "../plugins/types.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
@@ -67,7 +78,9 @@ export type {
   ProviderDiscoveryContext,
   ProviderCatalogContext,
   ProviderCatalogResult,
+  ProviderDeferSyntheticProfileAuthContext,
   ProviderAugmentModelCatalogContext,
+  ProviderApplyConfigDefaultsContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
@@ -75,6 +88,7 @@ export type {
   ProviderCacheTtlEligibilityContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderFailoverErrorContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
   ProviderNormalizeToolSchemasContext,
@@ -83,21 +97,29 @@ export type {
   ProviderNormalizeModelIdContext,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
+  ProviderReplaySessionEntry,
+  ProviderReplaySessionState,
   ProviderPreparedRuntimeAuth,
   ProviderReasoningOutputMode,
   ProviderReasoningOutputModeContext,
   ProviderResolvedUsageAuth,
+  ProviderToolSchemaDiagnostic,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
   ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
   ProviderResolveDynamicModelContext,
+  ProviderResolveTransportTurnStateContext,
+  ProviderResolveWebSocketSessionPolicyContext,
   ProviderNormalizeResolvedModelContext,
   ProviderRuntimeModel,
+  RealtimeTranscriptionProviderPlugin,
+  ProviderTransportTurnState,
   SpeechProviderPlugin,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
+  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
   OpenClawPluginService,
   OpenClawPluginServiceContext,
@@ -109,7 +131,6 @@ export type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginDefinition,
   PluginLogger,
-  PluginInteractiveTelegramHandlerContext,
 };
 export type { OpenClawConfig };
 
@@ -134,13 +155,6 @@ type DefinedPluginEntry = {
   register: NonNullable<OpenClawPluginDefinition["register"]>;
 } & Pick<OpenClawPluginDefinition, "kind">;
 
-/** Resolve either a concrete config schema or a lazy schema factory. */
-function resolvePluginConfigSchema(
-  configSchema: DefinePluginEntryOptions["configSchema"] = emptyPluginConfigSchema,
-): OpenClawPluginConfigSchema {
-  return typeof configSchema === "function" ? configSchema() : configSchema;
-}
-
 /**
  * Canonical entry helper for non-channel plugins.
  *
@@ -156,12 +170,15 @@ export function definePluginEntry({
   configSchema = emptyPluginConfigSchema,
   register,
 }: DefinePluginEntryOptions): DefinedPluginEntry {
+  const getConfigSchema = createCachedLazyValueGetter(configSchema);
   return {
     id,
     name,
     description,
     ...(kind ? { kind } : {}),
-    configSchema: resolvePluginConfigSchema(configSchema),
+    get configSchema() {
+      return getConfigSchema();
+    },
     register,
   };
 }

@@ -1,5 +1,5 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/plugins/fetch-mock.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
@@ -34,6 +34,7 @@ describe("graph upload helpers", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer graph-token",
           "Content-Type": "application/octet-stream",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
         }),
       }),
     );
@@ -71,6 +72,7 @@ describe("graph upload helpers", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer graph-token",
           "Content-Type": "application/octet-stream",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
         }),
       }),
     );
@@ -138,7 +140,10 @@ describe("resolveGraphChatId", () => {
     expect(fetchFn).toHaveBeenCalledWith(
       expect.stringContaining("/me/chats"),
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer graph-token" }),
+        headers: expect.objectContaining({
+          Authorization: "Bearer graph-token",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
+        }),
       }),
     );
     const firstCall = fetchFn.mock.calls[0];

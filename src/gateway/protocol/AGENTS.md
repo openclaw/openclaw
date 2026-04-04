@@ -23,3 +23,6 @@ nodes.
   in sync.
 - New Gateway methods, events, or payload fields should land through the typed
   protocol definitions here rather than ad hoc JSON shapes elsewhere.
+- Keep protocol modules data-first and acyclic. Do not route protocol exports
+  back through heavier gateway runtime or server-method helpers that make the
+  contract surface expensive or order-dependent at import time.

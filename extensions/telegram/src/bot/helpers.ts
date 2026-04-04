@@ -1,6 +1,5 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveTelegramPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -10,6 +9,7 @@ import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runt
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
+import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
   buildSenderLabel,
   buildSenderName,
@@ -325,6 +325,8 @@ export function resolveTelegramReplyId(raw?: string): number | undefined {
 export type TelegramReplyTarget = {
   id?: string;
   sender: string;
+  senderId?: string;
+  senderUsername?: string;
   body: string;
   kind: "reply" | "quote";
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
@@ -379,6 +381,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   return {
     id: replyLike?.message_id ? String(replyLike.message_id) : undefined,
     sender: senderLabel,
+    senderId: replyLike?.from?.id != null ? String(replyLike.from.id) : undefined,
+    senderUsername: replyLike?.from?.username ?? undefined,
     body,
     kind,
     forwardedFrom,

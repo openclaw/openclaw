@@ -14,9 +14,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import {
   buildPluginBindingResolvedTextMock,
+  dispatchPluginInteractiveHandlerMock,
+  dispatchReplyMock,
+  enqueueSystemEventMock,
   readAllowFromStoreMock,
+  readSessionUpdatedAtMock,
   recordInboundSessionMock,
   resetDiscordComponentRuntimeMocks,
+  resolveStorePathMock,
   resolvePluginConversationBindingApprovalMock,
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
@@ -47,6 +52,11 @@ type CreateDiscordComponentModal =
   typeof import("./agent-components.js").createDiscordComponentModal;
 type CreateDiscordComponentStringSelect =
   typeof import("./agent-components.js").createDiscordComponentStringSelect;
+type DispatchReplyWithBufferedBlockDispatcherFn =
+  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
+type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
+  ReturnType<DispatchReplyWithBufferedBlockDispatcherFn>
+>;
 
 let createDiscordComponentButton: CreateDiscordComponentButton;
 let createDiscordComponentStringSelect: CreateDiscordComponentStringSelect;
@@ -57,51 +67,7 @@ let resolveDiscordComponentEntry: typeof import("../components-registry.js").res
 let resolveDiscordModalEntry: typeof import("../components-registry.js").resolveDiscordModalEntry;
 let sendComponents: typeof import("../send.components.js");
 
-const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
-const dispatchReplyMock = vi.hoisted(() => vi.fn());
-const readSessionUpdatedAtMock = vi.hoisted(() => vi.fn());
-const resolveStorePathMock = vi.hoisted(() => vi.fn());
-const dispatchPluginInteractiveHandlerMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
-
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
-  };
-}
-
-vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
-
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
-    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
-  return {
-    ...actual,
-    dispatchPluginInteractiveHandler: (...args: unknown[]) =>
-      dispatchPluginInteractiveHandlerMock(...args),
-  };
-});
 
 describe("discord component interactions", () => {
   let editDiscordComponentMessageMock: ReturnType<typeof vi.spyOn>;
@@ -120,12 +86,7 @@ describe("discord component interactions", () => {
       ...overrides,
     }) as DiscordAccountConfig;
 
-  type DispatchParams = {
-    ctx: Record<string, unknown>;
-    dispatcherOptions: {
-      deliver: (payload: { text?: string }) => Promise<void> | void;
-    };
-  };
+  type DispatchParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 
   type ComponentContext = Parameters<CreateDiscordComponentButton>[0];
 
@@ -324,10 +285,22 @@ describe("discord component interactions", () => {
     resetDiscordComponentRuntimeMocks();
     lastDispatchCtx = undefined;
     enqueueSystemEventMock.mockClear();
-    dispatchReplyMock.mockClear().mockImplementation(async (params: DispatchParams) => {
-      lastDispatchCtx = params.ctx;
-      await params.dispatcherOptions.deliver({ text: "ok" });
-    });
+    dispatchReplyMock
+      .mockClear()
+      .mockImplementation(
+        async (params: DispatchParams): Promise<DispatchReplyWithBufferedBlockDispatcherResult> => {
+          lastDispatchCtx = params.ctx;
+          await params.dispatcherOptions.deliver({ text: "ok" }, { kind: "final" });
+          return {
+            queuedFinal: false,
+            counts: {
+              block: 0,
+              final: 1,
+              tool: 0,
+            },
+          };
+        },
+      );
     recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
     readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
     resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
@@ -487,7 +460,7 @@ describe("discord component interactions", () => {
           channels: { discord: { replyToMode: "first", groupPolicy: "allowlist" } },
         } as OpenClawConfig,
         discordConfig: createDiscordConfig({ groupPolicy: "allowlist" }),
-        guildEntries: { g1: { channels: { "guild-channel": { allow: true, enabled: false } } } },
+        guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
       }),
     );
     const { interaction, reply } = createComponentButtonInteraction({
@@ -521,7 +494,7 @@ describe("discord component interactions", () => {
           channels: { discord: { replyToMode: "first", groupPolicy: "allowlist" } },
         } as OpenClawConfig,
         discordConfig: createDiscordConfig({ groupPolicy: "allowlist" }),
-        guildEntries: { g1: { channels: { "guild-channel": { allow: false } } } },
+        guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
       }),
     );
     const { interaction, reply } = createComponentButtonInteraction({

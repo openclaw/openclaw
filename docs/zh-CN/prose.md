@@ -7,7 +7,7 @@ summary: OpenProse：OpenClaw 中的 .prose 工作流、斜杠命令和状态
 title: OpenProse
 x-i18n:
   generated_at: "2026-02-03T07:53:38Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: cf7301e927b9a46347b498e264aeaa10dd76e85ff2de04775be57435718339f5
   source_path: prose.md

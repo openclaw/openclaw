@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("pi-model-discovery module compatibility", () => {
   afterEach(() => {
-    vi.resetModules();
     vi.doUnmock("@mariozechner/pi-coding-agent");
   });
 

@@ -36,8 +36,9 @@ openclaw agents add <name>
 
 <Tip>
 CLI onboarding includes a web search step where you can pick a provider
-(Perplexity, Brave, Gemini, Grok, or Kimi) and paste your API key so the agent
-can use `web_search`. You can also configure this later with
+such as Brave, Firecrawl, Gemini, Grok, Kimi, Ollama Web Search, Perplexity,
+or Tavily. Some providers require an API key, while others are key-free. You
+can also configure this later with
 `openclaw configure --section web`. Docs: [Web tools](/tools/web).
 </Tip>
 
@@ -65,18 +66,19 @@ Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
 
 **Local mode (default)** walks you through these steps:
 
-1. **Model/Auth** — choose any supported provider/auth flow (API key, OAuth, or setup-token), including Custom Provider
+1. **Model/Auth** — choose any supported provider/auth flow (API key, OAuth, or provider-specific manual auth), including Custom Provider
    (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect). Pick a default model.
    Security note: if this agent will run tools or process webhook/hooks content, prefer the strongest latest-generation model available and keep tool policy strict. Weaker/older tiers are easier to prompt-inject.
    For non-interactive runs, `--secret-input-mode ref` stores env-backed refs in auth profiles instead of plaintext API key values.
    In non-interactive `ref` mode, the provider env var must be set; passing inline key flags without that env var fails fast.
    In interactive runs, choosing secret reference mode lets you point at either an environment variable or a configured provider ref (`file` or `exec`), with a fast preflight validation before saving.
+   For Anthropic, interactive onboarding/configure prefers **Anthropic Claude CLI** first, then **Anthropic API key**. Existing legacy Anthropic token profiles still run if already configured, but new setup is no longer offered through onboarding or auth commands.
 2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
    In interactive token mode, choose default plaintext token storage or opt into SecretRef.
    Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
 4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, or iMessage.
-5. **Daemon** — Installs a LaunchAgent (macOS) or systemd user unit (Linux/WSL2).
+5. **Daemon** — Installs a LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task with per-user Startup-folder fallback.
    If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist the resolved token into supervisor service environment metadata.
    If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.
    If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, daemon install is blocked until mode is set explicitly.

@@ -5,7 +5,7 @@ summary: TypeBox 模式作为 Gateway 网关协议的唯一事实来源
 title: TypeBox
 x-i18n:
   generated_at: "2026-02-03T07:47:23Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 233800f4f5fabe8ed0e1b3d8aded2eca27252e08c9b0b24ea9c6293e9282c918
   source_path: concepts/typebox.md

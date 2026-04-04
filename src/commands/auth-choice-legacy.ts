@@ -32,7 +32,7 @@ export function resolveLegacyAuthChoiceAliasesForCli(params?: {
     .flatMap((choice) => choice.deprecatedChoiceIds ?? [])
     .filter((choice): choice is AuthChoice => choice.endsWith("-cli"))
     .toSorted((left, right) => left.localeCompare(right));
-  return ["setup-token", "oauth", ...manifestCliAliases];
+  return manifestCliAliases;
 }
 
 export function normalizeLegacyOnboardAuthChoice(

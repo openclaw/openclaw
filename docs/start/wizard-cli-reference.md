@@ -16,11 +16,11 @@ For the short guide, see [Onboarding (CLI)](/start/wizard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Ollama, Moonshot, and AI Gateway options)
+- Model and auth setup (OpenAI Code subscription OAuth, Anthropic Claude CLI or API key, plus MiniMax, GLM, Ollama, Moonshot, StepFun, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
-- Daemon install (LaunchAgent or systemd user unit)
+- Daemon install (LaunchAgent, systemd user unit, or native Windows Scheduled Task with Startup-folder fallback)
 - Health check
 - Skills setup
 
@@ -79,6 +79,9 @@ It does not install or modify anything on the remote host.
     - Linux and Windows via WSL2: systemd user unit
       - Wizard attempts `loginctl enable-linger <user>` so gateway stays up after logout.
       - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
+    - Native Windows: Scheduled Task first
+      - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
+      - Scheduled Tasks remain preferred because they provide better supervisor status.
     - Runtime selection: Node (recommended; required for WhatsApp and Telegram). Bun is not recommended.
   </Step>
   <Step title="Health check">
@@ -130,18 +133,19 @@ What you set:
     Reuses a local Claude CLI login on the gateway host and switches model
     selection to `claude-cli/...`.
 
+    This is the preferred interactive Anthropic path in `openclaw onboard` and
+    `openclaw configure`.
+
     - macOS: checks Keychain item "Claude Code-credentials"
     - Linux and Windows: reuses `~/.claude/.credentials.json` if present
 
     On macOS, choose "Always Allow" so launchd starts do not block.
 
   </Accordion>
-  <Accordion title="Anthropic token (setup-token paste)">
-    Run `claude setup-token` on any machine, then paste the token.
-    You can name it; blank uses default.
-  </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.
+    Reused Codex CLI credentials stay managed by Codex CLI; OpenClaw re-reads
+    that source on expiry instead of rotating the copied refresh token itself.
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
@@ -176,6 +180,11 @@ What you set:
   <Accordion title="MiniMax">
     Config is auto-written. Hosted default is `MiniMax-M2.7`.
     More detail: [MiniMax](/providers/minimax).
+  </Accordion>
+  <Accordion title="StepFun">
+    Config is auto-written for StepFun standard or Step Plan on China or global endpoints.
+    Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.
+    More detail: [StepFun](/providers/stepfun).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
     Prompts for `SYNTHETIC_API_KEY`.
@@ -218,8 +227,8 @@ Model behavior:
 
 Credential and profile paths:
 
-- OAuth credentials: `~/.openclaw/credentials/oauth.json`
 - Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
 
 Credential storage mode:
 
@@ -245,8 +254,10 @@ Credential storage mode:
 
 <Note>
 Headless and server tip: complete OAuth on a machine with a browser, then copy
-`~/.openclaw/credentials/oauth.json` (or `$OPENCLAW_STATE_DIR/credentials/oauth.json`)
-to the gateway host.
+that agent's `auth-profiles.json` (for example
+`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
+`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
+is only a legacy import source.
 </Note>
 
 ## Outputs and internals

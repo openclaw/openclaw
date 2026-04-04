@@ -5,7 +5,7 @@ summary: Zalo bot 支持状态、功能和配置
 title: Zalo
 x-i18n:
   generated_at: "2026-02-03T07:44:44Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0311d932349f96412b712970b5d37329b91929bf3020536edf3ca0ff464373c0
   source_path: channels/zalo.md

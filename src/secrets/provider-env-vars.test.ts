@@ -14,7 +14,9 @@ describe("provider env vars", () => {
         "GH_TOKEN",
         "ANTHROPIC_OAUTH_TOKEN",
         "BRAVE_API_KEY",
+        "DEEPGRAM_API_KEY",
         "FIRECRAWL_API_KEY",
+        "GROQ_API_KEY",
         "PERPLEXITY_API_KEY",
         "OPENROUTER_API_KEY",
         "TAVILY_API_KEY",
@@ -26,7 +28,9 @@ describe("provider env vars", () => {
         "GH_TOKEN",
         "ANTHROPIC_OAUTH_TOKEN",
         "BRAVE_API_KEY",
+        "DEEPGRAM_API_KEY",
         "FIRECRAWL_API_KEY",
+        "GROQ_API_KEY",
         "PERPLEXITY_API_KEY",
         "OPENROUTER_API_KEY",
         "TAVILY_API_KEY",
@@ -57,5 +61,6 @@ describe("provider env vars", () => {
     expect(getProviderEnvVars("__proto__")).toEqual([]);
     expect(getProviderEnvVars("constructor")).toEqual([]);
     expect(getProviderEnvVars("openai")).toEqual(["OPENAI_API_KEY"]);
+    expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
   });
 });

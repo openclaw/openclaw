@@ -20,7 +20,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-openclaw onboard --kilocode-api-key <key>
+openclaw onboard --auth-choice kilocode-api-key
 ```
 
 Or set the environment variable:
@@ -44,11 +44,11 @@ export KILOCODE_API_KEY="<your-kilocode-api-key>" # pragma: allowlist secret
 
 ## Default model
 
-The default model is `kilocode/kilo/auto`, a smart routing model that automatically selects
-the best underlying model based on the task:
+The default model is `kilocode/kilo/auto`, a provider-owned smart-routing
+model managed by Kilo Gateway.
 
-- Planning, debugging, and orchestration tasks route to Claude Opus
-- Code writing and exploration tasks route to Claude Sonnet
+OpenClaw treats `kilocode/kilo/auto` as the stable default ref, but does not
+publish a source-backed task-to-upstream-model mapping for that route.
 
 ## Available models
 
@@ -60,7 +60,7 @@ Any model available on the gateway can be used with the `kilocode/` prefix:
 ```
 kilocode/kilo/auto              (default - smart routing)
 kilocode/anthropic/claude-sonnet-4
-kilocode/openai/gpt-5.2
+kilocode/openai/gpt-5.4
 kilocode/google/gemini-3-pro-preview
 ...and many more
 ```
@@ -70,5 +70,14 @@ kilocode/google/gemini-3-pro-preview
 - Model refs are `kilocode/<model-id>` (e.g., `kilocode/anthropic/claude-sonnet-4`).
 - Default model: `kilocode/kilo/auto`
 - Base URL: `https://api.kilo.ai/api/gateway/`
+- Bundled fallback catalog always includes `kilocode/kilo/auto` (`Kilo Auto`) with
+  `input: ["text", "image"]`, `reasoning: true`, `contextWindow: 1000000`,
+  and `maxTokens: 128000`
+- At startup, OpenClaw tries `GET https://api.kilo.ai/api/gateway/models` and
+  merges discovered models ahead of the static fallback catalog
+- Exact upstream routing behind `kilocode/kilo/auto` is owned by Kilo Gateway,
+  not hard-coded in OpenClaw
+- Kilo Gateway is documented in source as OpenRouter-compatible, so it stays on
+  the proxy-style OpenAI-compatible path rather than native OpenAI request shaping
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - Kilo Gateway uses a Bearer token with your API key under the hood.

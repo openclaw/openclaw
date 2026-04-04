@@ -158,8 +158,11 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
-      const { outputRootHelp } = await import("./program/root-help.js");
-      await outputRootHelp();
+      const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+      if (!outputPrecomputedRootHelpText()) {
+        const { outputRootHelp } = await import("./program/root-help.js");
+        await outputRootHelp();
+      }
       return;
     }
 

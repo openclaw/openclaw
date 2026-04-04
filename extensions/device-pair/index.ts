@@ -481,6 +481,34 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
   return ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
 }
 
+function buildMissingPairingScopeReply(): { text: string } {
+  return {
+    text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+  };
+}
+
+function isMissingPairingScope(gatewayClientScopes: string[] | null): boolean {
+  return Boolean(
+    gatewayClientScopes &&
+    !gatewayClientScopes.includes("operator.pairing") &&
+    !gatewayClientScopes.includes("operator.admin"),
+  );
+}
+
+const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
+  "approve",
+  "cleanup",
+  "clear",
+  "notify",
+  "pending",
+  "revoke",
+  "status",
+]);
+
+function issuesPairSetupCode(action: string): boolean {
+  return !action || action === "qr" || !PAIR_SETUP_NON_ISSUING_ACTIONS.has(action);
+}
+
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
   const issuedBootstrap = await issueDeviceBootstrapToken({
     profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -563,14 +591,8 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
-          if (
-            gatewayClientScopes &&
-            !gatewayClientScopes.includes("operator.pairing") &&
-            !gatewayClientScopes.includes("operator.admin")
-          ) {
-            return {
-              text: "⚠️ This command requires operator.pairing for internal gateway callers.",
-            };
+          if (isMissingPairingScope(gatewayClientScopes)) {
+            return buildMissingPairingScopeReply();
           }
           const requested = tokens[1]?.trim();
           const list = await listDevicePairing();
@@ -618,6 +640,9 @@ export default definePluginEntry({
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
+          if (isMissingPairingScope(gatewayClientScopes)) {
+            return buildMissingPairingScopeReply();
+          }
           const cleared = await clearDeviceBootstrapTokens();
           return {
             text:
@@ -630,6 +655,9 @@ export default definePluginEntry({
         const authLabelResult = resolveAuthLabel(api.config);
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
+        }
+        if (issuesPairSetupCode(action) && isMissingPairingScope(gatewayClientScopes)) {
+          return buildMissingPairingScopeReply();
         }
 
         const urlResult = await resolveGatewayUrl(api);

@@ -6,7 +6,7 @@ summary: 使用设备流从 OpenClaw 登录 GitHub Copilot
 title: GitHub Copilot
 x-i18n:
   generated_at: "2026-02-01T21:34:57Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 503e0496d92c921e2f7111b1b4ba16374f5b781643bfbc6cb69cea97d9395c25
   source_path: providers/github-copilot.md

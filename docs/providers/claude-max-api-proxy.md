@@ -94,6 +94,15 @@ You can point OpenClaw at the proxy as a custom OpenAI-compatible endpoint:
 }
 ```
 
+This path uses the same proxy-style OpenAI-compatible route as other custom
+`/v1` backends:
+
+- native OpenAI-only request shaping does not apply
+- no `service_tier`, no Responses `store`, no prompt-cache hints, and no
+  OpenAI reasoning-compat payload shaping
+- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+  are not injected on the proxy URL
+
 ## Available Models
 
 | Model ID          | Maps To         |
@@ -150,5 +159,5 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-max-api.plist
 
 ## See Also
 
-- [Anthropic provider](/providers/anthropic) - Native OpenClaw integration with Claude setup-token or API keys
+- [Anthropic provider](/providers/anthropic) - Native OpenClaw integration with Claude CLI or API keys
 - [OpenAI provider](/providers/openai) - For OpenAI/Codex subscriptions
