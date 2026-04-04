@@ -21,6 +21,8 @@ type VitestHostInfo = {
   totalMemoryBytes?: number;
 };
 
+export type OpenClawVitestPool = "threads" | "forks";
+
 function detectVitestHostInfo(): Required<VitestHostInfo> {
   return {
     cpuCount:
@@ -68,11 +70,22 @@ export function resolveLocalVitestMaxWorkers(
   return clamp(inferred, 1, 16);
 }
 
+export function resolveDefaultVitestPool(
+  env: Record<string, string | undefined> = process.env,
+): OpenClawVitestPool {
+  const configuredPool = (env.OPENCLAW_VITEST_POOL ?? env.OPENCLAW_TEST_POOL)?.trim();
+  if (configuredPool === "threads" || configuredPool === "forks") {
+    return configuredPool;
+  }
+  return "threads";
+}
+
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = resolveLocalVitestMaxWorkers();
 const ciWorkers = isWindows ? 2 : 3;
+const defaultPool = resolveDefaultVitestPool();
 
 export const sharedVitestConfig = {
   resolve: {
@@ -96,7 +109,7 @@ export const sharedVitestConfig = {
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,
-    pool: "forks" as const,
+    pool: defaultPool,
     maxWorkers: isCI ? ciWorkers : localWorkers,
     forceRerunTriggers: [
       "package.json",

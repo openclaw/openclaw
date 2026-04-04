@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import baseConfig, { resolveLocalVitestMaxWorkers } from "../../vitest.config.ts";
+import baseConfig, {
+  resolveDefaultVitestPool,
+  resolveLocalVitestMaxWorkers,
+} from "../../vitest.config.ts";
 
 describe("resolveLocalVitestMaxWorkers", () => {
   it("uses a moderate local worker cap on larger hosts", () => {
@@ -89,6 +92,19 @@ describe("resolveLocalVitestMaxWorkers", () => {
 });
 
 describe("base vitest config", () => {
+  it("defaults the base pool to threads", () => {
+    expect(resolveDefaultVitestPool()).toBe("threads");
+    expect(baseConfig.test?.pool).toBe("threads");
+  });
+
+  it("lets OPENCLAW_VITEST_POOL force forks for local debugging", () => {
+    expect(
+      resolveDefaultVitestPool({
+        OPENCLAW_VITEST_POOL: "forks",
+      }),
+    ).toBe("forks");
+  });
+
   it("excludes fixture trees from test collection", () => {
     expect(baseConfig.test?.exclude).toContain("test/fixtures/**");
   });

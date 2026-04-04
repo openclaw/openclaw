@@ -146,7 +146,9 @@ describe("scripts/test-extension.mjs", () => {
         resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
     );
 
-    expect(uniqueAssigned.toSorted((left, right) => left.localeCompare(right))).toEqual(expected);
+    expect(uniqueAssigned.toSorted((left, right) => left.localeCompare(right))).toEqual(
+      expected.toSorted((left, right) => left.localeCompare(right)),
+    );
     expect(assigned).toHaveLength(expected.length);
 
     const totals = shards.map((shard) => shard.testFileCount);

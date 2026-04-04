@@ -71,13 +71,14 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
     sufficient substitute for those integration paths.
 - Pool note:
-  - Base Vitest config still defaults to `forks`.
-  - Unit and boundary projects stay on `forks`.
-  - Channel, extension, and gateway configs also stay on `forks`.
+  - Base Vitest config now defaults to `threads`.
+  - Hard thread exceptions stay on `forks`: `gateway`, `agents`, and `commands`.
+  - The root UI lane now mirrors the dedicated UI setup more closely: `jsdom`, isolated files, and the standard Vitest runner.
   - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
   - `pnpm test` inherits the isolation defaults from the root `vitest.config.ts` projects config.
   - Opt back into unit-file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
   - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
+  - `OPENCLAW_VITEST_POOL=forks` (or `OPENCLAW_TEST_POOL=forks`) forces a full local fork run when debugging thread-sensitive behavior.
 - Fast-local iteration note:
   - `pnpm test:changed` runs the native projects config with `--changed origin/main`.
   - `pnpm test:max` and `pnpm test:changed:max` keep the same native projects config, just with a higher worker cap.
