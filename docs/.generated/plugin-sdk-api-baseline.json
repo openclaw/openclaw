@@ -1960,6 +1960,15 @@
           }
         },
         {
+          "declaration": "export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;",
+          "exportName": "ChannelDoctorLegacyConfigRule",
+          "kind": "type",
+          "source": {
+            "line": 549,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelDoctorSequenceResult = ChannelDoctorSequenceResult;",
           "exportName": "ChannelDoctorSequenceResult",
           "kind": "type",
@@ -2137,7 +2146,7 @@
           "exportName": "createChannelPairingChallengeIssuer",
           "kind": "function",
           "source": {
-            "line": 23,
+            "line": 26,
             "path": "src/plugin-sdk/channel-pairing.ts"
           }
         },
@@ -2146,7 +2155,7 @@
           "exportName": "createChannelPairingController",
           "kind": "function",
           "source": {
-            "line": 41,
+            "line": 44,
             "path": "src/plugin-sdk/channel-pairing.ts"
           }
         },
@@ -2209,7 +2218,7 @@
           "exportName": "ChannelPairingController",
           "kind": "type",
           "source": {
-            "line": 16,
+            "line": 19,
             "path": "src/plugin-sdk/channel-pairing.ts"
           }
         }
@@ -3500,6 +3509,15 @@
           }
         },
         {
+          "declaration": "export function buildCommandsPaginationKeyboard(currentPage: number, totalPages: number, agentId?: string | undefined): { text: string; callback_data: string; }[][];",
+          "exportName": "buildCommandsPaginationKeyboard",
+          "kind": "function",
+          "source": {
+            "line": 9,
+            "path": "extensions/telegram/src/command-ui.ts"
+          }
+        },
+        {
           "declaration": "export function buildCommandText(commandName: string, args?: string | undefined): string;",
           "exportName": "buildCommandText",
           "kind": "function",
@@ -3765,7 +3783,7 @@
           "exportName": "resolveDirectDmAuthorizationOutcome",
           "kind": "function",
           "source": {
-            "line": 121,
+            "line": 122,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3810,7 +3828,7 @@
           "exportName": "resolveSenderCommandAuthorization",
           "kind": "function",
           "source": {
-            "line": 150,
+            "line": 151,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3819,7 +3837,7 @@
           "exportName": "resolveSenderCommandAuthorizationWithRuntime",
           "kind": "function",
           "source": {
-            "line": 139,
+            "line": 140,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -3954,7 +3972,7 @@
           "exportName": "CommandAuthorizationRuntime",
           "kind": "type",
           "source": {
-            "line": 105,
+            "line": 106,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -4062,7 +4080,7 @@
           "exportName": "ResolveSenderCommandAuthorizationParams",
           "kind": "type",
           "source": {
-            "line": 88,
+            "line": 89,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -4071,7 +4089,7 @@
           "exportName": "ResolveSenderCommandAuthorizationWithRuntimeParams",
           "kind": "type",
           "source": {
-            "line": 113,
+            "line": 114,
             "path": "src/plugin-sdk/command-auth.ts"
           }
         },
@@ -4145,7 +4163,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 226,
+            "line": 224,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4199,7 +4217,7 @@
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 591,
+            "line": 589,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4208,7 +4226,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 564,
+            "line": 562,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4235,7 +4253,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 324,
+            "line": 322,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4253,7 +4271,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 367,
+            "line": 365,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4577,7 +4595,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 206,
+            "line": 204,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4586,7 +4604,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 218,
+            "line": 216,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4739,7 +4757,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 201,
+            "line": 199,
             "path": "src/plugin-sdk/core.ts"
           }
         },
