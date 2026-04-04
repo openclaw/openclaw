@@ -16,6 +16,8 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- Fallback runtime rules, cooldown probes, and session-override persistence are
+  documented in [/concepts/model-failover](/concepts/model-failover).
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
