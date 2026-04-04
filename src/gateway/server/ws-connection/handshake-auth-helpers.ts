@@ -8,6 +8,7 @@ import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
 export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+export type PairingLocalityKind = "direct_local" | "cli_container_local" | "remote";
 
 export type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
@@ -47,14 +48,14 @@ export function resolveHandshakeBrowserSecurityContext(params: {
 }
 
 export function shouldAllowSilentLocalPairing(params: {
-  isLocalClient: boolean;
+  locality: PairingLocalityKind;
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
   isWebchat: boolean;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
   return (
-    params.isLocalClient &&
+    params.locality !== "remote" &&
     (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
     (params.reason === "not-paired" ||
       params.reason === "scope-upgrade" ||
@@ -62,29 +63,7 @@ export function shouldAllowSilentLocalPairing(params: {
   );
 }
 
-export function shouldSkipBackendSelfPairing(params: {
-  connectParams: ConnectParams;
-  isLocalClient: boolean;
-  hasBrowserOriginHeader: boolean;
-  sharedAuthOk: boolean;
-  authMethod: GatewayAuthResult["method"];
-}): boolean {
-  const isBackendClient =
-    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
-  if (!isBackendClient) {
-    return false;
-  }
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (
-    params.isLocalClient &&
-    !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
-  );
-}
-
-export function shouldTreatCliContainerHostAsLocal(params: {
+function isCliContainerLocalEquivalent(params: {
   connectParams: ConnectParams;
   requestHost?: string;
   remoteAddress?: string;
@@ -105,6 +84,57 @@ export function shouldTreatCliContainerHostAsLocal(params: {
     !params.hasBrowserOriginHeader &&
     isLoopbackAddress(params.remoteAddress) &&
     isPrivateOrLoopbackHost(resolveHostName(params.requestHost))
+  );
+}
+
+export function resolvePairingLocality(params: {
+  connectParams: ConnectParams;
+  isLocalClient: boolean;
+  requestHost?: string;
+  remoteAddress?: string;
+  hasProxyHeaders: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): PairingLocalityKind {
+  if (params.isLocalClient) {
+    return "direct_local";
+  }
+  if (
+    isCliContainerLocalEquivalent({
+      connectParams: params.connectParams,
+      requestHost: params.requestHost,
+      remoteAddress: params.remoteAddress,
+      hasProxyHeaders: params.hasProxyHeaders,
+      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
+      sharedAuthOk: params.sharedAuthOk,
+      authMethod: params.authMethod,
+    })
+  ) {
+    return "cli_container_local";
+  }
+  return "remote";
+}
+
+export function shouldSkipLocalBackendSelfPairing(params: {
+  connectParams: ConnectParams;
+  locality: PairingLocalityKind;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isBackendClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  if (!isBackendClient) {
+    return false;
+  }
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  const usesDeviceTokenAuth = params.authMethod === "device-token";
+  return (
+    params.locality === "direct_local" &&
+    !params.hasBrowserOriginHeader &&
+    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
   );
 }
 
