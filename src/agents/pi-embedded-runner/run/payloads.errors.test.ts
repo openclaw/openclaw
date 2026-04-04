@@ -213,6 +213,16 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("produces no answer text when assistantTexts is empty and lastAssistant is undefined (idle timeout)", () => {
+    // When an LLM idle timeout fires before any tokens stream, attempt.ts
+    // now scopes lastAssistant to the current turn only, yielding undefined.
+    // The payload builder must not produce stale text from a prior turn.
+    expectNoPayloads({
+      assistantTexts: [],
+      lastAssistant: undefined,
+    });
+  });
+
   it("adds tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
