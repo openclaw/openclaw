@@ -28,6 +28,11 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
 
+type DeviceTokenRotateTarget = {
+  pairedDevice: Awaited<ReturnType<typeof getPairedDevice>>;
+  normalizedRole: string;
+};
+
 function redactPairedDevice(
   device: { tokens?: Record<string, DeviceAuthToken> } & Record<string, unknown>,
 ) {
@@ -49,6 +54,25 @@ function logDeviceTokenRotationDenied(params: {
   params.log.warn(
     `device token rotation denied device=${params.deviceId} role=${params.role} reason=${params.reason}${suffix}`,
   );
+}
+
+async function loadDeviceTokenRotateTarget(params: {
+  deviceId: string;
+  role: string;
+  log: { warn: (message: string) => void };
+}): Promise<DeviceTokenRotateTarget | null> {
+  const normalizedRole = params.role.trim();
+  const pairedDevice = await getPairedDevice(params.deviceId);
+  if (!pairedDevice || !listApprovedPairedDeviceRoles(pairedDevice).includes(normalizedRole)) {
+    logDeviceTokenRotationDenied({
+      log: params.log,
+      deviceId: params.deviceId,
+      role: params.role,
+      reason: "unknown-device-or-role",
+    });
+    return null;
+  }
+  return { pairedDevice, normalizedRole };
 }
 
 export const deviceHandlers: GatewayRequestHandlers = {
@@ -197,15 +221,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
       role: string;
       scopes?: string[];
     };
-    const normalizedRole = role.trim();
-    const pairedDevice = await getPairedDevice(deviceId);
-    if (!pairedDevice) {
-      logDeviceTokenRotationDenied({
-        log: context.logGateway,
-        deviceId,
-        role,
-        reason: "unknown-device-or-role",
-      });
+    const rotateTarget = await loadDeviceTokenRotateTarget({
+      deviceId,
+      role,
+      log: context.logGateway,
+    });
+    if (!rotateTarget) {
       respond(
         false,
         undefined,
@@ -213,20 +234,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!listApprovedPairedDeviceRoles(pairedDevice).includes(normalizedRole)) {
-      logDeviceTokenRotationDenied({
-        log: context.logGateway,
-        deviceId,
-        role,
-        reason: "unknown-device-or-role",
-      });
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_TOKEN_ROTATION_DENIED_MESSAGE),
-      );
-      return;
-    }
+    const { pairedDevice, normalizedRole } = rotateTarget;
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const requestedScopes = normalizeDeviceAuthScopes(
       scopes ?? pairedDevice.tokens?.[normalizedRole]?.scopes ?? pairedDevice.scopes,
