@@ -9,7 +9,11 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
+import {
+  resolveCronDeliveryPlan,
+  resolveFailureDestination,
+  sendFailureNotificationAnnounce,
+} from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
@@ -420,12 +424,13 @@ export function buildGatewayCronService(params: {
         }
 
         if (evt.status === "error" && job) {
-          const failureDest = resolveFailureDestination(job, params.cfg.cron?.failureDestination);
-          if (failureDest) {
-            const isBestEffort = job.delivery?.bestEffort === true;
+          const isBestEffort = job.delivery?.bestEffort === true;
+          if (!isBestEffort) {
+            const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;
+            const failureDest = resolveFailureDestination(job, params.cfg.cron?.failureDestination);
 
-            if (!isBestEffort) {
-              const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;
+            if (failureDest) {
+              // Explicit failureDestination configured — use it
               const failurePayload = {
                 jobId: job.id,
                 jobName: job.name,
@@ -471,8 +476,28 @@ export function buildGatewayCronService(params: {
                     channel: failureDest.channel,
                     to: failureDest.to,
                     accountId: failureDest.accountId,
+                    sessionKey: job.sessionKey,
                   },
-                  `[Cron Failure] ${failureMessage}`,
+                  `⚠️ ${failureMessage}`,
+                );
+              }
+            } else {
+              // No explicit failureDestination — fall back to primary delivery channel (#60608)
+              const primaryPlan = resolveCronDeliveryPlan(job);
+              if (primaryPlan.mode === "announce" && primaryPlan.requested) {
+                const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+                void sendFailureNotificationAnnounce(
+                  params.deps,
+                  runtimeConfig,
+                  agentId,
+                  job.id,
+                  {
+                    channel: primaryPlan.channel,
+                    to: primaryPlan.to,
+                    accountId: primaryPlan.accountId,
+                    sessionKey: job.sessionKey,
+                  },
+                  `⚠️ ${failureMessage}`,
                 );
               }
             }

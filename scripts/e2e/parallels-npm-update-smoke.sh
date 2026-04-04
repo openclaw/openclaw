@@ -700,6 +700,15 @@ case "\$version" in
     ;;
 esac
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
+# Same-guest npm upgrades can leave launchd holding the old gateway process or
+# module graph briefly; wait for a fresh RPC-ready restart before the agent turn.
+/opt/homebrew/bin/openclaw gateway restart
+for _ in 1 2 3 4 5 6 7 8; do
+  if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
 /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$head_short --message "Reply with exact ASCII text OK only." --json
 EOF

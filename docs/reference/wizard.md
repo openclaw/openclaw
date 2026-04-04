@@ -220,6 +220,8 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack/Discord/Matrix/Microsoft Teams) when you opt in during the prompts (names resolve to IDs when possible).
 - `skills.install.nodeManager`
+  - `setup --node-manager` accepts `npm`, `pnpm`, or `bun`.
+  - Manual config can still use `yarn` by setting `skills.install.nodeManager` directly.
 - `wizard.lastRunAt`
 - `wizard.lastRunVersion`
 - `wizard.lastRunCommit`

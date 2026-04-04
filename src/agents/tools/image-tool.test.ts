@@ -122,6 +122,13 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenClawCodingToolsArgs) {
   vi.resetModules();
   const freshImageTool = await import("./image-tool.js");
+  const defaultImageModels = new Map<string, string>([
+    ["anthropic", "claude-opus-4-6"],
+    ["minimax", "MiniMax-VL-01"],
+    ["minimax-portal", "MiniMax-VL-01"],
+    ["openai", "gpt-5.4-mini"],
+    ["zai", "glm-4.6v"],
+  ]);
   freshImageTool.__testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
@@ -129,6 +136,12 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    describeImageWithModel: describeGenericImageWithModel,
+    describeImagesWithModel: describeGenericImagesWithModel,
+    resolveAutoMediaKeyProviders: ({ capability }) =>
+      capability === "image" ? ["openai", "anthropic"] : [],
+    resolveDefaultMediaModel: ({ providerId, capability }) =>
+      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
   });
   const { createOpenClawCodingTools } = await import("../pi-tools.js");
   return createOpenClawCodingTools(options);
@@ -356,6 +369,50 @@ async function describeMoonshotImages(
   });
 }
 
+async function readMockResponseText(response: Response): Promise<string> {
+  const contentType =
+    response.headers instanceof Headers ? (response.headers.get("content-type") ?? "") : "";
+  if (contentType.includes("application/json") || typeof response.text !== "function") {
+    const payload = (await response.json()) as { content?: string };
+    return payload.content ?? "";
+  }
+  const raw = await response.text();
+  const match = raw.match(/"content":"([^"]*)"/);
+  return match?.[1] ?? "";
+}
+
+async function describeGenericImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-image", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      mime: params.mime,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
+async function describeGenericImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<{ text: string; model: string }> {
+  const response = await global.fetch("https://example.invalid/media-images", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      provider: params.provider,
+      model: params.model,
+      prompt: params.prompt,
+      imageCount: params.images.length,
+    }),
+  });
+  return { text: await readMockResponseText(response), model: params.model };
+}
+
 const moonshotProvider = {
   id: "moonshot",
   capabilities: ["image"],
@@ -365,6 +422,13 @@ const moonshotProvider = {
 
 function installImageUnderstandingProviderStubs(...providers: MediaUnderstandingProvider[]) {
   imageProviderHarness.setProviders(providers);
+  const defaultImageModels = new Map<string, string>([
+    ["anthropic", "claude-opus-4-6"],
+    ["minimax", "MiniMax-VL-01"],
+    ["minimax-portal", "MiniMax-VL-01"],
+    ["openai", "gpt-5.4-mini"],
+    ["zai", "glm-4.6v"],
+  ]);
   __testing.setProviderDepsForTest({
     buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
       imageProviderHarness.buildProviderRegistry(overrides),
@@ -372,6 +436,12 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+    describeImageWithModel: describeGenericImageWithModel,
+    describeImagesWithModel: describeGenericImagesWithModel,
+    resolveAutoMediaKeyProviders: ({ capability }) =>
+      capability === "image" ? ["openai", "anthropic"] : [],
+    resolveDefaultMediaModel: ({ providerId, capability }) =>
+      capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
   });
 }
 

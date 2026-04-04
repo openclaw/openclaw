@@ -173,9 +173,27 @@ Notes:
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention`
+  or `channels.mattermost.groups["*"].requireMention` for a default.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 - Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
+
+Example:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      groupPolicy: "open",
+      groups: {
+        "*": { requireMention: true },
+        "team-channel-id": { requireMention: false },
+      },
+    },
+  },
+}
+```
 
 ## Targets for outbound delivery
 

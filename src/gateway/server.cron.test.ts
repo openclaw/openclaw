@@ -24,6 +24,8 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
   })),
 );
 
+const sendFailureNotificationAnnounceMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) =>
     (
@@ -34,6 +36,17 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
       }>
     )(...args),
 }));
+
+vi.mock("../cron/delivery.js", async () => {
+  const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
+  return {
+    ...actual,
+    sendFailureNotificationAnnounce: (...args: unknown[]) =>
+      (
+        sendFailureNotificationAnnounceMock as unknown as (...innerArgs: unknown[]) => Promise<void>
+      )(...args),
+  };
+});
 
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_TIMEOUT_MS = 3_000;
@@ -232,6 +245,7 @@ describe("gateway server cron", () => {
   beforeEach(() => {
     // Keep polling helpers deterministic even if other tests left fake timers enabled.
     vi.useRealTimers();
+    sendFailureNotificationAnnounceMock.mockClear();
   });
 
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 20_000 }, async () => {
@@ -975,6 +989,61 @@ describe("gateway server cron", () => {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 60_000);
+
+  test("falls back to the primary delivery channel on job failure and preserves sessionKey", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-failure-primary-fallback-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+      const jobId = await addWebhookCronJob({
+        ws,
+        name: "primary delivery fallback",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          channel: "last",
+        },
+      });
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          sessionKey: "agent:main:telegram:direct:123:thread:99",
+        },
+      });
+      expect(updateRes.ok).toBe(true);
+
+      const finished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, jobId);
+      await finished;
+
+      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
+      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.any(String),
+        jobId,
+        {
+          channel: "last",
+          to: undefined,
+          accountId: undefined,
+          sessionKey: "agent:main:telegram:direct:123:thread:99",
+        },
+        '⚠️ Cron job "primary delivery fallback" failed: unknown error',
+      );
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
 
   test("ignores non-string cron.webhookToken values without crashing webhook delivery", async () => {
     const { prevSkipCron } = await setupCronTestRun({

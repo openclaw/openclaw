@@ -75,6 +75,12 @@ For isolated jobs, runtime teardown now includes best-effort browser cleanup for
 - `--light-context`: skip workspace bootstrap file injection
 - `--tools exec,read`: restrict which tools the job can use
 
+`--model` uses the selected allowed model for that job. If the requested model
+is not allowed, cron logs a warning and falls back to the job's agent/default
+model selection instead. Configured fallback chains still apply, but a plain
+model override with no explicit per-job fallback list no longer appends the
+agent primary as a hidden extra retry target.
+
 ## Delivery and output
 
 | Mode       | What happens                                             |
@@ -84,6 +90,13 @@ For isolated jobs, runtime teardown now includes best-effort browser cleanup for
 | `none`     | Internal only, no delivery                               |
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
+
+Failure notifications follow a separate destination path:
+
+- `cron.failureDestination` sets a global default for failure notifications.
+- `job.delivery.failureDestination` overrides that per job.
+- If neither is set and the job already delivers via `announce`, failure notifications now fall back to that primary announce target.
+- `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
 
 ## CLI examples
 
@@ -184,8 +197,10 @@ Custom hook names are resolved via `hooks.mappings` in config. Mappings can tran
 
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 - Use a dedicated hook token; do not reuse gateway auth tokens.
+- Keep `hooks.path` on a dedicated subpath; `/` is rejected.
 - Set `hooks.allowedAgentIds` to limit explicit `agentId` routing.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
+- If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to constrain allowed session key shapes.
 - Hook payloads are wrapped with safety boundaries by default.
 
 ## Gmail PubSub integration
@@ -272,6 +287,17 @@ openclaw cron remove <jobId>
 openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
+
+Model override note:
+
+- `openclaw cron add|edit --model ...` changes the job's selected model.
+- If the model is allowed, that exact provider/model reaches the isolated agent
+  run.
+- If it is not allowed, cron warns and falls back to the job's agent/default
+  model selection.
+- Configured fallback chains still apply, but a plain `--model` override with
+  no explicit per-job fallback list no longer falls through to the agent
+  primary as a silent extra retry target.
 
 ## Configuration
 

@@ -226,6 +226,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("prompt too long") ||
     lower.includes("exceeds model context window") ||
     lower.includes("model token limit") ||
+    (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
     lower.includes("exceed context limit") ||
