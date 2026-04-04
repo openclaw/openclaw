@@ -1,0 +1,310 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway 网关"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills 配置"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills 配置"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "入门指南"
+  },
+  {
+    "source": "Getting started",
+    "target": "入门指南"
+  },
+  {
+    "source": "Quick start",
+    "target": "快速开始"
+  },
+  {
+    "source": "Quick Start",
+    "target": "快速开始"
+  },
+  {
+    "source": "Diffs",
+    "target": "Diffs"
+  },
+  {
+    "source": "Capability Cookbook",
+    "target": "能力扩展手册"
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "设置向导参考"
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "CLI 设置参考"
+  },
+  {
+    "source": "Setup Wizard (CLI)",
+    "target": "设置向导（CLI）"
+  },
+  {
+    "source": "Docs directory",
+    "target": "文档目录"
+  },
+  {
+    "source": "Credits",
+    "target": "致谢"
+  },
+  {
+    "source": "Features",
+    "target": "功能"
+  },
+  {
+    "source": "DMs",
+    "target": "私信"
+  },
+  {
+    "source": "DM",
+    "target": "私信"
+  },
+  {
+    "source": "sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "Sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "沙箱注意事项"
+  },
+  {
+    "source": "Companion apps",
+    "target": "配套应用"
+  },
+  {
+    "source": "expected keys",
+    "target": "预期键名"
+  },
+  {
+    "source": "block streaming",
+    "target": "分块流式传输"
+  },
+  {
+    "source": "Block streaming",
+    "target": "分块流式传输"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "设备发现 + 传输协议"
+  },
+  {
+    "source": "Discovery",
+    "target": "设备发现"
+  },
+  {
+    "source": "Network model",
+    "target": "网络模型"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "Polls",
+    "target": "投票"
+  },
+  {
+    "source": "Release Policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "Release policy",
+    "target": "发布策略"
+  },
+  {
+    "source": "for full details",
+    "target": "了解详情"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "最初的六十秒"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "凭证：存储位置（重要）"
+  },
+  {
+    "source": "agent",
+    "target": "智能体"
+  },
+  {
+    "source": "channel",
+    "target": "渠道"
+  },
+  {
+    "source": "session",
+    "target": "会话"
+  },
+  {
+    "source": "provider",
+    "target": "提供商"
+  },
+  {
+    "source": "model",
+    "target": "模型"
+  },
+  {
+    "source": "tool",
+    "target": "工具"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "install sanity",
+    "target": "安装完整性检查"
+  },
+  {
+    "source": "get unstuck",
+    "target": "解决问题"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "故障排除"
+  },
+  {
+    "source": "FAQ",
+    "target": "常见问题"
+  },
+  {
+    "source": "Ollama Web Search",
+    "target": "Ollama Web 搜索"
+  },
+  {
+    "source": "onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "Onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "wizard",
+    "target": "向导"
+  },
+  {
+    "source": "environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "environment variable",
+    "target": "环境变量"
+  },
+  {
+    "source": "env vars",
+    "target": "环境变量"
+  },
+  {
+    "source": "env var",
+    "target": "环境变量"
+  },
+  {
+    "source": "Plugin SDK",
+    "target": "插件 SDK"
+  },
+  {
+    "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "SDK Overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Plugin Entry Points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Entry Points",
+    "target": "入口点"
+  },
+  {
+    "source": "Plugin Runtime",
+    "target": "插件运行时"
+  },
+  {
+    "source": "Runtime",
+    "target": "运行时"
+  },
+  {
+    "source": "Plugin Setup",
+    "target": "插件设置"
+  },
+  {
+    "source": "Setup",
+    "target": "设置"
+  },
+  {
+    "source": "Channel Plugin SDK",
+    "target": "渠道插件 SDK"
+  },
+  {
+    "source": "Channel Plugins",
+    "target": "渠道插件"
+  },
+  {
+    "source": "Provider Plugin SDK",
+    "target": "提供商插件 SDK"
+  },
+  {
+    "source": "Provider Plugins",
+    "target": "提供商插件"
+  },
+  {
+    "source": "Plugin SDK Testing",
+    "target": "插件 SDK 测试"
+  },
+  {
+    "source": "Testing",
+    "target": "测试"
+  }
+]
