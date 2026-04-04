@@ -87,16 +87,16 @@ beforeEach(() => {
 });
 
 describe("CDP screenshot params", () => {
-  it("viewport screenshot uses fromSurface: false without clip or emulation override", async () => {
+  it("viewport screenshot omits fromSurface without clip or emulation override", async () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
     const call = sentMessages.find((m) => m.method === "Page.captureScreenshot");
     expect(call).toBeDefined();
     expect(call!.params).toMatchObject({
       format: "png",
-      fromSurface: false,
       captureBeyondViewport: true,
     });
+    expect(call!.params).not.toHaveProperty("fromSurface");
     expect(call!.params).not.toHaveProperty("clip");
 
     const emulationCalls = sentMessages.filter(
