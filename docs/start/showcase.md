@@ -253,6 +253,15 @@ A scheduled prompt generates a single "scene" image each morning (weather, tasks
 Rebuilt entire personal site via Telegram while watching Netflix — Notion → Astro, 18 posts migrated, DNS to Cloudflare. Never opened a laptop.
 </Card>
 
+<Card title="Everything Openclaw (EO)" icon="bot" href="https://clawhub.com/plugins/eo-collaboration">
+  **@467718584** • `multi-agent` `collaboration` `expert-library` `workflow`
+
+  🦞 Transform your OpenClaw Agent from lone soldier to "Steel Crayfish Legion".
+  141 expert personas, multi-expert parallel execution, checkpoint validation,
+  MD + TS hybrid architecture. Slogan: "Let every Agent wear a mech suit".
+  Also on ClawHub: eo-quickstart, eo-blog-dev demo plugins.
+</Card>
+
 <Card title="Job Search Agent" icon="briefcase">
   **@attol8** • `automation` `api` `skill`
 
