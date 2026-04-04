@@ -52,6 +52,8 @@ export type PluginManifest = {
 
 export type PluginManifestContracts = {
   speechProviders?: string[];
+  realtimeTranscriptionProviders?: string[];
+  realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
   imageGenerationProviders?: string[];
   webFetchProviders?: string[];
@@ -125,6 +127,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   }
 
   const speechProviders = normalizeStringList(value.speechProviders);
+  const realtimeTranscriptionProviders = normalizeStringList(value.realtimeTranscriptionProviders);
+  const realtimeVoiceProviders = normalizeStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
   const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
   const webFetchProviders = normalizeStringList(value.webFetchProviders);
@@ -132,6 +136,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const tools = normalizeStringList(value.tools);
   const contracts = {
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
+    ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
+    ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),

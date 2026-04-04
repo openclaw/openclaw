@@ -11,6 +11,8 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     providers: [],
     cliBackends: [],
     speechProviders: [],
+    realtimeTranscriptionProviders: [],
+    realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     webFetchProviders: [],

@@ -145,4 +145,4 @@ Actions:
 - While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
 - Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
-- Media streaming requires `ws` and OpenAI Realtime API key.
+- Media streaming requires `ws` plus a configured realtime-transcription provider. The bundled provider today is OpenAI.

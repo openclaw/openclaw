@@ -1,16 +1,14 @@
 import { Command } from "commander";
 import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
-import type { OpenClawPluginCliCommandDescriptor } from "../../plugins/types.js";
+import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp } from "./help.js";
 import { getSubCliEntries } from "./subcli-descriptors.js";
 
-type RootHelpRenderOptions = {
-  pluginDescriptors?: OpenClawPluginCliCommandDescriptor[] | null;
-};
+type RootHelpLoaderOptions = Pick<PluginLoadOptions, "pluginSdkResolution">;
 
-async function buildRootHelpProgram(options?: RootHelpRenderOptions): Promise<Command> {
+async function buildRootHelpProgram(loaderOptions?: RootHelpLoaderOptions): Promise<Command> {
   const program = new Command();
   configureProgramHelp(program, {
     programVersion: VERSION,
@@ -31,11 +29,7 @@ async function buildRootHelpProgram(options?: RootHelpRenderOptions): Promise<Co
     program.command(command.name).description(command.description);
     existingCommands.add(command.name);
   }
-  const pluginDescriptors =
-    options && "pluginDescriptors" in options
-      ? (options.pluginDescriptors ?? [])
-      : await getPluginCliCommandDescriptors();
-  for (const command of pluginDescriptors) {
+  for (const command of await getPluginCliCommandDescriptors(undefined, undefined, loaderOptions)) {
     if (existingCommands.has(command.name)) {
       continue;
     }
@@ -46,8 +40,8 @@ async function buildRootHelpProgram(options?: RootHelpRenderOptions): Promise<Co
   return program;
 }
 
-export async function renderRootHelpText(options?: RootHelpRenderOptions): Promise<string> {
-  const program = await buildRootHelpProgram(options);
+export async function renderRootHelpText(loaderOptions?: RootHelpLoaderOptions): Promise<string> {
+  const program = await buildRootHelpProgram(loaderOptions);
   let output = "";
   const originalWrite = process.stdout.write.bind(process.stdout);
   const captureWrite: typeof process.stdout.write = ((chunk: string | Uint8Array) => {
@@ -63,6 +57,6 @@ export async function renderRootHelpText(options?: RootHelpRenderOptions): Promi
   return output;
 }
 
-export async function outputRootHelp(options?: RootHelpRenderOptions): Promise<void> {
-  process.stdout.write(await renderRootHelpText(options));
+export async function outputRootHelp(loaderOptions?: RootHelpLoaderOptions): Promise<void> {
+  process.stdout.write(await renderRootHelpText(loaderOptions));
 }

@@ -10,6 +10,8 @@ import type {
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
   ProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
@@ -27,6 +29,8 @@ export type CapturedPluginRegistration = {
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
   speechProviders: SpeechProviderPlugin[];
+  realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
+  realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
@@ -42,6 +46,8 @@ export function createCapturedPluginRegistration(params?: {
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
   const cliBackends: CliBackendPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
+  const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
+  const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
@@ -59,6 +65,8 @@ export function createCapturedPluginRegistration(params?: {
     cliRegistrars,
     cliBackends,
     speechProviders,
+    realtimeTranscriptionProviders,
+    realtimeVoiceProviders,
     mediaUnderstandingProviders,
     imageGenerationProviders,
     webFetchProviders,
@@ -105,6 +113,12 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);
+        },
+        registerRealtimeTranscriptionProvider(provider: RealtimeTranscriptionProviderPlugin) {
+          realtimeTranscriptionProviders.push(provider);
+        },
+        registerRealtimeVoiceProvider(provider: RealtimeVoiceProviderPlugin) {
+          realtimeVoiceProviders.push(provider);
         },
         registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {
           mediaUnderstandingProviders.push(provider);

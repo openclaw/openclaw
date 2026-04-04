@@ -72,13 +72,25 @@ const voiceCallConfigSchema = {
       advanced: true,
     },
     "streaming.enabled": { label: "Enable Streaming", advanced: true },
-    "streaming.openaiApiKey": {
+    "streaming.provider": { label: "Streaming Provider", advanced: true },
+    "streaming.providers.openai.apiKey": {
       label: "OpenAI Realtime API Key",
       sensitive: true,
       advanced: true,
     },
-    "streaming.sttModel": { label: "Realtime STT Model", advanced: true },
+    "streaming.providers.openai.model": { label: "Realtime STT Model", advanced: true },
     "streaming.streamPath": { label: "Media Stream Path", advanced: true },
+    "realtime.enabled": { label: "Enable Realtime Voice", advanced: true },
+    "realtime.provider": { label: "Realtime Voice Provider", advanced: true },
+    "realtime.streamPath": { label: "Realtime Stream Path", advanced: true },
+    "realtime.instructions": { label: "Realtime Instructions", advanced: true },
+    "realtime.providers.openai.apiKey": {
+      label: "OpenAI Realtime API Key",
+      sensitive: true,
+      advanced: true,
+    },
+    "realtime.providers.openai.model": { label: "OpenAI Realtime Model", advanced: true },
+    "realtime.providers.openai.voice": { label: "OpenAI Realtime Voice", advanced: true },
     "tts.provider": {
       label: "TTS Provider Override",
       help: "Deep-merges with messages.tts (Microsoft is ignored for calls).",
@@ -181,6 +193,7 @@ export default definePluginEntry({
         runtimePromise = createVoiceCallRuntime({
           config,
           coreConfig: api.config as CoreConfig,
+          fullConfig: api.config,
           agentRuntime: api.runtime.agent,
           ttsRuntime: api.runtime.tts,
           logger: api.logger,

@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
+  "dependencies": {
+    "ws": "^8.20.0"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"

@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
 - Matrix/backup reset: recreate secret storage during backup reset when stale SSSS state blocks durable backup-key reload, including no-backup repair paths. (#60599) thanks @emonty.
 - Matrix: allow secret-storage recreation during automatic repair bootstrap so clients that lose their recovery key can recover and persist new cross-signing keys. (#59846) Thanks @al3mart.
+- Voice Call/OpenAI: move realtime voice and realtime transcription onto provider-owned plugin capabilities so `voice-call` uses generic provider selection while keeping realtime Twilio replay and custom webhook-path handling working.
 - Matrix/crypto persistence: capture and write the IndexedDB snapshot while holding the snapshot file lock so concurrent gateway and CLI persists cannot overwrite newer crypto state. (#59851) Thanks @al3mart.
 - Matrix/media: surface a dedicated `[matrix <kind> attachment too large]` marker for oversized inbound media instead of the generic unavailable marker, and classify size-limit failures with a typed Matrix error. (#60289) Thanks @efe-arv.
 - Matrix/Telegram exec approvals: recover stored same-channel account bindings even when session reply state drifted to another channel, so foreign-channel approvals route to the bound account instead of fanning out or being rejected as ambiguous. (#60417) thanks @gumadeiras.

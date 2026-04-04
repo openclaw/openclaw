@@ -324,8 +324,8 @@ API key auth, and dynamic model resolution.
 
   <Step title="Add extra capabilities (optional)">
     <a id="step-5-add-extra-capabilities"></a>
-    A provider plugin can register speech, media understanding, image
-    generation, and web search alongside text inference:
+    A provider plugin can register speech, realtime transcription, realtime voice, media
+    understanding, image generation, and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -340,6 +340,33 @@ API key auth, and dynamic model resolution.
           outputFormat: "mp3",
           fileExtension: ".mp3",
           voiceCompatible: false,
+        }),
+      });
+
+      api.registerRealtimeTranscriptionProvider({
+        id: "acme-ai",
+        label: "Acme Realtime Transcription",
+        isConfigured: () => true,
+        createSession: (req) => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          close: () => {},
+          isConnected: () => true,
+        }),
+      });
+
+      api.registerRealtimeVoiceProvider({
+        id: "acme-ai",
+        label: "Acme Realtime Voice",
+        isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
+        createBridge: (req) => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          setMediaTimestamp: () => {},
+          submitToolResult: () => {},
+          acknowledgeMark: () => {},
+          close: () => {},
+          isConnected: () => true,
         }),
       });
 

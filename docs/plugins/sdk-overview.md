@@ -128,15 +128,17 @@ methods:
 
 ### Capability registration
 
-| Method                                        | What it registers              |
-| --------------------------------------------- | ------------------------------ |
-| `api.registerProvider(...)`                   | Text inference (LLM)           |
-| `api.registerCliBackend(...)`                 | Local CLI inference backend    |
-| `api.registerChannel(...)`                    | Messaging channel              |
-| `api.registerSpeechProvider(...)`             | Text-to-speech / STT synthesis |
-| `api.registerMediaUnderstandingProvider(...)` | Image/audio/video analysis     |
-| `api.registerImageGenerationProvider(...)`    | Image generation               |
-| `api.registerWebSearchProvider(...)`          | Web search                     |
+| Method                                           | What it registers                |
+| ------------------------------------------------ | -------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)             |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
+| `api.registerChannel(...)`                       | Messaging channel                |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
+| `api.registerImageGenerationProvider(...)`       | Image generation                 |
+| `api.registerWebSearchProvider(...)`             | Web search                       |
 
 ### Tools and commands
 

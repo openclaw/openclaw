@@ -34,6 +34,8 @@
   ],
   "contracts": {
     "speechProviders": ["openai"],
+    "realtimeTranscriptionProviders": ["openai"],
+    "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
     "imageGenerationProviders": ["openai"]
   },

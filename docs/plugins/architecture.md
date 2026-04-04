@@ -32,6 +32,7 @@ native OpenClaw plugin registers against one or more capability types:
 | Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
 | CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
 | Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
+| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | `openai`                  |
 | Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
 | Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
 | Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
@@ -239,8 +240,9 @@ Examples:
 - the bundled `minimax`, `mistral`, `moonshot`, and `zai` plugins own their
   media-understanding backends
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
-  CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
-  inventing a second speech stack
+  CLI, routes, and Twilio media-stream bridging, but it consumes shared speech
+  plus realtime-transcription and realtime-voice capabilities instead of
+  importing vendor plugins directly
 
 The intended end state is:
 

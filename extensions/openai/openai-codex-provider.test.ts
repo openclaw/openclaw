@@ -103,16 +103,16 @@ describe("openai codex provider", () => {
               api: "openai-codex-responses",
               baseUrl: "https://chatgpt.com/backend-api",
               reasoning: true,
-              input: ["text", "image"],
+              input: ["text", "image"] as const,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 272_000,
               maxTokens: 128_000,
             };
           }
-          return null;
-        },
+          return undefined;
+        }),
       } as never,
-    } as never);
+    });
 
     expect(model).toMatchObject({
       id: "gpt-5.4",
@@ -173,7 +173,7 @@ describe("openai codex provider", () => {
           contextWindow: 272_000,
         },
       ],
-    });
+    } as never);
 
     expect(entries).toContainEqual(
       expect.objectContaining({

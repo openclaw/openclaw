@@ -551,6 +551,14 @@
       "types": "./dist/plugin-sdk/reply-history.d.ts",
       "default": "./dist/plugin-sdk/reply-history.js"
     },
+    "./plugin-sdk/realtime-voice": {
+      "types": "./dist/plugin-sdk/realtime-voice.d.ts",
+      "default": "./dist/plugin-sdk/realtime-voice.js"
+    },
+    "./plugin-sdk/realtime-transcription": {
+      "types": "./dist/plugin-sdk/realtime-transcription.d.ts",
+      "default": "./dist/plugin-sdk/realtime-transcription.js"
+    },
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
       "default": "./dist/plugin-sdk/media-understanding.js"

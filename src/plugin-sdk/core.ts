@@ -66,6 +66,7 @@ export type {
   ProviderReplaySessionState,
   ProviderResolveDynamicModelContext,
   ProviderResolvedUsageAuth,
+  RealtimeTranscriptionProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,

@@ -179,6 +179,35 @@ describe("validateProviderConfig", () => {
       expect(result.errors).toEqual([]);
     });
   });
+
+  describe("realtime config", () => {
+    it("rejects disabled inbound policy for realtime mode", () => {
+      const config = createBaseConfig("twilio");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "disabled";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
+      );
+    });
+
+    it("rejects enabling realtime and streaming together", () => {
+      const config = createBaseConfig("twilio");
+      config.realtime.enabled = true;
+      config.streaming.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
+      );
+    });
+  });
 });
 
 describe("normalizeVoiceCallConfig", () => {
@@ -194,9 +223,23 @@ describe("normalizeVoiceCallConfig", () => {
 
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
-    expect(normalized.streaming.sttModel).toBe("gpt-4o-transcribe");
+    expect(normalized.streaming.provider).toBe("openai");
+    expect(normalized.streaming.providers.openai).toEqual({});
+    expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+  });
+
+  it("derives the realtime stream path from a custom webhook path", () => {
+    const normalized = normalizeVoiceCallConfig({
+      enabled: true,
+      provider: "twilio",
+      serve: {
+        path: "/custom/webhook",
+      },
+    });
+
+    expect(normalized.realtime.streamPath).toBe("/custom/stream/realtime");
   });
 
   it("accepts partial nested TTS overrides and preserves nested objects", () => {

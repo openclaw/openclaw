@@ -155,9 +155,10 @@ async function loadPluginCliCommandRegistry(
 export async function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
 ): Promise<OpenClawPluginCliCommandDescriptor[]> {
   try {
-    const { registry } = await loadPluginCliMetadataRegistry(cfg, env);
+    const { registry } = await loadPluginCliMetadataRegistry(cfg, env, loaderOptions);
     const seen = new Set<string>();
     const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
     for (const entry of registry.cliRegistrars) {

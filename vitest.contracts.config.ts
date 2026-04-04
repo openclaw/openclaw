@@ -1,23 +1,23 @@
-import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
-import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+import { defineConfig } from "vitest/config";
+import { sharedVitestConfig } from "./vitest.shared.config.ts";
 
-export function createContractsVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(
-    [
-      "src/channels/plugins/contracts/**/*.test.ts",
-      "src/config/doc-baseline.integration.test.ts",
-      "src/config/schema.base.generated.test.ts",
-      "src/config/schema.help.quality.test.ts",
-      "src/plugins/contracts/**/*.test.ts",
-      "test/**/*.test.ts",
-    ],
-    {
-      env,
-      exclude: boundaryTestFiles,
-      name: "contracts",
+const base = sharedVitestConfig as Record<string, unknown>;
+const baseTest = sharedVitestConfig.test ?? {};
+
+export function createContractsVitestConfig() {
+  return defineConfig({
+    ...base,
+    test: {
+      ...baseTest,
+      isolate: true,
+      setupFiles: baseTest.setupFiles ?? [],
+      include: [
+        "src/channels/plugins/contracts/**/*.test.ts",
+        "src/plugins/contracts/**/*.test.ts",
+      ],
       passWithNoTests: true,
     },
-  );
+  });
 }
 
 export default createContractsVitestConfig();

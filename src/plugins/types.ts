@@ -30,6 +30,22 @@ import type { HookEntry } from "../hooks/types.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { ProviderUsageSnapshot } from "../infra/provider-usage.types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderConfiguredContext,
+  RealtimeTranscriptionProviderId,
+  RealtimeTranscriptionProviderResolveConfigContext,
+  RealtimeTranscriptionSession,
+  RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-types.js";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderConfiguredContext,
+  RealtimeVoiceProviderId,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "../realtime-voice/provider-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
   RuntimeWebFetchMetadata,
@@ -1526,6 +1542,38 @@ export type PluginSpeechProviderEntry = SpeechProviderPlugin & {
   pluginId: string;
 };
 
+/** Realtime transcription capability registered by a plugin. */
+export type RealtimeTranscriptionProviderPlugin = {
+  id: RealtimeTranscriptionProviderId;
+  label: string;
+  aliases?: string[];
+  autoSelectOrder?: number;
+  resolveConfig?: (
+    ctx: RealtimeTranscriptionProviderResolveConfigContext,
+  ) => RealtimeTranscriptionProviderConfig;
+  isConfigured: (ctx: RealtimeTranscriptionProviderConfiguredContext) => boolean;
+  createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
+};
+
+export type PluginRealtimeTranscriptionProviderEntry = RealtimeTranscriptionProviderPlugin & {
+  pluginId: string;
+};
+
+/** Realtime voice capability registered by a plugin. */
+export type RealtimeVoiceProviderPlugin = {
+  id: RealtimeVoiceProviderId;
+  label: string;
+  aliases?: string[];
+  autoSelectOrder?: number;
+  resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
+  isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
+};
+
+export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
+  pluginId: string;
+};
+
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
 export type ImageGenerationProviderPlugin = ImageGenerationProvider;
 
@@ -1850,6 +1898,10 @@ export type OpenClawPluginApi = {
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
+  /** Register a realtime transcription provider (streaming STT capability). */
+  registerRealtimeTranscriptionProvider: (provider: RealtimeTranscriptionProviderPlugin) => void;
+  /** Register a realtime voice provider (duplex voice capability). */
+  registerRealtimeVoiceProvider: (provider: RealtimeVoiceProviderPlugin) => void;
   /** Register a media understanding provider (media understanding capability). */
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */

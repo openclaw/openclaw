@@ -4,4 +4,6 @@ export {
   openaiCodexMediaUnderstandingProvider,
   openaiMediaUnderstandingProvider,
 } from "./media-understanding-provider.js";
+export { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+export { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 export { buildOpenAISpeechProvider } from "./speech-provider.js";

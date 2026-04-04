@@ -196,6 +196,8 @@ read without importing the plugin runtime.
 {
   "contracts": {
     "speechProviders": ["openai"],
+    "realtimeTranscriptionProviders": ["openai"],
+    "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
     "imageGenerationProviders": ["openai"],
     "webSearchProviders": ["gemini"],
@@ -206,13 +208,15 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                         | Type       | What it means                                                  |
-| ----------------------------- | ---------- | -------------------------------------------------------------- |
-| `speechProviders`             | `string[]` | Speech provider ids this plugin owns.                          |
-| `mediaUnderstandingProviders` | `string[]` | Media-understanding provider ids this plugin owns.             |
-| `imageGenerationProviders`    | `string[]` | Image-generation provider ids this plugin owns.                |
-| `webSearchProviders`          | `string[]` | Web-search provider ids this plugin owns.                      |
-| `tools`                       | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
+| Field                            | Type       | What it means                                                  |
+| -------------------------------- | ---------- | -------------------------------------------------------------- |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                          |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.          |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.             |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                      |
+| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
 
 Legacy top-level `speechProviders`, `mediaUnderstandingProviders`, and
 `imageGenerationProviders` are deprecated. Use `openclaw doctor --fix` to move

@@ -86,12 +86,16 @@
       "label": "Enable Streaming",
       "advanced": true
     },
-    "streaming.openaiApiKey": {
+    "streaming.provider": {
+      "label": "Streaming Provider",
+      "advanced": true
+    },
+    "streaming.providers.openai.apiKey": {
       "label": "OpenAI Realtime API Key",
       "sensitive": true,
       "advanced": true
     },
-    "streaming.sttModel": {
+    "streaming.providers.openai.model": {
       "label": "Realtime STT Model",
       "advanced": true
     },
@@ -345,9 +349,11 @@
           "enabled": {
             "type": "boolean"
           },
+          "provider": {
+            "type": "string"
+          },
           "sttProvider": {
-            "type": "string",
-            "enum": ["openai-realtime"]
+            "type": "string"
           },
           "openaiApiKey": {
             "type": "string"
@@ -367,6 +373,13 @@
           "streamPath": {
             "type": "string"
           },
+          "providers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
           "preStartTimeoutMs": {
             "type": "integer",
             "minimum": 1
@@ -382,6 +395,72 @@
           "maxConnections": {
             "type": "integer",
             "minimum": 1
+          }
+        }
+      },
+      "realtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "streamPath": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["function"]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": ["object"]
+                    },
+                    "properties": {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    "required": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["type", "properties"]
+                }
+              },
+              "required": ["type", "name", "description", "parameters"]
+            }
+          },
+          "providers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": true
+            }
           }
         }
       },
