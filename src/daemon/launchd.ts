@@ -201,12 +201,49 @@ async function bootstrapLaunchAgentOrThrow(params: {
     return;
   }
   const detail = (boot.stderr || boot.stdout).trim();
-  if (isUnsupportedGuiDomain(detail)) {
-    throwBootstrapGuiSessionError({
-      detail,
-      domain: params.domain,
-      actionHint: params.actionHint,
-    });
+  // Track the most relevant error detail across retries so that the final
+  // error message shown to the user reflects the actual failure, not a stale
+  // "already bootstrapped" message from an earlier attempt.
+  let effectiveDetail = detail;
+
+  // If the service is already registered (e.g. re-install without prior uninstall),
+  // bootout the stale registration and retry once.
+  if (isAlreadyBootstrapped(detail)) {
+    await execLaunchctl(["bootout", params.domain, params.plistPath]);
+    const retry = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+    if (retry.code === 0) {
+      return;
+    }
+    const retryDetail = (retry.stderr || retry.stdout).trim();
+    effectiveDetail = retryDetail;
+    if (isUnsupportedGuiDomain(retryDetail)) {
+      // Fall through to the legacy load fallback below.
+    } else if (!isAlreadyBootstrapped(retryDetail)) {
+      throw new Error(`launchctl bootstrap failed: ${retryDetail}`);
+    }
+  }
+
+  // If the gui/ domain is unavailable (SSH, headless, or sudo), try the
+  // deprecated-but-universal `launchctl load` as a last resort before giving up.
+  if (isUnsupportedGuiDomain(effectiveDetail) || isAlreadyBootstrapped(effectiveDetail)) {
+    const load = await execLaunchctl(["load", "-w", params.plistPath]);
+    if (load.code === 0) {
+      return;
+    }
+    const loadDetail = (load.stderr || load.stdout).trim();
+    // Only show GUI-session guidance when the failure is actually gui-domain related
+    // and the load fallback didn't reveal a different, more actionable error.
+    if (isUnsupportedGuiDomain(effectiveDetail)) {
+      const isLoadDifferentError = loadDetail && !isUnsupportedGuiDomain(loadDetail);
+      throwBootstrapGuiSessionError({
+        detail: isLoadDifferentError
+          ? `${loadDetail} (bootstrap: ${effectiveDetail})`
+          : effectiveDetail,
+        domain: params.domain,
+        actionHint: params.actionHint,
+      });
+    }
+    throw new Error(`launchctl load failed: ${loadDetail || effectiveDetail}`);
   }
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
@@ -444,8 +481,19 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   const normalized = detail.toLowerCase();
   return (
     normalized.includes("domain does not support specified action") ||
-    normalized.includes("bootstrap failed: 125")
+    normalized.includes("bootstrap failed: 125") ||
+    normalized.includes("could not find domain for")
   );
+}
+
+function isAlreadyBootstrapped(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  // Match explicit "already loaded" / "already bootstrapped" messages.
+  // We intentionally do NOT match the generic "bootstrap failed: 5"
+  // (Input/output error) because that code also fires for malformed or
+  // unreadable plists, and treating those as "already loaded" would mask
+  // real bootstrap failures.
+  return normalized.includes("already loaded") || normalized.includes("already bootstrapped");
 }
 
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
