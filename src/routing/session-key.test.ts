@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { deriveSessionChatType } from "../sessions/session-chat-type.js";
 import {
-  deriveSessionChatType,
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,

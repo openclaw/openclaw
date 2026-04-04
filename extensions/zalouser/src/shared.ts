@@ -3,8 +3,6 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelPlugin } from "../runtime-api.js";
-import { buildChannelConfigSchema, formatAllowFromLowercase } from "../runtime-api.js";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -12,6 +10,8 @@ import {
   checkZcaAuthenticated,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
+import type { ChannelPlugin } from "./channel-api.js";
+import { buildChannelConfigSchema, formatAllowFromLowercase } from "./channel-api.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
 import { zalouserDoctor } from "./doctor.js";
 

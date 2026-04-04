@@ -27,13 +27,14 @@ export function createUnitVitestConfigWithOptions(
   options: {
     includePatterns?: string[];
     extraExcludePatterns?: string[];
+    name?: string;
   } = {},
 ) {
   return defineProject({
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
-      name: "unit",
+      name: options.name ?? "unit",
       isolate: resolveVitestIsolation(env),
       runner: "./test/non-isolated-runner.ts",
       setupFiles: [

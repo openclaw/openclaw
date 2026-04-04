@@ -143,6 +143,20 @@ const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
+const lazyDreams = createLazy(() => import("./views/dreams.ts"));
+
+function isDreamingEnabled(configValue: Record<string, unknown> | null): boolean {
+  if (!configValue) {
+    return false;
+  }
+  const plugins = configValue.plugins as Record<string, unknown> | undefined;
+  const entries = plugins?.entries as Record<string, unknown> | undefined;
+  const memoryCore = entries?.["memory-core"] as Record<string, unknown> | undefined;
+  const config = memoryCore?.config as Record<string, unknown> | undefined;
+  const dreaming = config?.dreaming as Record<string, unknown> | undefined;
+  const mode = dreaming?.mode;
+  return typeof mode === "string" && mode !== "off";
+}
 
 let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -329,6 +343,7 @@ export function renderApp(state: AppViewState) {
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const dreamingOn = isDreamingEnabled(configValue);
   const basePath = normalizeBasePath(state.basePath ?? "");
   const resolvedAgentId =
     state.agentsSelectedId ??
@@ -2002,6 +2017,18 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadLogs(state, { reset: true }),
                 onExport: (lines, label) => state.exportLogs(lines, label),
                 onScroll: (event) => state.handleLogsScroll(event),
+              }),
+            )
+          : nothing}
+        ${state.tab === "dreams"
+          ? lazyRender(lazyDreams, (m) =>
+              m.renderDreams({
+                active: dreamingOn,
+                shortTermCount: 0,
+                longTermCount: 0,
+                promotedCount: 0,
+                dreamingOf: null,
+                nextCycle: null,
               }),
             )
           : nothing}

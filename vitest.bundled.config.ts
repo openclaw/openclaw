@@ -11,4 +11,5 @@ const bundledUnitExcludePatterns = unitTestAdditionalExcludePatterns.filter(
 export default createUnitVitestConfigWithOptions(process.env, {
   includePatterns: bundledPluginDependentUnitTestFiles,
   extraExcludePatterns: bundledUnitExcludePatterns,
+  name: "bundled",
 });

@@ -51,6 +51,8 @@ export function createPluginRecord(
     cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
     webFetchProviderIds: [],
@@ -107,7 +109,7 @@ export function createCustomHook(params: {
 export function createPluginLoadResult(
   overrides: Partial<PluginLoadResult> & Pick<PluginLoadResult, "plugins"> = { plugins: [] },
 ): PluginLoadResult {
-  const { plugins, ...rest } = overrides;
+  const { plugins, realtimeTranscriptionProviders, realtimeVoiceProviders, ...rest } = overrides;
   return {
     plugins,
     diagnostics: [],
@@ -129,6 +131,8 @@ export function createPluginLoadResult(
     commands: [],
     conversationBindingResolvedHandlers: [],
     ...rest,
+    realtimeTranscriptionProviders: realtimeTranscriptionProviders ?? [],
+    realtimeVoiceProviders: realtimeVoiceProviders ?? [],
   };
 }
 

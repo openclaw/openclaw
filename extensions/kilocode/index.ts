@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildPassthroughGeminiSanitizingReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
@@ -7,19 +8,6 @@ import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
 
 const PROVIDER_ID = "kilocode";
-
-function buildKilocodeReplayPolicy(modelId?: string) {
-  const normalizedModelId = modelId?.toLowerCase() ?? "";
-  if (!normalizedModelId.includes("gemini")) {
-    return {};
-  }
-  return {
-    sanitizeThoughtSignatures: {
-      allowBase64Only: true,
-      includeCamelCase: true,
-    },
-  };
-}
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -44,7 +32,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildKilocodeProviderWithDiscovery,
     },
-    buildReplayPolicy: ({ modelId }) => buildKilocodeReplayPolicy(modelId),
+    buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
     wrapStreamFn: (ctx) => {
       const thinkingLevel =
         ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)

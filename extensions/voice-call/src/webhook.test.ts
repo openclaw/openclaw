@@ -1,10 +1,40 @@
 import { request } from "node:http";
+import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { CallRecord, NormalizedEvent } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
+import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+
+const mocks = vi.hoisted(() => {
+  const realtimeTranscriptionProvider: RealtimeTranscriptionProviderPlugin = {
+    id: "openai",
+    label: "OpenAI",
+    aliases: ["openai-realtime"],
+    isConfigured: () => true,
+    resolveConfig: ({ rawConfig }) => rawConfig,
+    createSession: () => ({
+      connect: async () => {},
+      sendAudio: () => {},
+      close: () => {},
+      isConnected: () => true,
+    }),
+  };
+
+  return {
+    getRealtimeTranscriptionProvider: vi.fn<
+      (...args: unknown[]) => RealtimeTranscriptionProviderPlugin | undefined
+    >(() => realtimeTranscriptionProvider),
+    listRealtimeTranscriptionProviders: vi.fn(() => [realtimeTranscriptionProvider]),
+  };
+});
+
+vi.mock("./realtime-transcription.runtime.js", () => ({
+  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
+  listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
+}));
 
 const provider: VoiceCallProvider = {
   name: "mock",
@@ -83,6 +113,48 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("");
   expect(parsed.port).not.toBe("0");
 }
+
+describe("VoiceCallWebhookServer realtime transcription provider selection", () => {
+  it("auto-selects the first registered provider when streaming.provider is unset", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "sk-test", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+    const autoSelectedProvider: RealtimeTranscriptionProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      autoSelectOrder: 5,
+      isConfigured: () => true,
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      createSession: () => ({
+        connect: async () => {},
+        sendAudio: () => {},
+        close: () => {},
+        isConnected: () => true,
+      }),
+    };
+    mocks.getRealtimeTranscriptionProvider.mockReturnValueOnce(undefined);
+    mocks.listRealtimeTranscriptionProviders.mockReturnValueOnce([autoSelectedProvider]);
+
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+    try {
+      await server.start();
+      expect(mocks.getRealtimeTranscriptionProvider).toHaveBeenCalledWith(undefined, undefined);
+      expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(undefined);
+      expect(server.getMediaStreamHandler()).toBeTruthy();
+    } finally {
+      await server.stop();
+    }
+  });
+});
 
 async function runStaleCallReaperCase(params: {
   callAgeMs: number;
@@ -285,6 +357,56 @@ describe("VoiceCallWebhookServer replay handling", () => {
       const response = await postWebhookForm(server, baseUrl, "CallSid=CA123&SpeechResult=hello");
 
       expect(response.status).toBe(200);
+      expect(processEvent).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("returns realtime TwiML for replayed inbound twilio webhooks", async () => {
+    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const twilioProvider: VoiceCallProvider = {
+      ...provider,
+      name: "twilio",
+      verifyWebhook: () => ({ ok: true, isReplay: true, verifiedRequestKey: "twilio:req:replay" }),
+      parseWebhookEvent,
+    };
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({
+      provider: "twilio",
+      inboundPolicy: "allowlist",
+      realtime: {
+        enabled: true,
+        streamPath: "/voice/stream/realtime",
+        tools: [],
+        providers: {},
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
+    server.setRealtimeHandler({
+      buildTwiMLPayload: () => ({
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: '<Response><Connect><Stream url="wss://example.test/voice/stream/realtime/token" /></Connect></Response>',
+      }),
+      getStreamPathPattern: () => "/voice/stream/realtime",
+      handleWebSocketUpgrade: () => {},
+      registerToolHandler: () => {},
+      setPublicUrl: () => {},
+    } as unknown as RealtimeCallHandler);
+
+    try {
+      const baseUrl = await server.start();
+      const response = await postWebhookFormWithHeaders(
+        server,
+        baseUrl,
+        "CallSid=CA123&Direction=inbound&CallStatus=ringing",
+        { "x-twilio-signature": "sig" },
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("<Connect><Stream");
+      expect(parseWebhookEvent).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
     } finally {
       await server.stop();
@@ -625,6 +747,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       manager,
       twilioProvider as unknown as VoiceCallProvider,
     );
+    await server.start();
 
     const mediaHandler = server.getMediaStreamHandler() as unknown as {
       config: {
@@ -717,6 +840,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       manager,
       createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
     );
+    await server.start();
     const handleInboundResponse = vi.fn(async () => {});
     (
       server as unknown as {
@@ -790,6 +914,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       manager,
       createTwilioProvider(clearTtsQueue) as unknown as VoiceCallProvider,
     );
+    await server.start();
 
     try {
       const media = getMediaCallbacks(server);

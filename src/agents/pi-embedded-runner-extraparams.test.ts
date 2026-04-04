@@ -161,11 +161,14 @@ beforeEach(() => {
           params.context.thinkingLevel,
         );
       }
-      if (params.provider === "kimi") {
+      if (params.provider === "test-anthropic-tool-compat") {
         return createAnthropicToolPayloadCompatibilityWrapper(params.context.streamFn, {
           toolSchemaMode: "openai-functions",
           toolChoiceMode: "openai-string-modes",
         });
+      }
+      if (params.provider === "kimi") {
+        return params.context.streamFn;
       }
       if (params.provider === "minimax" || params.provider === "minimax-portal") {
         return createMinimaxFastModeWrapper(
@@ -1222,7 +1225,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("rewrites anthropic tool payloads for Kimi", () => {
+  it("keeps anthropic tool payloads native for Kimi", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1259,22 +1262,16 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.tools).toEqual([
       {
-        type: "function",
-        function: {
-          name: "read",
-          description: "Read file",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
-          },
+        name: "read",
+        description: "Read file",
+        input_schema: {
+          type: "object",
+          properties: { path: { type: "string" } },
+          required: ["path"],
         },
       },
     ]);
-    expect(payloads[0]?.tool_choice).toEqual({
-      type: "function",
-      function: { name: "read" },
-    });
+    expect(payloads[0]?.tool_choice).toEqual({ type: "tool", name: "read" });
   });
 
   it("does not rewrite anthropic tool schema for non-kimi endpoints", () => {
@@ -1377,11 +1374,18 @@ describe("applyExtraParamsToAgent", () => {
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi", "proxy-model", undefined, "low");
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "test-anthropic-tool-compat",
+      "proxy-model",
+      undefined,
+      "low",
+    );
 
     const model = {
       api: "anthropic-messages",
-      provider: "kimi",
+      provider: "test-anthropic-tool-compat",
       id: "proxy-model",
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };

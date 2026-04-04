@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { parseFeishuConversationId } from "../plugin-sdk/feishu-conversation.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -58,6 +59,10 @@ function buildChannelCandidates(
     normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
+  const bundledParentOverrideFallbacks = resolveBundledParentOverrideFallbacks({
+    channel: normalizedChannel,
+    parentConversationId: sessionConversation?.rawId,
+  });
   const parentOverrideFallbacks =
     (normalizedChannel
       ? getChannelPlugin(
@@ -65,7 +70,7 @@ function buildChannelCandidates(
         )?.conversationBindings?.buildModelOverrideParentCandidates?.({
           parentConversationId: sessionConversation?.rawId,
         })
-      : null) ?? [];
+      : null) ?? bundledParentOverrideFallbacks;
   const groupConversationKind =
     normalizeChatType(params.groupChatType ?? undefined) === "channel"
       ? "channel"
@@ -101,6 +106,34 @@ function buildChannelCandidates(
       subjectSlug,
     ),
   };
+}
+
+function resolveBundledParentOverrideFallbacks(params: {
+  channel?: string | null;
+  parentConversationId?: string | null;
+}): string[] {
+  if (params.channel !== "feishu") {
+    return [];
+  }
+  const parsed = parseFeishuConversationId({
+    conversationId: params.parentConversationId ?? "",
+  });
+  if (!parsed) {
+    return [];
+  }
+  switch (parsed.scope) {
+    case "group_topic_sender":
+      return buildChannelKeyCandidates(
+        parsed.topicId ? `${parsed.chatId}:topic:${parsed.topicId}` : undefined,
+        parsed.chatId,
+      );
+    case "group_topic":
+    case "group_sender":
+      return buildChannelKeyCandidates(parsed.chatId);
+    case "group":
+    default:
+      return [];
+  }
 }
 
 export function resolveChannelModelOverride(

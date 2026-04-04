@@ -33,8 +33,10 @@ const providerAuthContractModules = vi.hoisted(() => ({
   openAIIndexModuleUrl: new URL("../../../extensions/openai/index.ts", import.meta.url).href,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth-login", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-login")>();
+vi.mock("openclaw/plugin-sdk/provider-auth-login", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth-login")>(
+    "openclaw/plugin-sdk/provider-auth-login",
+  );
   return {
     ...actual,
     loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
@@ -42,8 +44,10 @@ vi.mock("openclaw/plugin-sdk/provider-auth-login", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+vi.mock("openclaw/plugin-sdk/provider-auth", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
+    "openclaw/plugin-sdk/provider-auth",
+  );
   return {
     ...actual,
     ensureAuthProfileStore: ensureAuthProfileStoreMock,

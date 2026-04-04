@@ -274,8 +274,8 @@ export const baseConfig = (): OpenClawConfig =>
     },
   }) as OpenClawConfig;
 
-vi.mock("@buape/carbon", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@buape/carbon")>();
+vi.mock("@buape/carbon", async () => {
+  const actual = await vi.importActual<typeof import("@buape/carbon")>("@buape/carbon");
   class RateLimitError extends Error {
     status = 429;
     discordCode?: number;

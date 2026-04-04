@@ -1,5 +1,5 @@
-import type { ChannelPlugin } from "../runtime-api.js";
 import type { ResolvedZalouserAccount } from "./accounts.js";
+import type { ChannelPlugin } from "./channel-api.js";
 import { zalouserSetupAdapter } from "./setup-core.js";
 import { zalouserSetupWizard } from "./setup-surface.js";
 import { createZalouserPluginBase } from "./shared.js";

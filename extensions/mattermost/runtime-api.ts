@@ -31,7 +31,7 @@ export {
   isTrustedProxyAddress,
 } from "openclaw/plugin-sdk/core";
 export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
-export { createAccountStatusSink } from "openclaw/plugin-sdk/compat";
+export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export {
   buildModelsProviderData,

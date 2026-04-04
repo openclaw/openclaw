@@ -51,7 +51,7 @@ describe("test-projects args", () => {
       "exec",
       "vitest",
       "--config",
-      "vitest.config.ts",
+      "vitest.unit.config.ts",
       "src/foo.test.ts",
     ]);
   });
@@ -62,8 +62,208 @@ describe("test-projects args", () => {
       "vitest",
       "run",
       "--config",
-      "vitest.config.ts",
+      "vitest.unit.config.ts",
       "src/foo.test.ts",
+    ]);
+  });
+
+  it("routes boundary targets to the boundary config", () => {
+    expect(buildVitestRunPlans(["src/infra/openclaw-root.test.ts"])).toEqual([
+      {
+        config: "vitest.boundary.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/infra/openclaw-root.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes bundled-plugin-dependent unit targets to the bundled config", () => {
+    expect(buildVitestRunPlans(["src/plugins/loader.test.ts"])).toEqual([
+      {
+        config: "vitest.bundled.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugins/loader.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes top-level repo tests to the contracts config", () => {
+    expect(buildVitestRunPlans(["test/appcast.test.ts"])).toEqual([
+      {
+        config: "vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/appcast.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes script tests to the tooling config", () => {
+    expect(buildVitestRunPlans(["src/scripts/test-projects.test.ts"])).toEqual([
+      {
+        config: "vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/scripts/test-projects.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes contract tests to the contracts config", () => {
+    expect(
+      buildVitestRunPlans(["src/plugins/contracts/memory-embedding-provider.contract.test.ts"]),
+    ).toEqual([
+      {
+        config: "vitest.contracts.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugins/contracts/memory-embedding-provider.contract.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes config baseline integration tests to the contracts config", () => {
+    expect(buildVitestRunPlans(["src/config/doc-baseline.integration.test.ts"])).toEqual([
+      {
+        config: "vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/config/doc-baseline.integration.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes command targets to the commands config", () => {
+    expect(buildVitestRunPlans(["src/commands/status.summary.test.ts"])).toEqual([
+      {
+        config: "vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/commands/status.summary.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes auto-reply targets to the auto-reply config", () => {
+    expect(buildVitestRunPlans(["src/auto-reply/reply/get-reply.message-hooks.test.ts"])).toEqual([
+      {
+        config: "vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/reply/get-reply.message-hooks.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes agents targets to the agents config", () => {
+    expect(buildVitestRunPlans(["src/agents/tools/image-tool.test.ts"])).toEqual([
+      {
+        config: "vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/tools/image-tool.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes gateway targets to the gateway config", () => {
+    expect(buildVitestRunPlans(["src/gateway/call.test.ts"])).toEqual([
+      {
+        config: "vitest.gateway.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/gateway/call.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes infra targets to the infra config", () => {
+    expect(buildVitestRunPlans(["src/infra/openclaw-root.test.ts"])).toEqual([
+      {
+        config: "vitest.boundary.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/infra/openclaw-root.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["src/infra/migrations.test.ts"])).toEqual([
+      {
+        config: "vitest.infra.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/infra/migrations.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes acp targets to the acp config", () => {
+    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+      {
+        config: "vitest.acp.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("widens non-test helper file targets to sibling tests inside the routed suite", () => {
+    expect(buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"])).toEqual([
+      {
+        config: "vitest.gateway.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/gateway/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("widens extension helper targets to sibling extension tests", () => {
+    expect(
+      buildVitestRunPlans(["extensions/memory-core/src/memory/test-runtime-mocks.ts"]),
+    ).toEqual([
+      {
+        config: "vitest.extensions.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/memory-core/src/memory/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes ui targets to the ui config", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/views/channels.test.ts"])).toEqual([
+      {
+        config: "vitest.ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/channels.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("widens top-level test helpers to sibling repo tests under contracts", () => {
+    expect(buildVitestRunPlans(["test/helpers/temp-home.ts"])).toEqual([
+      {
+        config: "vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/helpers/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes e2e targets straight to the e2e config", () => {
+    expect(buildVitestRunPlans(["src/commands/models.set.e2e.test.ts"])).toEqual([
+      {
+        config: "vitest.e2e.config.ts",
+        forwardedArgs: ["src/commands/models.set.e2e.test.ts"],
+        includePatterns: null,
+        watchMode: false,
+      },
     ]);
   });
 
@@ -72,7 +272,7 @@ describe("test-projects args", () => {
       buildVitestRunPlans(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]),
     ).toEqual([
       {
-        config: "vitest.channels.config.ts",
+        config: "vitest.extension-channels.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
@@ -80,7 +280,40 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes direct provider extension file targets to the extensions config", () => {
+  it("routes browser extension targets to the extension channel config", () => {
+    expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
+      {
+        config: "vitest.extension-channels.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/browser/index.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes line extension targets to the extension channel config", () => {
+    expect(buildVitestRunPlans(["extensions/line/src/send.test.ts"])).toEqual([
+      {
+        config: "vitest.extension-channels.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/line/src/send.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes direct provider extension file targets to the extension providers config", () => {
+    expect(buildVitestRunPlans(["extensions/openai/openai-codex-provider.test.ts"])).toEqual([
+      {
+        config: "vitest.extension-providers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/openai/openai-codex-provider.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("keeps non-provider extension file targets on the shared extensions config", () => {
     expect(buildVitestRunPlans(["extensions/firecrawl/index.test.ts"])).toEqual([
       {
         config: "vitest.extensions.config.ts",
@@ -101,13 +334,13 @@ describe("test-projects args", () => {
       ]),
     ).toEqual([
       {
-        config: "vitest.config.ts",
+        config: "vitest.unit.config.ts",
         forwardedArgs: ["-t", "mention", "src/config/config-misc.test.ts"],
         includePatterns: null,
         watchMode: false,
       },
       {
-        config: "vitest.channels.config.ts",
+        config: "vitest.extension-channels.config.ts",
         forwardedArgs: ["-t", "mention"],
         includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
@@ -125,7 +358,7 @@ describe("test-projects args", () => {
       "vitest",
       "run",
       "--config",
-      "vitest.channels.config.ts",
+      "vitest.extension-channels.config.ts",
     ]);
     expect(spec?.includePatterns).toEqual([
       "extensions/discord/src/monitor/message-handler.preflight.test.ts",

@@ -55,8 +55,8 @@ export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
 
 function installLifecycleModuleMocks() {
-  vi.doMock(apiModuleId, async (importOriginal) => {
-    const actual = await importOriginal<object>();
+  vi.doMock(apiModuleId, async () => {
+    const actual = await vi.importActual<object>(apiModuleId);
     return {
       ...actual,
       deleteWebhook: lifecycleMocks.deleteWebhookMock,

@@ -18,11 +18,11 @@ function resolveDefaultBase<TModule extends object>(actual: TModule): Record<str
 }
 
 export async function mockNodeBuiltinModule<TModule extends object>(
-  importOriginal: () => Promise<TModule>,
+  loadActual: () => Promise<TModule>,
   factory: MockFactory<TModule>,
   options?: { mirrorToDefault?: boolean },
 ): Promise<TModule> {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   const overrides = resolveMockOverrides(actual, factory);
   const mocked = {
     ...actual,

@@ -10,6 +10,7 @@ export const unitTestIncludePatterns = [
   "ui/src/ui/views/agents-utils.test.ts",
   "ui/src/ui/views/channels.test.ts",
   "ui/src/ui/views/chat.test.ts",
+  "ui/src/ui/views/dreams.test.ts",
   "ui/src/ui/views/usage-render-details.test.ts",
   "ui/src/ui/controllers/agents.test.ts",
   "ui/src/ui/controllers/chat.test.ts",
@@ -39,6 +40,7 @@ export const bundledPluginDependentUnitTestFiles = [
 
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
+  "src/infra/**",
   `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
   "src/browser/**",
   "src/line/**",
@@ -47,6 +49,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
+  "src/scripts/**",
   "src/infra/boundary-path.test.ts",
   "src/infra/git-root.test.ts",
   "src/infra/home-dir.test.ts",
