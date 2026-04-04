@@ -582,6 +582,56 @@ describe("sessions tools", () => {
     expect(details.error).toMatch(/Session not found|No session found/);
   });
 
+  it("sessions_send defaults to the global agent timeout when timeoutSeconds is omitted", async () => {
+    const calls: Array<{ method?: string; params?: unknown; timeoutMs?: number }> = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown; timeoutMs?: number };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-1", status: "accepted", acceptedAt: 1234 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "done" }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    openClawToolsTesting.setDepsForTest({
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+      config: {
+        ...TEST_CONFIG,
+        agents: { defaults: { timeoutSeconds: 123 } },
+      } as OpenClawConfig,
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-default-timeout", {
+      sessionKey: "main",
+      message: "wait",
+    });
+    expect(waited.details).toMatchObject({ status: "ok" });
+
+    const waitCall = calls.find((call) => call.method === "agent.wait");
+    expect(waitCall).toBeDefined();
+    expect(waitCall?.timeoutMs).toBe(125_000);
+  });
+
   it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
