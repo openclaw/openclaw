@@ -143,6 +143,20 @@ const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
+const lazyDreams = createLazy(() => import("./views/dreams.ts"));
+
+function isDreamingEnabled(configValue: Record<string, unknown> | null): boolean {
+  if (!configValue) {
+    return false;
+  }
+  const plugins = configValue.plugins as Record<string, unknown> | undefined;
+  const entries = plugins?.entries as Record<string, unknown> | undefined;
+  const memoryCore = entries?.["memory-core"] as Record<string, unknown> | undefined;
+  const config = memoryCore?.config as Record<string, unknown> | undefined;
+  const dreaming = config?.dreaming as Record<string, unknown> | undefined;
+  const mode = dreaming?.mode;
+  return typeof mode === "string" && mode !== "off";
+}
 
 let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -509,8 +523,13 @@ export function renderApp(state: AppViewState) {
             <div class="sidebar-shell__body">
               <nav class="sidebar-nav">
                 ${TAB_GROUPS.map((group) => {
+                  const dreamingOn = isDreamingEnabled(configValue);
+                  const visibleTabs = group.tabs.filter((tab) => tab !== "dreams" || dreamingOn);
+                  if (visibleTabs.length === 0) {
+                    return nothing;
+                  }
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+                  const hasActiveTab = visibleTabs.some((tab) => tab === state.tab);
                   const showItems = navCollapsed || hasActiveTab || !isGroupCollapsed;
 
                   return html`
@@ -537,7 +556,7 @@ export function renderApp(state: AppViewState) {
                           `
                         : nothing}
                       <div class="nav-section__items">
-                        ${group.tabs.map((tab) =>
+                        ${visibleTabs.map((tab) =>
                           renderTab(state, tab, { collapsed: navCollapsed }),
                         )}
                       </div>
@@ -2002,6 +2021,18 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadLogs(state, { reset: true }),
                 onExport: (lines, label) => state.exportLogs(lines, label),
                 onScroll: (event) => state.handleLogsScroll(event),
+              }),
+            )
+          : nothing}
+        ${state.tab === "dreams"
+          ? lazyRender(lazyDreams, (m) =>
+              m.renderDreams({
+                active: true,
+                shortTermCount: 0,
+                longTermCount: 0,
+                promotedCount: 0,
+                dreamingOf: null,
+                nextCycle: null,
               }),
             )
           : nothing}
