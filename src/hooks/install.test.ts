@@ -16,6 +16,7 @@ import {
   installHooksFromNpmSpec,
   installHooksFromPath,
 } from "./install.js";
+import * as hookInstallRuntime from "./install.runtime.js";
 
 const fixtureRoot = path.join(process.cwd(), ".tmp", `openclaw-hook-install-${randomUUID()}`);
 const sharedArchiveDir = path.join(fixtureRoot, "_archives");
@@ -327,6 +328,44 @@ describe("installHooksFromPath", () => {
 });
 
 describe("installHooksFromNpmSpec", () => {
+  it("forwards dangerous force unsafe install through npm-spec archive params", async () => {
+    const installFromValidatedNpmSpecArchiveSpy = vi
+      .spyOn(hookInstallRuntime, "installFromValidatedNpmSpecArchive")
+      .mockImplementation(
+        async (
+          params: Parameters<typeof hookInstallRuntime.installFromValidatedNpmSpecArchive>[0],
+        ) => {
+          expect(params.archiveInstallParams).toEqual(
+            expect.objectContaining({
+              dangerouslyForceUnsafeInstall: true,
+            }),
+          );
+          return {
+            ok: true,
+            hookPackId: "test-hooks",
+            hooks: ["one-hook"],
+            targetDir: "/tmp/hooks/test-hooks",
+            version: "0.0.1",
+          };
+        },
+      );
+
+    try {
+      const result = await installHooksFromNpmSpec({
+        spec: "@openclaw/test-hooks@0.0.1",
+        dangerouslyForceUnsafeInstall: true,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.hookPackId).toBe("test-hooks");
+    } finally {
+      installFromValidatedNpmSpecArchiveSpy.mockRestore();
+    }
+  });
+
   it("uses --ignore-scripts for npm pack and cleans up temp dir", async () => {
     const stateDir = makeTempDir();
 
