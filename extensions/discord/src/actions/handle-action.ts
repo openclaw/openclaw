@@ -90,6 +90,35 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "upload-file") {
+    const to = readStringParam(params, "to", { required: true });
+    const mediaUrl =
+      readStringParam(params, "media", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "filePath", { trim: false });
+    if (!mediaUrl) {
+      throw new Error("upload-file requires filePath, path, or media");
+    }
+    const filename = readStringParam(params, "filename");
+    const content =
+      readStringParam(params, "message", { allowEmpty: true }) ??
+      readStringParam(params, "initialComment", { allowEmpty: true });
+    const replyTo = readStringParam(params, "replyTo");
+    return await handleDiscordAction(
+      {
+        action: "sendMessage",
+        accountId: accountId ?? undefined,
+        to,
+        content: content ?? undefined,
+        mediaUrl,
+        filename: filename ?? undefined,
+        replyTo: replyTo ?? undefined,
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
   if (action === "poll") {
     const to = readStringParam(params, "to", { required: true });
     const question = readStringParam(params, "pollQuestion", {
