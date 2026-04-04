@@ -2,10 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import {
-  findCommandByNativeName,
-  resolveCommandArgChoices,
-} from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,6 +33,12 @@ const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
 const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
   vi.fn<ResolveConfiguredBindingRoute>(() => createUnboundConfiguredRouteResult()),
 );
+const providerThinkingMocks = vi.hoisted(() => ({
+  resolveProviderBinaryThinking: vi.fn(),
+  resolveProviderDefaultThinkingLevel: vi.fn(),
+  resolveProviderXHighThinking: vi.fn(),
+}));
+const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
 
 type ConfiguredBindingRoute = ConfiguredBindingRouteResult;
 type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRoute["bindingResolution"]>;
@@ -87,16 +89,75 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   );
 });
 
+vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+  resolveDefaultModelForAgent: (params: { cfg: ReturnType<typeof loadConfig> }) => {
+    const configuredModel = params.cfg.agents?.defaults?.model;
+    const primary =
+      typeof configuredModel === "string"
+        ? configuredModel.trim()
+        : (configuredModel?.primary?.trim() ?? "");
+    const slashIndex = primary.indexOf("/");
+    if (slashIndex > 0 && slashIndex < primary.length - 1) {
+      return {
+        provider: primary.slice(0, slashIndex).trim().toLowerCase(),
+        model: primary.slice(slashIndex + 1).trim(),
+      };
+    }
+    return {
+      provider: "anthropic",
+      model: "claude-sonnet-4.5",
+    };
+  },
+}));
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
+  buildModelsProviderData: buildModelsProviderDataMock,
+}));
+
 const STORE_PATH = path.join(
   os.tmpdir(),
   `openclaw-discord-think-autocomplete-${process.pid}.json`,
 );
 const SESSION_KEY = "agent:main:main";
+let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
+let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
+
+async function loadDiscordThinkAutocompleteModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../../../../src/plugins/provider-thinking.js", () => ({
+    resolveProviderBinaryThinking: providerThinkingMocks.resolveProviderBinaryThinking,
+    resolveProviderDefaultThinkingLevel: providerThinkingMocks.resolveProviderDefaultThinkingLevel,
+    resolveProviderXHighThinking: providerThinkingMocks.resolveProviderXHighThinking,
+  }));
+  const commandAuth = await import("openclaw/plugin-sdk/command-auth");
+  const nativeCommandUi = await import("./native-command-ui.js");
+  return {
+    findCommandByNativeName: commandAuth.findCommandByNativeName,
+    resolveCommandArgChoices: commandAuth.resolveCommandArgChoices,
+    resolveDiscordNativeChoiceContext: nativeCommandUi.resolveDiscordNativeChoiceContext,
+  };
+}
 
 describe("discord native /think autocomplete", () => {
   beforeAll(async () => {
-    ({ resolveDiscordNativeChoiceContext } = await import("./native-command-ui.js"));
+    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
+      provider === "openai-codex" && context.modelId === "gpt-5.4" ? true : undefined,
+    );
+    buildModelsProviderDataMock.mockResolvedValue({
+      byProvider: new Map<string, Set<string>>(),
+      providers: [],
+      resolvedDefault: {
+        provider: "anthropic",
+        model: "claude-sonnet-4.5",
+      },
+      modelNames: new Map<string, string>(),
+    });
+    ({ findCommandByNativeName, resolveCommandArgChoices, resolveDiscordNativeChoiceContext } =
+      await loadDiscordThinkAutocompleteModulesForTest());
   });
 
   beforeEach(() => {
@@ -105,6 +166,14 @@ describe("discord native /think autocomplete", () => {
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createUnboundConfiguredRouteResult());
+    providerThinkingMocks.resolveProviderBinaryThinking.mockReset();
+    providerThinkingMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReset();
+    providerThinkingMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
+    providerThinkingMocks.resolveProviderXHighThinking.mockReset();
+    providerThinkingMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
+      provider === "openai-codex" && context.modelId === "gpt-5.4" ? true : undefined,
+    );
     fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
     fs.writeFileSync(
       STORE_PATH,
