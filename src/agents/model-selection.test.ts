@@ -704,6 +704,27 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
+    it("should infer the unique provider from configured models for bare defaults", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "claude-opus-4-6" },
+            models: {
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
     it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
