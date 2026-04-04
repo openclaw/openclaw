@@ -26,11 +26,15 @@ async function loadMaintenanceModule(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, unknown>;
   acpEntry?: unknown;
+  activeCronJobIds?: string[];
+  activeRunIds?: string[];
 }) {
   vi.resetModules();
 
   const sessionStore = params.sessionStore ?? {};
   const acpEntry = params.acpEntry;
+  const activeCronJobIds = new Set(params.activeCronJobIds ?? []);
+  const activeRunIds = new Set(params.activeRunIds ?? []);
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
   vi.doMock("../acp/runtime/session-meta.js", () => ({
@@ -43,6 +47,15 @@ async function loadMaintenanceModule(params: {
   vi.doMock("../config/sessions.js", () => ({
     loadSessionStore: () => sessionStore,
     resolveStorePath: () => "",
+  }));
+
+  vi.doMock("../cron/active-jobs.js", () => ({
+    isCronJobActive: (jobId: string) => activeCronJobIds.has(jobId),
+  }));
+
+  vi.doMock("../infra/agent-events.js", () => ({
+    getAgentRunContext: (runId: string) =>
+      activeRunIds.has(runId) ? { sessionKey: "main" } : undefined,
   }));
 
   vi.doMock("./runtime-internal.js", () => ({
@@ -90,22 +103,11 @@ async function loadMaintenanceModule(params: {
 }
 
 describe("task-registry maintenance issue #60299", () => {
-  it("marks cron tasks with no child session key lost after the grace period", async () => {
-    const task = makeStaleTask({
-      runtime: "cron",
-      childSessionKey: undefined,
-    });
-
-    const { mod, currentTasks } = await loadMaintenanceModule({ tasks: [task] });
-
-    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
-    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
-  });
-
-  it("marks cron tasks lost even if their transient child key still exists in the session store", async () => {
+  it("marks stale cron tasks lost once the runtime no longer tracks the job as active", async () => {
     const childSessionKey = "agent:main:slack:channel:test-channel";
     const task = makeStaleTask({
       runtime: "cron",
+      sourceId: "cron-job-1",
       childSessionKey,
     });
 
@@ -118,10 +120,28 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });
 
-  it("treats cli tasks backed only by a persistent chat session as stale", async () => {
+  it("keeps active cron tasks live while the cron runtime still owns the job", async () => {
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-2",
+      childSessionKey: undefined,
+    });
+
+    const { mod, currentTasks } = await loadMaintenanceModule({
+      tasks: [task],
+      activeCronJobIds: ["cron-job-2"],
+    });
+
+    expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("marks chat-backed cli tasks lost after the owning run context disappears", async () => {
     const channelKey = "agent:main:slack:channel:C1234567890";
     const task = makeStaleTask({
       runtime: "cli",
+      sourceId: "run-chat-cli-stale",
+      runId: "run-chat-cli-stale",
       ownerKey: "agent:main:main",
       requesterSessionKey: channelKey,
       childSessionKey: channelKey,
@@ -136,18 +156,21 @@ describe("task-registry maintenance issue #60299", () => {
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });
 
-  it("keeps subagent tasks live while their child session still exists", async () => {
-    const childKey = "agent:main:subagent:abc123";
+  it("keeps chat-backed cli tasks live while the owning run context is still active", async () => {
+    const channelKey = "agent:main:slack:channel:C1234567890";
     const task = makeStaleTask({
-      runtime: "subagent",
+      runtime: "cli",
+      sourceId: "run-chat-cli-live",
+      runId: "run-chat-cli-live",
       ownerKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey: childKey,
+      requesterSessionKey: channelKey,
+      childSessionKey: channelKey,
     });
 
     const { mod, currentTasks } = await loadMaintenanceModule({
       tasks: [task],
-      sessionStore: { [childKey]: { updatedAt: Date.now() } },
+      sessionStore: { [channelKey]: { updatedAt: Date.now() } },
+      activeRunIds: ["run-chat-cli-live"],
     });
 
     expect(await mod.runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
