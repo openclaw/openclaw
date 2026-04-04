@@ -833,6 +833,36 @@ describe("cron cli", () => {
     });
   });
 
+  it("treats --deliver as announce-equivalent for webhook thread delivery edits", async () => {
+    resetGatewayMock();
+    mockCronListPages([
+      [makeCronJob({ delivery: { mode: "webhook", to: "https://example.invalid/cron" } })],
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--deliver",
+        "--channel",
+        "telegram",
+        "--to",
+        "19098680",
+        "--thread-id",
+        "48",
+      ],
+      { from: "user" },
+    );
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.delivery).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "19098680:topic:48",
+    });
+  });
+
   it("looks up exact cron edit jobs across pages with stable ordering", async () => {
     resetGatewayMock();
     mockCronListPages([

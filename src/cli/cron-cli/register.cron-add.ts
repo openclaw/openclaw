@@ -206,10 +206,12 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.account.trim()
               : undefined;
           const threadInputs = normalizeThreadIdInputs(opts);
+          const explicitChannelProvidedInAdd =
+            typeof opts.channel === "string" && opts.channel !== "last";
 
           if (threadInputs.hasThreadId) {
             assertValidThreadIdValue(threadInputs.threadId);
-            if (threadInputs.explicitChannelProvided && !threadInputs.explicitChannel) {
+            if (explicitChannelProvidedInAdd && !threadInputs.explicitChannel) {
               throw new Error("--thread-id requires --channel telegram");
             }
             if (threadInputs.explicitToProvided && !threadInputs.explicitTo) {

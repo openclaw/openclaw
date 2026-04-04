@@ -143,13 +143,17 @@ export function registerCronEditCommand(cron: Command) {
           }
           const patch: Record<string, unknown> = {};
           const threadInputs = normalizeThreadIdInputs(opts);
-          let existingJob: CronJob | undefined;
+          let existingJob: CronJob | null | undefined;
           const getExistingJob = async () => {
             if (existingJob !== undefined) {
+              if (existingJob === null) {
+                throw new Error(`unknown cron job id: ${id}`);
+              }
               return existingJob;
             }
             existingJob = await findCronJobById(id, opts);
             if (!existingJob) {
+              existingJob = null;
               throw new Error(`unknown cron job id: ${id}`);
             }
             return existingJob;
@@ -322,7 +326,7 @@ export function registerCronEditCommand(cron: Command) {
             if (effectiveDeliveryMode === "none") {
               throw new Error("--thread-id is not supported with --no-deliver");
             }
-            if (existingDelivery.mode === "webhook" && !opts.announce) {
+            if (existingDelivery.mode === "webhook" && effectiveDeliveryMode !== "announce") {
               throw new Error(
                 "--thread-id is not supported for webhook delivery jobs unless --announce is set",
               );
