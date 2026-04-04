@@ -1,9 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
-} from "openclaw/plugin-sdk/provider-moonshot";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
@@ -18,6 +15,7 @@ const PROVIDER_ID = "moonshot";
 const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
 });
+const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -63,13 +61,7 @@ export default defineSingleProviderPluginEntry({
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
-    wrapStreamFn: (ctx) => {
-      const thinkingType = resolveMoonshotThinkingType({
-        configuredThinking: ctx.extraParams?.thinking,
-        thinkingLevel: ctx.thinkingLevel,
-      });
-      return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
-    },
+    ...MOONSHOT_THINKING_STREAM_HOOKS,
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);
