@@ -848,6 +848,8 @@ Notes:
 
 - `--token` and `--password` are mutually exclusive.
 - The setup code carries a short-lived bootstrap token, not the shared gateway token/password.
+- Built-in bootstrap handoff keeps the primary node token at `scopes: []`.
+- Any handed-off operator bootstrap token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`.
 - `--remote` can use `gateway.remote.url` or the active Tailscale Serve/Funnel URL.
 - After scanning, approve the request with `openclaw devices list` / `openclaw devices approve <requestId>`.
 

@@ -120,6 +120,9 @@ Common signatures:
 - That cached-token retry reuses the cached scope set stored with the paired
   device token. Explicit `deviceToken` / explicit `scopes` callers keep their
   requested scope set instead.
+- Outside that retry path, connect auth precedence is explicit shared
+  token/password first, then explicit `deviceToken`, then stored device token,
+  then bootstrap token.
 - On the async Tailscale Serve Control UI path, failed attempts for the same
   `{scope, ip}` are serialized before the limiter records the failure. Two bad
   concurrent retries from the same client can therefore surface `retry later`
