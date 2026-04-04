@@ -225,7 +225,19 @@ describe("resolveContextTokensForModel", () => {
         models: {
           providers: {
             "openai-codex": {
-              models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 160_000 }],
+              baseUrl: "https://chatgpt.com/backend-api",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "gpt-5.4",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_050_000,
+                  contextTokens: 160_000,
+                  maxTokens: 128_000,
+                },
+              ],
             },
           },
         },

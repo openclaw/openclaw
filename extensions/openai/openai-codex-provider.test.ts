@@ -94,7 +94,7 @@ describe("openai codex provider", () => {
       provider: "openai-codex",
       modelId: "gpt-5.4",
       modelRegistry: {
-        find: vi.fn((providerId: string, modelId: string) => {
+        find: (providerId: string, modelId: string) => {
           if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
             return {
               id: "gpt-5.3-codex",
@@ -110,9 +110,9 @@ describe("openai codex provider", () => {
             };
           }
           return null;
-        }),
-      },
-    });
+        },
+      } as never,
+    } as never);
 
     expect(model).toMatchObject({
       id: "gpt-5.4",
@@ -126,19 +126,15 @@ describe("openai codex provider", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const entries = provider.augmentModelCatalog?.({
-      provider: "openai-codex",
+      env: process.env,
       entries: [
         {
           id: "gpt-5.3-codex",
           name: "gpt-5.3-codex",
           provider: "openai-codex",
-          api: "openai-codex-responses",
-          baseUrl: "https://chatgpt.com/backend-api",
           reasoning: true,
           input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 272_000,
-          maxTokens: 128_000,
         },
       ],
     });
