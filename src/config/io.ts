@@ -461,8 +461,10 @@ function resolveGatewayMode(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// Use JSON cloning instead of structuredClone to keep memory within V8's
+// managed heap. Config values are pure JSON data. See #45438.
 function cloneUnknown<T>(value: T): T {
-  return structuredClone(value);
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function createMergePatch(base: unknown, target: unknown): unknown {

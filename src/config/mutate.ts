@@ -66,7 +66,8 @@ export async function mutateConfigFile<T = void>(params: {
   const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);
   const baseConfig = params.base === "runtime" ? snapshot.runtimeConfig : snapshot.sourceConfig;
-  const draft = structuredClone(baseConfig) as OpenClawConfig;
+  // Use JSON cloning instead of structuredClone — see #45438.
+  const draft = JSON.parse(JSON.stringify(baseConfig)) as OpenClawConfig;
   const result = (await params.mutate(draft, { snapshot, previousHash })) as T | undefined;
   await writeConfigFile(draft, {
     ...writeOptions,

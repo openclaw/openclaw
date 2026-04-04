@@ -73,16 +73,23 @@ const preparedSnapshotRefreshContext = new WeakMap<
   SecretsRuntimeRefreshContext
 >();
 
+// Use JSON cloning instead of structuredClone to keep memory within V8's
+// managed heap. Snapshot data is pure JSON (configs, auth stores, web tools).
+// See #45438.
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
-    sourceConfig: structuredClone(snapshot.sourceConfig),
-    config: structuredClone(snapshot.config),
+    sourceConfig: cloneJson(snapshot.sourceConfig),
+    config: cloneJson(snapshot.config),
     authStores: snapshot.authStores.map((entry) => ({
       agentDir: entry.agentDir,
-      store: structuredClone(entry.store),
+      store: cloneJson(entry.store),
     })),
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
-    webTools: structuredClone(snapshot.webTools),
+    webTools: cloneJson(snapshot.webTools),
   };
 }
 
@@ -171,8 +178,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const migrated = migrateLegacyConfig(params.config);
   const migratedConfig = migrated.config ?? migrateLegacyXSearchConfig(params.config).config;
-  const sourceConfig = structuredClone(migratedConfig);
-  const resolvedConfig = structuredClone(migratedConfig);
+  const sourceConfig = cloneJson(migratedConfig);
+  const resolvedConfig = cloneJson(migratedConfig);
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
     resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv });
@@ -195,7 +202,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
   if (includeAuthStoreRefs) {
     for (const agentDir of candidateDirs) {
-      const store = structuredClone(loadAuthStore(agentDir));
+      const store = cloneJson(loadAuthStore(agentDir));
       collectAuthStoreAssignments({
         store,
         context,
@@ -289,7 +296,7 @@ export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | nu
   if (!activeSnapshot) {
     return null;
   }
-  return structuredClone(activeSnapshot.webTools);
+  return cloneJson(activeSnapshot.webTools);
 }
 
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {

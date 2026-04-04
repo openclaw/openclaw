@@ -478,7 +478,7 @@ function gatewaySecretInputPathCanWin(params: {
     return false;
   }
   const sentinel = `__OPENCLAW_GATEWAY_SECRET_REF_PROBE_${params.path.replaceAll(".", "_")}__`;
-  const probeConfig = structuredClone(params.config);
+  const probeConfig = JSON.parse(JSON.stringify(params.config)) as OpenClawConfig;
   for (const candidatePath of ALL_GATEWAY_SECRET_INPUT_PATHS) {
     if (!hasConfiguredGatewaySecretRef(probeConfig, candidatePath)) {
       continue;
@@ -595,7 +595,7 @@ async function resolvePreferredGatewaySecretInputs(params: {
       continue;
     }
     if (nextConfig === params.config) {
-      nextConfig = structuredClone(params.config);
+      nextConfig = JSON.parse(JSON.stringify(params.config)) as OpenClawConfig;
     }
     try {
       const resolvedValue = await resolveConfiguredGatewaySecretInput({
@@ -645,7 +645,7 @@ async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
         throw error;
       }
       if (resolvedConfig === params.context.config) {
-        resolvedConfig = structuredClone(params.context.config);
+        resolvedConfig = JSON.parse(JSON.stringify(params.context.config)) as OpenClawConfig;
       }
       const resolvedValue = await resolveConfiguredGatewaySecretInput({
         config: resolvedConfig,
