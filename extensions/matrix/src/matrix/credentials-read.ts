@@ -21,10 +21,12 @@ export type MatrixStoredCredentials = {
   lastUsedAt?: string;
 };
 
+type MatrixCredentialsSource = "current" | "legacy";
+
 type MatrixCredentialsFileLoadResult =
   | {
       kind: "loaded";
-      source: "current" | "legacy";
+      source: MatrixCredentialsSource;
       credentials: MatrixStoredCredentials | null;
     }
   | {
@@ -88,7 +90,7 @@ function parseMatrixCredentialsFile(filePath: string): MatrixStoredCredentials |
 
 function loadMatrixCredentialsFile(
   filePath: string,
-  source: "current" | "legacy",
+  source: MatrixCredentialsSource,
 ): MatrixCredentialsFileLoadResult {
   try {
     return {
@@ -183,9 +185,7 @@ export function clearMatrixCredentials(
       continue;
     }
     try {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
+      fs.unlinkSync(filePath);
     } catch {
       // ignore
     }
