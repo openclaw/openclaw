@@ -487,6 +487,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         to: "chat_1",
         mediaUrl: "https://example.com/image.png",
         replyToMessageId: "om_thread_1",
+        replyInThread: true,
         accountId: "main",
       }),
     );

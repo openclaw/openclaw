@@ -258,6 +258,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: accountId ?? undefined,
             mediaLocalRoots,
             replyToMessageId,
+            replyInThread,
           });
         } catch (err) {
           // Log the error for debugging
