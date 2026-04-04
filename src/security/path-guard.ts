@@ -40,7 +40,7 @@ function toPosixPath(value: string): string {
 function escapeMinimatchLiteralPrefix(prefix: string): string {
   // Escape minimatch/glob metacharacters in a literal filesystem prefix.
   // We only escape the realpath-derived prefix, never the user-authored glob remainder.
-  return prefix.replace(/[\\*?\[\]{}()!+@]/g, (ch) => `\\${ch}`);
+  return prefix.replace(/[][\\*?{}()!+@]/g, (ch) => `\\${ch}`);
 }
 
 function isPathInside(parent: string, child: string): boolean {
