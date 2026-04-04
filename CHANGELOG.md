@@ -104,6 +104,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/watchdog: reset watchdog timeout after reconnect so quiet channels no longer enter a tight reconnect loop from stale message timestamps carried across connection runs. (#60007) Thanks @MonkeyLeeT.
 - Agents/fallback: persist selected fallback overrides before retry attempts start, prefer persisted overrides during live-session reconciliation, and keep provider-scoped auth-profile failover from snapping retries back to stale primary selections.
 - Agents/MCP: sort MCP tools deterministically by name so the tools block in API requests is stable across turns, preventing unnecessary prompt-cache busting from non-deterministic `listTools()` order. (#58037) Thanks @bcherny.
+- Infra/json-file: preserve symlink-backed JSON stores and Windows overwrite fallback when atomically saving small sync JSON state files. (#60589) Thanks @gumadeiras.
 
 ## 2026.4.2
 
