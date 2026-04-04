@@ -21,7 +21,7 @@ import {
   formatPairingApproveHint,
   resolveInboundDirectDmAccessWithRuntime,
   type ChannelPlugin,
-} from "../runtime-api.js";
+} from "./channel-api.js";
 import type { NostrProfile } from "./config-schema.js";
 import { NostrConfigSchema } from "./config-schema.js";
 import type { MetricEvent, MetricsSnapshot } from "./metrics.js";
