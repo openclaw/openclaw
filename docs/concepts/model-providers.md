@@ -126,7 +126,11 @@ Current bundled examples:
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
   policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
-  policy, binary-thinking/live-model policy, and usage auth + quota fetching
+  policy, binary-thinking/live-model policy, and usage auth + quota fetching;
+  unknown `glm-5*` ids synthesize from the bundled `glm-4.7` template
+- `xai`: native Responses transport normalization, `/fast` alias rewrites for
+  Grok fast variants, default `tool_stream`, and xAI-specific tool-schema /
+  reasoning-payload cleanup
 - `mistral`: plugin-owned capability metadata
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
@@ -369,6 +373,12 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - BytePlus: `byteplus` (`BYTEPLUS_API_KEY`)
 - Example model: `byteplus-plan/ark-code-latest`
 - xAI: `xai` (`XAI_API_KEY`)
+  - Native bundled xAI requests use the xAI Responses path
+  - `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`,
+    `grok-4`, and `grok-4-0709` to their `*-fast` variants
+  - `tool_stream` defaults on; set
+    `agents.defaults.models["xai/<model>"].params.tool_stream` to `false` to
+    disable it
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - Example model: `mistral/mistral-large-latest`
 - CLI: `openclaw onboard --auth-choice mistral-api-key`
