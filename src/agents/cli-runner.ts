@@ -73,8 +73,8 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
         throw err;
       }
       const message = err instanceof Error ? err.message : String(err);
-      if (isFailoverErrorMessage(message)) {
-        const reason = classifyFailoverReason(message) ?? "unknown";
+      if (isFailoverErrorMessage(message, { provider: params.provider })) {
+        const reason = classifyFailoverReason(message, { provider: params.provider }) ?? "unknown";
         const status = resolveFailoverStatus(reason);
         throw new FailoverError(message, {
           reason,
