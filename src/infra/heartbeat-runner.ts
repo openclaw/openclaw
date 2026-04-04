@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -77,7 +78,13 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
+import {
+  type SystemEvent,
+  drainSystemEventEntries,
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+} from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -195,6 +202,43 @@ function resolveHeartbeatSession(
     return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
   }
 
+  // Configured heartbeat session takes priority over the originating
+  // (forced) session key.  System-event-triggered heartbeats pass the
+  // originating DM session as forcedSessionKey, but the user's explicit
+  // heartbeat.session config should always win.
+  const trimmed = heartbeat?.session?.trim() ?? "";
+  if (trimmed) {
+    const normalized = trimmed.toLowerCase();
+    if (normalized === "main" || normalized === "global") {
+      return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    }
+    if (normalized !== "main" && normalized !== "global") {
+      const candidate = toAgentStoreSessionKey({
+        agentId: resolvedAgentId,
+        requestKey: trimmed,
+        mainKey: cfg.session?.mainKey,
+      });
+      const canonical = canonicalizeMainSessionAlias({
+        cfg,
+        agentId: resolvedAgentId,
+        sessionKey: candidate,
+      });
+      if (canonical !== "global") {
+        const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
+        if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          return {
+            sessionKey: canonical,
+            storePath,
+            store,
+            entry: store[canonical],
+          };
+        }
+      }
+    }
+  }
+
+  // Fall back to the originating session when no explicit heartbeat
+  // session is configured.
   const forced = forcedSessionKey?.trim();
   if (forced) {
     const forcedCandidate = toAgentStoreSessionKey({
@@ -217,38 +261,6 @@ function resolveHeartbeatSession(
           entry: store[forcedCanonical],
         };
       }
-    }
-  }
-
-  const trimmed = heartbeat?.session?.trim() ?? "";
-  if (!trimmed) {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
-  }
-
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "main" || normalized === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
-  }
-
-  const candidate = toAgentStoreSessionKey({
-    agentId: resolvedAgentId,
-    requestKey: trimmed,
-    mainKey: cfg.session?.mainKey,
-  });
-  const canonical = canonicalizeMainSessionAlias({
-    cfg,
-    agentId: resolvedAgentId,
-    sessionKey: candidate,
-  });
-  if (canonical !== "global") {
-    const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
-    if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
-      return {
-        sessionKey: canonical,
-        storePath,
-        store,
-        entry: store[canonical],
-      };
     }
   }
 
@@ -409,6 +421,18 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   skipReason?: HeartbeatSkipReason;
 };
 
+// Returns true when a system event is session-scoped and should NOT be migrated
+// to the heartbeat session. All other events (exec, cron, hook, wake,
+// notifications, watchdog, etc.) are migrated so they are visible in the
+// session where the heartbeat actually runs.
+function isSessionScopedEvent(event: SystemEvent): boolean {
+  const key = event.contextKey ?? "";
+  // Only session-maintenance events are session-scoped. All other events
+  // (including untagged ones) are migrated to the heartbeat session so
+  // wake-trigger payloads are never lost.
+  return key === "session-maintenance" || key.startsWith("session-maintenance:");
+}
+
 function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
   const reasonKind = resolveHeartbeatReasonKind(reason);
   return {
@@ -432,6 +456,71 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
+
+  // When the resolved heartbeat session differs from the originating session
+  // (e.g. system-event-triggered heartbeat routed to a dedicated heartbeat
+  // session), migrate all events to the heartbeat session so they are visible
+  // where the heartbeat actually runs. Only session-scoped events (like
+  // session-maintenance warnings) stay in the originating session.
+  //
+  // Migration state is tracked so events can be restored to the originating
+  // session if the heartbeat ends up being skipped (e.g. empty HEARTBEAT.md).
+  const originatingSessionKey = params.forcedSessionKey?.trim();
+  let migratedEvents: SystemEvent[] = [];
+  let preExistingHeartbeatEvents: SystemEvent[] = [];
+  const migrationId = crypto.randomUUID();
+  if (originatingSessionKey && originatingSessionKey !== session.sessionKey) {
+    const originEvents = drainSystemEventEntries(originatingSessionKey);
+    const sessionScoped: SystemEvent[] = [];
+    for (const event of originEvents) {
+      if (isSessionScopedEvent(event)) {
+        sessionScoped.push(event);
+      } else {
+        migratedEvents.push(event);
+      }
+    }
+
+    // Re-enqueue session-scoped events back into the originating session so
+    // they remain visible in the user's conversation.
+    for (const event of sessionScoped) {
+      enqueueSystemEvent(event.text, {
+        sessionKey: originatingSessionKey,
+        contextKey: event.contextKey,
+        deliveryContext: event.deliveryContext,
+        trusted: event.trusted,
+        skipDedup: true,
+      });
+    }
+
+    // Drain destination events first so we can rebuild the queue with
+    // pre-existing events followed by migrated events.  skipDedup prevents
+    // the consecutive-duplicate guard from dropping a migrated event whose
+    // text happens to match the destination queue's tail.  Migrated events
+    // are tagged with __migrated so skip-restore can identify them by stable
+    // identity instead of key+text matching.
+    preExistingHeartbeatEvents = drainSystemEventEntries(session.sessionKey);
+    for (const event of preExistingHeartbeatEvents) {
+      enqueueSystemEvent(event.text, {
+        sessionKey: session.sessionKey,
+        contextKey: event.contextKey,
+        deliveryContext: event.deliveryContext,
+        trusted: event.trusted,
+        skipDedup: true,
+        ...(event.__migrated ? { __migrated: event.__migrated } : {}),
+      });
+    }
+    for (const event of migratedEvents) {
+      enqueueSystemEvent(event.text, {
+        sessionKey: session.sessionKey,
+        contextKey: event.contextKey,
+        deliveryContext: event.deliveryContext,
+        trusted: event.trusted,
+        skipDedup: true,
+        __migrated: migrationId,
+      });
+    }
+  }
+
   const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
@@ -462,6 +551,44 @@ async function resolveHeartbeatPreflight(params: {
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent)) {
+      // Restore migrated events to the originating session — the heartbeat
+      // won't run, so leaving them in the heartbeat session would orphan them.
+      //
+      // Instead of draining the entire destination queue and rebuilding it
+      // from preExistingHeartbeatEvents + migratedEvents, we compute a diff:
+      // only remove the events we migrated, leaving any events that arrived
+      // concurrently (between the earlier enqueue and the fs.readFile await)
+      // intact.
+      if (migratedEvents.length > 0 && originatingSessionKey) {
+        const currentDestEvents = drainSystemEventEntries(session.sessionKey);
+
+        // Re-enqueue events that were NOT migrated by THIS run.  Events
+        // tagged with a different migrationId (from a prior failed run) are
+        // left intact so they are not silently lost.
+        for (const event of currentDestEvents) {
+          if (event.__migrated !== migrationId) {
+            enqueueSystemEvent(event.text, {
+              sessionKey: session.sessionKey,
+              contextKey: event.contextKey,
+              deliveryContext: event.deliveryContext,
+              trusted: event.trusted,
+              skipDedup: true,
+              ...(event.__migrated ? { __migrated: event.__migrated } : {}),
+            });
+          }
+        }
+
+        // Restore migrated events to the originating session.
+        for (const event of migratedEvents) {
+          enqueueSystemEvent(event.text, {
+            sessionKey: originatingSessionKey,
+            contextKey: event.contextKey,
+            deliveryContext: event.deliveryContext,
+            trusted: event.trusted,
+            skipDedup: true,
+          });
+        }
+      }
       return {
         ...basePreflight,
         skipReason: "empty-heartbeat-file",

@@ -137,7 +137,7 @@ export const systemHandlers: GatewayRequestHandlers = {
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      enqueueSystemEvent(text, { sessionKey, contextKey: "system" });
     }
     broadcastPresenceSnapshot({
       broadcast: context.broadcast,
