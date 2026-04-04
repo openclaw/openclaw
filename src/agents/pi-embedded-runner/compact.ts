@@ -63,6 +63,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
+import { resolveEffectiveCompaction } from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -286,8 +287,14 @@ export async function compactEmbeddedPiSessionDirect(
     workspaceDir: resolvedWorkspace,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
-  // Resolve compaction model: prefer config override, then fall back to caller-supplied model
-  const compactionModelOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
+  // Resolve session agent ID early for per-agent compaction overrides
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  // Resolve compaction model: prefer per-agent override, then defaults override, then caller-supplied model
+  const effectiveCompaction = resolveEffectiveCompaction(params.config, sessionAgentId);
+  const compactionModelOverride = effectiveCompaction?.model?.trim();
   let provider: string;
   let modelId: string;
   // When switching provider via override, drop the primary auth profile to avoid
@@ -551,7 +558,7 @@ export async function compactEmbeddedPiSessionDirect(
             accountId: params.agentAccountId,
           })
         : undefined;
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    const { defaultAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
     });
@@ -640,7 +647,7 @@ export async function compactEmbeddedPiSessionDirect(
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
-    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+    const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config, sessionAgentId);
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
@@ -670,6 +677,7 @@ export async function compactEmbeddedPiSessionDirect(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
       });
       // Sets compaction/pruning runtime state and returns extension factories
       // that must be passed to the resource loader for the safeguard to be active.
@@ -679,6 +687,7 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        agentId: sessionAgentId,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
@@ -837,6 +846,7 @@ export async function compactEmbeddedPiSessionDirect(
           config: params.config,
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
+          agentId: sessionAgentId,
         });
         // Estimate tokens after compaction by summing token estimates for remaining messages
         const tokensAfter = estimateTokensAfterCompaction({
@@ -879,7 +889,7 @@ export async function compactEmbeddedPiSessionDirect(
           firstKeptEntryId: result.firstKeptEntryId,
         });
         // Truncate session file to remove compacted entries (#39953)
-        if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
+        if (effectiveCompaction?.truncateAfterCompaction) {
           try {
             const truncResult = await truncateSessionAfterCompaction({
               sessionFile: params.sessionFile,
@@ -1038,6 +1048,7 @@ export async function compactEmbeddedPiSession(
             config: params.config,
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
+            agentId: sessionAgentId,
           });
         }
         if (

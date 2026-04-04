@@ -6,10 +6,15 @@ import { getActiveMemorySearchManager } from "../../plugins/memory-runtime.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
+import { resolveEffectiveCompaction } from "../pi-settings.js";
 import { log } from "./logger.js";
 
-function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "async" | "await" {
-  const mode = config?.agents?.defaults?.compaction?.postIndexSync;
+function resolvePostCompactionIndexSyncMode(
+  config?: OpenClawConfig,
+  agentId?: string,
+): "off" | "async" | "await" {
+  const compaction = resolveEffectiveCompaction(config, agentId);
+  const mode = compaction?.postIndexSync;
   if (mode === "off" || mode === "async" || mode === "await") {
     return mode;
   }
@@ -82,6 +87,7 @@ export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionFile: string;
+  agentId?: string;
 }): Promise<void> {
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
@@ -92,7 +98,7 @@ export async function runPostCompactionSideEffects(params: {
     config: params.config,
     sessionKey: params.sessionKey,
     sessionFile,
-    mode: resolvePostCompactionIndexSyncMode(params.config),
+    mode: resolvePostCompactionIndexSyncMode(params.config, params.agentId),
   });
 }
 

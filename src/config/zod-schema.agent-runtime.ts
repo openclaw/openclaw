@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
+import { CompactionConfigSchema } from "./zod-schema.compaction.js";
 import {
   GroupChatSchema,
   HumanDelaySchema,
@@ -801,6 +802,7 @@ export const AgentEntrySchema = z
       .optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
+    compaction: CompactionConfigSchema,
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
   })

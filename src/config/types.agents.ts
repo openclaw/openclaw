@@ -1,5 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
+import type { AgentDefaultsConfig, AgentCompactionConfig } from "./types.agent-defaults.js";
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
@@ -90,6 +90,8 @@ export type AgentConfig = {
   sandbox?: AgentSandboxConfig;
   /** Optional per-agent stream params (e.g. cacheRetention, temperature). */
   params?: Record<string, unknown>;
+  /** Optional per-agent compaction overrides (merged on top of agents.defaults.compaction). */
+  compaction?: AgentCompactionConfig;
   tools?: AgentToolsConfig;
   /** Optional runtime descriptor for this agent. */
   runtime?: AgentRuntimeConfig;

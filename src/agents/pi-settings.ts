@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
+import { resolveAgentCompaction } from "./resolve-agent-compaction.js";
 
 export const DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
@@ -41,6 +42,14 @@ export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): numbe
   return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 }
 
+/**
+ * Resolve the effective compaction config for a specific agent,
+ * merging per-agent overrides with global defaults.
+ */
+export function resolveEffectiveCompaction(cfg: OpenClawConfig | undefined, agentId?: string) {
+  return resolveAgentCompaction(cfg, agentId);
+}
+
 function toNonNegativeInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return undefined;
@@ -58,13 +67,14 @@ function toPositiveInt(value: unknown): number | undefined {
 export function applyPiCompactionSettingsFromConfig(params: {
   settingsManager: PiSettingsManagerLike;
   cfg?: OpenClawConfig;
+  agentId?: string;
 }): {
   didOverride: boolean;
   compaction: { reserveTokens: number; keepRecentTokens: number };
 } {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
-  const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const compactionCfg = resolveEffectiveCompaction(params.cfg, params.agentId);
 
   const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);

@@ -690,7 +690,7 @@ export async function runEmbeddedAttempt(
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: resolveRunTimeoutWithCompactionGraceMs({
           runTimeoutMs: params.timeoutMs,
-          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config),
+          compactionTimeoutMs: resolveCompactionTimeoutMs(params.config, sessionAgentId),
         }),
       }),
     });
@@ -761,6 +761,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
         agentDir,
         cfg: params.config,
+        agentId: sessionAgentId,
       });
       applyPiAutoCompactionGuard({
         settingsManager,
@@ -775,6 +776,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
+        agentId: sessionAgentId,
       });
       // Only create an explicit resource loader when there are extension factories
       // to register; otherwise let createAgentSession use its built-in default.
