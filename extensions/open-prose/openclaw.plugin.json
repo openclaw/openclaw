@@ -1,7 +1,7 @@
 {
   "id": "open-prose",
   "name": "VeriClaw OpenProse",
-  "description": "Portable .prose workflow engine for VeriClaw with bundled prose skills, multi-agent orchestration, and the /prose slash command, while preserving OpenClaw runtime compatibility.",
+  "description": "AI workflow engine for .prose programs, prompt workflows, multi-agent orchestration, research automation, code review, documentation pipelines, and reusable /prose runs in VeriClaw/OpenClaw.",
   "skills": ["./skills"],
   "bundledSkills": ["prose"],
   "commands": ["prose"],

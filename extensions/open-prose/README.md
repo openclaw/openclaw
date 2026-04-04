@@ -1,14 +1,14 @@
 # VeriClaw OpenProse (plugin)
 
-VeriClaw OpenProse is the public-facing plugin package for `.prose` workflows, multi-agent orchestration, and AI workflow automation. It ships a bundled OpenProse skill pack plus the `/prose` slash command so you can run portable, markdown-first workflows inside VeriClaw while keeping the OpenClaw compatibility layer underneath.
+VeriClaw OpenProse is an AI workflow automation plugin for VeriClaw and the OpenClaw compatibility layer. Use it to run `.prose` prompt workflows for research automation, code review, documentation generation, prompt chaining, multi-agent orchestration, and reusable `/prose` slash-command automations.
 
-If you are searching for a VeriClaw workflow plugin, a `.prose` runner, or a multi-agent slash command for reusable research, review, and automation flows, this is the plugin to enable.
+If you want a prompt workflow engine, a markdown-first agent orchestrator, or a reusable AI task runner that stays inspectable in git, this is the plugin to install from ClawHub.
 
 ## Why install OpenProse
 
-- Run reusable `.prose` programs for research, debugging, documentation, and content workflows.
-- Coordinate multiple agents with explicit sequential and parallel control flow.
-- Keep workflow state under `.prose/` so runs are inspectable, repeatable, and easy to share.
+- Run reusable `.prose` workflows for research, debugging, code review, documentation, and content production.
+- Coordinate multiple agents with explicit sequential, parallel, retry, and prompt-chaining control flow.
+- Keep workflow state under `.prose/` so runs are inspectable, repeatable, searchable, and easy to share.
 - Start quickly with `/prose help`, `/prose examples`, or your own local `.prose` file.
 
 ## Install + enable
