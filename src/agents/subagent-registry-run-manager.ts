@@ -21,6 +21,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { waitForAgentRun } from "./tools/agent-step.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 
@@ -74,23 +75,11 @@ export function createSubagentRunManager(params: {
 }) {
   const waitForSubagentCompletion = async (runId: string, waitTimeoutMs: number) => {
     try {
-      const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-      const wait = await params.callGateway<{
-        status?: string;
-        startedAt?: number;
-        endedAt?: number;
-        error?: string;
-      }>({
-        method: "agent.wait",
-        params: {
-          runId,
-          timeoutMs,
-        },
-        timeoutMs: timeoutMs + 10_000,
+      const wait = await waitForAgentRun({
+        runId,
+        timeoutMs: Math.max(1, Math.floor(waitTimeoutMs)),
+        callGateway: params.callGateway,
       });
-      if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
-        return;
-      }
       const entry = params.runs.get(runId);
       if (!entry) {
         return;

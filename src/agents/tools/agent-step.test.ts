@@ -5,7 +5,13 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-import { __testing, readLatestAssistantReply } from "./agent-step.js";
+import {
+  __testing,
+  readLatestAssistantReply,
+  readLatestAssistantReplySnapshot,
+  waitForAgentRun,
+  waitForAgentRunAndReadUpdatedAssistantReply,
+} from "./agent-step.js";
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
@@ -48,5 +54,128 @@ describe("readLatestAssistantReply", () => {
     const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
 
     expect(result).toBe("older output");
+  });
+
+  it("returns assistant fingerprints for delta comparisons", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "new output" }],
+          timestamp: 42,
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReplySnapshot({ sessionKey: "agent:main:child" });
+
+    expect(result.text).toBe("new output");
+    expect(result.fingerprint).toContain('"timestamp":42');
+  });
+});
+
+describe("waitForAgentRun", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear();
+    __testing.setDepsForTest({
+      callGateway: async (opts) => await callGatewayMock(opts),
+    });
+  });
+
+  it("maps gateway timeouts to timeout status", async () => {
+    callGatewayMock.mockRejectedValue(new Error("gateway timeout while waiting"));
+
+    const result = await waitForAgentRun({ runId: "run-1", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "gateway timeout while waiting",
+    });
+  });
+
+  it("preserves timing metadata from agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+    });
+  });
+});
+
+describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
+  beforeEach(() => {
+    callGatewayMock.mockClear();
+    __testing.setDepsForTest({
+      callGateway: async (opts) => await callGatewayMock(opts),
+    });
+  });
+
+  it("returns undefined when the latest assistant fingerprint matches the baseline", async () => {
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "same reply" }],
+      timestamp: 42,
+    };
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+      })
+      .mockResolvedValueOnce({
+        messages: [assistantMessage],
+      });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-1",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      baseline: {
+        text: "same reply",
+        fingerprint: JSON.stringify(assistantMessage),
+      },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: undefined,
+    });
+  });
+
+  it("returns the new assistant text when the fingerprint changes", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "fresh reply" }],
+            timestamp: 99,
+          },
+        ],
+      });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-2",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      baseline: {
+        text: "older reply",
+        fingerprint: "old-fingerprint",
+      },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: "fresh reply",
+    });
   });
 });

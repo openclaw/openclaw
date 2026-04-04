@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
+import { readLatestAssistantReply, runAgentStep, waitForAgentRun } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   buildAgentToAgentAnnounceContext,
@@ -41,16 +41,12 @@ export async function runSessionsSendA2AFlow(params: {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
-      const waitMs = Math.min(params.announceTimeoutMs, 60_000);
-      const wait = await sessionsSendA2ADeps.callGateway<{ status: string }>({
-        method: "agent.wait",
-        params: {
-          runId: params.waitRunId,
-          timeoutMs: waitMs,
-        },
-        timeoutMs: waitMs + 2000,
+      const wait = await waitForAgentRun({
+        runId: params.waitRunId,
+        timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
+        callGateway: sessionsSendA2ADeps.callGateway,
       });
-      if (wait?.status === "ok") {
+      if (wait.status === "ok") {
         primaryReply = await readLatestAssistantReply({
           sessionKey: params.targetSessionKey,
         });
