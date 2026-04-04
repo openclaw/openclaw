@@ -4,7 +4,7 @@
   "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
   "type": "module",
   "dependencies": {
-    "@lancedb/lancedb": "^0.27.1",
+    "@lancedb/lancedb": "^0.27.2",
     "@sinclair/typebox": "0.34.49",
     "openai": "^6.33.0"
   },
