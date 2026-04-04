@@ -100,8 +100,12 @@ export async function deliverLineAutoReply(params: {
   // Sticker-only sending policy: if a valid sticker is present, send only the sticker (drop text).
   // payload.sticker comes from the common STICKER: directive parser.
   if (payload.sticker) {
+    logVerbose(`line: sticker directive received (raw: ${payload.sticker.raw})`);
     const parsed = parseLineStickerRaw(payload.sticker.raw);
     if (parsed) {
+      logVerbose(
+        `line: sending sticker (packageId: ${parsed.packageId}, stickerId: ${parsed.stickerId})`,
+      );
       const stickerMsg = createStickerMessage(parsed.packageId, parsed.stickerId);
       try {
         await sendLineMessages([stickerMsg], true);

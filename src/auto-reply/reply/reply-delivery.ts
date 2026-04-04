@@ -132,10 +132,16 @@ export function createBlockReplyDeliveryHandler(params: {
     const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
-    if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
+    // Also keep sticker-only payloads (sticker is not counted in blockHasMedia).
+    if (
+      !blockPayload.text &&
+      !blockHasMedia &&
+      !blockPayload.audioAsVoice &&
+      !blockPayload.sticker
+    ) {
       return;
     }
-    if (normalized.isSilent && !blockHasMedia) {
+    if (normalized.isSilent && !blockHasMedia && !blockPayload.sticker) {
       return;
     }
 
