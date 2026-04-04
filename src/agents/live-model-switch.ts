@@ -4,11 +4,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { resolveDefaultModelForAgent, resolvePersistedModelRef } from "./model-selection.js";
 import {
+  abortEmbeddedPiRun,
   consumeEmbeddedRunModelSwitch,
   requestEmbeddedRunModelSwitch,
   type EmbeddedRunModelSwitchRequest,
 } from "./pi-embedded-runner/runs.js";
-import { abortEmbeddedPiRun } from "./pi-embedded.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
 

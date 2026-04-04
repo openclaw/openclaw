@@ -10,13 +10,16 @@ const state = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),
   resolveStorePathMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
+  piEmbeddedModuleImported: false,
 }));
 
-vi.mock("./pi-embedded.js", () => ({
-  abortEmbeddedPiRun: (...args: unknown[]) => state.abortEmbeddedPiRunMock(...args),
-}));
+vi.mock("./pi-embedded.js", () => {
+  state.piEmbeddedModuleImported = true;
+  return {};
+});
 
 vi.mock("./pi-embedded-runner/runs.js", () => ({
+  abortEmbeddedPiRun: (...args: unknown[]) => state.abortEmbeddedPiRunMock(...args),
   requestEmbeddedRunModelSwitch: (...args: unknown[]) =>
     state.requestEmbeddedRunModelSwitchMock(...args),
   consumeEmbeddedRunModelSwitch: (...args: unknown[]) =>
@@ -56,6 +59,7 @@ describe("live model switch", () => {
     state.abortEmbeddedPiRunMock.mockReset().mockReturnValue(false);
     state.requestEmbeddedRunModelSwitchMock.mockReset();
     state.consumeEmbeddedRunModelSwitchMock.mockReset();
+    state.piEmbeddedModuleImported = false;
     state.resolveDefaultModelForAgentMock
       .mockReset()
       .mockReturnValue({ provider: "anthropic", model: "claude-opus-4-6" });
@@ -245,6 +249,12 @@ describe("live model switch", () => {
       model: "gpt-5.4",
       authProfileId: "profile-gpt",
     });
+  });
+
+  it("does not import the broad pi-embedded barrel on module load", async () => {
+    await loadModule();
+
+    expect(state.piEmbeddedModuleImported).toBe(false);
   });
 
   it("treats auth-profile-source changes as no-op when no auth profile is selected", async () => {

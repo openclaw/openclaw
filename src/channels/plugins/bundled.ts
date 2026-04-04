@@ -279,7 +279,6 @@ function getBundledChannelState(): BundledChannelState {
   if (cachedBundledChannelState) {
     return cachedBundledChannelState;
   }
-
   const entries = loadGeneratedBundledChannelEntries();
   const plugins = entries.map(({ entry }) => entry.channelPlugin);
   const setupPlugins = entries.flatMap(({ setupEntry }) => {
