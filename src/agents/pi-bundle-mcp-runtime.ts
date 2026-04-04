@@ -121,6 +121,11 @@ export function createSessionMcpRuntime(params: {
     cfg: params.cfg,
     logDiagnostics: true,
   });
+  if (Object.keys(loaded.mcpServers).length === 0 && params.cfg?.mcp?.servers) {
+    logWarn(
+      `bundle-mcp: config has mcp.servers [${Object.keys(params.cfg.mcp.servers).join(", ")}] but loaded.mcpServers is empty — possible config resolution issue`,
+    );
+  }
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
   let disposed = false;
@@ -242,7 +247,17 @@ export function createSessionMcpRuntime(params: {
     try {
       const nextCatalog = await catalogInFlight;
       failIfDisposed();
-      catalog = nextCatalog;
+      // Only cache if all configured servers connected successfully.
+      // If some failed, leave catalog uncached so the next call retries.
+      const configuredCount = Object.keys(loaded.mcpServers).length;
+      const connectedCount = Object.keys(nextCatalog.servers).length;
+      if (connectedCount >= configuredCount) {
+        catalog = nextCatalog;
+      } else if (configuredCount > 0) {
+        logWarn(
+          `bundle-mcp: only ${connectedCount}/${configuredCount} servers connected; catalog will retry on next call`,
+        );
+      }
       return nextCatalog;
     } finally {
       catalogInFlight = undefined;
