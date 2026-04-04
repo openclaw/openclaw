@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { minimatch, Minimatch } from "minimatch";
 
-export type PathGuardViolationRule = "workspaceOnly" | "denyPaths" | "allowedPaths";
+export type PathGuardViolationRule =
+  | "workspaceOnly"
+  | "denyPaths"
+  | "allowedPaths";
 
 export class PathGuardError extends Error {
   code = "PATH_GUARD_DENIED" as const;
@@ -34,9 +37,18 @@ function toPosixPath(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
+function escapeMinimatchLiteralPrefix(prefix: string): string {
+  // Escape minimatch/glob metacharacters in a literal filesystem prefix.
+  // We only escape the realpath-derived prefix, never the user-authored glob remainder.
+  return prefix.replace(/[\\*?\[\]{}()!+@]/g, (ch) => `\\${ch}`);
+}
+
 function isPathInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 async function resolveRealPathStrict(targetPath: string): Promise<string> {
@@ -129,7 +141,10 @@ export async function checkPathGuardStrict(
 
             // extglob operators are only magic when followed by '('
             // (e.g. +(foo|bar), @(foo), !(foo)).
-            if ((ch === "!" || ch === "+" || ch === "@") && normalizedEntryPattern[i + 1] === "(") {
+            if (
+              (ch === "!" || ch === "+" || ch === "@") &&
+              normalizedEntryPattern[i + 1] === "("
+            ) {
               return i;
             }
           }
@@ -139,11 +154,20 @@ export async function checkPathGuardStrict(
         // If magic appears mid-segment (e.g. /dir[12]/...), splitting at firstMagic would produce
         // prefix=/dir and rest=[12]/..., and inserting '/' changes semantics. Instead, rewrite from
         // the last '/' before firstMagic.
-        const splitIndex = firstMagic >= 0 ? normalizedEntryPattern.lastIndexOf("/", firstMagic) : -1;
-        const dirPrefix = splitIndex > 0 ? normalizedEntryPattern.slice(0, splitIndex) : "/";
-        const remainder = splitIndex >= 0 ? normalizedEntryPattern.slice(splitIndex) : normalizedEntryPattern;
+        const splitIndex =
+          firstMagic >= 0
+            ? normalizedEntryPattern.lastIndexOf("/", firstMagic)
+            : -1;
+        const dirPrefix =
+          splitIndex > 0 ? normalizedEntryPattern.slice(0, splitIndex) : "/";
+        const remainder =
+          splitIndex >= 0
+            ? normalizedEntryPattern.slice(splitIndex)
+            : normalizedEntryPattern;
         try {
-          const canonicalDirPrefix = toPosixPath(await resolveRealPathStrict(dirPrefix));
+          const canonicalDirPrefix = escapeMinimatchLiteralPrefix(
+            toPosixPath(await resolveRealPathStrict(dirPrefix)),
+          );
 
           // Normalize slash joining so root-prefixed patterns don't become //**/*.pem.
           const rewrittenPattern =
@@ -169,7 +193,8 @@ export async function checkPathGuardStrict(
       const canonicalEntry = await resolveRealPathStrict(entry);
       const normalizedEntry = toPosixPath(canonicalEntry);
       return (
-        normalizedRealPath === normalizedEntry || isPathInside(normalizedEntry, normalizedRealPath)
+        normalizedRealPath === normalizedEntry ||
+        isPathInside(normalizedEntry, normalizedRealPath)
       );
     }
 
@@ -186,12 +211,16 @@ export async function checkPathGuardStrict(
     // Otherwise a policy like denyPaths:["vendor"] could be bypassed if "vendor" is a symlink
     // that resolves outside workspace, because requested targets are matched in realpath-space.
     const canonicalAbsoluteEntry = await resolveRealPathStrict(absoluteEntry);
-    const normalizedCanonicalAbsoluteEntry = toPosixPath(canonicalAbsoluteEntry);
+    const normalizedCanonicalAbsoluteEntry = toPosixPath(
+      canonicalAbsoluteEntry,
+    );
 
     // Relative policy entries are workspace-anchored by intent.
     // If the canonicalized entry escapes the workspace (e.g. entry points at a symlinked dir outside),
     // it must NOT match outside-workspace targets.
-    if (!isPathInside(normalizedWorkspaceRoot, normalizedCanonicalAbsoluteEntry)) {
+    if (
+      !isPathInside(normalizedWorkspaceRoot, normalizedCanonicalAbsoluteEntry)
+    ) {
       return false;
     }
 
@@ -202,16 +231,24 @@ export async function checkPathGuardStrict(
     }).hasMagic();
 
     if (hasGlobMagic) {
-      const relativeToWorkspace = toPosixPath(path.relative(realWorkspaceRoot, realPath));
+      const relativeToWorkspace = toPosixPath(
+        path.relative(realWorkspaceRoot, realPath),
+      );
       // Relative policy entries are workspace-anchored and must never match
       // targets outside workspace.
-      if (relativeToWorkspace.startsWith("../") || relativeToWorkspace === "..") {
+      if (
+        relativeToWorkspace.startsWith("../") ||
+        relativeToWorkspace === ".."
+      ) {
         return false;
       }
       if (path.isAbsolute(relativeToWorkspace)) {
         return false;
       }
-      return minimatch(relativeToWorkspace, normalizedPattern, { dot: true, magicalBraces: true });
+      return minimatch(relativeToWorkspace, normalizedPattern, {
+        dot: true,
+        magicalBraces: true,
+      });
     }
     return (
       normalizedRealPath === normalizedCanonicalAbsoluteEntry ||
