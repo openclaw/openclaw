@@ -42,14 +42,6 @@ import type { SlackActionContext } from "./action-runtime.js";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
 import { slackApprovalCapability } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
-import { resolveSlackChannelType } from "./channel-type.js";
-import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
-import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
-import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import { SLACK_TEXT_LIMIT } from "./limits.js";
-import { slackOutbound } from "./outbound-adapter.js";
-import type { SlackProbe } from "./probe.js";
-import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import {
   DEFAULT_ACCOUNT_ID,
   looksLikeSlackTargetId,
@@ -59,7 +51,15 @@ import {
   resolveConfiguredFromRequiredCredentialStatuses,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "./runtime-api.js";
+} from "./channel-api.js";
+import { resolveSlackChannelType } from "./channel-type.js";
+import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
+import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
+import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { slackOutbound } from "./outbound-adapter.js";
+import type { SlackProbe } from "./probe.js";
+import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime, getSlackRuntime } from "./runtime.js";
 import { fetchSlackScopes } from "./scopes.js";
 import { collectSlackSecurityAuditFindings } from "./security-audit.js";
