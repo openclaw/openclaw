@@ -7,6 +7,8 @@ vi.mock("../../agents/subagent-announce.js", () => ({
 }));
 vi.mock("../../agents/subagent-registry.js", () => ({
   countActiveDescendantRuns: vi.fn().mockReturnValue(0),
+  getLatestSubagentRunByChildSessionKey: vi.fn().mockReturnValue(null),
+  listDescendantRunsForRequester: vi.fn().mockReturnValue([]),
 }));
 
 describe("matchesMessagingToolDeliveryTarget", () => {
