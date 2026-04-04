@@ -184,20 +184,6 @@ export type ToolPolicyConfig = {
   profile?: ToolProfileId;
 };
 
-export type SkillCacheConfig = {
-  /** Enable skill content pre-fetching at session start (default: true). */
-  enabled?: boolean;
-  /** Minutes before a cached skill entry is considered stale (default: 30). */
-  staleMinutes?: number;
-  /** Max bytes to read per SKILL.md file (default: 256000). */
-  maxBytesPerSkill?: number;
-  /**
-   * Skills that should be warmed together. When a primary skill is eligible,
-   * its associates are also pre-fetched. Overrides the built-in defaults.
-   */
-  associations?: Record<string, string[]>;
-};
-
 export type GroupToolPolicyConfig = {
   allow?: string[];
   /** Additional allowlist entries merged into allow. */
@@ -641,6 +627,4 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
-  /** Skill pre-fetch cache configuration. */
-  skillCache?: SkillCacheConfig;
 };

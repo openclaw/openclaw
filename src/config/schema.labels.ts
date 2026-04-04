@@ -532,11 +532,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.recentMessagesToKeep": "Messages to Keep During Compaction",
   "agents.defaults.subagents.operatingPrinciples": "Subagent Operating Principles",
   "agents.defaults.subagents.maxFailureAttempts": "Subagent Max Failure Attempts",
-  "tools.skillCache": "Skill Cache",
-  "tools.skillCache.enabled": "Skill Cache Enabled",
-  "tools.skillCache.staleMinutes": "Skill Cache Stale Minutes",
-  "tools.skillCache.maxBytesPerSkill": "Skill Cache Max Bytes",
-  "tools.skillCache.associations": "Skill Cache Associations",
+
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":

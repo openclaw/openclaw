@@ -898,15 +898,6 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
-    skillCache: z
-      .object({
-        enabled: z.boolean().optional(),
-        staleMinutes: z.number().min(1).optional(),
-        maxBytesPerSkill: z.number().min(1024).optional(),
-        associations: z.record(z.string(), z.array(z.string())).optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

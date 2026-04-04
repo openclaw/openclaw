@@ -14,7 +14,6 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - "sqlite-vec"
   - "sqlite-vec-*"
-  - "acpx"
 
 onlyBuiltDependencies:
   - "@lydell/node-pty"
