@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime: reuse compatible active registries for `web_search` and `web_fetch` provider snapshot resolution so repeated runtime reads do not re-import the same bundled plugin set on each agent message. Related #48380.
 - Infra/tailscale: ignore `OPENCLAW_TEST_TAILSCALE_BINARY` outside explicit test environments and block it from workspace `.env`, so test-only binary overrides cannot be injected through trusted repository state. (#58468) Thanks @eleqtrizit.
 - Plugins/OpenAI: enable reference-image edits for `gpt-image-1` by routing edit calls to `/images/edits` with multipart image uploads, and update image-generation capability/docs metadata accordingly. Thanks @steipete.
+- Cache/context guard: compact newest tool results first so the cached prompt prefix stays byte-identical and avoids full re-tokenization every turn past the 75% context threshold. (#58036) Thanks @bcherny.
 - Agents/tools: include value-shape hints in missing-parameter tool errors so dropped, empty-string, and wrong-type write payloads are easier to diagnose from logs. (#55317) Thanks @priyansh19.
 - Android/assistant: keep queued App Actions prompts pending when auto-send enqueue is rejected, so transient chat-health drops do not silently lose the assistant request. Thanks @obviyus.
 - Plugins/startup: migrate legacy `tools.web.search.<provider>` config before strict startup validation, and record plugin failure phase/timestamp so degraded plugin startup is easier to diagnose from logs and `plugins list`.

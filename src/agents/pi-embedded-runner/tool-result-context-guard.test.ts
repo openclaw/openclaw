@@ -106,7 +106,7 @@ function expectCompactedToolResultsWithoutContextNotice(
 }
 
 describe("installToolResultContextGuard", () => {
-  it("compacts oldest-first when total context overflows, even if each result fits individually", async () => {
+  it("compacts newest-first when total context overflows, even if each result fits individually", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = makeTwoToolResultOverflowContext();
     const transformed = await applyGuardToContext(agent, contextForNextCall);
@@ -115,7 +115,7 @@ describe("installToolResultContextGuard", () => {
     expectCompactedToolResultsWithoutContextNotice(contextForNextCall, 1, 2);
   });
 
-  it("keeps compacting oldest-first until context is back under budget", async () => {
+  it("keeps compacting newest-first until context is back under budget", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -141,7 +141,7 @@ describe("installToolResultContextGuard", () => {
     expect(third).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
-  it("survives repeated large tool results by compacting older outputs before later turns", async () => {
+  it("survives repeated large tool results by compacting the newest output each turn", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
@@ -159,8 +159,10 @@ describe("installToolResultContextGuard", () => {
       .filter((msg) => msg.role === "toolResult")
       .map((msg) => getToolResultText(msg as AgentMessage));
 
-    expect(toolResultTexts[0]).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(toolResultTexts[3]?.length).toBe(95_000);
+    // Newest-first compaction: oldest results stay intact to preserve the
+    // cached prefix; the newest overflowing result is compacted.
+    expect(toolResultTexts[0]?.length).toBe(95_000);
+    expect(toolResultTexts[3]).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
     expect(toolResultTexts.join("\n")).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
@@ -181,7 +183,7 @@ describe("installToolResultContextGuard", () => {
     expect(newResultText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
   });
 
-  it("keeps compacting oldest-first until overflow clears, including the newest tool result when needed", async () => {
+  it("keeps compacting newest-first until overflow clears, reaching older tool results when needed", async () => {
     const agent = makeGuardableAgent();
 
     installToolResultContextGuard({
