@@ -153,6 +153,7 @@ export default definePluginEntry({
         });
       },
       buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+      resolveReasoningOutputMode: () => "native",
       wrapStreamFn: (ctx) => {
         return createConfiguredOllamaCompatStreamWrapper(ctx);
       },

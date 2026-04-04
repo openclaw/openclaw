@@ -130,6 +130,7 @@ export default definePluginEntry({
         await loadOpenRouterModelCapabilities(ctx.modelId);
       },
       buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+      resolveReasoningOutputMode: () => "native",
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
         const providerRouting =

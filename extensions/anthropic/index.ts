@@ -450,6 +450,7 @@ export default definePluginEntry({
       resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
       buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
+      resolveReasoningOutputMode: () => "native",
       wrapStreamFn: (ctx) => {
         const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
         const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
