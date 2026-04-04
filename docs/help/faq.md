@@ -1011,7 +1011,7 @@ for usage/billing and raise limits as needed.
     Debug:
 
     ```bash
-    openclaw cron run <jobId> --force
+    openclaw cron run <jobId>
     openclaw cron runs --id <jobId> --limit 50
     ```
 
@@ -1021,7 +1021,7 @@ for usage/billing and raise limits as needed.
 
   <Accordion title="How do I install skills on Linux?">
     Use native `openclaw skills` commands or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
-    Browse skills at [https://clawhub.com](https://clawhub.com).
+    Browse skills at [https://clawhub.ai](https://clawhub.ai).
 
     ```bash
     openclaw skills search "calendar"
