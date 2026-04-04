@@ -841,6 +841,7 @@ describe("plugin-sdk subpath exports", () => {
 
     expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
     expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
+    expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
     expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
