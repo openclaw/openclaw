@@ -574,6 +574,19 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
+        provider: "generic",
+        api: "openai-completions",
+        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "modelstudio-native",
+      supportsNativeStreamingUsageCompat: true,
+    });
+
+    expect(
+      resolveProviderRequestCapabilities({
         provider: "ollama",
         modelId: "kimi-k2.5:cloud",
         capability: "llm",
@@ -742,6 +755,28 @@ describe("provider attribution", () => {
         },
         expected: {
           knownProviderFamily: "modelstudio",
+          endpointClass: "modelstudio-native",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: false,
+          supportsOpenAIReasoningCompatPayload: false,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: false,
+          shouldStripResponsesPromptCache: false,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: true,
+        },
+      },
+      {
+        name: "generic provider on native DashScope completions",
+        input: {
+          provider: "generic",
+          api: "openai-completions",
+          baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "generic",
           endpointClass: "modelstudio-native",
           isKnownNativeEndpoint: true,
           allowsOpenAIServiceTier: false,
