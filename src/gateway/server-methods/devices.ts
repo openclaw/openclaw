@@ -29,7 +29,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";
 
 type DeviceTokenRotateTarget = {
-  pairedDevice: Awaited<ReturnType<typeof getPairedDevice>>;
+  pairedDevice: NonNullable<Awaited<ReturnType<typeof getPairedDevice>>>;
   normalizedRole: string;
 };
 
