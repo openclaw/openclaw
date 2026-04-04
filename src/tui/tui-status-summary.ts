@@ -76,7 +76,7 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
       });
       const flags = entry.flags?.length ? ` | flags: ${entry.flags.join(", ")}` : "";
       lines.push(
-        `- ${entry.key}${entry.kind ? ` [${entry.kind}]` : ""} | ${ageLabel} | model ${model} | ${usage}${flags}`,
+        `- ${entry.displayName ?? entry.label ?? entry.key}${entry.kind ? ` [${entry.kind}]` : ""} | ${ageLabel} | model ${model} | ${usage}${flags}`,
       );
     }
   }

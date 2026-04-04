@@ -94,6 +94,8 @@ export type GatewayStatusSummary = {
     recent?: Array<{
       agentId?: string;
       key: string;
+      label?: string;
+      displayName?: string;
       kind?: string;
       updatedAt?: number | null;
       age?: number | null;
