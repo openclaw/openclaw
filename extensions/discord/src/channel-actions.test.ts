@@ -67,6 +67,40 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("role-add");
   });
 
+  it("includes upload-file in discovered actions when messages is enabled", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          discord: {
+            token: "Bot token-main",
+            actions: {
+              messages: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(discovery?.actions).toContain("upload-file");
+  });
+
+  it("excludes upload-file from discovered actions when messages is disabled", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          discord: {
+            token: "Bot token-main",
+            actions: {
+              messages: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(discovery?.actions).not.toContain("upload-file");
+  });
+
   it("honors account-scoped action gates during discovery", () => {
     const cfg = {
       channels: {
