@@ -182,7 +182,7 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 
 ### 8) Voice + expanded Android command surface
 
-- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and TTS playback (ElevenLabs when configured, system TTS fallback). Voice stops when the app leaves the foreground.
+- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and `talk.speak` playback. Local system TTS is used only when `talk.speak` is unavailable. Voice stops when the app leaves the foreground.
 - Voice wake/talk-mode toggles are currently removed from Android UX/runtime.
 - Additional Android command families (availability depends on device + permissions):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
