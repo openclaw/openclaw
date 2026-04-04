@@ -10,6 +10,7 @@ export function createAcpTestConfig(overrides?: Partial<OpenClawConfig>): OpenCl
         maxChunkChars: 64,
       },
     },
+    channels: {},
     ...overrides,
   } as OpenClawConfig;
 }

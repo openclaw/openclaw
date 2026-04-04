@@ -16,8 +16,10 @@ const collectDiscordAuditChannelIdsMock = vi.hoisted(() =>
 );
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => {
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
+    ...actual,
     sleepWithAbort: sleepWithAbortMock,
   };
 });
@@ -132,6 +134,16 @@ describe("discordPlugin outbound", () => {
 
     expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
+  });
+
+  it("treats ACP block replies as already visible", () => {
+    const shouldTreatRoutedTextAsVisible = discordPlugin.outbound?.shouldTreatRoutedTextAsVisible;
+    if (!shouldTreatRoutedTextAsVisible) {
+      throw new Error("Expected discord outbound visibility hook to be defined");
+    }
+
+    expect(shouldTreatRoutedTextAsVisible({ kind: "block", text: "hello" })).toBe(true);
+    expect(shouldTreatRoutedTextAsVisible({ kind: "tool", text: "hello" })).toBe(false);
   });
 
   it("forwards mediaLocalRoots to sendMessageDiscord", async () => {

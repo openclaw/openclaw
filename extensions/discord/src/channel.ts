@@ -151,6 +151,16 @@ function resolveOptionalDiscordRuntime() {
   }
 }
 
+function shouldTreatDiscordRoutedTextAsVisible(params: {
+  kind: "tool" | "block" | "final";
+  text?: string;
+}): boolean {
+  void params.text;
+  // Discord renders streamed ACP block replies directly in-channel, so treating
+  // them as hidden causes the final fallback to replay the same text.
+  return params.kind === "block";
+}
+
 async function resolveDiscordSend(deps?: { [channelId: string]: unknown }): Promise<DiscordSendFn> {
   return (
     resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
@@ -819,6 +829,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             accountId,
             payload,
           }),
+        shouldTreatRoutedTextAsVisible: shouldTreatDiscordRoutedTextAsVisible,
         resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
       },
       attachedResults: {

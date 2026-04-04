@@ -58,6 +58,26 @@ const bindingServiceMocks = vi.hoisted(() => ({
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
 }));
 
+const channelPluginMocks = vi.hoisted(() => ({
+  getChannelPlugin: vi.fn((channelId: string) => {
+    if (channelId === "telegram") {
+      return {
+        outbound: {
+          shouldTreatRoutedTextAsVisible: ({ kind }: { kind: string }) => kind !== "final",
+        },
+      };
+    }
+    if (channelId === "discord") {
+      return {
+        outbound: {
+          shouldTreatRoutedTextAsVisible: ({ kind }: { kind: string }) => kind === "block",
+        },
+      };
+    }
+    return undefined;
+  }),
+}));
+
 const sessionKey = "agent:codex-acp:session-1";
 const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
@@ -107,6 +127,8 @@ async function runDispatch(params: {
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
@@ -126,7 +148,10 @@ async function runDispatch(params: {
     inboundAudio: false,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
-      ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
+      ? {
+          originatingChannel: params.originatingChannel ?? "telegram",
+          originatingTo: params.originatingTo ?? "telegram:thread-1",
+        }
       : {}),
     shouldSendToolSummaries: true,
     bypassForCommand: false,
@@ -199,13 +224,18 @@ function queueTtsReplies(...replies: MockTtsReply[]) {
   }
 }
 
-async function runRoutedAcpTextTurn(text: string) {
+async function runRoutedAcpTextTurn(
+  text: string,
+  params?: { originatingChannel?: string; originatingTo?: string },
+) {
   mockRoutedTextTurn(text);
   const { dispatcher } = createDispatcher();
   const result = await runDispatch({
     bodyForAgent: "run acp",
     dispatcher,
     shouldRouteToOriginating: true,
+    originatingChannel: params?.originatingChannel,
+    originatingTo: params?.originatingTo,
   });
   return { result };
 }
@@ -256,6 +286,13 @@ describe("tryDispatchAcpReply", () => {
         unbind: (input: unknown) => bindingServiceMocks.unbind(input),
       }),
     }));
+    vi.doMock("../../channels/plugins/index.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
+      return {
+        ...actual,
+        getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+      };
+    });
     ({ tryDispatchAcpReply } = await import("./dispatch-acp.js"));
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
@@ -283,6 +320,24 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
+    channelPluginMocks.getChannelPlugin.mockReset();
+    channelPluginMocks.getChannelPlugin.mockImplementation((channelId: string) => {
+      if (channelId === "telegram") {
+        return {
+          outbound: {
+            shouldTreatRoutedTextAsVisible: ({ kind }: { kind: string }) => kind !== "final",
+          },
+        };
+      }
+      if (channelId === "discord") {
+        return {
+          outbound: {
+            shouldTreatRoutedTextAsVisible: ({ kind }: { kind: string }) => kind === "block",
+          },
+        };
+      }
+      return undefined;
+    });
     globalThis.fetch = originalFetch;
   });
 
@@ -906,6 +961,20 @@ describe("tryDispatchAcpReply", () => {
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
   });
 
+  it("does not deliver final fallback text when routed discord block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
+    const { result } = await runRoutedAcpTextTurn("CODEX_OK", {
+      originatingChannel: "discord",
+      originatingTo: "channel:1489996832695386162",
+    });
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
   it("does not deliver final fallback text when direct block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -955,7 +1024,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("preserves final fallback when direct block text is filtered by non-telegram channels", async () => {
+  it("preserves final fallback when direct block text uses a channel without a visibility hook", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -965,6 +1034,10 @@ describe("tryDispatchAcpReply", () => {
     const result = await runDispatch({
       bodyForAgent: "reply",
       dispatcher,
+      ctxOverrides: {
+        Provider: "webchat",
+        Surface: "webchat",
+      },
     });
 
     expect(result?.counts.block).toBe(0);
