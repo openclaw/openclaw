@@ -420,8 +420,14 @@ Gateway exposes today.
 
 ## Auth
 
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
-  must match or the socket is closed.
+- Shared-secret gateway auth uses `connect.params.auth.token` or
+  `connect.params.auth.password`, depending on the configured auth mode.
+- Identity-bearing modes such as Tailscale Serve
+  (`gateway.auth.allowTailscale: true`) or non-loopback
+  `gateway.auth.mode: "trusted-proxy"` satisfy the connect auth check from
+  request headers instead of `connect.params.auth.*`.
+- Private-ingress `gateway.auth.mode: "none"` skips shared-secret connect auth
+  entirely; do not expose that mode on public/untrusted ingress.
 - After pairing, the Gateway issues a **device token** scoped to the connection
   role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
   persisted by the client for future connects.

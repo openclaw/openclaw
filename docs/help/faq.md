@@ -1455,14 +1455,14 @@ for usage/billing and raise limits as needed.
     - `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
     - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
     - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
-    - The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
+    - Shared-secret Control UI setups authenticate via `connect.params.auth.token` or `connect.params.auth.password` (stored in app/UI settings). Identity-bearing modes such as Tailscale Serve or `trusted-proxy` use request headers instead. Avoid putting shared secrets in URLs.
 
   </Accordion>
 
   <Accordion title="Why do I need a token on localhost now?">
-    OpenClaw enforces token auth by default, including loopback. If no token is configured, gateway startup auto-generates one and saves it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
+    OpenClaw enforces gateway auth by default, including loopback. In the normal default path that means token auth: if no explicit auth path is configured, gateway startup resolves to token mode and auto-generates one, saving it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
 
-    If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
+    If you prefer a different auth path, you can explicitly choose password mode (or, for non-loopback identity-aware reverse proxies, `trusted-proxy`). If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
 
   </Accordion>
 

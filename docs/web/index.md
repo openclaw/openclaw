@@ -98,7 +98,10 @@ Open:
 - Gateway auth is required by default (token, password, trusted-proxy, or Tailscale Serve identity headers when enabled).
 - Non-loopback binds still **require** gateway auth. In practice that means token/password auth or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - The wizard generates a gateway token by default (even on loopback).
-- The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
+- In shared-secret mode, the UI sends `connect.params.auth.token` or
+  `connect.params.auth.password`.
+- In identity-bearing modes such as Tailscale Serve or `trusted-proxy`, the
+  WebSocket auth check is satisfied from request headers instead.
 - For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
   explicitly (full origins). Without it, gateway startup is refused by default.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables

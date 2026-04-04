@@ -82,8 +82,14 @@ sequenceDiagram
 - After handshake:
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
-  must match or the socket closes.
+- Shared-secret auth uses `connect.params.auth.token` or
+  `connect.params.auth.password`, depending on the configured gateway auth mode.
+- Identity-bearing modes such as Tailscale Serve
+  (`gateway.auth.allowTailscale: true`) or non-loopback
+  `gateway.auth.mode: "trusted-proxy"` satisfy auth from request headers
+  instead of `connect.params.auth.*`.
+- Private-ingress `gateway.auth.mode: "none"` disables shared-secret auth
+  entirely; keep that mode off public/untrusted ingress.
 - Idempotency keys are required for side‑effecting methods (`send`, `agent`) to
   safely retry; the server keeps a short‑lived dedupe cache.
 - Nodes must include `role: "node"` plus caps/commands/permissions in `connect`.
