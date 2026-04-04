@@ -1,0 +1,189 @@
+# Agentic CI/CD Protocol — L0: Full Auto
+# Agent PRs for safe changes (data, docs, lint, deps) auto-merge after CI green.
+# See: .github/AGENTIC_CICD_PROTOCOL.md
+
+name: "L0: Agent Auto-Merge"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  classify:
+    name: Classify Risk Level
+    runs-on: ubuntu-latest
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'agent-pr') ||
+      github.event.pull_request.user.login == 'github-actions[bot]' ||
+      github.event.pull_request.user.login == 'dependabot[bot]'
+    outputs:
+      is_l0_safe: ${{ steps.check.outputs.is_safe }}
+      risk_score: ${{ steps.check.outputs.risk_score }}
+      changed_categories: ${{ steps.check.outputs.categories }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Analyze changed files
+        id: check
+        run: |
+          # Fetch diff file list
+          gh pr diff ${{ github.event.pull_request.number }} --name-only > /tmp/changed_files.txt
+
+          SAFE=true
+          RISK=0
+          CATEGORIES=""
+
+          while IFS= read -r file; do
+            case "$file" in
+              # L0 safe: data files
+              *.json)
+                # But NOT package.json, tsconfig, or workflow configs
+                if echo "$file" | grep -qE '(package\.json|tsconfig|\.github/)'; then
+                  SAFE=false
+                  RISK=$((RISK + 30))
+                  CATEGORIES="$CATEGORIES,config"
+                else
+                  RISK=$((RISK + 1))
+                  CATEGORIES="$CATEGORIES,data"
+                fi
+                ;;
+              # L0 safe: docs and markdown
+              *.md)
+                if echo "$file" | grep -qE '(CLAUDE\.md|AGENTS\.md|SECURITY\.md)'; then
+                  SAFE=false
+                  RISK=$((RISK + 20))
+                  CATEGORIES="$CATEGORIES,system-docs"
+                else
+                  RISK=$((RISK + 1))
+                  CATEGORIES="$CATEGORIES,docs"
+                fi
+                ;;
+              # L0 safe: stylesheets
+              *.css|*.scss)
+                RISK=$((RISK + 2))
+                CATEGORIES="$CATEGORIES,style"
+                ;;
+              # L0 safe: lock files (dependency updates)
+              pnpm-lock.yaml|yarn.lock|package-lock.json)
+                RISK=$((RISK + 5))
+                CATEGORIES="$CATEGORIES,deps"
+                ;;
+              # UNSAFE: workflows, secrets, env, auth
+              .github/workflows/*|.github/actions/*)
+                SAFE=false
+                RISK=$((RISK + 50))
+                CATEGORIES="$CATEGORIES,ci"
+                ;;
+              .env*|*.pem|*.key)
+                SAFE=false
+                RISK=$((RISK + 100))
+                CATEGORIES="$CATEGORIES,secrets"
+                ;;
+              # UNSAFE: source code (TypeScript, JavaScript, Python, Swift)
+              *.ts|*.tsx|*.js|*.jsx|*.py|*.swift|*.kt)
+                SAFE=false
+                RISK=$((RISK + 20))
+                CATEGORIES="$CATEGORIES,code"
+                ;;
+              # Everything else: cautious
+              *)
+                RISK=$((RISK + 10))
+                if [ $RISK -gt 50 ]; then
+                  SAFE=false
+                fi
+                CATEGORIES="$CATEGORIES,other"
+                ;;
+            esac
+          done < /tmp/changed_files.txt
+
+          # Check diff size (max 500 lines for L0)
+          DIFF_LINES=$(gh pr diff ${{ github.event.pull_request.number }} | wc -l)
+          if [ "$DIFF_LINES" -gt 500 ]; then
+            SAFE=false
+            RISK=$((RISK + 30))
+          fi
+
+          # Deduplicate categories
+          CATEGORIES=$(echo "$CATEGORIES" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/^,//;s/,$//')
+
+          echo "is_safe=$SAFE" >> $GITHUB_OUTPUT
+          echo "risk_score=$RISK" >> $GITHUB_OUTPUT
+          echo "categories=$CATEGORIES" >> $GITHUB_OUTPUT
+
+          echo "## L0 Risk Assessment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Safe for auto-merge:** $SAFE" >> $GITHUB_STEP_SUMMARY
+          echo "- **Risk score:** $RISK" >> $GITHUB_STEP_SUMMARY
+          echo "- **Categories:** $CATEGORIES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Diff lines:** $DIFF_LINES" >> $GITHUB_STEP_SUMMARY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  auto-merge:
+    name: L0 Auto-Merge
+    needs: [classify]
+    runs-on: ubuntu-latest
+    if: needs.classify.outputs.is_l0_safe == 'true'
+    steps:
+      - name: Wait for CI checks
+        run: |
+          echo "Waiting for all CI checks to complete..."
+          # Give other workflows time to start
+          sleep 30
+
+      - name: Verify all checks passed
+        id: verify
+        run: |
+          # Get all check runs for this PR (exclude self)
+          CHECKS=$(gh api repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs \
+            --jq '.check_runs[] | select(.name != "L0 Auto-Merge" and .name != "Classify Risk Level") | {name: .name, status: .status, conclusion: .conclusion}')
+
+          echo "Check runs:"
+          echo "$CHECKS" | jq -r '"\(.name): \(.status) / \(.conclusion)"'
+
+          # Check if any required checks failed
+          FAILED=$(echo "$CHECKS" | jq -r 'select(.conclusion == "failure") | .name')
+          if [ -n "$FAILED" ]; then
+            echo "::error::Failed checks: $FAILED"
+            echo "passed=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          # Check if any required checks are still running (wait up to 10 min)
+          for i in $(seq 1 20); do
+            PENDING=$(gh api repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs \
+              --jq '[.check_runs[] | select(.name != "L0 Auto-Merge" and .name != "Classify Risk Level" and .status != "completed")] | length')
+            if [ "$PENDING" -eq 0 ]; then
+              break
+            fi
+            echo "Still waiting on $PENDING checks... (attempt $i/20)"
+            sleep 30
+          done
+
+          echo "passed=true" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Auto-merge PR
+        if: steps.verify.outputs.passed == 'true'
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --merge \
+            --subject "L0 auto-merge: ${{ github.event.pull_request.title }}" \
+            --body "Auto-merged by Agentic CI/CD Protocol L0.
+          Risk score: ${{ needs.classify.outputs.risk_score }}
+          Categories: ${{ needs.classify.outputs.changed_categories }}
+          Protocol: .github/AGENTIC_CICD_PROTOCOL.md"
+
+          echo "## L0 Auto-Merged" >> $GITHUB_STEP_SUMMARY
+          echo "PR #${{ github.event.pull_request.number }} auto-merged." >> $GITHUB_STEP_SUMMARY
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Audit log
+        if: always()
+        run: |
+          echo "{\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"pr\":${{ github.event.pull_request.number }},\"action\":\"l0_automerge\",\"safe\":${{ needs.classify.outputs.is_l0_safe }},\"risk\":${{ needs.classify.outputs.risk_score }},\"categories\":\"${{ needs.classify.outputs.changed_categories }}\",\"merged\":${{ steps.verify.outputs.passed || false }}}" >> $GITHUB_STEP_SUMMARY
