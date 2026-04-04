@@ -1,11 +1,11 @@
 import { z } from "zod";
+import { isSafeScpRemoteHost } from "../infra/scp-host.js";
+import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
-} from "../../extensions/telegram/config-api.js";
-import { isSafeScpRemoteHost } from "../infra/scp-host.js";
-import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
+} from "../plugin-sdk/telegram-command-config.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
