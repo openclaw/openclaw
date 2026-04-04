@@ -2362,6 +2362,16 @@ for usage/billing and raise limits as needed.
 
     Cooldowns apply to failing profiles (exponential backoff), so OpenClaw can keep responding even when a provider is rate-limited or temporarily failing.
 
+    The rate-limit bucket includes more than plain `429` responses. OpenClaw
+    also treats messages like `Too many concurrent requests`,
+    `ThrottlingException`, `resource exhausted`, and periodic usage-window
+    limits (`weekly/monthly limit reached`) as failover-worthy rate limits.
+
+    Context-overflow errors are different: signatures such as
+    `request_too_large`, `input exceeds the maximum number of tokens`, or
+    `input is too long for the model` stay on the compaction/retry path instead
+    of advancing model fallback.
+
   </Accordion>
 
   <Accordion title='What does "No credentials found for profile anthropic:default" mean?'>

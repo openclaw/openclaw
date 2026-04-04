@@ -120,6 +120,10 @@ If you have both an OAuth profile and an API key profile for the same provider, 
 
 When a profile fails due to auth/rate‑limit errors (or a timeout that looks
 like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
+That rate-limit bucket is broader than plain `429`: it also includes provider
+messages such as `Too many concurrent requests`, `ThrottlingException`,
+`throttled`, `resource exhausted`, and periodic usage-window limits such as
+`weekly/monthly limit reached`.
 Format/invalid‑request errors (for example Cloud Code Assist tool call ID
 validation failures) are treated as failover‑worthy and use the same cooldowns.
 OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`,
@@ -223,6 +227,8 @@ Model fallback does not continue on:
 
 - explicit aborts that are not timeout/failover-shaped
 - context overflow errors that should stay inside compaction/retry logic
+  (for example `request_too_large`, `INVALID_ARGUMENT: input exceeds the maximum
+number of tokens`, or `The input is too long for the model`)
 - a final unknown error when there are no candidates left
 
 ### Cooldown skip vs probe behavior

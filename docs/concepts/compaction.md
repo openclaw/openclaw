@@ -25,7 +25,9 @@ model sees on the next turn.
 
 Auto-compaction is on by default. It runs when the session nears the context
 limit, or when the model returns a context-overflow error (in which case
-OpenClaw compacts and retries).
+OpenClaw compacts and retries). Typical overflow signatures include
+`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, and `input is too long for the model`.
 
 <Info>
 Before compacting, OpenClaw automatically reminds the agent to save important
