@@ -8,9 +8,8 @@ export function listSlackMessageActions(
   cfg: OpenClawConfig,
   accountId?: string | null,
 ): ChannelMessageActionName[] {
-  const accounts = (accountId
-    ? [resolveSlackAccount({ cfg, accountId })]
-    : listEnabledSlackAccounts(cfg)
+  const accounts = (
+    accountId ? [resolveSlackAccount({ cfg, accountId })] : listEnabledSlackAccounts(cfg)
   ).filter((account) => account.enabled && account.botTokenSource !== "none");
   if (accounts.length === 0) {
     return [];

@@ -5,7 +5,7 @@ summary: Twitch 聊天机器人配置和设置
 title: Twitch
 x-i18n:
   generated_at: "2026-02-03T07:44:41Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0dd1c05bef570470d8b82c1f6dee5337e8b76b57269c5cad6aee2e711483f8ba
   source_path: channels/twitch.md

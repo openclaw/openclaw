@@ -11,6 +11,7 @@ export function applyModelOverrideToSessionEntry(params: {
   selection: ModelOverrideSelection;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
+  markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
@@ -102,6 +103,9 @@ export function applyModelOverrideToSessionEntry(params: {
 
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
+    if (selectionUpdated && params.markLiveSwitchPending) {
+      entry.liveModelSwitchPending = true;
+    }
     delete entry.fallbackNoticeSelectedModel;
     delete entry.fallbackNoticeActiveModel;
     delete entry.fallbackNoticeReason;

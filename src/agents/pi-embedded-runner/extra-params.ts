@@ -12,11 +12,13 @@ import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
+import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
 import {
   createSiliconFlowThinkingWrapper,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import { createOpenAIResponsesContextManagementWrapper } from "./openai-stream-wrappers.js";
+import { createOpenRouterSystemCacheWrapper } from "./proxy-stream-wrappers.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const defaultProviderRuntimeDeps = {
@@ -90,11 +92,22 @@ export function resolveExtraParams(params: {
     delete merged.textVerbosity;
   }
 
+  const resolvedCachedContent = resolveAliasedParamValue(
+    [defaultParams, globalParams, agentParams],
+    "cached_content",
+    "cachedContent",
+  );
+  if (resolvedCachedContent !== undefined) {
+    merged.cachedContent = resolvedCachedContent;
+    delete merged.cached_content;
+  }
+
   return merged;
 }
 
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
+  cachedContent?: string;
   openaiWsWarmup?: boolean;
 };
 type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
@@ -136,6 +149,15 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  const resolvedCachedContent = resolveAliasedParamValue(
+    [resolvedExtraParams, override],
+    "cached_content",
+    "cachedContent",
+  );
+  if (resolvedCachedContent !== undefined) {
+    merged.cachedContent = resolvedCachedContent;
+    delete merged.cached_content;
+  }
   return (
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
@@ -205,6 +227,15 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
+  }
+  const cachedContent =
+    typeof extraParams.cachedContent === "string"
+      ? extraParams.cachedContent
+      : typeof extraParams.cached_content === "string"
+        ? extraParams.cached_content
+        : undefined;
+  if (typeof cachedContent === "string" && cachedContent.trim()) {
+    streamParams.cachedContent = cachedContent.trim();
   }
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
@@ -328,6 +359,8 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
 function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
+  ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
+
   if (!ctx.providerWrapperHandled) {
     // Guard Google-family payloads against invalid negative thinking budgets
     // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
@@ -341,6 +374,11 @@ function applyPostPluginStreamWrappers(
       ctx.effectiveExtraParams,
     );
   }
+
+  // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
+  // visible reply path because it does not emit native Anthropic thinking
+  // blocks. Disable thinking unless an earlier wrapper already set it.
+  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.resolvedExtraParams, ctx.override],
@@ -416,7 +454,6 @@ export function applyExtraParamsToAgent(
     override,
   };
 
-  applyPrePluginStreamWrappers(wrapperContext);
   const providerStreamBase = agent.streamFn;
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
@@ -432,6 +469,9 @@ export function applyExtraParamsToAgent(
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
+  // Apply caller/config extra params outside provider defaults so explicit values
+  // like `openaiWsWarmup=false` can override provider-added defaults.
+  applyPrePluginStreamWrappers(wrapperContext);
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
   applyPostPluginStreamWrappers({

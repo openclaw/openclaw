@@ -499,7 +499,9 @@ describe("handleDiscordGuildAction", () => {
       client_status: {},
     } as never);
 
-    discordGuildActionRuntime.fetchMemberInfoDiscord = vi.fn(async () => ({ user: { id: "U1" } })) as never;
+    discordGuildActionRuntime.fetchMemberInfoDiscord = vi.fn(async () => ({
+      user: { id: "U1" },
+    })) as never;
 
     const result = await handleDiscordGuildAction(
       "memberInfo",

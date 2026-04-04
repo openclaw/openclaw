@@ -16,20 +16,29 @@ describe("resolveReasoningOutputMode", () => {
     resolveProviderReasoningOutputModeWithPluginMock.mockReturnValue(undefined);
   });
 
+  it.each([["google-generative-ai", "tagged"]] as const)(
+    "falls back to the built-in map for %s",
+    (provider, expected) => {
+      expect(resolveReasoningOutputMode({ provider, workspaceDir: process.cwd() })).toBe(expected);
+      expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([
     ["google", "tagged"],
     ["Google", "tagged"],
     ["google-gemini-cli", "tagged"],
-    ["google-generative-ai", "tagged"],
     ["anthropic", "native"],
     ["openai", "native"],
     ["openrouter", "native"],
     ["ollama", "native"],
     ["minimax", "native"],
     ["minimax-cn", "native"],
-  ] as const)("uses the built-in fast path for %s", (provider, expected) => {
+  ] as const)("prefers provider hooks for %s", (provider, expected) => {
+    resolveProviderReasoningOutputModeWithPluginMock.mockReturnValueOnce(expected);
+
     expect(resolveReasoningOutputMode({ provider, workspaceDir: process.cwd() })).toBe(expected);
-    expect(resolveProviderReasoningOutputModeWithPluginMock).not.toHaveBeenCalled();
+    expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to provider hooks for unknown providers", () => {
@@ -58,20 +67,30 @@ describe("isReasoningTagProvider", () => {
   });
 
   it.each([
+    ["google-generative-ai", true],
+    [null, false],
+    [undefined, false],
+    ["", false],
+  ] as const)("returns %s for %s", (value, expected) => {
+    expect(isReasoningTagProvider(value, { workspaceDir: process.cwd() })).toBe(expected);
+  });
+
+  it.each([
     ["google", true],
     ["Google", true],
     ["google-gemini-cli", true],
-    ["google-generative-ai", true],
     ["anthropic", false],
     ["openai", false],
     ["openrouter", false],
     ["ollama", false],
     ["minimax", false],
     ["minimax-cn", false],
-    [null, false],
-    [undefined, false],
-    ["", false],
-  ] as const)("returns %s for %s", (value, expected) => {
+  ] as const)("uses provider hooks when available for %s", (value, expected) => {
+    resolveProviderReasoningOutputModeWithPluginMock.mockReturnValueOnce(
+      expected ? "tagged" : "native",
+    );
+
     expect(isReasoningTagProvider(value, { workspaceDir: process.cwd() })).toBe(expected);
+    expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledTimes(1);
   });
 });

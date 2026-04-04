@@ -524,5 +524,7 @@ export function pruneHistoryForContextShare(params: {
 }
 
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
-  return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
+  const effective =
+    (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;
+  return Math.max(1, Math.floor(effective ?? DEFAULT_CONTEXT_TOKENS));
 }

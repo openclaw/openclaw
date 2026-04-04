@@ -17,21 +17,6 @@ const DEFAULT_DOCTOR_CHANNEL_CAPABILITIES: DoctorChannelCapabilities = {
   warnOnEmptyGroupSenderAllowlist: true,
 };
 
-const DOCTOR_CHANNEL_CAPABILITIES: Record<string, DoctorChannelCapabilities> = {
-  imessage: {
-    dmAllowFromMode: "topOnly",
-    groupModel: "sender",
-    groupAllowFromFallbackToAllowFrom: false,
-    warnOnEmptyGroupSenderAllowlist: true,
-  },
-  irc: {
-    dmAllowFromMode: "topOnly",
-    groupModel: "sender",
-    groupAllowFromFallbackToAllowFrom: false,
-    warnOnEmptyGroupSenderAllowlist: true,
-  },
-};
-
 export function getDoctorChannelCapabilities(channelName?: string): DoctorChannelCapabilities {
   if (!channelName) {
     return DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;
@@ -50,5 +35,5 @@ export function getDoctorChannelCapabilities(channelName?: string): DoctorChanne
         DEFAULT_DOCTOR_CHANNEL_CAPABILITIES.warnOnEmptyGroupSenderAllowlist,
     };
   }
-  return DOCTOR_CHANNEL_CAPABILITIES[channelName] ?? DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;
+  return DEFAULT_DOCTOR_CHANNEL_CAPABILITIES;
 }

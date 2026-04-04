@@ -6,7 +6,7 @@ summary: "`openclaw message`（发送 + 渠道操作）的 CLI 参考"
 title: message
 x-i18n:
   generated_at: "2026-02-01T20:21:30Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 35159baf1ef7136252e3ab1e5e03881ebc4196dd43425e2319a39306ced7f48c
   source_path: cli/message.md

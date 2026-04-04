@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createWhatsAppPollFixture,
-  expectWhatsAppPollSent,
-} from "../../../src/test-helpers/whatsapp-outbound.js";
+import { createWhatsAppPollFixture, expectWhatsAppPollSent } from "../contract-api.js";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
 
 describe("createWhatsAppOutboundBase", () => {

@@ -604,9 +604,10 @@ export function resolveProviderRequestCapabilities(
       policy.usesKnownNativeOpenAIEndpoint,
     shouldStripResponsesPromptCache:
       api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+    // Native endpoint class is the real signal here. Users can point a generic
+    // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
-      (provider === "moonshot" && endpointClass === "moonshot-native") ||
-      (provider === "modelstudio" && endpointClass === "modelstudio-native"),
+      endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
     compatibilityFamily,
   };
 }

@@ -3,16 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
-
-const TEST_BUNDLED_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/discord/runtime-api.js",
-  "dist/extensions/slack/helper-api.js",
-  "dist/extensions/telegram/thread-bindings-runtime.js",
-] as const;
+import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -752,11 +748,6 @@ describe("update-cli", () => {
     const pkgRoot = path.join(brewRoot, "openclaw");
     const brewNpm = path.join(brewPrefix, "bin", "npm");
     const win32PrefixNpm = path.join(brewPrefix, "npm.cmd");
-    const owningNpmCommands = new Set(
-      [brewNpm, path.resolve(brewNpm), win32PrefixNpm, path.resolve(win32PrefixNpm)].map(
-        (candidate) => path.normalize(candidate),
-      ),
-    );
     const pathNpmRoot = createCaseDir("nvm-root");
     mockPackageInstallStatus(pkgRoot);
     pathExists.mockResolvedValue(false);
@@ -782,11 +773,7 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
-      if (
-        owningNpmCommands.has(path.normalize(String(argv[0] ?? ""))) &&
-        argv[1] === "root" &&
-        argv[2] === "-g"
-      ) {
+      if (isOwningNpmCommand(argv[0], brewPrefix) && argv[1] === "root" && argv[2] === "-g") {
         return {
           stdout: `${brewRoot}\n`,
           stderr: "",
@@ -808,6 +795,7 @@ describe("update-cli", () => {
 
     await fs.mkdir(path.dirname(brewNpm), { recursive: true });
     await fs.writeFile(brewNpm, "", "utf8");
+    await fs.writeFile(win32PrefixNpm, "", "utf8");
     await updateCommand({ yes: true });
 
     platformSpy.mockRestore();
@@ -818,7 +806,7 @@ describe("update-cli", () => {
       .mock.calls.find(
         ([argv]) =>
           Array.isArray(argv) &&
-          owningNpmCommands.has(path.normalize(String(argv[0] ?? ""))) &&
+          isOwningNpmCommand(argv[0], brewPrefix) &&
           argv[1] === "i" &&
           argv[2] === "-g" &&
           argv[3] === "openclaw@latest",

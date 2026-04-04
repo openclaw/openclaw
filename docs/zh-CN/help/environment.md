@@ -7,7 +7,7 @@ summary: OpenClaw 从哪里加载环境变量以及优先级顺序
 title: 环境变量
 x-i18n:
   generated_at: "2026-02-03T07:47:11Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b49ae50e5d306612f89f93a86236188a4f2ec23f667e2388b043832be3ac1546
   source_path: help/environment.md

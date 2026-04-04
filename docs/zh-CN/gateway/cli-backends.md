@@ -7,7 +7,7 @@ summary: CLI 后端：通过本地 AI CLI 实现纯文本回退
 title: CLI 后端
 x-i18n:
   generated_at: "2026-02-03T07:47:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 56a96e83b16a4f6443cbf4a9da7a660c41a5b178af5e13f35352c9d72e1b08dd
   source_path: gateway/cli-backends.md
@@ -36,7 +36,7 @@ openclaw agent --message "hi" --model claude-cli/opus-4.5
 Codex CLI 也可以开箱即用：
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.2-codex
+openclaw agent --message "hi" --model codex-cli/gpt-5.4
 ```
 
 如果你的 Gateway 网关在 launchd/systemd 下运行且 PATH 很精简，只需添加命令路径：
@@ -66,11 +66,11 @@ openclaw agent --message "hi" --model codex-cli/gpt-5.2-codex
   agents: {
     defaults: {
       model: {
-        primary: "anthropic/claude-opus-4-5",
+        primary: "anthropic/claude-opus-4-6",
         fallbacks: ["claude-cli/opus-4.5"],
       },
       models: {
-        "anthropic/claude-opus-4-5": { alias: "Opus" },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
         "claude-cli/opus-4.5": {},
       },
     },
@@ -114,8 +114,8 @@ agents.defaults.cliBackends
           input: "arg",
           modelArg: "--model",
           modelAliases: {
-            "claude-opus-4-5": "opus",
-            "claude-sonnet-4-5": "sonnet",
+            "claude-opus-4-6": "opus",
+            "claude-sonnet-4-6": "sonnet",
           },
           sessionArg: "--session",
           sessionMode: "existing",

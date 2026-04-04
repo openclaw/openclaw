@@ -21,7 +21,7 @@ function coerceNativeSetting(value: unknown): boolean | "auto" | undefined {
   return undefined;
 }
 
-function isDiscordMutableAllowEntry(raw: string): boolean {
+export function isDiscordMutableAllowEntry(raw: string): boolean {
   const text = raw.trim();
   if (!text || text === "*") {
     return false;

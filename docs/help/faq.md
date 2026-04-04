@@ -156,18 +156,21 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     The wizard opens your browser with a clean (non-tokenized) dashboard URL right after onboarding and also prints the link in the summary. Keep that tab open; if it didn't launch, copy/paste the printed URL on the same machine.
   </Accordion>
 
-  <Accordion title="How do I authenticate the dashboard (token) on localhost vs remote?">
+  <Accordion title="How do I authenticate the dashboard on localhost vs remote?">
     **Localhost (same machine):**
 
     - Open `http://127.0.0.1:18789/`.
-    - If it asks for auth, paste the token from `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
-    - Retrieve it from the gateway host: `openclaw config get gateway.auth.token` (or generate one: `openclaw doctor --generate-gateway-token`).
+    - If it asks for shared-secret auth, paste the configured token or password into Control UI settings.
+    - Token source: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
+    - Password source: `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+    - If no shared secret is configured yet, generate a token with `openclaw doctor --generate-gateway-token`.
 
     **Not on localhost:**
 
-    - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no token, assumes trusted gateway host); HTTP APIs still require token/password.
-    - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"`, open `http://<tailscale-ip>:18789/`, paste token in dashboard settings.
-    - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/` and paste the token in Control UI settings.
+    - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no pasted shared secret, assumes trusted gateway host); HTTP APIs still require shared-secret auth unless you deliberately use private-ingress `none` or trusted-proxy HTTP auth.
+    - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"` (or configure password auth), open `http://<tailscale-ip>:18789/`, then paste the matching shared secret in dashboard settings.
+    - **Identity-aware reverse proxy**: keep the Gateway behind a non-loopback trusted proxy, configure `gateway.auth.mode: "trusted-proxy"`, then open the proxy URL.
+    - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`. Shared-secret auth still applies over the tunnel; paste the configured token or password if prompted.
 
     See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth details.
 
@@ -543,7 +546,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="What does onboarding actually do?">
     `openclaw onboard` is the recommended setup path. In **local mode** it walks you through:
 
-    - **Model/auth setup** (provider OAuth/setup-token flows and API keys supported, plus local model options such as LM Studio)
+    - **Model/auth setup** (provider OAuth, Claude CLI reuse, and API keys supported, plus local model options such as LM Studio)
     - **Workspace** location + bootstrap files
     - **Gateway settings** (bind/port/auth/tailscale)
     - **Providers** (WhatsApp, Telegram, Discord, Mattermost (plugin), Signal, iMessage)
@@ -559,68 +562,65 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **local-only models** so your data stays on your device. Subscriptions (Claude
     Pro/Max or OpenAI Codex) are optional ways to authenticate those providers.
 
-    If you choose Anthropic subscription auth, decide for yourself whether to use it:
-    Anthropic has blocked some subscription usage outside Claude Code in the past.
-    OpenAI Codex OAuth is explicitly supported for external tools like OpenClaw.
+    Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+    PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+    OpenClaw, and Anthropic subscription auth in OpenClaw now requires **Extra
+    Usage** billed separately from the subscription. OpenAI Codex OAuth is
+    explicitly supported for external tools like OpenClaw.
+
+    OpenClaw also supports other hosted subscription-style options including
+    **Alibaba Cloud Model Studio Coding Plan**, **MiniMax Coding Plan**, and
+    **Z.AI / GLM Coding Plan**.
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
+    [Qwen / Model Studio](/providers/qwen_modelstudio),
+    [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
   </Accordion>
 
   <Accordion title="Can I use Claude Max subscription without an API key?">
-    Yes. You can either use a **setup-token** or reuse a local **Claude CLI**
-    login on the gateway host.
+    Yes, via a local **Claude CLI** login on the gateway host.
 
-    Claude Pro/Max subscriptions **do not include an API key**, so this is the
-    technical path for subscription accounts. But this is your decision: Anthropic
-    has blocked some subscription usage outside Claude Code in the past.
-    If you want the clearest and safest supported path for production, use an Anthropic API key.
-
-  </Accordion>
-
-  <Accordion title="How does Anthropic setup-token auth work?">
-    `claude setup-token` generates a **token string** via the Claude Code CLI (it is not available in the web console). You can run it on **any machine**. Choose **Anthropic token (paste setup-token)** in onboarding or paste it with `openclaw models auth paste-token --provider anthropic`. The token is stored as an auth profile for the **anthropic** provider and used like an API key (no auto-refresh). More detail: [OAuth](/concepts/oauth).
-  </Accordion>
-
-  <Accordion title="Where do I find an Anthropic setup-token?">
-    It is **not** in the Anthropic Console. The setup-token is generated by the **Claude Code CLI** on **any machine**:
-
-    ```bash
-    claude setup-token
-    ```
-
-    Copy the token it prints, then choose **Anthropic token (paste setup-token)** in onboarding. If you want to run it on the gateway host, use `openclaw models auth setup-token --provider anthropic`. If you ran `claude setup-token` elsewhere, paste it on the gateway host with `openclaw models auth paste-token --provider anthropic`. See [Anthropic](/providers/anthropic).
+    Claude Pro/Max subscriptions **do not include an API key**, so Claude CLI
+    reuse is the supported subscription-style path in OpenClaw. Anthropic
+    changed third-party harness billing on **April 4, 2026 at 12:00 PM PT /
+    8:00 PM BST**: Anthropic says OpenClaw now requires **Extra Usage** billed
+    separately from the subscription for this path. If you want the clearest
+    and safest supported path for production, use an Anthropic API key.
 
   </Accordion>
 
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
-    Yes. You can either:
+    Yes. Reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`.
 
-    - use a **setup-token**
-    - reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`
+    Existing legacy Anthropic token profiles still run if they are already configured, but OpenClaw no longer offers Anthropic setup-token as a new setup path. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
-    Setup-token is still supported. Claude CLI migration is simpler when the gateway host already runs Claude Code. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Important: Anthropic changed third-party harness billing on **April 4, 2026
+    at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
+    longer cover OpenClaw, and Anthropic now requires **Extra Usage** billed
+    separately from the subscription for Claude CLI traffic through OpenClaw.
 
-    Important: this is technical compatibility, not a policy guarantee. Anthropic
-    has blocked some subscription usage outside Claude Code in the past.
-    You need to decide whether to use it and verify Anthropic's current terms.
-    For production or multi-user workloads, Anthropic API key auth is the safer, recommended choice.
+    For production or multi-user workloads, Anthropic API key auth is the
+    safer, recommended choice. If you want other subscription-style hosted
+    options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
+    Studio](/providers/qwen_modelstudio), [MiniMax](/providers/minimax), and
+    [GLM Models](/providers/glm).
 
   </Accordion>
 
 <a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
 <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
 That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-use a **Claude subscription** (setup-token), wait for the window to
-reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
+use **Claude CLI**, wait for the window to reset or upgrade your plan. If you
+use an **Anthropic API key**, check the Anthropic Console
 for usage/billing and raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
     Anthropic's 1M context beta (`context1m: true`). That only works when your
-    credential is eligible for long-context billing (API key billing or subscription
-    with Extra Usage enabled).
+    credential is eligible for long-context billing (API key billing or Claude
+    CLI with Extra Usage enabled).
 
     Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
@@ -629,7 +629,7 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is AWS Bedrock supported?">
-    Yes - via pi-ai's **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
+    Yes. OpenClaw has a bundled **Amazon Bedrock (Converse)** provider. With AWS env markers present, OpenClaw can auto-discover the streaming/text Bedrock catalog and merge it as an implicit `amazon-bedrock` provider; otherwise you can explicitly enable `models.bedrockDiscovery.enabled` or add a manual provider entry. See [Amazon Bedrock](/providers/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI-compatible proxy in front of Bedrock is still a valid option.
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
@@ -652,6 +652,8 @@ for usage/billing and raise limits as needed.
 
     1. Enable the plugin: `openclaw plugins enable google`
     2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+    3. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    4. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
@@ -1012,7 +1014,7 @@ for usage/billing and raise limits as needed.
     Debug:
 
     ```bash
-    openclaw cron run <jobId> --force
+    openclaw cron run <jobId>
     openclaw cron runs --id <jobId> --limit 50
     ```
 
@@ -1022,15 +1024,24 @@ for usage/billing and raise limits as needed.
 
   <Accordion title="How do I install skills on Linux?">
     Use native `openclaw skills` commands or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
-    Browse skills at [https://clawhub.com](https://clawhub.com).
+    Browse skills at [https://clawhub.ai](https://clawhub.ai).
 
     ```bash
     openclaw skills search "calendar"
+    openclaw skills search --limit 20
     openclaw skills install <skill-slug>
+    openclaw skills install <skill-slug> --version <version>
+    openclaw skills install <skill-slug> --force
     openclaw skills update --all
+    openclaw skills list --eligible
+    openclaw skills check
     ```
 
-    Install the separate `clawhub` CLI only if you want to publish or sync your own skills. For shared installs across agents, put the skill under `~/.openclaw/skills` and use `agents.defaults.skills` or `agents.list[].skills` if you want to narrow which agents can see it.
+    Native `openclaw skills install` writes into the active workspace `skills/`
+    directory. Install the separate `clawhub` CLI only if you want to publish or
+    sync your own skills. For shared installs across agents, put the skill under
+    `~/.openclaw/skills` and use `agents.defaults.skills` or
+    `agents.list[].skills` if you want to narrow which agents can see it.
 
   </Accordion>
 
@@ -1269,7 +1280,7 @@ for usage/billing and raise limits as needed.
     - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
       `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
       `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
-    - **State dir (`~/.openclaw`)**: config, credentials, auth profiles, sessions, logs,
+    - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs,
       and shared skills (`~/.openclaw/skills`).
 
     Default workspace is `~/.openclaw/workspace`, configurable via:
@@ -1413,9 +1424,10 @@ for usage/billing and raise limits as needed.
     `web_fetch` works without an API key. `web_search` depends on your selected
     provider:
 
-    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily require their normal API key setup.
+    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
     - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
     - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
+    - SearXNG is key-free/self-hosted; configure `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl`.
 
     **Recommended:** run `openclaw configure --section web` and choose a provider.
     Environment alternatives:
@@ -1426,7 +1438,9 @@ for usage/billing and raise limits as needed.
     - Gemini: `GEMINI_API_KEY`
     - Grok: `XAI_API_KEY`
     - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+    - MiniMax Search: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`
     - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+    - SearXNG: `SEARXNG_BASE_URL`
     - Tavily: `TAVILY_API_KEY`
 
     ```json5
@@ -2040,7 +2054,7 @@ for usage/billing and raise limits as needed.
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw currently assumes `anthropic` as a temporary deprecation fallback - but you should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw currently assumes the configured default provider (currently `openai`) as a temporary deprecation fallback - but you should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -2191,10 +2205,14 @@ for usage/billing and raise limits as needed.
     Fix checklist:
 
     1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
-    2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
-       exists in env/auth profiles so the provider can be injected.
-    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7` or
-       `minimax/MiniMax-M2.7-highspeed`.
+    2. Make sure MiniMax is configured (wizard or JSON), or that MiniMax auth
+       exists in env/auth profiles so the matching provider can be injected
+       (`MINIMAX_API_KEY` for `minimax`, `MINIMAX_OAUTH_TOKEN` or stored MiniMax
+       OAuth for `minimax-portal`).
+    3. Use the exact model id (case-sensitive) for your auth path:
+       `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed` for API-key
+       setup, or `minimax-portal/MiniMax-M2.7` /
+       `minimax-portal/MiniMax-M2.7-highspeed` for OAuth setup.
     4. Run:
 
        ```bash
@@ -2250,7 +2268,8 @@ for usage/billing and raise limits as needed.
     - `opus` → `anthropic/claude-opus-4-6`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
     - `gpt` → `openai/gpt-5.4`
-    - `gpt-mini` → `openai/gpt-5-mini`
+    - `gpt-mini` → `openai/gpt-5.4-mini`
+    - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`
     - `gemini-flash` → `google/gemini-3-flash-preview`
     - `gemini-flash-lite` → `google/gemini-3.1-flash-lite-preview`
@@ -2364,9 +2383,8 @@ for usage/billing and raise limits as needed.
     This means the run is pinned to an Anthropic auth profile, but the Gateway
     can't find it in its auth store.
 
-    - **Use a setup-token**
-      - Run `claude setup-token`, then paste it with `openclaw models auth setup-token --provider anthropic`.
-      - If the token was created on another machine, use `openclaw models auth paste-token --provider anthropic`.
+    - **Use Claude CLI**
+      - Run `openclaw models auth login --provider anthropic --method cli --set-default` on the gateway host.
     - **If you want to use an API key instead**
       - Put `ANTHROPIC_API_KEY` in `~/.openclaw/.env` on the **gateway host**.
       - Clear any pinned order that forces a missing profile:
@@ -2453,7 +2471,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - **OAuth** often leverages subscription access (where applicable).
     - **API keys** use pay-per-token billing.
 
-    The wizard explicitly supports Anthropic setup-token and OpenAI Codex OAuth and can store API keys for you.
+    The wizard explicitly supports Anthropic Claude CLI, OpenAI Codex OAuth, and API keys.
 
   </Accordion>
 </AccordionGroup>
@@ -2527,7 +2545,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
   </Accordion>
 
   <Accordion title='The Control UI says "unauthorized" (or keeps reconnecting). What now?'>
-    Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not sending the matching token/password.
+    Your gateway auth path and the UI's auth method do not match.
 
     Facts (from code):
 
@@ -2539,8 +2557,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - Fastest: `openclaw dashboard` (prints + copies the dashboard URL, tries to open; shows SSH hint if headless).
     - If you don't have a token yet: `openclaw doctor --generate-gateway-token`.
     - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
-    - Set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) on the gateway host.
-    - In the Control UI settings, paste the same token.
+    - Shared-secret mode: set `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, then paste the matching secret in Control UI settings.
+    - Tailscale Serve mode: make sure `gateway.auth.allowTailscale` is enabled and you are opening the Serve URL, not a raw loopback/tailnet URL that bypasses Tailscale identity headers.
+    - Trusted-proxy mode: make sure you are coming through the configured non-loopback identity-aware proxy, not a same-host loopback proxy or raw gateway URL.
     - If mismatch persists after the one retry, rotate/re-approve the paired device token:
       - `openclaw devices list`
       - `openclaw devices rotate --device <id> --role operator`

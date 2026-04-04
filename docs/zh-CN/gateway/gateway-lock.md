@@ -6,7 +6,7 @@ summary: 使用 WebSocket 监听器绑定的 Gateway 网关单例保护
 title: Gateway 网关锁
 x-i18n:
   generated_at: "2026-02-03T07:47:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 15fdfa066d1925da8b4632073a876709f77ca8d40e6828c174a30d953ba4f8e9
   source_path: gateway/gateway-lock.md

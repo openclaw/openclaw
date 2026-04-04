@@ -25,7 +25,7 @@ export async function loadUsageWithAuth<T extends ProviderUsageLoader>(
     now: usageNow,
     auth,
     fetch: mockFetch as unknown as typeof fetch,
-    // These tests exercise the built-in usage fetchers, not provider plugin hooks.
-    config: { plugins: { enabled: false } } as OpenClawConfig,
+    // Keep config minimal; bundled provider usage hooks own the provider-specific fetchers now.
+    config: {} as OpenClawConfig,
   });
 }

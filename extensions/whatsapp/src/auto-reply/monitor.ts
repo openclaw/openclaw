@@ -50,13 +50,13 @@ type ActiveConnectionRun = {
   backgroundTasks: Set<Promise<unknown>>;
 };
 
-function createActiveConnectionRun(lastInboundAt: number | null): ActiveConnectionRun {
+function createActiveConnectionRun(): ActiveConnectionRun {
   return {
     connectionId: newConnectionId(),
     startedAt: Date.now(),
     heartbeat: null,
     watchdogTimer: null,
-    lastInboundAt,
+    lastInboundAt: null,
     handledMessages: 0,
     unregisterUnhandled: null,
     backgroundTasks: new Set<Promise<unknown>>(),
@@ -171,7 +171,7 @@ export async function monitorWebChannel(
       break;
     }
 
-    const active = createActiveConnectionRun(status.lastInboundAt ?? status.lastMessageAt ?? null);
+    const active = createActiveConnectionRun();
 
     // Watchdog to detect stuck message processing (e.g., event emitter died).
     // Tuning overrides are test-oriented; production defaults remain unchanged.
@@ -306,10 +306,9 @@ export async function monitorWebChannel(
       }, heartbeatSeconds * 1000);
 
       active.watchdogTimer = setInterval(() => {
-        if (!active.lastInboundAt) {
-          return;
-        }
-        const timeSinceLastMessage = Date.now() - active.lastInboundAt;
+        // A reconnect should get a fresh watchdog window even before the next inbound arrives.
+        const watchdogBaselineAt = active.lastInboundAt ?? active.startedAt;
+        const timeSinceLastMessage = Date.now() - watchdogBaselineAt;
         if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
           return;
         }
@@ -319,7 +318,7 @@ export async function monitorWebChannel(
           {
             connectionId: active.connectionId,
             minutesSinceLastMessage,
-            lastInboundAt: new Date(active.lastInboundAt),
+            lastInboundAt: active.lastInboundAt ? new Date(active.lastInboundAt) : null,
             messagesHandled: active.handledMessages,
           },
           "Message timeout detected - forcing reconnect",

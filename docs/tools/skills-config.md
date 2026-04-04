@@ -50,7 +50,7 @@ auth/API key. Typical examples: `GEMINI_API_KEY` or `GOOGLE_API_KEY` for
 
 Examples:
 
-- Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3-pro-image-preview"`
+- Native Nano Banana-style setup: `agents.defaults.imageGenerationModel.primary: "google/gemini-3.1-flash-image-preview"`
 - Native fal setup: `agents.defaults.imageGenerationModel.primary: "fal/fal-ai/flux/dev"`
 
 ## Agent skill allowlists
@@ -95,6 +95,9 @@ Rules:
 - `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
   This only affects **skill installs**; the Gateway runtime should still be Node
   (Bun not recommended for WhatsApp/Telegram).
+  - `openclaw setup --node-manager` is narrower and currently accepts `npm`,
+    `pnpm`, or `bun`. Set `skills.install.nodeManager: "yarn"` manually if you
+    want Yarn-backed skill installs.
 - `entries.<skillKey>`: per-skill overrides.
 - `agents.defaults.skills`: optional default skill allowlist inherited by agents
   that omit `agents.list[].skills`.

@@ -1,5 +1,6 @@
 import {
   addWildcardAllowFrom,
+  applySetupAccountConfigPatch,
   createAllowFromSection,
   createStandardChannelSetupStatus,
   type ChannelSetupDmPolicy,
@@ -99,17 +100,23 @@ const dmPolicy: ChannelSetupDmPolicy = {
   setPolicy: (cfg, policy, accountId) => {
     const resolvedAccountId = accountId ?? resolveDefaultTelegramAccountId(cfg);
     const merged = mergeTelegramAccountConfig(cfg, resolvedAccountId);
-    return patchChannelConfigForAccount({
-      cfg,
-      channel,
-      accountId: resolvedAccountId,
-      patch: {
-        dmPolicy: policy,
-        ...(policy === "open"
-          ? { allowFrom: addWildcardAllowFrom(merged.allowFrom) }
-          : {}),
-      },
-    });
+    const patch = {
+      dmPolicy: policy,
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(merged.allowFrom) } : {}),
+    };
+    return accountId == null && resolvedAccountId !== DEFAULT_ACCOUNT_ID
+      ? applySetupAccountConfigPatch({
+          cfg,
+          channelKey: channel,
+          accountId: resolvedAccountId,
+          patch,
+        })
+      : patchChannelConfigForAccount({
+          cfg,
+          channel,
+          accountId: resolvedAccountId,
+          patch,
+        });
   },
   promptAllowFrom: promptTelegramAllowFromForAccount,
 };
@@ -127,8 +134,8 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     resolveConfigured: ({ cfg, accountId }) =>
       (accountId ? [accountId] : listTelegramAccountIds(cfg)).some((resolvedAccountId) => {
         const account = inspectTelegramAccount({ cfg, accountId: resolvedAccountId });
-          return account.configured;
-        }),
+        return account.configured;
+      }),
   }),
   prepare: async ({ cfg, accountId, credentialValues }) => ({
     cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),

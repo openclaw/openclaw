@@ -11,7 +11,7 @@ import googlePlugin from "./index.js";
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
-    const { providers } = registerProviderPlugin({
+    const { providers } = await registerProviderPlugin({
       plugin: googlePlugin,
       id: "google",
       name: "Google Provider",
@@ -81,8 +81,8 @@ describe("google provider plugin hooks", () => {
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
 
-  it("owns Gemini CLI tool schema normalization", () => {
-    const { providers } = registerProviderPlugin({
+  it("owns Gemini CLI tool schema normalization", async () => {
+    const { providers } = await registerProviderPlugin({
       plugin: googlePlugin,
       id: "google",
       name: "Google Provider",

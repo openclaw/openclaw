@@ -92,6 +92,8 @@ export const pluginRegistrationContractCases = {
     pluginId: "openai",
     providerIds: ["openai", "openai-codex"],
     speechProviderIds: ["openai"],
+    realtimeTranscriptionProviderIds: ["openai"],
+    realtimeVoiceProviderIds: ["openai"],
     mediaUnderstandingProviderIds: ["openai", "openai-codex"],
     imageGenerationProviderIds: ["openai"],
     cliBackendIds: ["codex-cli"],

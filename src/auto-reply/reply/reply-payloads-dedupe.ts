@@ -60,10 +60,6 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
-const PROVIDER_ALIAS_MAP: Record<string, string> = {
-  lark: "feishu",
-};
-
 function normalizeProviderForComparison(value?: string): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -74,7 +70,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   if (normalizedChannel) {
     return normalizedChannel;
   }
-  return PROVIDER_ALIAS_MAP[lowered] ?? lowered;
+  return lowered;
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {

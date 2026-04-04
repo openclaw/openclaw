@@ -201,6 +201,8 @@ const createStubPluginRegistry = (): PluginRegistry => ({
       }),
     },
   ],
+  realtimeTranscriptionProviders: [],
+  realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
   webFetchProviders: [],
