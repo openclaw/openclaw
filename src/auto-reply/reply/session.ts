@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import {
   buildTelegramTopicConversationId,
@@ -8,6 +9,10 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   deriveSessionMetaPatch,
@@ -49,6 +54,41 @@ import { forkSessionFromParent, resolveParentForkMaxTokens } from "./session-for
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 
 const log = createSubsystemLogger("session-init");
+const TERMINAL_SESSION_STATUSES = new Set(["done", "failed", "killed", "timeout"]);
+
+function shouldResetTerminalSessionFromNewerTranscript(params: {
+  entry: SessionEntry | undefined;
+  storePath: string;
+  sessionKey: string;
+}): boolean {
+  const entry = params.entry;
+  const isMainSessionKey =
+    params.sessionKey === "global" || /^agent:[^:]+:[^:]+$/.test(params.sessionKey);
+  if (!isMainSessionKey) {
+    return false;
+  }
+  if (!entry?.sessionId || !TERMINAL_SESSION_STATUSES.has(entry.status ?? "")) {
+    return false;
+  }
+  const persistedUpdatedAt = entry.updatedAt ?? 0;
+  if (!Number.isFinite(persistedUpdatedAt) || persistedUpdatedAt <= 0) {
+    return false;
+  }
+  try {
+    const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey });
+    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+      ...resolveSessionFilePathOptions({
+        agentId,
+        storePath: params.storePath,
+      }),
+      agentId,
+    });
+    const stat = fs.statSync(transcriptPath);
+    return Number.isFinite(stat.mtimeMs) && stat.mtimeMs > persistedUpdatedAt;
+  } catch {
+    return false;
+  }
+}
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -351,9 +391,15 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
-  const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
-    : false;
+  const transcriptAdvancedPastTerminalEntry = shouldResetTerminalSessionFromNewerTranscript({
+    entry,
+    storePath,
+    sessionKey,
+  });
+  const freshEntry =
+    (entry
+      ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
+      : false) && !transcriptAdvancedPastTerminalEntry;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).

@@ -1074,6 +1074,48 @@ describe("initSessionState reset policy", () => {
       previousSessionId: undefined,
     });
   });
+
+  it("starts a fresh session when a terminal main-session row is older than its transcript", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-terminal-transcript-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "terminal-stale-main";
+    const updatedAt = new Date(2026, 0, 18, 4, 0, 0).getTime();
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt,
+        status: "done",
+        endedAt: updatedAt,
+      },
+    });
+
+    const transcriptPath = path.join(root, `${existingSessionId}.jsonl`);
+    await fs.writeFile(
+      transcriptPath,
+      '{"type":"session","id":"terminal-stale-main"}\n',
+      "utf-8",
+    );
+    const transcriptMtime = new Date(updatedAt + 60_000);
+    await fs.utimes(transcriptPath, transcriptMtime, transcriptMtime);
+
+    const cfg = {
+      session: {
+        store: storePath,
+        idleMinutes: 240,
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
 });
 
 describe("initSessionState channel reset overrides", () => {
