@@ -111,6 +111,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Outbound/sanitizer: strip leaked `<tool_call>`, `<function_calls>`, and model special tokens from shared user-visible assistant text, including truncated tool-call streams, so internal scaffolding no longer bleeds into replies across surfaces. (#60619) Thanks @oliviareid-svg.
 - Control UI/avatar: honor `ui.assistant.avatar` when serving `/avatar/:agentId` so Appearance UI avatar paths stop falling back to initials placeholders. (#60778) Thanks @hannasdev.
+- Control UI/Overview: prevent gateway access token/password visibility toggle buttons from overlapping their inputs at narrow widths. (#56924) Thanks @bbddbb1.
 
 ## 2026.4.2
 
