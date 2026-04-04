@@ -1203,7 +1203,7 @@ Options:
 
 - `--json`
 - `--all` (full diagnosis; read-only, pasteable)
-- `--deep` (probe channels)
+- `--deep` (ask the gateway for a live health probe, including channel probes when supported)
 - `--usage` (show model provider usage/quota)
 - `--timeout <ms>`
 - `--verbose`
@@ -1241,8 +1241,13 @@ Options:
 
 - `--json`
 - `--timeout <ms>`
-- `--verbose`
+- `--verbose` (force a live probe and print gateway connection details)
 - `--debug` (alias for `--verbose`)
+
+Notes:
+
+- Default `health` can return a fresh cached gateway snapshot.
+- `health --verbose` forces a live probe and expands human-readable output across all configured accounts and agents.
 
 ### `sessions`
 
