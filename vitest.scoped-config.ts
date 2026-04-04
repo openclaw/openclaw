@@ -48,7 +48,7 @@ export function createScopedVitestConfig(
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
     name?: string;
-    pool?: "threads" | "forks";
+    pool?: "forks";
     passWithNoTests?: boolean;
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;

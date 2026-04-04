@@ -21,7 +21,7 @@ type VitestHostInfo = {
   totalMemoryBytes?: number;
 };
 
-export type OpenClawVitestPool = "threads" | "forks";
+export type OpenClawVitestPool = "forks";
 
 export const jsdomOptimizedDeps = {
   optimizer: {
@@ -97,10 +97,10 @@ export function resolveDefaultVitestPool(
   env: Record<string, string | undefined> = process.env,
 ): OpenClawVitestPool {
   const configuredPool = (env.OPENCLAW_VITEST_POOL ?? env.OPENCLAW_TEST_POOL)?.trim();
-  if (configuredPool === "threads" || configuredPool === "forks") {
-    return configuredPool;
+  if (configuredPool && configuredPool !== "forks") {
+    return "forks";
   }
-  return "threads";
+  return "forks";
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -146,21 +146,45 @@ export const sharedVitestConfig = {
       "vitest.acp.config.ts",
       "vitest.boundary.config.ts",
       "vitest.bundled.config.ts",
+      "vitest.cli.config.ts",
       "vitest.config.ts",
       "vitest.contracts.config.ts",
+      "vitest.cron.config.ts",
+      "vitest.daemon.config.ts",
       "vitest.e2e.config.ts",
+      "vitest.extension-acpx-paths.mjs",
+      "vitest.extension-acpx.config.ts",
+      "vitest.extension-bluebubbles-paths.mjs",
+      "vitest.extension-bluebubbles.config.ts",
       "vitest.extension-channels.config.ts",
+      "vitest.extension-diffs-paths.mjs",
+      "vitest.extension-diffs.config.ts",
+      "vitest.extension-matrix-paths.mjs",
+      "vitest.extension-matrix.config.ts",
+      "vitest.extension-memory-paths.mjs",
+      "vitest.extension-memory.config.ts",
+      "vitest.extension-messaging-paths.mjs",
+      "vitest.extension-messaging.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
       "vitest.infra.config.ts",
       "vitest.live.config.ts",
+      "vitest.media.config.ts",
+      "vitest.media-understanding.config.ts",
       "vitest.performance-config.ts",
       "vitest.scoped-config.ts",
+      "vitest.shared-core.config.ts",
       "vitest.shared.config.ts",
       "vitest.tooling.config.ts",
       "vitest.ui.config.ts",
       "vitest.unit.config.ts",
       "vitest.unit-paths.mjs",
+      "vitest.runtime-config.config.ts",
+      "vitest.secrets.config.ts",
+      "vitest.plugin-sdk.config.ts",
+      "vitest.plugins.config.ts",
+      "vitest.extension-telegram-paths.mjs",
+      "vitest.extension-telegram.config.ts",
       "vitest.extension-provider-paths.mjs",
       "vitest.extension-providers.config.ts",
     ],
@@ -235,6 +259,7 @@ export const sharedVitestConfig = {
         "src/node-host/**",
         "src/plugins/**",
         "src/providers/**",
+        "src/secrets/**",
         "src/agents/model-scan.ts",
         "src/agents/pi-embedded-runner.ts",
         "src/agents/sandbox-paths.ts",

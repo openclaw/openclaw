@@ -2,7 +2,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelSurfaceTestFile } from "../vitest.channel-paths.mjs";
+import { isAcpxExtensionRoot } from "../vitest.extension-acpx-paths.mjs";
+import { isBlueBubblesExtensionRoot } from "../vitest.extension-bluebubbles-paths.mjs";
+import { isDiffsExtensionRoot } from "../vitest.extension-diffs-paths.mjs";
+import { isMatrixExtensionRoot } from "../vitest.extension-matrix-paths.mjs";
+import { isMemoryExtensionRoot } from "../vitest.extension-memory-paths.mjs";
+import { isMessagingExtensionRoot } from "../vitest.extension-messaging-paths.mjs";
 import { isProviderExtensionRoot } from "../vitest.extension-provider-paths.mjs";
+import { isTelegramExtensionRoot } from "../vitest.extension-telegram-paths.mjs";
 import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
 
 const DEFAULT_VITEST_CONFIG = "vitest.unit.config.ts";
@@ -12,14 +19,31 @@ const AUTO_REPLY_VITEST_CONFIG = "vitest.auto-reply.config.ts";
 const BOUNDARY_VITEST_CONFIG = "vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "vitest.channels.config.ts";
+const CLI_VITEST_CONFIG = "vitest.cli.config.ts";
 const COMMANDS_VITEST_CONFIG = "vitest.commands.config.ts";
 const CONTRACTS_VITEST_CONFIG = "vitest.contracts.config.ts";
+const CRON_VITEST_CONFIG = "vitest.cron.config.ts";
+const DAEMON_VITEST_CONFIG = "vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "vitest.e2e.config.ts";
+const EXTENSION_ACPX_VITEST_CONFIG = "vitest.extension-acpx.config.ts";
+const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "vitest.extension-bluebubbles.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "vitest.extension-channels.config.ts";
+const EXTENSION_DIFFS_VITEST_CONFIG = "vitest.extension-diffs.config.ts";
+const EXTENSION_MATRIX_VITEST_CONFIG = "vitest.extension-matrix.config.ts";
+const EXTENSION_MEMORY_VITEST_CONFIG = "vitest.extension-memory.config.ts";
+const EXTENSION_MESSAGING_VITEST_CONFIG = "vitest.extension-messaging.config.ts";
 const EXTENSION_PROVIDERS_VITEST_CONFIG = "vitest.extension-providers.config.ts";
+const EXTENSION_TELEGRAM_VITEST_CONFIG = "vitest.extension-telegram.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "vitest.extensions.config.ts";
 const GATEWAY_VITEST_CONFIG = "vitest.gateway.config.ts";
 const INFRA_VITEST_CONFIG = "vitest.infra.config.ts";
+const MEDIA_VITEST_CONFIG = "vitest.media.config.ts";
+const MEDIA_UNDERSTANDING_VITEST_CONFIG = "vitest.media-understanding.config.ts";
+const PLUGIN_SDK_VITEST_CONFIG = "vitest.plugin-sdk.config.ts";
+const PLUGINS_VITEST_CONFIG = "vitest.plugins.config.ts";
+const RUNTIME_CONFIG_VITEST_CONFIG = "vitest.runtime-config.config.ts";
+const SECRETS_VITEST_CONFIG = "vitest.secrets.config.ts";
+const SHARED_CORE_VITEST_CONFIG = "vitest.shared-core.config.ts";
 const TOOLING_VITEST_CONFIG = "vitest.tooling.config.ts";
 const UI_VITEST_CONFIG = "vitest.ui.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
@@ -85,6 +109,27 @@ function classifyTarget(arg, cwd) {
     if (isChannelSurfaceTestFile(relative)) {
       return "extensionChannel";
     }
+    if (isAcpxExtensionRoot(extensionRoot)) {
+      return "extensionAcpx";
+    }
+    if (isDiffsExtensionRoot(extensionRoot)) {
+      return "extensionDiffs";
+    }
+    if (isBlueBubblesExtensionRoot(extensionRoot)) {
+      return "extensionBlueBubbles";
+    }
+    if (isTelegramExtensionRoot(extensionRoot)) {
+      return "extensionTelegram";
+    }
+    if (isMatrixExtensionRoot(extensionRoot)) {
+      return "extensionMatrix";
+    }
+    if (isMemoryExtensionRoot(extensionRoot)) {
+      return "extensionMemory";
+    }
+    if (isMessagingExtensionRoot(extensionRoot)) {
+      return "extensionMessaging";
+    }
     return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
   }
   if (isChannelSurfaceTestFile(relative)) {
@@ -110,14 +155,44 @@ function classifyTarget(arg, cwd) {
   if (isBundledPluginDependentUnitTestFile(relative)) {
     return "bundled";
   }
+  if (relative.startsWith("src/channels/")) {
+    return "channel";
+  }
   if (relative.startsWith("src/gateway/")) {
     return "gateway";
   }
   if (relative.startsWith("src/infra/")) {
     return "infra";
   }
+  if (relative.startsWith("src/config/")) {
+    return "runtimeConfig";
+  }
+  if (relative.startsWith("src/cron/")) {
+    return "cron";
+  }
+  if (relative.startsWith("src/daemon/")) {
+    return "daemon";
+  }
+  if (relative.startsWith("src/media-understanding/")) {
+    return "mediaUnderstanding";
+  }
+  if (relative.startsWith("src/media/")) {
+    return "media";
+  }
+  if (relative.startsWith("src/plugin-sdk/")) {
+    return "pluginSdk";
+  }
+  if (relative.startsWith("src/secrets/")) {
+    return "secrets";
+  }
+  if (relative.startsWith("src/shared/")) {
+    return "sharedCore";
+  }
   if (relative.startsWith("src/acp/")) {
     return "acp";
+  }
+  if (relative.startsWith("src/cli/")) {
+    return "cli";
   }
   if (relative.startsWith("src/commands/")) {
     return "command";
@@ -127,6 +202,9 @@ function classifyTarget(arg, cwd) {
   }
   if (relative.startsWith("src/agents/")) {
     return "agent";
+  }
+  if (relative.startsWith("src/plugins/")) {
+    return "plugin";
   }
   if (relative.startsWith("ui/src/ui/")) {
     return "ui";
@@ -203,13 +281,30 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     "bundled",
     "gateway",
     "infra",
+    "runtimeConfig",
+    "cron",
+    "daemon",
+    "media",
+    "pluginSdk",
+    "secrets",
+    "sharedCore",
+    "mediaUnderstanding",
     "acp",
+    "cli",
     "command",
     "autoReply",
     "agent",
+    "plugin",
     "ui",
     "e2e",
+    "extensionAcpx",
+    "extensionDiffs",
+    "extensionBlueBubbles",
     "extensionChannel",
+    "extensionTelegram",
+    "extensionMatrix",
+    "extensionMemory",
+    "extensionMessaging",
     "extensionProvider",
     "channel",
     "extension",
@@ -233,27 +328,61 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
                 ? GATEWAY_VITEST_CONFIG
                 : kind === "infra"
                   ? INFRA_VITEST_CONFIG
-                  : kind === "acp"
-                    ? ACP_VITEST_CONFIG
-                    : kind === "command"
-                      ? COMMANDS_VITEST_CONFIG
-                      : kind === "autoReply"
-                        ? AUTO_REPLY_VITEST_CONFIG
-                        : kind === "agent"
-                          ? AGENTS_VITEST_CONFIG
-                          : kind === "ui"
-                            ? UI_VITEST_CONFIG
-                            : kind === "e2e"
-                              ? E2E_VITEST_CONFIG
-                              : kind === "extensionChannel"
-                                ? EXTENSION_CHANNELS_VITEST_CONFIG
-                                : kind === "extensionProvider"
-                                  ? EXTENSION_PROVIDERS_VITEST_CONFIG
-                                  : kind === "channel"
-                                    ? CHANNEL_VITEST_CONFIG
-                                    : kind === "extension"
-                                      ? EXTENSIONS_VITEST_CONFIG
-                                      : DEFAULT_VITEST_CONFIG;
+                  : kind === "runtimeConfig"
+                    ? RUNTIME_CONFIG_VITEST_CONFIG
+                    : kind === "cron"
+                      ? CRON_VITEST_CONFIG
+                      : kind === "daemon"
+                        ? DAEMON_VITEST_CONFIG
+                        : kind === "media"
+                          ? MEDIA_VITEST_CONFIG
+                          : kind === "pluginSdk"
+                            ? PLUGIN_SDK_VITEST_CONFIG
+                            : kind === "secrets"
+                              ? SECRETS_VITEST_CONFIG
+                              : kind === "sharedCore"
+                                ? SHARED_CORE_VITEST_CONFIG
+                                : kind === "mediaUnderstanding"
+                                  ? MEDIA_UNDERSTANDING_VITEST_CONFIG
+                                  : kind === "acp"
+                                    ? ACP_VITEST_CONFIG
+                                    : kind === "cli"
+                                      ? CLI_VITEST_CONFIG
+                                      : kind === "command"
+                                        ? COMMANDS_VITEST_CONFIG
+                                        : kind === "autoReply"
+                                          ? AUTO_REPLY_VITEST_CONFIG
+                                          : kind === "agent"
+                                            ? AGENTS_VITEST_CONFIG
+                                            : kind === "plugin"
+                                              ? PLUGINS_VITEST_CONFIG
+                                              : kind === "ui"
+                                                ? UI_VITEST_CONFIG
+                                                : kind === "e2e"
+                                                  ? E2E_VITEST_CONFIG
+                                                  : kind === "extensionAcpx"
+                                                    ? EXTENSION_ACPX_VITEST_CONFIG
+                                                    : kind === "extensionDiffs"
+                                                      ? EXTENSION_DIFFS_VITEST_CONFIG
+                                                      : kind === "extensionBlueBubbles"
+                                                        ? EXTENSION_BLUEBUBBLES_VITEST_CONFIG
+                                                        : kind === "extensionChannel"
+                                                          ? EXTENSION_CHANNELS_VITEST_CONFIG
+                                                          : kind === "extensionTelegram"
+                                                            ? EXTENSION_TELEGRAM_VITEST_CONFIG
+                                                            : kind === "extensionMatrix"
+                                                              ? EXTENSION_MATRIX_VITEST_CONFIG
+                                                              : kind === "extensionMemory"
+                                                                ? EXTENSION_MEMORY_VITEST_CONFIG
+                                                                : kind === "extensionMessaging"
+                                                                  ? EXTENSION_MESSAGING_VITEST_CONFIG
+                                                                  : kind === "extensionProvider"
+                                                                    ? EXTENSION_PROVIDERS_VITEST_CONFIG
+                                                                    : kind === "channel"
+                                                                      ? CHANNEL_VITEST_CONFIG
+                                                                      : kind === "extension"
+                                                                        ? EXTENSIONS_VITEST_CONFIG
+                                                                        : DEFAULT_VITEST_CONFIG;
     const includePatterns =
       kind === "default" || kind === "e2e"
         ? null

@@ -6,13 +6,30 @@ import { createAcpVitestConfig } from "../vitest.acp.config.ts";
 import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
 import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
+import { createCliVitestConfig } from "../vitest.cli.config.ts";
 import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
+import { createCronVitestConfig } from "../vitest.cron.config.ts";
+import { createDaemonVitestConfig } from "../vitest.daemon.config.ts";
+import { createExtensionAcpxVitestConfig } from "../vitest.extension-acpx.config.ts";
+import { createExtensionBlueBubblesVitestConfig } from "../vitest.extension-bluebubbles.config.ts";
 import { createExtensionChannelsVitestConfig } from "../vitest.extension-channels.config.ts";
+import { createExtensionDiffsVitestConfig } from "../vitest.extension-diffs.config.ts";
+import { createExtensionMatrixVitestConfig } from "../vitest.extension-matrix.config.ts";
+import { createExtensionMemoryVitestConfig } from "../vitest.extension-memory.config.ts";
+import { createExtensionMessagingVitestConfig } from "../vitest.extension-messaging.config.ts";
 import { createExtensionProvidersVitestConfig } from "../vitest.extension-providers.config.ts";
+import { createExtensionTelegramVitestConfig } from "../vitest.extension-telegram.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "../vitest.infra.config.ts";
+import { createMediaUnderstandingVitestConfig } from "../vitest.media-understanding.config.ts";
+import { createMediaVitestConfig } from "../vitest.media.config.ts";
+import { createPluginSdkVitestConfig } from "../vitest.plugin-sdk.config.ts";
+import { createPluginsVitestConfig } from "../vitest.plugins.config.ts";
+import { createRuntimeConfigVitestConfig } from "../vitest.runtime-config.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
+import { createSecretsVitestConfig } from "../vitest.secrets.config.ts";
+import { createSharedCoreVitestConfig } from "../vitest.shared-core.config.ts";
 import { createToolingVitestConfig } from "../vitest.tooling.config.ts";
 import { createUiVitestConfig } from "../vitest.ui.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
@@ -76,24 +93,41 @@ describe("createScopedVitestConfig", () => {
 describe("scoped vitest configs", () => {
   const defaultChannelsConfig = createChannelsVitestConfig({});
   const defaultAcpConfig = createAcpVitestConfig({});
+  const defaultCliConfig = createCliVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
+  const defaultExtensionAcpxConfig = createExtensionAcpxVitestConfig({});
+  const defaultExtensionBlueBubblesConfig = createExtensionBlueBubblesVitestConfig({});
   const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
+  const defaultExtensionDiffsConfig = createExtensionDiffsVitestConfig({});
+  const defaultExtensionMatrixConfig = createExtensionMatrixVitestConfig({});
+  const defaultExtensionMemoryConfig = createExtensionMemoryVitestConfig({});
+  const defaultExtensionMessagingConfig = createExtensionMessagingVitestConfig({});
   const defaultExtensionProvidersConfig = createExtensionProvidersVitestConfig({});
+  const defaultExtensionTelegramConfig = createExtensionTelegramVitestConfig({});
   const defaultGatewayConfig = createGatewayVitestConfig({});
   const defaultInfraConfig = createInfraVitestConfig({});
+  const defaultPluginSdkConfig = createPluginSdkVitestConfig({});
+  const defaultSecretsConfig = createSecretsVitestConfig({});
+  const defaultRuntimeConfig = createRuntimeConfigVitestConfig({});
+  const defaultCronConfig = createCronVitestConfig({});
+  const defaultDaemonConfig = createDaemonVitestConfig({});
+  const defaultMediaConfig = createMediaVitestConfig({});
+  const defaultMediaUnderstandingConfig = createMediaUnderstandingVitestConfig({});
+  const defaultSharedCoreConfig = createSharedCoreVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
   const defaultAgentsConfig = createAgentsVitestConfig({});
+  const defaultPluginsConfig = createPluginsVitestConfig({});
   const defaultToolingConfig = createToolingVitestConfig({});
   const defaultUiConfig = createUiVitestConfig({});
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
-    expect(defaultChannelsConfig.test?.pool).toBe("threads");
+    expect(defaultChannelsConfig.test?.pool).toBe("forks");
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
-    expect(defaultChannelsConfig.test?.include).toEqual([]);
+    expect(defaultChannelsConfig.test?.include).toEqual(["src/channels/**/*.test.ts"]);
   });
 
   it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
@@ -125,7 +159,7 @@ describe("scoped vitest configs", () => {
 
   it("defaults extension tests to non-isolated mode", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
-    expect(defaultExtensionsConfig.test?.pool).toBe("threads");
+    expect(defaultExtensionsConfig.test?.pool).toBe("forks");
   });
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {
@@ -143,6 +177,21 @@ describe("scoped vitest configs", () => {
     );
   });
 
+  it("normalizes bluebubbles extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionBlueBubblesConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionBlueBubblesConfig.test?.include).toEqual(["bluebubbles/**/*.test.ts"]);
+  });
+
+  it("normalizes acpx extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionAcpxConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionAcpxConfig.test?.include).toEqual(["acpx/**/*.test.ts"]);
+  });
+
+  it("normalizes diffs extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionDiffsConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionDiffsConfig.test?.include).toEqual(["diffs/**/*.test.ts"]);
+  });
+
   it("normalizes extension include patterns relative to the scoped dir", () => {
     expect(defaultExtensionsConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
@@ -155,21 +204,50 @@ describe("scoped vitest configs", () => {
     );
   });
 
-  it("keeps telegram plugin tests in extensions while excluding channel-surface plugin roots", () => {
+  it("normalizes extension messaging include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionMessagingConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionMessagingConfig.test?.include).toEqual(
+      expect.arrayContaining(["feishu/**/*.test.ts"]),
+    );
+  });
+
+  it("normalizes matrix extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionMatrixConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionMatrixConfig.test?.include).toEqual(["matrix/**/*.test.ts"]);
+  });
+
+  it("normalizes telegram extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionTelegramConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionTelegramConfig.test?.include).toEqual(["telegram/**/*.test.ts"]);
+  });
+
+  it("normalizes memory extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionMemoryConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionMemoryConfig.test?.include).toEqual(
+      expect.arrayContaining(["memory-core/**/*.test.ts", "memory-lancedb/**/*.test.ts"]),
+    );
+  });
+
+  it("keeps telegram plugin tests out of the shared extensions lane", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
     expect(
       extensionExcludes.some((pattern) => path.matchesGlob("telegram/src/fetch.test.ts", pattern)),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       extensionExcludes.some((pattern) =>
         path.matchesGlob("telegram/src/bot/delivery.resolve-media-retry.test.ts", pattern),
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(defaultChannelsConfig.test?.include).not.toContain("extensions/telegram/**/*.test.ts");
     expect(defaultChannelsConfig.test?.exclude).not.toContain(
       bundledPluginFile("telegram", "src/fetch.test.ts"),
     );
     expect(defaultExtensionsConfig.test?.setupFiles).toEqual([
+      "test/setup.ts",
+      "test/setup.extensions.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
+    expect(defaultExtensionTelegramConfig.test?.setupFiles).toEqual([
       "test/setup.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
@@ -185,6 +263,50 @@ describe("scoped vitest configs", () => {
     ).toBe(true);
   });
 
+  it("keeps messaging plugin tests out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) => path.matchesGlob("matrix/src/channel.test.ts", pattern)),
+    ).toBe(true);
+  });
+
+  it("normalizes secrets include patterns relative to the scoped dir", () => {
+    expect(defaultSecretsConfig.test?.dir).toBe("src/secrets");
+    expect(defaultSecretsConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("keeps memory plugin tests out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) =>
+        path.matchesGlob("memory-core/src/memory/test-runtime-mocks.ts", pattern),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps bluebubbles tests out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) =>
+        path.matchesGlob("bluebubbles/src/monitor.test.ts", pattern),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps acpx tests out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) => path.matchesGlob("acpx/src/runtime.test.ts", pattern)),
+    ).toBe(true);
+  });
+
+  it("keeps diffs tests out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) => path.matchesGlob("diffs/src/render.test.ts", pattern)),
+    ).toBe(true);
+  });
+
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
@@ -193,6 +315,43 @@ describe("scoped vitest configs", () => {
   it("normalizes infra include patterns relative to the scoped dir", () => {
     expect(defaultInfraConfig.test?.dir).toBe("src");
     expect(defaultInfraConfig.test?.include).toEqual(["infra/**/*.test.ts"]);
+  });
+
+  it("normalizes runtime config include patterns relative to the scoped dir", () => {
+    expect(defaultRuntimeConfig.test?.dir).toBe("src");
+    expect(defaultRuntimeConfig.test?.include).toEqual(["config/**/*.test.ts"]);
+  });
+
+  it("normalizes cron include patterns relative to the scoped dir", () => {
+    expect(defaultCronConfig.test?.dir).toBe("src");
+    expect(defaultCronConfig.test?.include).toEqual(["cron/**/*.test.ts"]);
+  });
+
+  it("normalizes daemon include patterns relative to the scoped dir", () => {
+    expect(defaultDaemonConfig.test?.dir).toBe("src");
+    expect(defaultDaemonConfig.test?.include).toEqual(["daemon/**/*.test.ts"]);
+  });
+
+  it("normalizes media include patterns relative to the scoped dir", () => {
+    expect(defaultMediaConfig.test?.dir).toBe("src");
+    expect(defaultMediaConfig.test?.include).toEqual(["media/**/*.test.ts"]);
+  });
+
+  it("normalizes plugin-sdk include patterns relative to the scoped dir", () => {
+    expect(defaultPluginSdkConfig.test?.dir).toBe("src");
+    expect(defaultPluginSdkConfig.test?.include).toEqual(["plugin-sdk/**/*.test.ts"]);
+  });
+
+  it("normalizes shared-core include patterns relative to the scoped dir", () => {
+    expect(defaultSharedCoreConfig.test?.dir).toBe("src");
+    expect(defaultSharedCoreConfig.test?.include).toEqual(["shared/**/*.test.ts"]);
+  });
+
+  it("normalizes media-understanding include patterns relative to the scoped dir", () => {
+    expect(defaultMediaUnderstandingConfig.test?.dir).toBe("src");
+    expect(defaultMediaUnderstandingConfig.test?.include).toEqual([
+      "media-understanding/**/*.test.ts",
+    ]);
   });
 
   it("keeps tooling tests in their own lane", () => {
@@ -210,6 +369,11 @@ describe("scoped vitest configs", () => {
     expect(defaultAcpConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
+  it("normalizes cli include patterns relative to the scoped dir", () => {
+    expect(defaultCliConfig.test?.dir).toBe("src/cli");
+    expect(defaultCliConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
   it("normalizes commands include patterns relative to the scoped dir", () => {
     expect(defaultCommandsConfig.test?.dir).toBe("src/commands");
     expect(defaultCommandsConfig.test?.include).toEqual(["**/*.test.ts"]);
@@ -223,6 +387,11 @@ describe("scoped vitest configs", () => {
   it("normalizes agents include patterns relative to the scoped dir", () => {
     expect(defaultAgentsConfig.test?.dir).toBe("src/agents");
     expect(defaultAgentsConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("normalizes plugins include patterns relative to the scoped dir", () => {
+    expect(defaultPluginsConfig.test?.dir).toBe("src/plugins");
+    expect(defaultPluginsConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
   it("normalizes ui include patterns relative to the scoped dir", () => {
