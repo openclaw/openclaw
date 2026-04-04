@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import type { SessionEntry } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import { resolveVoiceResponseModel } from "./response-model.js";
 
 export type VoiceResponseParams = {
   /** Voice call config */
@@ -216,12 +217,7 @@ export async function generateVoiceResponse(
   });
 
   // Resolve model from config
-  const modelRef =
-    voiceConfig.responseModel || `${agentRuntime.defaults.provider}/${agentRuntime.defaults.model}`;
-  const slashIndex = modelRef.indexOf("/");
-  const provider =
-    slashIndex === -1 ? agentRuntime.defaults.provider : modelRef.slice(0, slashIndex);
-  const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
+  const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
 
   // Resolve thinking level
   const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });

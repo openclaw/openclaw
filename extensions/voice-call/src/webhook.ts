@@ -16,7 +16,7 @@ import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
-import { resolveProviderRawConfig, selectConfiguredOrAutoProvider } from "./provider-selection.js";
+import { resolveConfiguredCapabilityProvider } from "./provider-runtime-resolution.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
@@ -162,42 +162,35 @@ export class VoiceCallWebhookServer {
     const pluginConfig = this.coreConfig as unknown as OpenClawConfig | undefined;
     const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await import("./realtime-transcription.runtime.js");
-    const selection = selectConfiguredOrAutoProvider({
+    const resolution = resolveConfiguredCapabilityProvider({
       configuredProviderId: streaming.provider,
+      providerConfigs: streaming.providers,
+      cfg: pluginConfig,
+      cfgForResolve: pluginConfig ?? ({} as OpenClawConfig),
       getConfiguredProvider: (providerId) =>
         getRealtimeTranscriptionProvider(providerId, pluginConfig),
       listProviders: () => listRealtimeTranscriptionProviders(pluginConfig),
     });
-    if (selection.missingConfiguredProvider) {
+    if (!resolution.ok && resolution.code === "missing-configured-provider") {
       console.warn(
-        `[voice-call] Streaming enabled but realtime transcription provider "${selection.configuredProviderId}" is not registered`,
+        `[voice-call] Streaming enabled but realtime transcription provider "${resolution.configuredProviderId}" is not registered`,
       );
       return;
     }
-    const provider = selection.provider;
-    if (!provider) {
+    if (!resolution.ok && resolution.code === "no-registered-provider") {
       console.warn(
         "[voice-call] Streaming enabled but no realtime transcription provider is registered",
       );
       return;
     }
-    const rawProviderConfig = resolveProviderRawConfig({
-      providerId: provider.id,
-      configuredProviderId: selection.configuredProviderId,
-      providerConfigs: streaming.providers,
-    });
-    const providerConfig = provider.resolveConfig
-      ? provider.resolveConfig({
-          cfg: pluginConfig ?? ({} as OpenClawConfig),
-          rawConfig: rawProviderConfig,
-        })
-      : rawProviderConfig;
-    if (!provider.isConfigured({ cfg: pluginConfig, providerConfig })) {
+    if (!resolution.ok) {
       console.warn(
-        `[voice-call] Streaming enabled but provider "${provider.id}" is not configured`,
+        `[voice-call] Streaming enabled but provider "${resolution.provider?.id}" is not configured`,
       );
       return;
     }
+    const provider = resolution.provider;
+    const providerConfig = resolution.providerConfig;
 
     const streamConfig: MediaStreamConfig = {
       transcriptionProvider: provider,

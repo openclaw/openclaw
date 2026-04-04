@@ -7,7 +7,7 @@ import type { VoiceCallConfig } from "./config.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
-import { resolveProviderRawConfig, selectConfiguredOrAutoProvider } from "./provider-selection.js";
+import { resolveConfiguredCapabilityProvider } from "./provider-runtime-resolution.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
@@ -154,37 +154,31 @@ async function resolveRealtimeProvider(params: {
 }): Promise<ResolvedRealtimeProvider> {
   const { getRealtimeVoiceProvider, listRealtimeVoiceProviders } =
     await import("./realtime-voice.runtime.js");
-  const selection = selectConfiguredOrAutoProvider({
+  const resolution = resolveConfiguredCapabilityProvider({
     configuredProviderId: params.config.realtime.provider,
+    providerConfigs: params.config.realtime.providers,
+    cfg: params.fullConfig,
+    cfgForResolve: params.fullConfig,
     getConfiguredProvider: (providerId) => getRealtimeVoiceProvider(providerId, params.fullConfig),
     listProviders: () => listRealtimeVoiceProviders(params.fullConfig),
   });
-  if (selection.missingConfiguredProvider) {
+  if (!resolution.ok && resolution.code === "missing-configured-provider") {
     throw new Error(
-      `Realtime voice provider "${selection.configuredProviderId}" is not registered`,
+      `Realtime voice provider "${resolution.configuredProviderId}" is not registered`,
     );
   }
-  const provider = selection.provider;
-  if (!provider) {
+  if (!resolution.ok && resolution.code === "no-registered-provider") {
     throw new Error("No realtime voice provider registered");
   }
-
-  const rawProviderConfig = resolveProviderRawConfig({
-    providerId: provider.id,
-    configuredProviderId: selection.configuredProviderId,
-    providerConfigs: params.config.realtime.providers,
-  }) as RealtimeVoiceProviderConfig;
-  const providerConfig =
-    provider.resolveConfig?.({
-      cfg: params.fullConfig,
-      rawConfig: rawProviderConfig,
-    }) ?? rawProviderConfig;
-
-  if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {
-    throw new Error(`Realtime voice provider "${provider.id}" is not configured`);
+  if (!resolution.ok) {
+    throw new Error(`Realtime voice provider "${resolution.provider?.id}" is not configured`);
   }
 
-  return { provider, providerConfig };
+  const provider = resolution.provider;
+  return {
+    provider,
+    providerConfig: resolution.providerConfig as RealtimeVoiceProviderConfig,
+  };
 }
 
 export async function createVoiceCallRuntime(params: {
