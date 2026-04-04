@@ -319,6 +319,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     wrapStreamFn: (ctx) => wrapOpenAICodexProviderStream(ctx),
     resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
     resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
+    resolveReasoningOutputMode: () => "native",
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;

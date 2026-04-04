@@ -261,6 +261,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         : wrapAzureOpenAIProviderStream(ctx),
     resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
     resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
+    resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {

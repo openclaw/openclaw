@@ -40,6 +40,18 @@ assembly, and contract enforcement.
 - Keep contract loading and contract tests on the dedicated bundled registry
   path. Do not make contract validation depend on activating providers through
   unrelated production resolution flows.
+- Prefer shared provider-family helpers over ad hoc policy in plugin registry
+  hooks. If multiple providers need the same replay policy, tool compat, stream
+  wrapper composition, or payload patch behavior, centralize that helper before
+  adding another plugin-local lambda.
+- Keep provider policy layers separated:
+  auth/catalog/onboarding stay plugin-owned,
+  transport/replay/tool compat families belong in shared helpers,
+  registry/runtime code should compose those layers rather than re-encoding
+  policy inline.
+- When a provider hook grows a nested chain of wrapper composition or repeated
+  compat flags, treat that as a regression signal. Extract the shared helper or
+  composer instead of letting one more plugin carry a near-copy.
 
 ## Verification
 
