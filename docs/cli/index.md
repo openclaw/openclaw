@@ -546,7 +546,7 @@ Options:
 - `--skip-ui`
 - `--cloudflare-ai-gateway-account-id <id>`
 - `--cloudflare-ai-gateway-gateway-id <id>`
-- `--node-manager <npm|pnpm|yarn|bun>` (node manager for skills; pnpm recommended, bun and yarn also supported)
+- `--node-manager <npm|pnpm|bun>` (setup/onboarding node manager for skills; pnpm recommended, bun also supported)
 - `--json`
 
 ### `configure`

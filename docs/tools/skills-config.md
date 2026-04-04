@@ -95,6 +95,9 @@ Rules:
 - `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
   This only affects **skill installs**; the Gateway runtime should still be Node
   (Bun not recommended for WhatsApp/Telegram).
+  - `openclaw setup --node-manager` is narrower and currently accepts `npm`,
+    `pnpm`, or `bun`. Set `skills.install.nodeManager: "yarn"` manually if you
+    want Yarn-backed skill installs.
 - `entries.<skillKey>`: per-skill overrides.
 - `agents.defaults.skills`: optional default skill allowlist inherited by agents
   that omit `agents.list[].skills`.
