@@ -171,6 +171,20 @@ describe("splitMessagesByTokenShare", () => {
     expect(parts.flat().length).toBe(messages.length);
   });
 
+  it("splits before a trailing completed tool-call pair", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeAssistantToolCall(2, "call_tail", "y".repeat(200)),
+      makeToolResult(3, "call_tail", "r".repeat(4000)),
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    expect(parts.length).toBe(2);
+    expect(parts[0]?.map((m) => m.timestamp)).toEqual([1]);
+    expect(parts[1]?.map((m) => m.timestamp)).toEqual([2, 3]);
+  });
+
   it("does not block splits after aborted tool-call assistants", () => {
     const messages: AgentMessage[] = [
       makeAssistantToolCall(1, "call_abort", "y".repeat(4000), "aborted"),
@@ -182,6 +196,20 @@ describe("splitMessagesByTokenShare", () => {
 
     expect(parts.length).toBe(2);
     expect(parts.flat().length).toBe(messages.length);
+  });
+
+  it("splits before unfinished tool-call turns that never get a result", () => {
+    const messages: AgentMessage[] = [
+      makeMessage(1, 4000),
+      makeAssistantToolCall(2, "call_missing"),
+      makeMessage(3, 4000),
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    expect(parts.length).toBe(2);
+    expect(parts[0]?.map((m) => m.timestamp)).toEqual([1]);
+    expect(parts[1]?.map((m) => m.timestamp)).toEqual([2, 3]);
   });
 });
 
