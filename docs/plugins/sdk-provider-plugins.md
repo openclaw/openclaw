@@ -460,44 +460,47 @@ API key auth, and dynamic model resolution.
       | --- | --- | --- |
       | 1 | `catalog` | Model catalog or base URL defaults |
       | 2 | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
-      | 3 | `normalizeTransport` | Provider-family `api` / `baseUrl` cleanup before generic model assembly |
-      | 4 | `normalizeConfig` | Normalize `models.providers.<id>` config |
-      | 5 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
-      | 6 | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
-      | 7 | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
-      | 8 | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
-      | 9 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | 10 | `prepareDynamicModel` | Async metadata fetch before resolving |
-      | 11 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 12 | `capabilities` | Legacy static capability bag; compatibility only |
-      | 13 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 14 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 15 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 16 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
-      | 17 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
-      | 18 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
-      | 19 | `prepareExtraParams` | Default request params |
-      | 20 | `createStreamFn` | Fully custom StreamFn transport |
-      | 21 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
-      | 22 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 23 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 24 | `formatApiKey` | Custom runtime token shape |
-      | 25 | `refreshOAuth` | Custom OAuth refresh |
-      | 26 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 27 | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | 28 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
-      | 29 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 30 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 31 | `suppressBuiltInModel` | Hide stale upstream rows |
-      | 32 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 33 | `isBinaryThinking` | Binary thinking on/off |
-      | 34 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 35 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 36 | `isModernModelRef` | Live/smoke model matching |
-      | 37 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 38 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 39 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 40 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 3 | `normalizeModelId` | Legacy/preview model-id alias cleanup before lookup |
+      | 4 | `normalizeTransport` | Provider-family `api` / `baseUrl` cleanup before generic model assembly |
+      | 5 | `normalizeConfig` | Normalize `models.providers.<id>` config |
+      | 6 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
+      | 7 | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
+      | 8 | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
+      | 9 | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
+      | 10 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
+      | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
+      | 13 | `contributeResolvedModelCompat` | Compat flags for vendor models behind another compatible transport |
+      | 14 | `capabilities` | Legacy static capability bag; compatibility only |
+      | 15 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
+      | 16 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
+      | 17 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
+      | 18 | `prepareExtraParams` | Default request params |
+      | 19 | `createStreamFn` | Fully custom StreamFn transport |
+      | 20 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | 21 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 22 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 23 | `formatApiKey` | Custom runtime token shape |
+      | 24 | `refreshOAuth` | Custom OAuth refresh |
+      | 25 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 26 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 27 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 28 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 29 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 30 | `suppressBuiltInModel` | Hide stale upstream rows |
+      | 31 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 32 | `isBinaryThinking` | Binary thinking on/off |
+      | 33 | `supportsXHighThinking` | `xhigh` reasoning support |
+      | 34 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 35 | `isModernModelRef` | Live/smoke model matching |
+      | 36 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 37 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 38 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 39 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | 40 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 41 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 42 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 43 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
