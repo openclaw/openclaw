@@ -58,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: reuse durable exact-command `allow-always` approvals in allowlist mode so identical reruns stop prompting, and tighten Windows interpreter/path approval handling so wrapper and malformed-path cases fail closed more consistently. (#59880, #59780, #58040, #59182)
 - Agents/runtime: make default subagent allowlists, inherited skills/workspaces, and duplicate session-id resolution behave more predictably, and include value-shape hints in missing-parameter tool errors. (#59944, #59992, #59858, #55317)
 - Update/npm: prefer the npm binary that owns the installed global OpenClaw prefix so mixed Homebrew-plus-nvm setups update the right install. (#60153) Thanks @jayeshp19.
+- Gateway/plugin routes: keep gateway-auth plugin runtime routes on write-only fallback scopes unless a trusted-proxy caller explicitly declares narrower `x-openclaw-scopes`, so plugin HTTP handlers no longer mint admin-level runtime scopes on missing or untrusted HTTP scope headers. (#59815) Thanks @pgondhi987.
 
 ## 2026.4.2
 

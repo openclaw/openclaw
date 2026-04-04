@@ -61,16 +61,14 @@ import {
   authorizeGatewayHttpRequestOrReply,
   getBearerToken,
   resolveHttpBrowserOriginPolicy,
-  resolveTrustedHttpOperatorScopes,
-  type AuthorizedGatewayHttpRequest,
 } from "./http-utils.js";
-import { WRITE_SCOPE } from "./method-scopes.js";
 import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { authorizeCanvasRequest, isCanvasPath } from "./server/http-auth.js";
+import { resolvePluginRouteRuntimeOperatorScopes } from "./server/plugin-route-runtime-scopes.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
@@ -157,16 +155,6 @@ function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathConte
     pathContext.decodePassLimitReached ||
     isProtectedPluginRoutePathFromContext(pathContext)
   );
-}
-
-function resolvePluginRouteRuntimeOperatorScopes(
-  req: IncomingMessage,
-  requestAuth: AuthorizedGatewayHttpRequest,
-): string[] {
-  if (requestAuth.trustDeclaredOperatorScopes) {
-    return resolveTrustedHttpOperatorScopes(req, requestAuth);
-  }
-  return [WRITE_SCOPE];
 }
 
 async function canRevealReadinessDetails(params: {
