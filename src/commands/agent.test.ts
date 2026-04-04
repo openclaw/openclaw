@@ -7,6 +7,7 @@ import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js"
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import * as authProfilesModule from "../agents/auth-profiles.js";
 import * as cliRunnerModule from "../agents/cli-runner.js";
+import * as sessionStoreModule from "../agents/command/session-store.js";
 import { resolveSession } from "../agents/command/session.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -552,6 +553,52 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.sessionId).toBe("session-123");
+    });
+  });
+
+  it("creates a stable session key for explicit session-id-only runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store);
+
+      const resolution = resolveSession({ cfg, sessionId: "explicit-session-123" });
+
+      expect(resolution.sessionKey).toBe("agent:main:explicit:explicit-session-123");
+      expect(resolution.sessionId).toBe("explicit-session-123");
+    });
+  });
+
+  it("persists explicit session-id-only CLI runs with the synthetic session key", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: { primary: "claude-cli/claude-sonnet-4-6" },
+        models: { "claude-cli/claude-sonnet-4-6": {} },
+      });
+      vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => true);
+      runCliAgentSpy.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: {
+            sessionId: "claude-cli-session-1",
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            cliSessionBinding: {
+              sessionId: "claude-cli-session-1",
+            },
+          },
+        },
+      } as never);
+
+      await agentCommand({ message: "resume me", sessionId: "explicit-session-123" }, runtime);
+
+      expect(vi.mocked(sessionStoreModule.updateSessionStoreAfterAgentRun)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "explicit-session-123",
+          sessionKey: "agent:main:explicit:explicit-session-123",
+        }),
+      );
     });
   });
 

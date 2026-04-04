@@ -19,7 +19,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
+import { normalizeAgentId, normalizeMainKey } from "../../routing/session-key.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
@@ -46,6 +46,10 @@ type SessionIdMatchSet = {
   primaryStoreMatches: Array<[string, SessionEntry]>;
   storeByKey: Map<string, SessionKeyResolution>;
 };
+
+function buildExplicitSessionIdSessionKey(params: { sessionId: string; agentId?: string }): string {
+  return `agent:${normalizeAgentId(params.agentId)}:explicit:${params.sessionId.trim()}`;
+}
 
 function collectSessionIdMatchesForRequest(opts: {
   cfg: OpenClawConfig;
@@ -144,6 +148,13 @@ export function resolveSessionKeyForRequest(opts: {
       }
       sessionKey = currentStoreSelection.sessionKey;
     }
+  }
+
+  if (opts.sessionId && !sessionKey) {
+    sessionKey = buildExplicitSessionIdSessionKey({
+      sessionId: opts.sessionId,
+      agentId: opts.agentId,
+    });
   }
 
   return { sessionKey, sessionStore, storePath };
