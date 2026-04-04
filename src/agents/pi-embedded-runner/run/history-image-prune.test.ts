@@ -42,18 +42,22 @@ describe("pruneProcessedHistoryImages", () => {
       assistantTurn(),
       userText(),
       assistantTurn(),
+      userText(),
+      assistantTurn(),
     ];
 
     const content = expectPrunedImageMessage(messages, "expected user array content");
     expect(content[0]?.type).toBe("text");
   });
 
-  it("keeps image blocks within the last 3 assistant turns to preserve prompt cache", () => {
+  it("keeps image blocks that belong to the third-most-recent assistant turn", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "user",
         content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
       }),
+      assistantTurn(),
+      userText(),
       assistantTurn(),
       userText(),
       assistantTurn(),
@@ -94,6 +98,8 @@ describe("pruneProcessedHistoryImages", () => {
       assistantTurn(),
       userText(),
       assistantTurn(),
+      userText(),
+      assistantTurn(),
     ];
 
     expectPrunedImageMessage(messages, "expected toolResult array content");
@@ -105,6 +111,8 @@ describe("pruneProcessedHistoryImages", () => {
         role: "user",
         content: [{ type: "text", text: "old" }, { ...image }],
       }),
+      assistantTurn(),
+      userText(),
       assistantTurn(),
       userText(),
       assistantTurn(),
@@ -121,7 +129,7 @@ describe("pruneProcessedHistoryImages", () => {
     const oldContent = expectArrayMessageContent(messages[0], "expected old user content");
     expect(oldContent[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
 
-    const recentContent = expectArrayMessageContent(messages[4], "expected recent user content");
+    const recentContent = expectArrayMessageContent(messages[6], "expected recent user content");
     expect(recentContent[1]).toMatchObject({ type: "image", data: "abc" });
   });
 

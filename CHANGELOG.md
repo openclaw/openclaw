@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Ollama: add bundled Ollama Web Search provider for key-free web_search via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
 - Providers/transport: add shared proxy/TLS/auth-aware request transport support across model-provider paths, including Anthropic and Google native transport runtimes, so provider request overrides work beyond OpenAI-family traffic.
+- Cache/history images: preserve the full 3-turn embedded Pi image-cache window so prompt-cache prefix reuse survives one more assistant turn. (#60603) Thanks @gumadeiras.
 
 ### Fixes
 

@@ -21,7 +21,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i]?.role === "assistant") {
       assistantSeen++;
-      if (assistantSeen >= PRESERVE_RECENT_ASSISTANT_TURNS) {
+      if (assistantSeen > PRESERVE_RECENT_ASSISTANT_TURNS) {
         pruneBeforeIndex = i;
         break;
       }
