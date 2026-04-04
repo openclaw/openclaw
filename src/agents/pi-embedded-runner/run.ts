@@ -1057,7 +1057,7 @@ export async function runEmbeddedPiAgent(
               modelId,
             });
             const promptFailoverFailure =
-              promptFailoverReason !== null || isFailoverErrorMessage(errorText);
+              promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
