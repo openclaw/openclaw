@@ -1,9 +1,9 @@
 {
   "name": "@openclaw/open-prose",
-  "displayName": "OpenProse",
+  "displayName": "VeriClaw OpenProse",
   "version": "2026.3.14",
   "private": true,
-  "description": "OpenClaw OpenProse plugin for .prose workflows, multi-agent orchestration, and the /prose slash command.",
+  "description": "VeriClaw OpenProse plugin for .prose workflows, multi-agent orchestration, and the /prose slash command, built on the OpenClaw compatibility layer.",
   "keywords": [
     ".prose",
     "ai orchestration",

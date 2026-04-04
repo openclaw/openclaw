@@ -1,7 +1,7 @@
 {
   "id": "open-prose",
-  "name": "OpenProse",
-  "description": "Portable .prose workflow engine for OpenClaw with bundled prose skills, multi-agent orchestration, and the /prose slash command.",
+  "name": "VeriClaw OpenProse",
+  "description": "Portable .prose workflow engine for VeriClaw with bundled prose skills, multi-agent orchestration, and the /prose slash command, while preserving OpenClaw runtime compatibility.",
   "skills": ["./skills"],
   "bundledSkills": ["prose"],
   "commands": ["prose"],

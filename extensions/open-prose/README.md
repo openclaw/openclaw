@@ -1,8 +1,8 @@
-# OpenProse (plugin)
+# VeriClaw OpenProse (plugin)
 
-OpenProse is the OpenClaw plugin for `.prose` workflows, multi-agent orchestration, and AI workflow automation. It ships a bundled OpenProse skill pack plus the `/prose` slash command so you can run portable, markdown-first workflows inside OpenClaw.
+VeriClaw OpenProse is the public-facing plugin package for `.prose` workflows, multi-agent orchestration, and AI workflow automation. It ships a bundled OpenProse skill pack plus the `/prose` slash command so you can run portable, markdown-first workflows inside VeriClaw while keeping the OpenClaw compatibility layer underneath.
 
-If you are searching for an OpenClaw workflow plugin, a `.prose` runner, or a multi-agent slash command for reusable research, review, and automation flows, this is the plugin to enable.
+If you are searching for a VeriClaw workflow plugin, a `.prose` runner, or a multi-agent slash command for reusable research, review, and automation flows, this is the plugin to enable.
 
 ## Why install OpenProse
 
@@ -13,7 +13,7 @@ If you are searching for an OpenClaw workflow plugin, a `.prose` runner, or a mu
 
 ## Install + enable
 
-Bundled OpenClaw plugins are disabled by default. Enable OpenProse, restart the Gateway, then confirm that the plugin is loaded:
+Bundled OpenClaw plugins are disabled by default. Enable VeriClaw OpenProse, restart the Gateway, then confirm that the plugin is loaded:
 
 ```bash
 openclaw plugins enable open-prose
@@ -31,7 +31,7 @@ openclaw gateway restart
 
 ## First successful run
 
-In an OpenClaw chat or TUI session, start with:
+In a VeriClaw chat or TUI session, start with:
 
 ```text
 /prose help
