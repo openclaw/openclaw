@@ -67,11 +67,18 @@ export type SkillsInstallPreferences = {
 
 export type ParsedSkillFrontmatter = Record<string, string>;
 
+export type SkillExposure = {
+  includeInRuntimeRegistry: boolean;
+  includeInAvailableSkillsPrompt: boolean;
+  userInvocable: boolean;
+};
+
 export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
+  exposure?: SkillExposure;
 };
 
 export type SkillEligibilityContext = {
