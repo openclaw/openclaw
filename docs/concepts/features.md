@@ -14,7 +14,7 @@ title: "Features"
     Discord, iMessage, Signal, Slack, Telegram, WhatsApp, WebChat, and more with a single Gateway.
   </Card>
   <Card title="Plugins" icon="plug">
-    Add Matrix, Microsoft Teams, Nextcloud Talk, Nostr, Twitch, Zalo, and more with plugins.
+    Add Matrix, Nextcloud Talk, Nostr, Twitch, Zalo, and more with plugins.
   </Card>
   <Card title="Routing" icon="route">
     Multi-agent routing with isolated sessions.
@@ -34,8 +34,8 @@ title: "Features"
 
 **Channels:**
 
-- Built-in and bundled channels include BlueBubbles for iMessage, Discord, Google Chat, IRC, QQ Bot, Signal, Slack, Telegram, WebChat, and WhatsApp
-- Optional plugin channels include Feishu, LINE, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Voice Call, Zalo, and Zalo Personal
+- Built-in and bundled channels include BlueBubbles for iMessage, Discord, Feishu, Google Chat, IRC, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WebChat, and WhatsApp
+- Optional plugin channels include LINE, Matrix, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Voice Call, Zalo, and Zalo Personal
 - Third-party channel plugins can extend the Gateway further, such as WeChat
 - Group chat support with mention-based activation
 - DM safety with allowlists and pairing
