@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, Chrome MCP, and CDP)"
+summary: "CLI reference for `openclaw browser` (lifecycle, profiles, tabs, actions, state, and debugging)"
 read_when:
   - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
@@ -9,7 +9,7 @@ title: "browser"
 
 # `openclaw browser`
 
-Manage OpenClaw’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
+Manage OpenClaw's browser control surface and run browser actions (lifecycle, profiles, tabs, snapshots, screenshots, navigation, input, state emulation, and debugging).
 
 Related:
 
@@ -20,6 +20,7 @@ Related:
 - `--url <gatewayWsUrl>`: Gateway WebSocket URL (defaults to config).
 - `--token <token>`: Gateway token (if required).
 - `--timeout <ms>`: request timeout (ms).
+- `--expect-final`: wait for a final Gateway response.
 - `--browser-profile <name>`: choose a browser profile (default from config).
 - `--json`: machine-readable output (where supported).
 
@@ -30,6 +31,15 @@ openclaw browser profiles
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
+```
+
+## Lifecycle
+
+```bash
+openclaw browser status
+openclaw browser start
+openclaw browser stop
+openclaw browser --browser-profile openclaw reset-profile
 ```
 
 ## If the command is missing
@@ -65,6 +75,7 @@ Profiles are named browser routing configs. In practice:
 openclaw browser profiles
 openclaw browser create-profile --name work --color "#FF5A36"
 openclaw browser create-profile --name chrome-live --driver existing-session
+openclaw browser create-profile --name remote --cdp-url https://browser-host.example.com
 openclaw browser delete-profile --name work
 ```
 
@@ -78,6 +89,9 @@ openclaw browser --browser-profile work tabs
 
 ```bash
 openclaw browser tabs
+openclaw browser tab new
+openclaw browser tab select 2
+openclaw browser tab close 2
 openclaw browser open https://docs.openclaw.ai
 openclaw browser focus <targetId>
 openclaw browser close <targetId>
@@ -103,6 +117,64 @@ Navigate/click/type (ref-based UI automation):
 openclaw browser navigate https://example.com
 openclaw browser click <ref>
 openclaw browser type <ref> "hello"
+openclaw browser press Enter
+openclaw browser hover <ref>
+openclaw browser scrollintoview <ref>
+openclaw browser drag <startRef> <endRef>
+openclaw browser select <ref> OptionA OptionB
+openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
+openclaw browser wait --text "Done"
+openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
+```
+
+File + dialog helpers:
+
+```bash
+openclaw browser upload /tmp/openclaw/uploads/file.pdf --ref <ref>
+openclaw browser waitfordownload
+openclaw browser download <ref> report.pdf
+openclaw browser dialog --accept
+```
+
+## State and storage
+
+Viewport + emulation:
+
+```bash
+openclaw browser resize 1280 720
+openclaw browser set viewport 1280 720
+openclaw browser set offline on
+openclaw browser set media dark
+openclaw browser set timezone Europe/London
+openclaw browser set locale en-GB
+openclaw browser set geo 51.5074 -0.1278 --accuracy 25
+openclaw browser set device "iPhone 14"
+openclaw browser set headers '{"x-test":"1"}'
+openclaw browser set credentials myuser mypass
+```
+
+Cookies + storage:
+
+```bash
+openclaw browser cookies
+openclaw browser cookies set session abc123 --url https://example.com
+openclaw browser cookies clear
+openclaw browser storage local get
+openclaw browser storage local set token abc123
+openclaw browser storage session clear
+```
+
+## Debugging
+
+```bash
+openclaw browser console --level error
+openclaw browser pdf
+openclaw browser responsebody "**/api"
+openclaw browser highlight <ref>
+openclaw browser errors --clear
+openclaw browser requests --filter api
+openclaw browser trace start
+openclaw browser trace stop --out trace.zip
 ```
 
 ## Existing Chrome via MCP
