@@ -192,18 +192,48 @@ Look for:
 - Service config mismatch (`Config (cli)` vs `Config (service)`).
 - Port/listener conflicts.
 - Extra launchd/systemd/schtasks installs when `--deep` is used.
+- `Other gateway-like services detected (best effort)` cleanup hints.
 
 Common signatures:
 
 - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → local gateway mode is not enabled, or the config file was clobbered and lost `gateway.mode`. Fix: set `gateway.mode="local"` in your config, or re-run `openclaw onboard --mode local` / `openclaw setup` to restamp the expected local-mode config. If you are running OpenClaw via Podman, the default config path is `~/.openclaw/openclaw.json`.
 - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
 - `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
+- `Other gateway-like services detected (best effort)` → stale or parallel launchd/systemd/schtasks units exist. Most setups should keep one gateway per machine; if you do need more than one, isolate ports + config/state/workspace. See [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
 
 Related:
 
 - [/gateway/background-process](/gateway/background-process)
 - [/gateway/configuration](/gateway/configuration)
 - [/gateway/doctor](/gateway/doctor)
+
+## Gateway probe warnings
+
+Use this when `openclaw gateway probe` reaches something, but still prints a warning block.
+
+```bash
+openclaw gateway probe
+openclaw gateway probe --json
+openclaw gateway probe --ssh user@gateway-host
+```
+
+Look for:
+
+- `warnings[].code` and `primaryTargetId` in JSON output.
+- Whether the warning is about SSH fallback, multiple gateways, missing scopes, or unresolved auth refs.
+
+Common signatures:
+
+- `SSH tunnel failed to start; falling back to direct probes.` → SSH setup failed, but the command still tried direct configured/loopback targets.
+- `multiple reachable gateways detected` → more than one target answered. Usually this means an intentional multi-gateway setup or stale/duplicate listeners.
+- `Probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
+- unresolved `gateway.auth.*` / `gateway.remote.*` SecretRef warning text → auth material was unavailable in this command path for the failed target.
+
+Related:
+
+- [/cli/gateway](/cli/gateway)
+- [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host)
+- [/gateway/remote](/gateway/remote)
 
 ## Channel connected messages not flowing
 

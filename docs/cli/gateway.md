@@ -132,6 +132,7 @@ Notes:
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
 - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need the Gateway RPC itself to be healthy.
+- `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
 - Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
 - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
 - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
@@ -170,10 +171,21 @@ JSON notes (`--json`):
 - Top level:
   - `ok`: at least one target is reachable.
   - `degraded`: at least one target had scope-limited detail RPC.
+  - `primaryTargetId`: best target to treat as the active winner in this order: explicit URL, SSH tunnel, configured remote, then local loopback.
+  - `warnings[]`: best-effort warning records with `code`, `message`, and optional `targetIds`.
+  - `network`: local loopback/tailnet URL hints derived from current config and host networking.
+  - `discovery.timeoutMs` and `discovery.count`: the actual discovery budget/result count used for this probe pass.
 - Per target (`targets[].connect`):
   - `ok`: reachability after connect + degraded classification.
   - `rpcOk`: full detail RPC success.
   - `scopeLimited`: detail RPC failed due to missing operator scope.
+
+Common warning codes:
+
+- `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
+- `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
+- `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
+- `probe_scope_limited`: WebSocket connect succeeded, but detail RPC was limited by missing `operator.read`.
 
 #### Remote over SSH (Mac app parity)
 

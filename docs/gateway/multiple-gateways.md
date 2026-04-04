@@ -106,7 +106,15 @@ openclaw gateway --port 19001
 ## Quick checks
 
 ```bash
+openclaw --profile main gateway status --deep
+openclaw --profile rescue gateway status --deep
+openclaw --profile rescue gateway probe
 openclaw --profile main status
 openclaw --profile rescue status
 openclaw --profile rescue browser status
 ```
+
+Interpretation:
+
+- `gateway status --deep` helps catch stale launchd/systemd/schtasks services from older installs.
+- `gateway probe` warning text such as `multiple reachable gateways detected` is expected only when you intentionally run more than one isolated gateway.
