@@ -259,7 +259,7 @@ export async function handleA2aJsonRpcRequest(
     }
     sendJson(res, 200, response);
   } catch (err) {
-    logError("A2A JSON-RPC handler error:", err);
+    logError(`A2A JSON-RPC handler error: ${err instanceof Error ? err.message : String(err)}`);
     sendJson(res, 200, jsonRpcError(rpcId, -32603, "Internal error"));
   }
 
@@ -447,7 +447,6 @@ async function dispatchToAgent(
     sessionKey,
     runId,
     message: inputText,
-    source: "a2a",
     senderIsOwner: false,
     allowModelOverride: false,
   });
