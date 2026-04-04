@@ -73,6 +73,7 @@ export async function runReplyAgent(params: {
   shouldSteer: boolean;
   shouldFollowup: boolean;
   isActive: boolean;
+  forceRunNowWhenActive?: boolean;
   isRunActive?: () => boolean;
   isStreaming: boolean;
   opts?: GetReplyOptions;
@@ -105,6 +106,7 @@ export async function runReplyAgent(params: {
     shouldSteer,
     shouldFollowup,
     isActive,
+    forceRunNowWhenActive,
     isRunActive,
     isStreaming,
     opts,
@@ -215,6 +217,7 @@ export async function runReplyAgent(params: {
     isHeartbeat,
     shouldFollowup,
     queueMode: resolvedQueue.mode,
+    forceRunNowWhenActive,
   });
 
   const queuedRunFollowupTurn = createFollowupRunner({

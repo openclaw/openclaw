@@ -45,4 +45,28 @@ describe("resolveActiveRunQueueAction", () => {
       }),
     ).toBe("enqueue-followup");
   });
+
+  it("forces immediate run when fast-lane override is enabled", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: false,
+        shouldFollowup: true,
+        queueMode: "collect",
+        forceRunNowWhenActive: true,
+      }),
+    ).toBe("run-now");
+  });
+
+  it("keeps heartbeat drop precedence over fast-lane override", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: true,
+        isHeartbeat: true,
+        shouldFollowup: true,
+        queueMode: "collect",
+        forceRunNowWhenActive: true,
+      }),
+    ).toBe("drop");
+  });
 });

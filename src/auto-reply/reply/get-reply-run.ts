@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -7,6 +8,7 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  resolveSessionTranscriptPath,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -35,6 +37,8 @@ import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import type { FollowupRun } from "./queue.js";
+import { getFollowupQueueDepth } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings.js";
 import type { RouteReplyParams } from "./route-reply.js";
 import { buildBareSessionResetPrompt } from "./session-reset-prompt.js";
@@ -56,6 +60,12 @@ let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runti
 let sessionStoreRuntimePromise: Promise<
   typeof import("../../config/sessions/store.runtime.js")
 > | null = null;
+
+const FAST_LANE_MAX_PROMPT_CHARS = 80;
+const FAST_LANE_QUICK_MESSAGE_PATTERN =
+  /^(?:yes|no|ok|okay|sure|thanks|thx|got it|cancel|stop|never mind|nevermind)$/i;
+const FAST_LANE_SYSTEM_PROMPT =
+  "Fast-lane turn: keep response concise and do not call tools unless absolutely required.";
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -80,6 +90,20 @@ function loadSessionUpdatesRuntime() {
 function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return sessionStoreRuntimePromise;
+}
+
+function isFastLaneCandidateMessage(text: string, cfg: OpenClawConfig): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.length > FAST_LANE_MAX_PROMPT_CHARS || trimmed.includes("\n")) {
+    return false;
+  }
+  if (hasControlCommand(trimmed, cfg)) {
+    return false;
+  }
+  return FAST_LANE_QUICK_MESSAGE_PATTERN.test(trimmed);
 }
 
 function buildResetSessionNoticeText(params: {
@@ -500,6 +524,7 @@ export async function runPreparedReply(
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
   const queueKey = sessionKey ?? sessionIdFinal;
+  const queuedFollowupDepth = getFollowupQueueDepth(queueKey);
   const isActive = isEmbeddedPiRunActive(sessionIdFinal);
   const isStreaming = isEmbeddedPiRunStreaming(sessionIdFinal);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
@@ -518,7 +543,7 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  const followupRun = {
+  let followupRun: FollowupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -589,33 +614,89 @@ export async function runPreparedReply(
         : {}),
     },
   };
+  let runQueueKey = queueKey;
+  let fastLaneFilesToCleanup: string[] = [];
+  const shouldUseFastLane =
+    isActive &&
+    shouldFollowup &&
+    // Preserve turn order: do not fast-lane when older followups are already queued.
+    queuedFollowupDepth === 0 &&
+    opts?.isHeartbeat !== true &&
+    !isStreaming &&
+    isFastLaneCandidateMessage(baseBodyTrimmedRaw, cfg);
+  let forceRunNowWhenActive = false;
+  if (shouldUseFastLane) {
+    const transientSessionId = `fastlane-${crypto.randomUUID()}`;
+    const transientSessionFile = resolveSessionFilePath(
+      transientSessionId,
+      undefined,
+      resolveSessionFilePathOptions({ agentId, storePath }),
+    );
+    fastLaneFilesToCleanup = Array.from(
+      new Set([
+        transientSessionFile,
+        resolveSessionTranscriptPath(transientSessionId, agentId),
+      ].filter((candidate): candidate is string => candidate.trim().length > 0)),
+    );
+    const transientQueueKey = `fastlane:${transientSessionId}`;
+    runQueueKey = transientQueueKey;
+    followupRun = {
+      ...followupRun,
+      run: {
+        ...followupRun.run,
+        sessionId: transientSessionId,
+        // Keep parent session key so system-event routing stays on the real lane.
+        sessionKey,
+        // Isolate command-lane serialization from the parent run.
+        sessionLaneKey: transientQueueKey,
+        sessionFile: transientSessionFile,
+        extraSystemPrompt: [followupRun.run.extraSystemPrompt, FAST_LANE_SYSTEM_PROMPT]
+          .filter(Boolean)
+          .join("\n\n"),
+      },
+    };
+    forceRunNowWhenActive = true;
+  }
 
   const { runReplyAgent } = await loadAgentRunnerRuntime();
-  return runReplyAgent({
-    commandBody: prefixedCommandBody,
-    followupRun,
-    queueKey,
-    resolvedQueue,
-    shouldSteer,
-    shouldFollowup,
-    isActive,
-    isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
-    isStreaming,
-    opts,
-    typing,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens: agentCfg?.contextTokens,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    isNewSession,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    sessionCtx,
-    shouldInjectGroupIntro,
-    typingMode,
-  });
+  try {
+    return await runReplyAgent({
+      commandBody: prefixedCommandBody,
+      followupRun,
+      queueKey: runQueueKey,
+      resolvedQueue,
+      shouldSteer,
+      shouldFollowup,
+      isActive,
+      forceRunNowWhenActive,
+      isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
+      isStreaming,
+      opts,
+      typing,
+      sessionEntry: shouldUseFastLane ? undefined : sessionEntry,
+      sessionStore: shouldUseFastLane ? undefined : sessionStore,
+      sessionKey,
+      storePath: shouldUseFastLane ? undefined : storePath,
+      defaultModel,
+      agentCfgContextTokens: agentCfg?.contextTokens,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      isNewSession: shouldUseFastLane ? true : isNewSession,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      sessionCtx,
+      shouldInjectGroupIntro,
+      typingMode,
+    });
+  } finally {
+    if (fastLaneFilesToCleanup.length > 0) {
+      for (const filePath of fastLaneFilesToCleanup) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          // Best-effort cleanup for transient fast-lane transcripts.
+        }
+      }
+    }
+  }
 }
