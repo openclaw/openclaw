@@ -643,7 +643,6 @@ describe("plugins cli install", () => {
       }),
     );
   });
-
   it("passes force through as overwrite mode for npm installs", async () => {
     const cfg = {
       plugins: {
