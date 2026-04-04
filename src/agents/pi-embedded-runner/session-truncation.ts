@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { CompactionEntry, SessionEntry } from "@mariozechner/pi-coding-agent";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  isHeartbeatOkResponse,
+  isHeartbeatUserMessage,
+} from "../../auto-reply/heartbeat-filter.js";
 import { log } from "./logger.js";
 
 /**
@@ -108,6 +112,25 @@ export async function truncateSessionAfterCompaction(params: {
   for (const entry of allEntries) {
     if (summarizedBranchIds.has(entry.id) && entry.type === "message") {
       removedIds.add(entry.id);
+    }
+  }
+
+  // Drop no-op heartbeat user+assistant pairs from the branch to prevent
+  // unbounded disk growth now that heartbeat entries are append-only (#39609).
+  for (let i = 0; i < branch.length - 1; i++) {
+    const userEntry = branch[i];
+    const assistantEntry = branch[i + 1];
+    if (
+      userEntry.type === "message" &&
+      assistantEntry.type === "message" &&
+      !removedIds.has(userEntry.id) &&
+      !removedIds.has(assistantEntry.id) &&
+      isHeartbeatUserMessage(userEntry.message) &&
+      isHeartbeatOkResponse(assistantEntry.message)
+    ) {
+      removedIds.add(userEntry.id);
+      removedIds.add(assistantEntry.id);
+      i++; // Skip the assistant entry
     }
   }
 

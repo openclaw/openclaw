@@ -6,6 +6,13 @@ import {
   DefaultResourceLoader,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../../extensions/ollama/runtime-api.js";
+import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -1663,6 +1670,14 @@ export async function runEmbeddedAttempt(
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.state.messages = activeSession.messages;
+          }
+
+          // Filter out no-op heartbeat user+assistant pairs from session context.
+          // Heartbeat entries are now kept in the JSONL (append-only) to avoid the
+          // fs.truncate race that caused orphaned parentId chains (#39609).
+          const filteredMessages = filterHeartbeatPairs(activeSession.messages);
+          if (filteredMessages.length < activeSession.messages.length) {
+            activeSession.agent.state.messages = filteredMessages;
           }
 
           // Detect and load images referenced in the prompt for vision-capable models.
