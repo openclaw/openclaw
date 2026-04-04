@@ -4,6 +4,7 @@ import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+  repairShortTermPromotionArtifacts,
   rankShortTermPromotionCandidates,
 } from "./short-term-promotion.js";
 
@@ -150,10 +151,12 @@ function normalizeDreamingMode(value: unknown): DreamingMode {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  const num =
+    typeof value === "string" && value.trim().length > 0 ? Number(value.trim()) : Number(value);
+  if (!Number.isFinite(num)) {
     return fallback;
   }
-  const floored = Math.floor(value);
+  const floored = Math.floor(num);
   if (floored < 0) {
     return fallback;
   }
@@ -161,13 +164,15 @@ function normalizeNonNegativeInt(value: unknown, fallback: number): number {
 }
 
 function normalizeScore(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  const num =
+    typeof value === "string" && value.trim().length > 0 ? Number(value.trim()) : Number(value);
+  if (!Number.isFinite(num)) {
     return fallback;
   }
-  if (value < 0 || value > 1) {
+  if (num < 0 || num > 1) {
     return fallback;
   }
-  return value;
+  return num;
 }
 
 function formatErrorMessage(err: unknown): string {
@@ -181,6 +186,23 @@ function resolveTimezoneFallback(cfg: OpenClawConfig | undefined): string | unde
   const agents = asRecord(cfg?.agents);
   const defaults = asRecord(agents?.defaults);
   return normalizeTrimmedString(defaults?.userTimezone);
+}
+
+function formatRepairSummary(repair: {
+  rewroteStore: boolean;
+  removedInvalidEntries: number;
+  removedStaleLock: boolean;
+}): string {
+  const actions: string[] = [];
+  if (repair.rewroteStore) {
+    actions.push(
+      `rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
+    );
+  }
+  if (repair.removedStaleLock) {
+    actions.push("removed stale promotion lock");
+  }
+  return actions.join(", ");
 }
 
 function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {
@@ -319,7 +341,10 @@ export function resolveShortTermPromotionDreamingConfig(params: {
   const enabled = mode !== "off";
   const thresholdPreset: DreamingPreset = mode === "off" ? DEFAULT_DREAMING_PRESET : mode;
   const thresholdDefaults = DREAMING_PRESET_DEFAULTS[thresholdPreset];
-  const cron = normalizeTrimmedString(dreaming?.frequency) ?? thresholdDefaults.cron;
+  const cron =
+    normalizeTrimmedString(dreaming?.cron) ??
+    normalizeTrimmedString(dreaming?.frequency) ??
+    thresholdDefaults.cron;
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ?? resolveTimezoneFallback(params.cfg);
   const limit = normalizeNonNegativeInt(dreaming?.limit, thresholdDefaults.limit);
@@ -360,9 +385,15 @@ export async function reconcileShortTermDreamingCronJob(params: {
   if (!params.config.enabled) {
     let removed = 0;
     for (const job of managed) {
-      const result = await cron.remove(job.id);
-      if (result.removed === true) {
-        removed += 1;
+      try {
+        const result = await cron.remove(job.id);
+        if (result.removed === true) {
+          removed += 1;
+        }
+      } catch (err) {
+        params.logger.warn(
+          `memory-core: failed to remove managed dreaming cron job ${job.id}: ${formatErrorMessage(err)}`,
+        );
       }
     }
     if (removed > 0) {
@@ -381,9 +412,15 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const [primary, ...duplicates] = sortManagedJobs(managed);
   let removed = 0;
   for (const duplicate of duplicates) {
-    const result = await cron.remove(duplicate.id);
-    if (result.removed === true) {
-      removed += 1;
+    try {
+      const result = await cron.remove(duplicate.id);
+      if (result.removed === true) {
+        removed += 1;
+      }
+    } catch (err) {
+      params.logger.warn(
+        `memory-core: failed to prune duplicate managed dreaming cron job ${duplicate.id}: ${formatErrorMessage(err)}`,
+      );
     }
   }
 
@@ -424,8 +461,18 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     );
     return { handled: true, reason: "memory-core: short-term dreaming missing workspace" };
   }
+  if (params.config.limit === 0) {
+    params.logger.info("memory-core: dreaming promotion skipped because limit=0.");
+    return { handled: true, reason: "memory-core: short-term dreaming disabled by limit" };
+  }
 
   try {
+    const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+    if (repair.changed) {
+      params.logger.info(
+        `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}).`,
+      );
+    }
     const candidates = await rankShortTermPromotionCandidates({
       workspaceDir,
       limit: params.config.limit,
@@ -455,37 +502,48 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   api.registerHook(
     "gateway:startup",
     async (event: unknown) => {
-      const config = resolveShortTermPromotionDreamingConfig({
-        pluginConfig: api.pluginConfig,
-        cfg: api.config,
-      });
-      const cron = resolveCronServiceFromStartupEvent(event);
-      if (!cron && config.enabled) {
-        api.logger.warn(
-          "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
+      try {
+        const config = resolveShortTermPromotionDreamingConfig({
+          pluginConfig: api.pluginConfig,
+          cfg: api.config,
+        });
+        const cron = resolveCronServiceFromStartupEvent(event);
+        if (!cron && config.enabled) {
+          api.logger.warn(
+            "memory-core: managed dreaming cron could not be reconciled (cron service unavailable).",
+          );
+        }
+        await reconcileShortTermDreamingCronJob({
+          cron,
+          config,
+          logger: api.logger,
+        });
+      } catch (err) {
+        api.logger.error(
+          `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
         );
       }
-      await reconcileShortTermDreamingCronJob({
-        cron,
-        config,
-        logger: api.logger,
-      });
     },
     { name: "memory-core-short-term-dreaming-cron" },
   );
 
   api.on("before_agent_reply", async (event, ctx) => {
-    const config = resolveShortTermPromotionDreamingConfig({
-      pluginConfig: api.pluginConfig,
-      cfg: api.config,
-    });
-    return await runShortTermDreamingPromotionIfTriggered({
-      cleanedBody: event.cleanedBody,
-      trigger: ctx.trigger,
-      workspaceDir: ctx.workspaceDir,
-      config,
-      logger: api.logger,
-    });
+    try {
+      const config = resolveShortTermPromotionDreamingConfig({
+        pluginConfig: api.pluginConfig,
+        cfg: api.config,
+      });
+      return await runShortTermDreamingPromotionIfTriggered({
+        cleanedBody: event.cleanedBody,
+        trigger: ctx.trigger,
+        workspaceDir: ctx.workspaceDir,
+        config,
+        logger: api.logger,
+      });
+    } catch (err) {
+      api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
+      return undefined;
+    }
   });
 }
 

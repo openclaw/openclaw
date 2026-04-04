@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
@@ -12,73 +13,6 @@ export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
-const MAX_CONCEPT_TAGS = 8;
-const SYMBOLIC_STOP_WORDS = new Set([
-  "about",
-  "after",
-  "agent",
-  "again",
-  "also",
-  "because",
-  "before",
-  "being",
-  "between",
-  "build",
-  "called",
-  "could",
-  "daily",
-  "default",
-  "deploy",
-  "during",
-  "every",
-  "file",
-  "files",
-  "from",
-  "have",
-  "into",
-  "just",
-  "line",
-  "lines",
-  "long",
-  "main",
-  "make",
-  "memory",
-  "month",
-  "more",
-  "most",
-  "move",
-  "much",
-  "next",
-  "note",
-  "notes",
-  "over",
-  "part",
-  "past",
-  "port",
-  "same",
-  "score",
-  "search",
-  "session",
-  "sessions",
-  "short",
-  "should",
-  "since",
-  "some",
-  "than",
-  "that",
-  "their",
-  "there",
-  "these",
-  "they",
-  "this",
-  "through",
-  "today",
-  "using",
-  "with",
-  "work",
-  "workspace",
-  "year",
-]);
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
@@ -91,7 +25,7 @@ export type PromotionWeights = {
   diversity: number;
   recency: number;
   consolidation: number;
-  symbolic: number;
+  conceptual: number;
 };
 
 export const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
@@ -100,7 +34,7 @@ export const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
   diversity: 0.15,
   recency: 0.15,
   consolidation: 0.1,
-  symbolic: 0.06,
+  conceptual: 0.06,
 };
 
 export type ShortTermRecallEntry = {
@@ -133,7 +67,7 @@ export type PromotionComponents = {
   diversity: number;
   recency: number;
   consolidation: number;
-  symbolic: number;
+  conceptual: number;
 };
 
 export type PromotionCandidate = {
@@ -179,7 +113,7 @@ export type ShortTermAuditSummary = {
   entryCount: number;
   promotedCount: number;
   spacedEntryCount: number;
-  symbolicEntryCount: number;
+  conceptTaggedEntryCount: number;
   invalidEntryCount: number;
   issues: ShortTermAuditIssue[];
   qmd?:
@@ -273,8 +207,15 @@ function mergeQueryHashes(existing: string[], queryHash: string): string[] {
   if (!queryHash) {
     return existing;
   }
-  const next = existing.filter(Boolean);
-  if (!next.includes(queryHash)) {
+  const seen = new Set<string>();
+  const next = existing.filter((value) => {
+    if (!value || seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
+  if (!seen.has(queryHash)) {
     next.push(queryHash);
   }
   if (next.length <= MAX_QUERY_HASHES) {
@@ -284,7 +225,14 @@ function mergeQueryHashes(existing: string[], queryHash: string): string[] {
 }
 
 function mergeRecentDistinct(existing: string[], nextValue: string, limit: number): string[] {
-  const next = existing.filter((value) => typeof value === "string" && value.length > 0);
+  const seen = new Set<string>();
+  const next = existing.filter((value): value is string => {
+    if (typeof value !== "string" || value.length === 0 || seen.has(value)) {
+      return false;
+    }
+    seen.add(value);
+    return true;
+  });
   if (nextValue && !next.includes(nextValue)) {
     next.push(nextValue);
   }
@@ -302,32 +250,24 @@ function normalizeIsoDay(isoLike: string): string | null {
   return match?.[1] ?? null;
 }
 
-function deriveSymbolicConceptTags(params: { path: string; snippet: string }): string[] {
-  const source = `${path.basename(params.path)} ${params.snippet}`;
-  const tokens = source.match(/[A-Za-z0-9][A-Za-z0-9._/-]{2,}/g) ?? [];
-  const tags: string[] = [];
-  for (const rawToken of tokens) {
-    const normalized = rawToken
-      .replace(/^[./_-]+|[./_-]+$/g, "")
-      .replaceAll("_", "-")
-      .toLowerCase();
-    if (!normalized || normalized.length < 3 || normalized.length > 32) {
+function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
       continue;
     }
-    if (/^\d+$/.test(normalized) || /^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
       continue;
     }
-    if (SYMBOLIC_STOP_WORDS.has(normalized)) {
-      continue;
-    }
-    if (!tags.includes(normalized)) {
-      tags.push(normalized);
-    }
-    if (tags.length >= MAX_CONCEPT_TAGS) {
+    seen.add(trimmed);
+    normalized.push(trimmed);
+    if (normalized.length >= limit) {
       break;
     }
   }
-  return tags;
+  return normalized;
 }
 
 function calculateConsolidationComponent(recallDays: string[]): number {
@@ -350,7 +290,7 @@ function calculateConsolidationComponent(recallDays: string[]): number {
   return clampScore(0.55 * spacing + 0.45 * span);
 }
 
-function calculateSymbolicComponent(conceptTags: string[]): number {
+function calculateConceptualComponent(conceptTags: string[]): number {
   return clampScore(conceptTags.length / 6);
 }
 
@@ -394,9 +334,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
       const promotedAt = typeof entry.promotedAt === "string" ? entry.promotedAt : undefined;
       const snippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
       const queryHashes = Array.isArray(entry.queryHashes)
-        ? entry.queryHashes.filter(
-            (hash): hash is string => typeof hash === "string" && hash.length > 0,
-          )
+        ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
@@ -404,11 +342,11 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
             .filter((value): value is string => value !== null)
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)
-        ? entry.conceptTags
-            .filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0)
-            .map((tag) => tag.trim().toLowerCase())
-            .slice(0, MAX_CONCEPT_TAGS)
-        : deriveSymbolicConceptTags({ path: entryPath, snippet });
+        ? normalizeDistinctStrings(
+            entry.conceptTags.map((tag) => (typeof tag === "string" ? tag.toLowerCase() : tag)),
+            MAX_CONCEPT_TAGS,
+          )
+        : deriveConceptTags({ path: entryPath, snippet });
 
       const normalizedKey = key || buildEntryKey({ path: entryPath, startLine, endLine, source });
       entries[normalizedKey] = {
@@ -468,8 +406,8 @@ function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights
   const diversity = Math.max(0, merged.diversity);
   const recency = Math.max(0, merged.recency);
   const consolidation = Math.max(0, merged.consolidation);
-  const symbolic = Math.max(0, merged.symbolic);
-  const sum = frequency + relevance + diversity + recency + consolidation + symbolic;
+  const conceptual = Math.max(0, merged.conceptual);
+  const sum = frequency + relevance + diversity + recency + consolidation + conceptual;
   if (sum <= 0) {
     return { ...DEFAULT_PROMOTION_WEIGHTS };
   }
@@ -479,7 +417,7 @@ function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights
     diversity: diversity / sum,
     recency: recency / sum,
     consolidation: consolidation / sum,
-    symbolic: symbolic / sum,
+    conceptual: conceptual / sum,
   };
 }
 
@@ -658,7 +596,7 @@ export async function recordShortTermRecalls(params: {
         nowIso.slice(0, 10),
         MAX_RECALL_DAYS,
       );
-      const conceptTags = deriveSymbolicConceptTags({ path: normalizedPath, snippet });
+      const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
       store.entries[key] = {
         key,
@@ -742,7 +680,7 @@ export async function rankShortTermPromotionCandidates(
     const recallDays = entry.recallDays ?? [];
     const conceptTags = entry.conceptTags ?? [];
     const consolidation = calculateConsolidationComponent(recallDays);
-    const symbolic = calculateSymbolicComponent(conceptTags);
+    const conceptual = calculateConceptualComponent(conceptTags);
 
     const score =
       weights.frequency * frequency +
@@ -750,7 +688,7 @@ export async function rankShortTermPromotionCandidates(
       weights.diversity * diversity +
       weights.recency * recency +
       weights.consolidation * consolidation +
-      weights.symbolic * symbolic;
+      weights.conceptual * conceptual;
 
     if (score < minScore) {
       continue;
@@ -780,7 +718,7 @@ export async function rankShortTermPromotionCandidates(
         diversity,
         recency,
         consolidation,
-        symbolic,
+        conceptual,
       },
     });
   }
@@ -932,7 +870,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   let entryCount = 0;
   let promotedCount = 0;
   let spacedEntryCount = 0;
-  let symbolicEntryCount = 0;
+  let conceptTaggedEntryCount = 0;
   let invalidEntryCount = 0;
   let updatedAt: string | undefined;
 
@@ -958,7 +896,7 @@ export async function auditShortTermPromotionArtifacts(params: {
       spacedEntryCount = Object.values(store.entries).filter(
         (entry) => (entry.recallDays?.length ?? 0) > 1,
       ).length;
-      symbolicEntryCount = Object.values(store.entries).filter(
+      conceptTaggedEntryCount = Object.values(store.entries).filter(
         (entry) => (entry.conceptTags?.length ?? 0) > 0,
       ).length;
       invalidEntryCount = Object.keys(asRecord(parsed)?.entries ?? {}).length - entryCount;
@@ -1051,7 +989,7 @@ export async function auditShortTermPromotionArtifacts(params: {
     entryCount,
     promotedCount,
     spacedEntryCount,
-    symbolicEntryCount,
+    conceptTaggedEntryCount,
     invalidEntryCount,
     issues,
     ...(qmd ? { qmd } : {}),
@@ -1082,7 +1020,7 @@ export async function repairShortTermPromotionArtifacts(params: {
     removedInvalidEntries = Math.max(0, rawEntries - Object.keys(normalized.entries).length);
     const nextEntries = Object.fromEntries(
       Object.entries(normalized.entries).map(([key, entry]) => {
-        const conceptTags = deriveSymbolicConceptTags({ path: entry.path, snippet: entry.snippet });
+        const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
         const fallbackDay = normalizeIsoDay(entry.lastRecalledAt) ?? nowIso.slice(0, 10);
         return [
           key,
@@ -1137,6 +1075,6 @@ export const __testing = {
   parseLockOwnerPid,
   canStealStaleLock,
   isProcessLikelyAlive,
-  deriveSymbolicConceptTags,
+  deriveConceptTags,
   calculateConsolidationComponent,
 };

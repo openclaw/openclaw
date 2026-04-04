@@ -125,7 +125,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
-  return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.symbolicEntryCount} symbolic · ${audit.spacedEntryCount} spaced`;
+  return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced`;
 }
 
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
@@ -1010,7 +1010,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           colorize(
             rich,
             theme.muted,
-            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} symbolic=${candidate.components.symbolic.toFixed(2)}`,
+            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
         if (candidate.conceptTags.length > 0) {

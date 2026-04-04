@@ -880,7 +880,7 @@ describe("memory cli", () => {
     });
   });
 
-  it("prints symbolic promotion signals", async () => {
+  it("prints conceptual promotion signals", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
         workspaceDir,

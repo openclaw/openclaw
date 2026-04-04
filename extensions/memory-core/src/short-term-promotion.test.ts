@@ -83,7 +83,7 @@ describe("short-term promotion", () => {
       expect(ranked[0]?.uniqueQueries).toBe(2);
       expect(ranked[0]?.score).toBeGreaterThan(0);
       expect(ranked[0]?.conceptTags).toContain("router");
-      expect(ranked[0]?.components.symbolic).toBeGreaterThan(0);
+      expect(ranked[0]?.components.conceptual).toBeGreaterThan(0);
 
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
       const raw = await fs.readFile(storePath, "utf-8");
@@ -249,7 +249,7 @@ describe("short-term promotion", () => {
               diversity: 0.2,
               recency: 1,
               consolidation: 0.2,
-              symbolic: 0.4,
+              conceptual: 0.4,
             },
           },
         ],
@@ -426,9 +426,9 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("extracts stable symbolic concept tags from snippets and paths", () => {
+  it("extracts stable concept tags from snippets and paths", () => {
     expect(
-      __testing.deriveSymbolicConceptTags({
+      __testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),

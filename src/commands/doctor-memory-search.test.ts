@@ -119,7 +119,7 @@ describe("noteMemorySearchHealth", () => {
       entryCount: 1,
       promotedCount: 0,
       spacedEntryCount: 0,
-      symbolicEntryCount: 1,
+      conceptTaggedEntryCount: 1,
       invalidEntryCount: 0,
       issues: [],
     });
@@ -458,7 +458,7 @@ describe("memory recall doctor integration", () => {
       entryCount: 12,
       promotedCount: 4,
       spacedEntryCount: 2,
-      symbolicEntryCount: 10,
+      conceptTaggedEntryCount: 10,
       invalidEntryCount: 1,
       issues: [
         {
@@ -497,7 +497,7 @@ describe("memory recall doctor integration", () => {
       entryCount: 12,
       promotedCount: 4,
       spacedEntryCount: 2,
-      symbolicEntryCount: 10,
+      conceptTaggedEntryCount: 10,
       invalidEntryCount: 1,
       issues: [
         {
