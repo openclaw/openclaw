@@ -27,7 +27,10 @@ export {
   hasCopilotVisionInput,
 } from "../agents/copilot-dynamic-headers.js";
 export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
-export { createAnthropicToolPayloadCompatibilityWrapper } from "../agents/pi-embedded-runner/anthropic-family-tool-payload-compat.js";
+export {
+  createAnthropicToolPayloadCompatibilityWrapper,
+  createOpenAIAnthropicToolPayloadCompatibilityWrapper,
+} from "../agents/pi-embedded-runner/anthropic-family-tool-payload-compat.js";
 export {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,

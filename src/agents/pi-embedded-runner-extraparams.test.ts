@@ -54,7 +54,10 @@ import {
   resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./pi-embedded-runner.js";
-import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
+import {
+  createAnthropicToolPayloadCompatibilityWrapper,
+  createOpenAIAnthropicToolPayloadCompatibilityWrapper,
+} from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
 import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
@@ -162,10 +165,7 @@ beforeEach(() => {
         );
       }
       if (params.provider === "kimi") {
-        return createAnthropicToolPayloadCompatibilityWrapper(params.context.streamFn, {
-          toolSchemaMode: "openai-functions",
-          toolChoiceMode: "openai-string-modes",
-        });
+        return createOpenAIAnthropicToolPayloadCompatibilityWrapper(params.context.streamFn);
       }
       if (params.provider === "minimax" || params.provider === "minimax-portal") {
         return createMinimaxFastModeWrapper(
