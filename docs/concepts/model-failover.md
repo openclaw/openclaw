@@ -133,10 +133,11 @@ Provider-scoped generic server text can also land in that timeout bucket when
 the source matches a known transient pattern. For example, Anthropic bare
 `An unknown error occurred` and JSON `api_error` payloads with transient server
 text such as `internal server error`, `unknown error, 520`, `upstream error`,
-or `backend error` are treated as failover-worthy timeouts. Generic internal
-fallback text such as `LLM request failed with an unknown error.` or a bare
-`Provider returned error` stays conservative and does not trigger failover by
-itself.
+or `backend error` are treated as failover-worthy timeouts. OpenRouter-specific
+generic upstream text such as bare `Provider returned error` is also treated as
+timeout only when the provider context is actually OpenRouter. Generic internal
+fallback text such as `LLM request failed with an unknown error.` stays
+conservative and does not trigger failover by itself.
 
 Cooldowns use exponential backoff:
 
@@ -165,7 +166,8 @@ Billing/credit failures (for example “insufficient credits” / “credit bala
 
 Not every billing-shaped response is `402`, and not every HTTP `402` lands
 here. OpenClaw keeps explicit billing text in the billing lane even when a
-provider returns `401` or `403` instead (for example OpenRouter `403 Key limit
+provider returns `401` or `403` instead, but provider-specific matchers stay
+scoped to the provider that owns them (for example OpenRouter `403 Key limit
 exceeded`). Meanwhile temporary `402` usage-window and
 organization/workspace spend-limit errors are classified as `rate_limit` when
 the message looks retryable (for example `weekly usage limit exhausted`, `daily

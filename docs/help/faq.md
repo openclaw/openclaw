@@ -2462,8 +2462,9 @@ for usage/billing and raise limits as needed.
 
     Some billing-looking responses are not `402`, and some HTTP `402`
     responses also stay in that transient bucket. If a provider returns
-    explicit billing text on `401` or `403` (for example OpenRouter
-    `Key limit exceeded`), OpenClaw keeps that in the billing lane. If a `402`
+    explicit billing text on `401` or `403`, OpenClaw can still keep that in
+    the billing lane, but provider-specific text matchers stay scoped to the
+    provider that owns them (for example OpenRouter `Key limit exceeded`). If a `402`
     message instead looks like a retryable usage-window or
     organization/workspace spend limit (`daily limit reached, resets tomorrow`,
     `organization spending limit exceeded`), OpenClaw treats it as
@@ -2476,13 +2477,13 @@ for usage/billing and raise limits as needed.
 
     Generic server-error text is intentionally narrower than "anything with
     unknown/error in it". OpenClaw does treat provider-scoped transient shapes
-    such as Anthropic bare `An unknown error occurred`, stop-reason errors like
-    `Unhandled stop reason: error`, and JSON `api_error` payloads with
-    transient server text (`internal server error`, `unknown error, 520`,
-    `upstream error`, `backend error`) as timeout/failover signals. But generic
-    internal fallback text like `LLM request failed with an unknown error.` or
-    a bare `Provider returned error` stays conservative and does not trigger
-    model fallback by itself.
+    such as Anthropic bare `An unknown error occurred`, OpenRouter bare
+    `Provider returned error`, stop-reason errors like `Unhandled stop reason:
+    error`, and JSON `api_error` payloads with transient server text
+    (`internal server error`, `unknown error, 520`, `upstream error`, `backend
+    error`) as timeout/failover signals when the provider context matches.
+    Generic internal fallback text like `LLM request failed with an unknown
+    error.` stays conservative and does not trigger model fallback by itself.
 
   </Accordion>
 
