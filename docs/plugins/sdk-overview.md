@@ -128,6 +128,9 @@ explicitly promotes one as public.
     | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
+    | `plugin-sdk/security-runtime` | Shared trust, DM gating, external-content, and secret-collection helpers |
+    | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
+    | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, and SSRF policy helpers |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
@@ -136,13 +139,31 @@ explicitly promotes one as public.
   <Accordion title="Runtime and storage subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
+    | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
+    | `plugin-sdk/plugin-runtime` | Shared plugin command/hook/http/interactive helpers |
+    | `plugin-sdk/hook-runtime` | Shared webhook/internal hook pipeline helpers |
+    | `plugin-sdk/process-runtime` | Process exec helpers |
+    | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
+    | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
+    | `plugin-sdk/session-store-runtime` | Session store path + updated-at helpers |
+    | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
+    | `plugin-sdk/string-normalization-runtime` | Slug/string normalization helpers |
+    | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |
+    | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
+    | `plugin-sdk/param-readers` | Common tool/CLI param readers |
+    | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
+    | `plugin-sdk/temp-path` | Shared temp-download path helpers |
+    | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
+    | `plugin-sdk/markdown-table-runtime` | Markdown table mode helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |

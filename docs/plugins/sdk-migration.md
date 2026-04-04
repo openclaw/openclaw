@@ -184,12 +184,22 @@ Current bundled provider examples:
   | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
+  | `plugin-sdk/runtime` | Broad runtime helpers | Runtime/logging/backup/plugin-install helpers |
+  | `plugin-sdk/runtime-env` | Narrow runtime env helpers | Logger/runtime env, timeout, retry, and backoff helpers |
+  | `plugin-sdk/plugin-runtime` | Shared plugin runtime helpers | Plugin commands/hooks/http/interactive helpers |
+  | `plugin-sdk/hook-runtime` | Hook pipeline helpers | Shared webhook/internal hook pipeline helpers |
+  | `plugin-sdk/process-runtime` | Process helpers | Shared exec helpers |
+  | `plugin-sdk/cli-runtime` | CLI runtime helpers | Command formatting, waits, version helpers |
+  | `plugin-sdk/gateway-runtime` | Gateway helpers | Gateway client and channel-status patch helpers |
   | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |
   | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
   | `plugin-sdk/approval-client-runtime` | Approval client helpers | Native exec approval profile/filter helpers |
   | `plugin-sdk/approval-delivery-runtime` | Approval delivery helpers | Native approval capability/delivery adapters |
   | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
   | `plugin-sdk/approval-reply-runtime` | Approval reply helpers | Exec/plugin approval reply payload helpers |
+  | `plugin-sdk/security-runtime` | Security helpers | Shared trust, DM gating, external-content, and secret-collection helpers |
+  | `plugin-sdk/ssrf-policy` | SSRF policy helpers | Host allowlist and private-network policy helpers |
+  | `plugin-sdk/ssrf-runtime` | SSRF runtime helpers | Pinned-dispatcher, guarded fetch, SSRF policy helpers |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, error graph helpers |
@@ -206,6 +216,17 @@ Current bundled provider examples:
   | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize + provider dispatch helpers |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
+  | `plugin-sdk/session-store-runtime` | Session store helpers | Store path + updated-at helpers |
+  | `plugin-sdk/state-paths` | State path helpers | State and OAuth dir helpers |
+  | `plugin-sdk/target-resolver-runtime` | Target resolver helpers | Shared target resolver helpers |
+  | `plugin-sdk/string-normalization-runtime` | String normalization helpers | Slug/string normalization helpers |
+  | `plugin-sdk/request-url` | Request URL helpers | Extract string URLs from request-like inputs |
+  | `plugin-sdk/run-command` | Timed command helpers | Timed command runner with normalized stdout/stderr |
+  | `plugin-sdk/param-readers` | Param readers | Common tool/CLI param readers |
+  | `plugin-sdk/tool-send` | Tool send extraction | Extract canonical send target fields from tool args |
+  | `plugin-sdk/temp-path` | Temp path helpers | Shared temp-download path helpers |
+  | `plugin-sdk/logging-core` | Logging helpers | Subsystem logger and redaction helpers |
+  | `plugin-sdk/markdown-table-runtime` | Markdown-table helpers | Markdown table mode helpers |
   | `plugin-sdk/reply-payload` | Message reply types | Reply payload types |
   | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers | Self-hosted provider discovery/config helpers |
   | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers | Same self-hosted provider discovery/config helpers |
