@@ -126,6 +126,10 @@ type SpawnAcpFailedResult = {
 
 export type SpawnAcpResult = SpawnAcpAcceptedResult | SpawnAcpFailedResult;
 
+export function isSpawnAcpAcceptedResult(result: SpawnAcpResult): result is SpawnAcpAcceptedResult {
+  return result.status === "accepted";
+}
+
 export const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =

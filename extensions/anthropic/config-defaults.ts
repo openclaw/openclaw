@@ -104,7 +104,7 @@ function parseProviderModelRef(
 
 function isAnthropicCacheRetentionTarget(
   parsed: { provider: string; model: string } | null | undefined,
-) {
+): parsed is { provider: string; model: string } {
   return Boolean(
     parsed &&
     (parsed.provider === "anthropic" ||
