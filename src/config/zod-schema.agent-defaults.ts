@@ -212,10 +212,23 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
-    requireAgentId: z.boolean().optional(),
-    operatingPrinciples: z.array(z.string()).optional(),
-    maxFailureAttempts: z.number().int().min(1).max(10).optional(),
-  })
+        requireAgentId: z.boolean().optional(),
+        operatingPrinciples: z
+          .array(
+            z.enum([
+              "context_first",
+              "local_before_external",
+              "act_verify_report",
+              "failure_recovery",
+              "stay_focused",
+              "complete_the_loop",
+              "trust_push",
+              "recover_compacted",
+            ]),
+          )
+          .optional(),
+        maxFailureAttempts: z.number().int().min(1).max(10).optional(),
+      })
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,

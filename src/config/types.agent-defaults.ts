@@ -308,7 +308,7 @@ export type AgentDefaultsConfig = {
      * "failure_recovery", "stay_focused", "complete_the_loop", "trust_push", "recover_compacted".
      * Default: all enabled.
      */
-    operatingPrinciples?: string[];
+    operatingPrinciples?: SubagentOperatingPrinciple[];
     /**
      * Maximum retry attempts before subagent escalation (default: 3).
      * Used when "failure_recovery" principle is enabled.
@@ -404,6 +404,19 @@ export type AgentCompactionMemoryFlushConfig = {
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
 };
+
+/**
+ * Valid operating principle identifiers for subagent system prompts.
+ */
+export type SubagentOperatingPrinciple =
+  | "context_first"
+  | "local_before_external"
+  | "act_verify_report"
+  | "failure_recovery"
+  | "stay_focused"
+  | "complete_the_loop"
+  | "trust_push"
+  | "recover_compacted";
 
 /**
  * LLM timeout configuration.

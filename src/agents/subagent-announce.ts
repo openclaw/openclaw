@@ -1,5 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+import type { SubagentOperatingPrinciple } from "../config/types.agent-defaults.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -78,7 +79,7 @@ export function buildSubagentSystemPrompt(params: {
    * "failure_recovery", "stay_focused", "complete_the_loop", "trust_push", "recover_compacted".
    * Default: all enabled.
    */
-  operatingPrinciples?: string[];
+  operatingPrinciples?: SubagentOperatingPrinciple[];
   /** Max failure attempts before escalation (default: 3). */
   maxFailureAttempts?: number;
 }) {
