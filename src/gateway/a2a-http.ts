@@ -235,7 +235,7 @@ export async function handleA2aJsonRpcRequest(
     return true;
   }
 
-  if (rpcReq.jsonrpc !== "2.0" || typeof rpcReq.method !== "string") {
+  if (!rpcReq || typeof rpcReq !== "object" || rpcReq.jsonrpc !== "2.0" || typeof rpcReq.method !== "string") {
     sendJson(res, 400, jsonRpcError(rpcReq.id ?? null, -32600, "Invalid request"));
     return true;
   }
