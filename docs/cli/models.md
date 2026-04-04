@@ -71,6 +71,10 @@ openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token
 ```
 
+`models auth add` is the interactive auth helper. It can launch a provider auth
+flow (OAuth/API key) or guide you into manual token paste, depending on the
+provider you choose.
+
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
 

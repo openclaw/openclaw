@@ -96,7 +96,7 @@ const resolveAcpSpawnStreamLogPathSpy = vi.spyOn(
   "resolveAcpSpawnStreamLogPath",
 );
 
-const { spawnAcpDirect } = await import("./acp-spawn.js");
+const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
 type SpawnContext = Parameters<typeof spawnAcpDirect>[1];
 type SpawnResult = Awaited<ReturnType<typeof spawnAcpDirect>>;
@@ -250,6 +250,14 @@ function expectFailedSpawn(
   }
   if (result.status === "accepted") {
     throw new Error("Expected ACP spawn to fail");
+  }
+  return result;
+}
+
+function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status: "accepted" }> {
+  expect(result.status).toBe("accepted");
+  if (!isSpawnAcpAcceptedResult(result)) {
+    throw new Error("Expected ACP spawn to be accepted");
   }
   return result;
 }
@@ -504,15 +512,15 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.childSessionKey).toMatch(/^agent:codex:acp:/);
-    expect(result.runId).toBe("run-1");
-    expect(result.mode).toBe("session");
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.childSessionKey).toMatch(/^agent:codex:acp:/);
+    expect(accepted.runId).toBe("run-1");
+    expect(accepted.mode).toBe("session");
     const patchCalls = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .filter((request) => request.method === "sessions.patch");
     expect(patchCalls[0]?.params).toMatchObject({
-      key: result.childSessionKey,
+      key: accepted.childSessionKey,
       spawnedBy: "agent:main:main",
     });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
@@ -954,9 +962,9 @@ describe("spawnAcpDirect", () => {
   ])("$name", async ({ ctx, expectedAgentCall, expectTranscriptPersistence }) => {
     const result = await spawnAcpDirect(createSpawnRequest(), ctx);
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
       expect(hoisted.resolveSessionTranscriptFileMock).toHaveBeenCalledWith(
@@ -1157,8 +1165,8 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -1183,7 +1191,7 @@ describe("spawnAcpDirect", () => {
       (call: unknown[]) => (call[0] as { runId?: string }).runId,
     );
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
-    expect(relayRuns).toContain(result.runId);
+    expect(relayRuns).toContain(accepted.runId);
     expect(hoisted.resolveAcpSpawnStreamLogPathMock).toHaveBeenCalledWith({
       childSessionKey: expect.stringMatching(/^agent:codex:acp:/),
     });
@@ -1248,9 +1256,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -1294,9 +1302,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1327,9 +1335,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1351,9 +1359,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1380,9 +1388,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1399,9 +1407,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1416,9 +1424,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1437,9 +1445,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1470,9 +1478,9 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("run");
-    expect(result.streamLogPath).toBeUndefined();
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -1548,8 +1556,8 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
-    expect(result.mode).toBe("session");
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.mode).toBe("session");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",

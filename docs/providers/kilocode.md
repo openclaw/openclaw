@@ -20,7 +20,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-openclaw onboard --kilocode-api-key <key>
+openclaw onboard --auth-choice kilocode-api-key
 ```
 
 Or set the environment variable:

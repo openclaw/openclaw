@@ -493,14 +493,14 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
-        "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Opus: anthropic/claude-opus-4-6",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 
     expect(prompt).toContain("## Model Aliases");
     expect(prompt).toContain("Prefer aliases when specifying model overrides");
-    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-6");
   });
 
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
@@ -682,7 +682,7 @@ describe("buildAgentSystemPrompt", () => {
         arch: "arm64",
         node: "v20",
         model: "anthropic/claude",
-        defaultModel: "anthropic/claude-opus-4-5",
+        defaultModel: "anthropic/claude-opus-4-6",
       },
       "telegram",
       ["inlineButtons"],
@@ -695,7 +695,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
     expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(line).toContain("default_model=anthropic/claude-opus-4-6");
     expect(line).toContain("channel=telegram");
     expect(line).toContain("capabilities=inlineButtons");
     expect(line).toContain("thinking=low");

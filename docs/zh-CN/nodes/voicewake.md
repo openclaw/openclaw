@@ -6,7 +6,7 @@ summary: 全局语音唤醒词（Gateway 网关拥有）及其如何跨节点同
 title: 语音唤醒
 x-i18n:
   generated_at: "2026-02-03T07:51:10Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: eb34f52dfcdc3fc1ae088ae1f621f245546d3cf388299fbeea62face61788c37
   source_path: nodes/voicewake.md

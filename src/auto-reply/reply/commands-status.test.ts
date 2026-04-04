@@ -32,7 +32,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     sessionScope: commandParams.sessionScope,
     storePath: commandParams.storePath,
     provider: "anthropic",
-    model: "claude-opus-4-5",
+    model: "claude-opus-4-6",
     contextTokens: 0,
     resolvedThinkLevel: commandParams.resolvedThinkLevel,
     resolvedFastMode: false,

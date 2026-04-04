@@ -1,4 +1,5 @@
 import type {
+  BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   ContextVisibilityMode,
   DmPolicy,
@@ -159,6 +160,8 @@ export type TelegramAccountConfig = {
   streaming?: TelegramStreamingMode;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /** Draft block-stream chunking thresholds for Telegram preview edits. */
+  draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   mediaMaxMb?: number;

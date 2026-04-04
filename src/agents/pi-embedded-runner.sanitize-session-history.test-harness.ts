@@ -138,7 +138,7 @@ export function makeSnapshotChangedOpenAIReasoningScenario() {
   return {
     sessionManager: makeInMemorySessionManager(sessionEntries),
     messages: makeReasoningAssistantMessages({ thinkingSignature: "object" }),
-    modelId: "gpt-5.2-codex",
+    modelId: "gpt-5.4",
   };
 }
 

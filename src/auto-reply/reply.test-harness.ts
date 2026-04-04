@@ -83,7 +83,7 @@ export function makeReplyConfig(home: string) {
   return {
     agents: {
       defaults: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         workspace: path.join(home, "openclaw"),
       },
     },
@@ -152,7 +152,7 @@ export function resetReplyRuntimeMocks(mocks: ReplyRuntimeMocks) {
   mocks.runEmbeddedPiAgent.mockClear();
   mocks.loadModelCatalog.mockClear();
   mocks.loadModelCatalog.mockResolvedValue([
-    { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
+    { id: "claude-opus-4-6", name: "Opus 4.5", provider: "anthropic" },
   ]);
 }
 

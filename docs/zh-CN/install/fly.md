@@ -3,7 +3,7 @@ description: Deploy OpenClaw on Fly.io
 title: Fly.io
 x-i18n:
   generated_at: "2026-02-03T07:52:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: a00bae43e416112eb269126445c51492a30abe9e136d89e161fc4193314a876f
   source_path: platforms/fly.md
@@ -155,8 +155,8 @@ cat > /data/openclaw.json << 'EOF'
   "agents": {
     "defaults": {
       "model": {
-        "primary": "anthropic/claude-opus-4-5",
-        "fallbacks": ["anthropic/claude-sonnet-4-5", "openai/gpt-4o"]
+        "primary": "anthropic/claude-opus-4-6",
+        "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-4o"]
       },
       "maxConcurrent": 4
     },

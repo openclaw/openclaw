@@ -5,7 +5,7 @@ summary: Gateway 网关仪表板（控制 UI）访问和认证
 title: 仪表板
 x-i18n:
   generated_at: "2026-02-03T10:13:14Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: e6876d50e17d3dd741471ed78bef6ac175b2fdbdc1c45dd52d9d2bd013e17f31
   source_path: web/dashboard.md

@@ -87,7 +87,7 @@ describe("resolveCronSession", () => {
       entry: {
         sessionId: "old-session-id",
         updatedAt: 1000,
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
       },
     });
 
@@ -182,7 +182,7 @@ describe("resolveCronSession", () => {
             to: "channel:C0XXXXXXXXX",
             threadId: "1737500000.123456",
           },
-          modelOverride: "gpt-5.2",
+          modelOverride: "gpt-5.4",
         },
         fresh: true,
         forceNew: true,
@@ -198,7 +198,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.lastThreadId).toBeUndefined();
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
       // Per-session overrides must be preserved
-      expect(result.sessionEntry.modelOverride).toBe("gpt-5.2");
+      expect(result.sessionEntry.modelOverride).toBe("gpt-5.4");
     });
 
     it("clears delivery routing metadata when session is stale", () => {

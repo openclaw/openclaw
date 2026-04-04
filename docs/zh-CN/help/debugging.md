@@ -7,7 +7,7 @@ summary: 调试工具：监视模式、原始模型流和追踪推理泄漏
 title: 调试
 x-i18n:
   generated_at: "2026-02-03T07:47:23Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 504c824bff4790006c8b73600daca66b919e049178e9711e6e65b6254731911a
   source_path: help/debugging.md
