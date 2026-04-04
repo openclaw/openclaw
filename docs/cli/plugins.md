@@ -68,6 +68,11 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
 
+If config is invalid, `plugins install` normally fails closed and tells you to
+run `openclaw doctor --fix` first. The only documented exception is a narrow
+bundled-plugin recovery path for plugins that explicitly opt into
+`openclaw.install.allowInvalidConfigRecovery`.
+
 `--force` reuses the existing install target and overwrites an already-installed
 plugin or hook pack in place. Use it when you are intentionally reinstalling
 the same id from a new local path, archive, ClawHub package, or npm artifact.

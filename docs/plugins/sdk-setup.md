@@ -135,16 +135,22 @@ Example:
 
 `openclaw.install` is package metadata, not manifest metadata.
 
-| Field                        | Type                 | What it means                                                                  |
-| ---------------------------- | -------------------- | ------------------------------------------------------------------------------ |
-| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                   |
-| `localPath`                  | `string`             | Local development or bundled install path.                                     |
-| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                              |
-| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z`.                      |
-| `allowInvalidConfigRecovery` | `boolean`            | Lets setup/install flows offer guarded recovery when plugin config is invalid. |
+| Field                        | Type                 | What it means                                                                    |
+| ---------------------------- | -------------------- | -------------------------------------------------------------------------------- |
+| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                     |
+| `localPath`                  | `string`             | Local development or bundled install path.                                       |
+| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                                |
+| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z`.                        |
+| `allowInvalidConfigRecovery` | `boolean`            | Lets bundled-plugin reinstall flows recover from specific stale-config failures. |
 
 If `minHostVersion` is set, install and manifest-registry loading both enforce
 it. Older hosts skip the plugin; invalid version strings are rejected.
+
+`allowInvalidConfigRecovery` is not a general bypass for broken configs. It is
+for narrow bundled-plugin recovery only, so reinstall/setup can repair known
+upgrade leftovers like a missing bundled plugin path or stale `channels.<id>`
+entry for that same plugin. If config is broken for unrelated reasons, install
+still fails closed and tells the operator to run `openclaw doctor --fix`.
 
 ### Deferred full load
 

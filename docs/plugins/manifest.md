@@ -339,12 +339,19 @@ Important examples:
 | `openclaw.install.npmSpec` / `openclaw.install.localPath`         | Install/update hints for bundled and externally published plugins.                     |
 | `openclaw.install.defaultChoice`                                  | Preferred install path when multiple install sources are available.                    |
 | `openclaw.install.minHostVersion`                                 | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22`.      |
-| `openclaw.install.allowInvalidConfigRecovery`                     | Allows setup/install flows to offer guarded recovery when config is invalid.           |
+| `openclaw.install.allowInvalidConfigRecovery`                     | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.         |
 | `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` | Lets setup-only channel surfaces load before the full channel plugin during startup.   |
 
 `openclaw.install.minHostVersion` is enforced during install and manifest
 registry loading. Invalid values are rejected; newer-but-valid values skip the
 plugin on older hosts.
+
+`openclaw.install.allowInvalidConfigRecovery` is intentionally narrow. It does
+not make arbitrary broken configs installable. Today it only allows install
+flows to recover from specific stale bundled-plugin upgrade failures, such as a
+missing bundled plugin path or a stale `channels.<id>` entry for that same
+bundled plugin. Unrelated config errors still block install and send operators
+to `openclaw doctor --fix`.
 
 ## JSON Schema requirements
 
