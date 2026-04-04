@@ -160,6 +160,23 @@ describe("zalouser setup wizard", () => {
     ).toBe(true);
   });
 
+  it("writes canonical enabled entries for configured groups", async () => {
+    const prompter = createQuickstartPrompter({
+      groupAccess: true,
+      groupPolicy: "allowlist",
+      textByMessage: {
+        "Zalo groups allowlist (comma-separated)": "Family, Work",
+      },
+    });
+
+    const result = await runSetup({ prompter });
+
+    expect(result.cfg.channels?.zalouser?.groups).toEqual({
+      Family: { enabled: true, requireMention: true },
+      Work: { enabled: true, requireMention: true },
+    });
+  });
+
   it("preserves non-quickstart forceAllowFrom behavior", async () => {
     const note = vi.fn(async (_message: string, _title?: string) => {});
     const seen: string[] = [];

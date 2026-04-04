@@ -15318,9 +15318,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           additionalProperties: {
             type: "object",
             properties: {
-              allow: {
-                type: "boolean",
-              },
               enabled: {
                 type: "boolean",
               },
@@ -15435,9 +15432,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 additionalProperties: {
                   type: "object",
                   properties: {
-                    allow: {
-                      type: "boolean",
-                    },
                     enabled: {
                       type: "boolean",
                     },

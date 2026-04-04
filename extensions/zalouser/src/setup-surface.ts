@@ -94,7 +94,7 @@ function setZalouserGroupAllowlist(
   groupKeys: string[],
 ): OpenClawConfig {
   const groups = Object.fromEntries(
-    groupKeys.map((key) => [key, { allow: true, requireMention: true }]),
+    groupKeys.map((key) => [key, { enabled: true, requireMention: true }]),
   );
   return setZalouserAccountScopedConfig(cfg, accountId, {
     groups,
