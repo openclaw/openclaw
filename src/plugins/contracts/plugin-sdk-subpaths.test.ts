@@ -856,10 +856,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
 
-    expectSourceMentions("channel-reply-pipeline", ["createChannelReplyPipeline"]);
-    expect("createTypingCallbacks" in channelReplyPipelineSdk).toBe(true);
-    expect("createReplyPrefixContext" in channelReplyPipelineSdk).toBe(true);
-    expect("createReplyPrefixOptions" in channelReplyPipelineSdk).toBe(true);
+    expectSourceMentions("channel-reply-pipeline", [
+      "createChannelReplyPipeline",
+      "createTypingCallbacks",
+      "createReplyPrefixContext",
+      "createReplyPrefixOptions",
+    ]);
+    expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
+    expect(typeof channelReplyPipelineSdk.createReplyPrefixContext).toBe("function");
+    expect(typeof channelReplyPipelineSdk.createReplyPrefixOptions).toBe("function");
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {

@@ -4,6 +4,9 @@ import { vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { monitorFeishuProvider } from "./monitor.js";
 
+const WEBHOOK_READY_MAX_ATTEMPTS = 200;
+const WEBHOOK_READY_RETRY_DELAY_MS = 50;
+
 export async function getFreePort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
@@ -16,7 +19,7 @@ export async function getFreePort(): Promise<number> {
 }
 
 async function waitUntilServerReady(url: string): Promise<void> {
-  for (let i = 0; i < 50; i += 1) {
+  for (let i = 0; i < WEBHOOK_READY_MAX_ATTEMPTS; i += 1) {
     try {
       const response = await fetch(url, { method: "GET" });
       if (response.status >= 200 && response.status < 500) {
@@ -25,7 +28,7 @@ async function waitUntilServerReady(url: string): Promise<void> {
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, WEBHOOK_READY_RETRY_DELAY_MS));
   }
   throw new Error(`server did not start: ${url}`);
 }
@@ -84,6 +87,7 @@ export async function withRunningWebhookMonitor(
     config: cfg,
     runtime,
     abortSignal: abortController.signal,
+    accountId: params.accountId,
   });
 
   const url = `http://127.0.0.1:${port}${params.path}`;
