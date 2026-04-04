@@ -316,6 +316,18 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     typeExports: ["GenerateImageParams", "GenerateImageRuntimeResult"],
   },
   {
+    subpath: "video-generation-runtime",
+    source: pluginSource("video-generation-core", "runtime-api.js"),
+    loadPolicy: "activated",
+    exports: [
+      "generateVideo",
+      "listRuntimeVideoGenerationProviders",
+      "GenerateVideoParams",
+      "GenerateVideoRuntimeResult",
+    ],
+    typeExports: ["GenerateVideoParams", "GenerateVideoRuntimeResult"],
+  },
+  {
     subpath: "kimi-coding",
     source: pluginSource("kimi-coding", "api.js"),
     exports: ["buildKimiCodingProvider"],
@@ -370,13 +382,19 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     source: pluginSource("memory-core", "runtime-api.js"),
     loadPolicy: "activated",
     exports: [
+      "auditShortTermPromotionArtifacts",
       "BuiltinMemoryEmbeddingProviderDoctorMetadata",
       "getBuiltinMemoryEmbeddingProviderDoctorMetadata",
       "getMemorySearchManager",
       "listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata",
       "MemoryIndexManager",
+      "repairShortTermPromotionArtifacts",
     ],
-    typeExports: ["BuiltinMemoryEmbeddingProviderDoctorMetadata"],
+    typeExports: [
+      "BuiltinMemoryEmbeddingProviderDoctorMetadata",
+      "RepairShortTermPromotionArtifactsResult",
+      "ShortTermAuditSummary",
+    ],
   },
   {
     subpath: "mattermost-policy",
@@ -533,8 +551,43 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
+    subpath: "qwen",
+    source: pluginSource("qwen", "api.js"),
+    exports: [
+      "applyQwenNativeStreamingUsageCompat",
+      "buildQwenDefaultModelDefinition",
+      "buildQwenModelDefinition",
+      "QWEN_BASE_URL",
+      "QWEN_CN_BASE_URL",
+      "QWEN_DEFAULT_COST",
+      "QWEN_DEFAULT_MODEL_ID",
+      "QWEN_DEFAULT_MODEL_REF",
+      "QWEN_GLOBAL_BASE_URL",
+      "QWEN_STANDARD_CN_BASE_URL",
+      "QWEN_STANDARD_GLOBAL_BASE_URL",
+      "QWEN_MODEL_CATALOG",
+      "isNativeQwenBaseUrl",
+      "buildQwenProvider",
+    ],
+  },
+  {
+    subpath: "qwen-definitions",
+    source: pluginSource("qwen", "api.js"),
+    exports: [
+      "buildQwenDefaultModelDefinition",
+      "buildQwenModelDefinition",
+      "QWEN_CN_BASE_URL",
+      "QWEN_DEFAULT_COST",
+      "QWEN_DEFAULT_MODEL_ID",
+      "QWEN_DEFAULT_MODEL_REF",
+      "QWEN_GLOBAL_BASE_URL",
+      "QWEN_STANDARD_CN_BASE_URL",
+      "QWEN_STANDARD_GLOBAL_BASE_URL",
+    ],
+  },
+  {
     subpath: "modelstudio",
-    source: pluginSource("modelstudio", "api.js"),
+    source: pluginSource("qwen", "api.js"),
     exports: [
       "applyModelStudioNativeStreamingUsageCompat",
       "buildModelStudioDefaultModelDefinition",
@@ -554,7 +607,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "modelstudio-definitions",
-    source: pluginSource("modelstudio", "api.js"),
+    source: pluginSource("qwen", "api.js"),
     exports: [
       "buildModelStudioDefaultModelDefinition",
       "buildModelStudioModelDefinition",

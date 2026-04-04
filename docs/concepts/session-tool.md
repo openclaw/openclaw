@@ -28,9 +28,29 @@ counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
+The returned view is intentionally bounded and safety-filtered:
+
+- assistant text is normalized before recall:
+  - thinking tags are stripped
+  - `<relevant-memories>` / `<relevant_memories>` scaffolding blocks are stripped
+  - plain-text tool-call XML payload blocks such as `<tool_call>...</tool_call>` / `<function_calls>...</function_calls>` are stripped
+  - downgraded tool-call/result scaffolding such as `[Tool Call: ...]`,
+    `[Tool Result ...]`, and `[Historical context ...]` is stripped
+  - leaked model control tokens such as `<|assistant|>` / `<｜...｜>` are stripped
+  - malformed MiniMax tool-call XML such as `<invoke ...>` /
+    `</minimax:tool_call>` is stripped
+- credential/token-like text is redacted before it is returned
+- long text blocks are truncated
+- very large histories can drop older rows or replace an oversized row with
+  `[sessions_history omitted: message too large]`
+- the tool reports summary flags such as `truncated`, `droppedMessages`,
+  `contentTruncated`, `contentRedacted`, and `bytes`
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID**
 from a previous list call.
+
+If you need the exact byte-for-byte transcript, inspect the transcript file on
+disk instead of treating `sessions_history` as a raw dump.
 
 ## Sending cross-session messages
 

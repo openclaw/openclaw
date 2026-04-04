@@ -3,6 +3,13 @@ import {
   type OpenClawPluginApi,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  buildVllmProvider,
+  VLLM_DEFAULT_API_KEY_ENV_VAR,
+  VLLM_DEFAULT_BASE_URL,
+  VLLM_MODEL_PLACEHOLDER,
+  VLLM_PROVIDER_LABEL,
+} from "./api.js";
 
 const PROVIDER_ID = "vllm";
 
@@ -14,15 +21,7 @@ export default definePluginEntry({
   id: "vllm",
   name: "vLLM Provider",
   description: "Bundled vLLM provider plugin",
-  async register(api: OpenClawPluginApi) {
-    const {
-      buildVllmProvider,
-      VLLM_DEFAULT_API_KEY_ENV_VAR,
-      VLLM_DEFAULT_BASE_URL,
-      VLLM_MODEL_PLACEHOLDER,
-      VLLM_PROVIDER_LABEL,
-    } = await import("./register.runtime.js");
-
+  register(api: OpenClawPluginApi) {
     api.registerProvider({
       id: PROVIDER_ID,
       label: "vLLM",

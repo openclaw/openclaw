@@ -1,10 +1,16 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream";
+import {
+  mergeImplicitBedrockProvider,
+  resolveBedrockConfigApiKey,
+  resolveImplicitBedrockProvider,
+} from "./api.js";
 
 type GuardrailConfig = {
   guardrailIdentifier: string;
@@ -38,7 +44,7 @@ function createGuardrailWrapStreamFn(
   };
 }
 
-export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promise<void> {
+export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
   const providerId = "amazon-bedrock";
@@ -48,15 +54,6 @@ export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promi
     /ValidationException.*(?:exceeds? the (?:maximum|max) (?:number of )?(?:input )?tokens)/i,
     /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
   ] as const;
-  // Defer provider-owned helper loading until registration so test/plugin-loader
-  // cycles cannot re-enter this module before its constants initialize.
-  const [
-    { buildProviderReplayFamilyHooks },
-    { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey, resolveImplicitBedrockProvider },
-  ] = await Promise.all([
-    import("openclaw/plugin-sdk/provider-model-shared"),
-    import("./api.js"),
-  ]);
   const anthropicByModelReplayHooks = buildProviderReplayFamilyHooks({
     family: "anthropic-by-model",
   });

@@ -42,7 +42,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    openclaw status --deep
    ```
 
-   Runs gateway health checks + provider probes (requires a reachable gateway). See [Health](/gateway/health).
+   Runs a live gateway health probe, including channel probes when supported
+   (requires a reachable gateway). See [Health](/gateway/health).
 
 5. **Tail the latest log**
 
@@ -127,6 +128,21 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Heartbeat keeps skipping. What do the skip reasons mean?">
+    Common heartbeat skip reasons:
+
+    - `quiet-hours`: outside the configured active-hours window
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
+    - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
+
+    In task mode, due timestamps are only advanced after a real heartbeat run
+    completes. Skipped runs do not mark tasks as completed.
+
+    Docs: [Heartbeat](/gateway/heartbeat), [Automation & Tasks](/automation).
+
+  </Accordion>
+
   <Accordion title="Recommended way to install and set up OpenClaw">
     The repo recommends running from source and using onboarding:
 
@@ -181,7 +197,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     They control different layers:
 
     - `approvals.exec`: forwards approval prompts to chat destinations
-    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client
+    - `channels.<channel>.execApprovals`: makes that channel act as a native approval client for exec approvals
 
     The host exec policy is still the real approval gate. Chat config only controls where approval
     prompts appear and how people can answer them.
@@ -192,6 +208,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     - If a supported native channel can infer approvers safely, OpenClaw now auto-enables DM-first native approvals when `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
     - Use `approvals.exec` only when prompts must also be forwarded to other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you explicitly want approval prompts posted back into the originating room/topic.
+    - Plugin approvals are separate again: they use same-chat `/approve` by default, optional `approvals.plugin` forwarding, and only some native channels keep plugin-approval-native handling on top.
 
     Short version: forwarding is for routing, native client config is for richer channel-specific UX.
     See [Exec Approvals](/tools/exec-approvals).
@@ -570,11 +587,11 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     explicitly supported for external tools like OpenClaw.
 
     OpenClaw also supports other hosted subscription-style options including
-    **Alibaba Cloud Model Studio Coding Plan**, **MiniMax Coding Plan**, and
+    **Qwen Cloud Coding Plan**, **MiniMax Coding Plan**, and
     **Z.AI / GLM Coding Plan**.
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
-    [Qwen / Model Studio](/providers/qwen_modelstudio),
+    [Qwen Cloud](/providers/qwen),
     [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
@@ -605,7 +622,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     For production or multi-user workloads, Anthropic API key auth is the
     safer, recommended choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Studio](/providers/qwen_modelstudio), [MiniMax](/providers/minimax), and
+    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and
     [GLM Models](/providers/glm).
 
   </Accordion>
@@ -1012,6 +1029,8 @@ for usage/billing and raise limits as needed.
     - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
     - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
     - Invalid or stale targets can still force queue fallback or final delivery failure.
+    - If the child's last visible assistant reply is a silent token (`NO_REPLY` / `ANNOUNCE_SKIP`), OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
+    - If the child timed out after only tool calls, the announce can collapse that into a short partial-progress summary instead of replaying raw tool output.
 
     Debug:
 
@@ -1050,6 +1069,7 @@ for usage/billing and raise limits as needed.
     - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
     - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
+    - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so the runner also suppresses queued fallback delivery.
 
     For isolated cron jobs, the runner owns final delivery. The agent is expected
     to return a plain-text summary for the runner to send. `--no-deliver` keeps
@@ -2128,7 +2148,7 @@ for usage/billing and raise limits as needed.
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. You should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -2442,8 +2462,9 @@ for usage/billing and raise limits as needed.
 
     Some billing-looking responses are not `402`, and some HTTP `402`
     responses also stay in that transient bucket. If a provider returns
-    explicit billing text on `401` or `403` (for example OpenRouter
-    `Key limit exceeded`), OpenClaw keeps that in the billing lane. If a `402`
+    explicit billing text on `401` or `403`, OpenClaw can still keep that in
+    the billing lane, but provider-specific text matchers stay scoped to the
+    provider that owns them (for example OpenRouter `Key limit exceeded`). If a `402`
     message instead looks like a retryable usage-window or
     organization/workspace spend limit (`daily limit reached, resets tomorrow`,
     `organization spending limit exceeded`), OpenClaw treats it as
@@ -2456,13 +2477,13 @@ for usage/billing and raise limits as needed.
 
     Generic server-error text is intentionally narrower than "anything with
     unknown/error in it". OpenClaw does treat provider-scoped transient shapes
-    such as Anthropic bare `An unknown error occurred`, stop-reason errors like
-    `Unhandled stop reason: error`, and JSON `api_error` payloads with
-    transient server text (`internal server error`, `unknown error, 520`,
-    `upstream error`, `backend error`) as timeout/failover signals. But generic
-    internal fallback text like `LLM request failed with an unknown error.` or
-    a bare `Provider returned error` stays conservative and does not trigger
-    model fallback by itself.
+    such as Anthropic bare `An unknown error occurred`, OpenRouter bare
+    `Provider returned error`, stop-reason errors like `Unhandled stop reason:
+    error`, and JSON `api_error` payloads with transient server text
+    (`internal server error`, `unknown error, 520`, `upstream error`, `backend
+    error`) as timeout/failover signals when the provider context matches.
+    Generic internal fallback text like `LLM request failed with an unknown
+    error.` stays conservative and does not trigger model fallback by itself.
 
   </Accordion>
 
@@ -2657,6 +2678,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
+    - Bootstrap token scope checks are role-prefixed. The built-in bootstrap operator allowlist only satisfies operator requests; node or other non-operator roles still need scopes under their own role prefix.
 
     Fix:
 
@@ -2977,6 +2999,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - using a read-only or tool-disabled "reader" agent to summarize untrusted content
     - keeping `web_search` / `web_fetch` / `browser` off for tool-enabled agents
+    - treating decoded file/document text as untrusted too: OpenResponses
+      `input_file` and media-attachment extraction both wrap extracted text in
+      explicit external-content boundary markers instead of passing raw file text
     - sandboxing and strict tool allowlists
 
     Details: [Security](/gateway/security).

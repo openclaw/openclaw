@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/modelstudio-provider",
+  "name": "@openclaw/qwen-provider",
   "version": "2026.4.1-beta.1",
   "private": true,
-  "description": "OpenClaw Model Studio provider plugin",
+  "description": "OpenClaw Qwen Cloud provider plugin",
   "type": "module",
   "openclaw": {
     "extensions": [

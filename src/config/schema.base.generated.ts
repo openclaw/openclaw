@@ -2573,6 +2573,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 ],
               },
+              videoGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -22635,6 +22657,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.imageGenerationModel.fallbacks": {
       label: "Image Generation Model Fallbacks",
       help: "Ordered fallback image-generation models (provider/model).",
+      tags: ["reliability", "media"],
+    },
+    "agents.defaults.videoGenerationModel.primary": {
+      label: "Video Generation Model",
+      help: "Optional video-generation model (provider/model) used by the shared video generation capability.",
+      tags: ["media"],
+    },
+    "agents.defaults.videoGenerationModel.fallbacks": {
+      label: "Video Generation Model Fallbacks",
+      help: "Ordered fallback video-generation models (provider/model).",
       tags: ["reliability", "media"],
     },
     "agents.defaults.pdfModel.primary": {
