@@ -97,7 +97,8 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Config writes (`config.set`/`config.apply`/`config.patch`) also preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write
 - Config schema + form rendering (`config.schema` / `config.schema.lookup`,
   including field `title` / `description`, matched UI hints, immediate child
-  summaries, plus plugin + channel schemas when available); Raw JSON editor is
+  summaries, docs metadata on nested object/wildcard/array/composition nodes,
+  plus plugin + channel schemas when available); Raw JSON editor is
   available only when the snapshot has a safe raw round-trip
 - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
 - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption

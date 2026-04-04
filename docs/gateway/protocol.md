@@ -296,7 +296,9 @@ implemented in `src/gateway/server-methods/*.ts`.
   CLI tooling: schema, `uiHints`, version, and generation metadata, including
   plugin + channel schema metadata when the runtime can load it. The schema
   includes field `title` / `description` metadata derived from the same labels
-  and help text used by the UI.
+  and help text used by the UI, including nested object, wildcard, array-item,
+  and `anyOf` / `oneOf` / `allOf` composition branches when matching field
+  documentation exists.
 - `config.schema.lookup` returns a path-scoped lookup payload for one config
   path: normalized path, a shallow schema node, matched hint + `hintPath`, and
   immediate child summaries for UI/CLI drill-down.

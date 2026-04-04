@@ -76,6 +76,8 @@ Schema tooling notes:
   editor and form tooling.
 - Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same
   docs metadata where matching field documentation exists.
+- `anyOf` / `oneOf` / `allOf` composition branches inherit the same docs
+  metadata too, so union/intersection variants keep the same field help.
 - `config.schema.lookup` returns one normalized config path with a shallow
   schema node (`title`, `description`, `type`, `enum`, `const`, common bounds,
   and similar validation fields), matched UI hint metadata, and immediate child

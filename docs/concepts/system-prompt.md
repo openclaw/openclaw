@@ -22,7 +22,9 @@ The prompt is intentionally compact and uses fixed sections:
 - **OpenClaw Self-Update**: how to inspect config safely with
   `config.schema.lookup`, patch config with `config.patch`, replace the full
   config with `config.apply`, and run `update.run` only on explicit user
-  request.
+  request. The owner-only `gateway` tool also refuses to rewrite
+  `tools.exec.ask` / `tools.exec.security`, including legacy `tools.bash.*`
+  aliases that normalize to those protected exec paths.
 - **Workspace**: working directory (`agents.defaults.workspace`).
 - **Documentation**: local path to OpenClaw docs (repo or npm package) and when to read them.
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
