@@ -313,7 +313,7 @@ openclaw doctor
 - Check `cron.enabled` and `OPENCLAW_SKIP_CRON` env var.
 - Confirm the Gateway is running continuously.
 - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
-- `reason: not-due` in run output means manual run called without `--force`.
+- `reason: not-due` in run output means manual run was checked with `openclaw cron run <jobId> --due` and the job was not due yet.
 
 ### Cron fired but no delivery
 

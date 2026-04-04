@@ -1245,7 +1245,7 @@ Subcommands:
 - `cron enable <id>`
 - `cron disable <id>`
 - `cron runs --id <id> [--limit <n>]`
-- `cron run <id> [--force]`
+- `cron run <id> [--due]`
 
 All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 
