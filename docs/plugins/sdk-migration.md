@@ -262,6 +262,9 @@ Current bundled provider examples:
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types and registry helpers |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types and registry helpers |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
+  | `plugin-sdk/video-generation` | Video-generation provider types | Video-generation provider/request/result types for provider plugins |
+  | `plugin-sdk/video-generation-core` | Shared video-generation core | Video-generation types, failover helpers, provider lookup, and model-ref parsing |
+  | `plugin-sdk/video-generation-runtime` | Video-generation runtime facade | Shared runtime `generateVideo` / `listRuntimeVideoGenerationProviders` facade |
   | `plugin-sdk/interactive-runtime` | Interactive reply helpers | Interactive reply payload normalization/reduction |
   | `plugin-sdk/channel-config-primitives` | Channel config primitives | Narrow channel config-schema primitives |
   | `plugin-sdk/channel-config-writes` | Channel config-write helpers | Channel config-write authorization helpers |

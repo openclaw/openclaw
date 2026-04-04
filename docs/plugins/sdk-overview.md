@@ -232,6 +232,9 @@ explicitly promotes one as public.
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
+    | `plugin-sdk/video-generation` | Video generation provider types |
+    | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
+    | `plugin-sdk/video-generation-runtime` | Shared runtime `generateVideo` / `listRuntimeVideoGenerationProviders` facade |
     | `plugin-sdk/media-understanding` | Media understanding provider types |
     | `plugin-sdk/speech` | Speech provider types |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |

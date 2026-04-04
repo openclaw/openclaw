@@ -136,8 +136,10 @@ Current bundled examples:
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
-  `qwen`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
+  `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
+- `qwen`: plugin-owned catalogs for text models plus shared media-understanding
+  and video-generation provider registrations for its multimodal surfaces
 - `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
 - `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic

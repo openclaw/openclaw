@@ -371,9 +371,9 @@ capability. The same ownership model applies there:
 That avoids baking one provider's video assumptions into core. The plugin owns
 the vendor surface; core owns the capability contract and fallback behavior.
 
-If OpenClaw adds a new domain later, such as video generation, use the same
-sequence again: define the core capability first, then let vendor plugins
-register implementations against it.
+Video generation already uses that same sequence: core owns the typed
+capability contract and runtime helper, and vendor plugins register
+`api.registerVideoGenerationProvider(...)` implementations against it.
 
 Need a concrete rollout checklist? See
 [Capability Cookbook](/tools/capability-cookbook).
@@ -817,9 +817,11 @@ api.registerProvider({
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
-  `huggingface`, `kimi-coding`, `qwen`, `nvidia`, `qianfan`,
+  `huggingface`, `kimi-coding`, `nvidia`, `qianfan`,
   `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine` use
   `catalog` only.
+- Qwen uses `catalog` for its text provider plus shared media-understanding and
+  video-generation registrations for its multimodal surfaces.
 - MiniMax and Xiaomi use `catalog` plus usage hooks because their `/usage`
   behavior is plugin-owned even though inference still runs through the shared
   transports.
@@ -900,8 +902,10 @@ Notes:
 - Keep vendor behavior in the provider plugin.
 - Additive expansion should stay typed: new optional methods, new optional
   result fields, new optional capabilities.
-- If OpenClaw adds a new capability such as video generation later, define the
-  core capability contract first, then let vendor plugins register against it.
+- Video generation already follows the same pattern:
+  - core owns the capability contract and runtime helper
+  - vendor plugins register `api.registerVideoGenerationProvider(...)`
+  - feature/channel plugins consume `api.runtime.videoGeneration.*`
 
 For media-understanding runtime helpers, plugins can call:
 
