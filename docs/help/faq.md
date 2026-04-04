@@ -1602,6 +1602,8 @@ for usage/billing and raise limits as needed.
 
     - Use `openclaw config set` for small changes.
     - Use `openclaw configure` for interactive edits.
+    - Use `config.schema.lookup` first when you are not sure about an exact path or field shape.
+    - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
 
     Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
 
@@ -1771,7 +1773,13 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is there an API / RPC way to apply config?">
-    Yes. `config.apply` validates + writes the full config and restarts the Gateway as part of the operation.
+    Yes.
+
+    - `config.schema.lookup`: inspect one config subtree with field docs before writing
+    - `config.get`: fetch the current snapshot + hash
+    - `config.patch`: safe partial update (preferred for most RPC edits)
+    - `config.apply`: validate + replace the full config, then restart
+
   </Accordion>
 
   <Accordion title="Minimal sane config for a first install">
@@ -2192,6 +2200,8 @@ for usage/billing and raise limits as needed.
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json`
 
     Avoid `config.apply` with a partial object unless you intend to replace the whole config.
+    For RPC edits, inspect with `config.schema.lookup` first and prefer `config.patch`
+    for partial updates.
     If you did overwrite config, restore from backup or re-run `openclaw doctor` to repair.
 
     Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/config), [Doctor](/gateway/doctor).
