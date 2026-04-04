@@ -43,12 +43,10 @@ function buildPrompt(
 }
 
 describe("formatSkillsCompact", () => {
-  it("keeps the full-format XML output aligned with the upstream formatter", () => {
-    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
+  it("keeps the full-format XML output aligned with the upstream formatter for visible skills", () => {
     const skills = [
       makeSkill("weather", "Get weather <data> & forecasts"),
       makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
-      hidden,
     ];
     expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
   });

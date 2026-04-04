@@ -41,8 +41,7 @@ function escapeXml(str: string): string {
  * cold skills path.
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
-  const visibleSkills = skills.filter((skill) => !skill.disableModelInvocation);
-  if (visibleSkills.length === 0) {
+  if (skills.length === 0) {
     return "";
   }
   const lines = [
@@ -52,7 +51,7 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
     "",
     "<available_skills>",
   ];
-  for (const skill of visibleSkills) {
+  for (const skill of skills) {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <description>${escapeXml(skill.description)}</description>`);

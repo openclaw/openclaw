@@ -469,11 +469,17 @@ function loadSkillEntries(
         filePath: skill.filePath,
         maxBytes: limits.maxSkillFileBytes,
       }) ?? ({} as ParsedSkillFrontmatter);
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
     return {
       skill,
       frontmatter,
       metadata: resolveOpenClawMetadata(frontmatter),
-      invocation: resolveSkillInvocationPolicy(frontmatter),
+      invocation,
+      exposure: {
+        includeInRuntimeRegistry: true,
+        includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+        userInvocable: invocation.userInvocable !== false,
+      },
     };
   });
   return skillEntries;
@@ -630,7 +636,7 @@ function resolveWorkspaceSkillPromptState(
     opts?.eligibility,
   );
   const promptEntries = eligible.filter(
-    (entry) => entry.invocation?.disableModelInvocation !== true,
+    (entry) => entry.exposure?.includeInAvailableSkillsPrompt !== false,
   );
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
