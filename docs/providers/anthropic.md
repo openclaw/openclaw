@@ -211,8 +211,8 @@ with model refs like:
 
 How it works:
 
-1. OpenClaw launches `claude -p --output-format json ...` on the **gateway
-   host**.
+1. OpenClaw launches `claude -p --output-format stream-json --include-partial-messages ...`
+   on the **gateway host** and sends the prompt over stdin.
 2. The first turn sends `--session-id <uuid>`.
 3. Follow-up turns reuse the stored Claude session via `--resume <sessionId>`.
 4. Your chat messages still go through the normal OpenClaw message pipeline, but

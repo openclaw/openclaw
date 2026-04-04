@@ -8,6 +8,7 @@ import {
 } from "./delivery-field-schemas.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { inferLegacyName } from "./service/normalize.js";
+import { assertSafeCronSessionTargetId } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -321,10 +322,7 @@ function normalizeSessionTarget(raw: unknown) {
   }
   // Support custom session IDs with "session:" prefix
   if (lower.startsWith("session:")) {
-    const sessionId = trimmed.slice(8).trim();
-    if (sessionId) {
-      return `session:${sessionId}`;
-    }
+    return `session:${assertSafeCronSessionTargetId(trimmed.slice(8))}`;
   }
   return undefined;
 }
@@ -539,7 +537,7 @@ export function normalizeCronJobInput(
         const sessionKey = options.sessionContext.sessionKey.trim();
         if (sessionKey) {
           // Store as session:customId format for persistence
-          next.sessionTarget = `session:${sessionKey}`;
+          next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
         }
       }
       // If "current" wasn't resolved, fall back to "isolated" behavior
@@ -551,7 +549,7 @@ export function normalizeCronJobInput(
     if (next.sessionTarget === "current") {
       const sessionKey = options.sessionContext?.sessionKey?.trim();
       if (sessionKey) {
-        next.sessionTarget = `session:${sessionKey}`;
+        next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
       } else {
         next.sessionTarget = "isolated";
       }

@@ -11,6 +11,9 @@ type MockMemorySearchManager = {
     sync: (params?: unknown) => Promise<void>;
   };
 };
+type MockEmbeddedAgentStreamFn = Mock<
+  (model?: unknown, context?: unknown, options?: unknown) => unknown
+>;
 
 export const contextEngineCompactMock = vi.fn(async () => ({
   ok: true as boolean,
@@ -81,7 +84,9 @@ export const sessionMessages: unknown[] = [
 ];
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
-export const resolveEmbeddedAgentStreamFnMock = vi.fn((_params?: unknown) => vi.fn());
+export const resolveEmbeddedAgentStreamFnMock: Mock<
+  (params?: unknown) => MockEmbeddedAgentStreamFn
+> = vi.fn((_params?: unknown) => vi.fn());
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
@@ -229,12 +234,16 @@ export async function loadCompactHooksHarness(): Promise<{
             : JSON.parse(JSON.stringify(message)),
         ),
         agent: {
-          replaceMessages: vi.fn((messages: unknown[]) => {
-            session.messages = [...(messages as typeof session.messages)];
-          }),
           streamFn: vi.fn(),
-          setTransport: vi.fn(),
           transport: "sse",
+          state: {
+            get messages() {
+              return session.messages;
+            },
+            set messages(messages: unknown[]) {
+              session.messages = [...(messages as typeof session.messages)];
+            },
+          },
         },
         compact: vi.fn(async () => {
           session.messages.splice(1);

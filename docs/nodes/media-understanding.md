@@ -133,6 +133,9 @@ Rules:
 - Audio files smaller than **1024 bytes** are treated as empty/corrupt and skipped before provider/CLI transcription.
 - If the model returns more than `maxChars`, output is trimmed.
 - `prompt` defaults to simple “Describe the {media}.” plus the `maxChars` guidance (image/video only).
+- If the active primary image model already supports vision natively, OpenClaw
+  skips the `[Image]` summary block and passes the original image into the
+  model instead.
 - If `<capability>.enabled: true` but no models are configured, OpenClaw tries the
   **active reply model** when its provider supports the capability.
 
@@ -142,15 +145,22 @@ If `tools.media.<capability>.enabled` is **not** set to `false` and you haven’
 configured models, OpenClaw auto-detects in this order and **stops at the first
 working option**:
 
-1. **Local CLIs** (audio only; if installed)
+1. **Active reply model** when its provider supports the capability.
+2. **`agents.defaults.imageModel`** primary/fallback refs (image only).
+3. **Local CLIs** (audio only; if installed)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
    - `whisper-cli` (`whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)
    - `whisper` (Python CLI; downloads models automatically)
-2. **Gemini CLI** (`gemini`) using `read_many_files`
-3. **Provider keys**
-   - Audio: OpenAI → Groq → Deepgram → Google → Mistral
-   - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
-   - Video: Google
+4. **Gemini CLI** (`gemini`) using `read_many_files`
+5. **Provider auth**
+   - Configured `models.providers.*` entries that support the capability are
+     tried before the bundled fallback order.
+   - Image-only config providers with an image-capable model auto-register for
+     media understanding even when they are not a bundled vendor plugin.
+   - Bundled fallback order:
+     - Audio: OpenAI → Groq → Deepgram → Google → Mistral
+     - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
+     - Video: Google → Moonshot
 
 To disable auto-detection, set:
 
@@ -190,22 +200,32 @@ lists, OpenClaw can infer defaults:
 - `openai`, `anthropic`, `minimax`: **image**
 - `minimax-portal`: **image**
 - `moonshot`: **image + video**
+- `openrouter`: **image**
 - `google` (Gemini API): **image + audio + video**
 - `mistral`: **audio**
 - `zai`: **image**
 - `groq`: **audio**
 - `deepgram`: **audio**
+- Any `models.providers.<id>.models[]` catalog with an image-capable model:
+  **image**
 
 For CLI entries, **set `capabilities` explicitly** to avoid surprising matches.
 If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                               | Notes                                                                   |
-| ---------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
-| Image      | OpenAI, Anthropic, Google, MiniMax, Moonshot, Z.AI | Vendor plugins register image support against core media understanding. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral            | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).               |
-| Video      | Google, Moonshot                                   | Provider video understanding via vendor plugins.                        |
+| Capability | Provider integration                                                             | Notes                                                                                                                                    |
+| ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Z.AI, config providers | Vendor plugins register image support; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                |
+| Video      | Google, Moonshot                                                                 | Provider video understanding via vendor plugins.                                                                                         |
+
+MiniMax note:
+
+- `minimax` and `minimax-portal` image understanding comes from the plugin-owned
+  `MiniMax-VL-01` media provider.
+- The bundled MiniMax text catalog still starts text-only; explicit
+  `models.providers.minimax` entries materialize image-capable M2.7 chat refs.
 
 ## Model selection guidance
 

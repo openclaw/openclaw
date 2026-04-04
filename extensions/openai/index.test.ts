@@ -31,16 +31,16 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 
 import { refreshOpenAICodexToken } from "./openai-codex-provider.runtime.js";
 
-const registerOpenAIPlugin = () =>
+const registerOpenAIPlugin = async () =>
   registerProviderPlugin({
     plugin,
     id: "openai",
     name: "OpenAI Provider",
   });
 
-function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
+async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
   const on = vi.fn();
-  plugin.register(
+  await plugin.register(
     createTestPluginApi({
       id: "openai",
       name: "OpenAI Provider",
@@ -241,7 +241,7 @@ describe("openai plugin", () => {
   });
 
   it("registers the friendly prompt overlay by default and scopes it to OpenAI providers", async () => {
-    const { on } = registerOpenAIPluginWithHook();
+    const { on } = await registerOpenAIPluginWithHook();
 
     expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
     const beforePromptBuild = on.mock.calls.find((call) => call[0] === "before_prompt_build")?.[1];
@@ -268,8 +268,8 @@ describe("openai plugin", () => {
     expect(nonOpenAIResult).toBeUndefined();
   });
 
-  it("supports opting out of the prompt overlay via plugin config", () => {
-    const { on } = registerOpenAIPluginWithHook({
+  it("supports opting out of the prompt overlay via plugin config", async () => {
+    const { on } = await registerOpenAIPluginWithHook({
       pluginConfig: { personalityOverlay: "off" },
     });
 

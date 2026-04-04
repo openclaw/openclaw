@@ -29,6 +29,39 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts groups with requireMention", () => {
+    const result = MattermostConfigSchema.safeParse({
+      groups: {
+        "*": { requireMention: true },
+        "channel-123": { requireMention: false },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts groups on account", () => {
+    const result = MattermostConfigSchema.safeParse({
+      accounts: {
+        main: {
+          baseUrl: "https://chat.example.com",
+          groups: {
+            "*": { requireMention: true },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown properties inside groups entry", () => {
+    const result = MattermostConfigSchema.safeParse({
+      groups: {
+        "*": { requireMention: true, unknownProp: "bad" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects unsupported direct-message reply threading config", () => {
     const result = MattermostConfigSchema.safeParse({
       dm: {
