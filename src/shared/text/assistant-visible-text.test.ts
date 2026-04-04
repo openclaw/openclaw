@@ -102,9 +102,10 @@ describe("stripAssistantInternalScaffolding", () => {
 
   describe("model special token stripping", () => {
     it("strips Kimi/GLM special tokens in isolation", () => {
+      // Trailing space from replacement is preserved (no global trim)
       expectVisibleText(
         "<|assistant|>Here is the answer<|end|>",
-        "Here is the answer",
+        "Here is the answer ",
       );
     });
 
@@ -116,16 +117,15 @@ describe("stripAssistantInternalScaffolding", () => {
     });
 
     it("strips special tokens mixed with normal text", () => {
+      // Each token is replaced with a single space; no global space
+      // collapsing to avoid corrupting indentation in code blocks.
       expectVisibleText(
         "Start <|tool_call_result_begin|>middle<|tool_call_result_end|> end",
-        "Start middle end",
+        "Start  middle  end",
       );
     });
 
     it("preserves special-token-like syntax inside code blocks", () => {
-      // Code blocks are not stripped by stripModelSpecialTokens (it operates
-      // on raw text), but this verifies the overall pipeline handles normal
-      // angle-bracket usage gracefully.
       expectVisibleText("Use <div>hello</div> in HTML", "Use <div>hello</div> in HTML");
     });
 
@@ -137,6 +137,28 @@ describe("stripAssistantInternalScaffolding", () => {
         "<|assistant|>Visible response",
       ].join("\n");
       expectVisibleText(input, "Visible response");
+    });
+
+    it("preserves indentation in code blocks", () => {
+      const input = [
+        "<|assistant|>Here is the code:",
+        "",
+        "```python",
+        "def foo():",
+        "    if True:",
+        "        return 42",
+        "```",
+      ].join("\n");
+      const expected = [
+        "Here is the code:",
+        "",
+        "```python",
+        "def foo():",
+        "    if True:",
+        "        return 42",
+        "```",
+      ].join("\n");
+      expectVisibleText(input, expected);
     });
   });
 });
