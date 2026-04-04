@@ -741,12 +741,14 @@ api.registerProvider({
   synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
 - Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel`,
   `buildReplayPolicy`, `sanitizeReplayHistory`,
-  `resolveReasoningOutputMode`, and `isModernModelRef` because the
+  `resolveReasoningOutputMode`, `wrapStreamFn`, and `isModernModelRef` because the
   `google-gemini` replay family owns Gemini 3.1 forward-compat fallback,
   native Gemini replay validation, bootstrap replay sanitation, tagged
-  reasoning-output mode, and modern-model matching; Gemini CLI OAuth also uses
-  `formatApiKey`, `resolveUsageAuth`, and `fetchUsageSnapshot` for token
-  formatting, token parsing, and quota endpoint wiring.
+  reasoning-output mode, and modern-model matching, while the
+  `google-thinking` stream family owns Gemini thinking payload normalization;
+  Gemini CLI OAuth also uses `formatApiKey`, `resolveUsageAuth`, and
+  `fetchUsageSnapshot` for token formatting, token parsing, and quota endpoint
+  wiring.
 - Anthropic Vertex uses `buildReplayPolicy` through the
   `anthropic-by-model` replay family so Claude-specific replay cleanup stays
   scoped to Claude ids instead of every `anthropic-messages` transport.
@@ -764,9 +766,12 @@ api.registerProvider({
   `hybrid-anthropic-openai` replay family because one provider owns both
   Anthropic-message and OpenAI-compatible semantics; it keeps Claude-only
   thinking-block dropping on the Anthropic side while overriding reasoning
-  output mode back to native.
+  output mode back to native, and the `minimax-fast-mode` stream family owns
+  fast-mode model rewrites on the shared stream path.
 - Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
-  OpenAI transport but needs provider-owned thinking payload normalization.
+  OpenAI transport but needs provider-owned thinking payload normalization; the
+  `moonshot-thinking` stream family maps config plus `/think` state onto its
+  native binary thinking payload.
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
   `isCacheTtlEligible` because it needs provider-owned request headers,
   reasoning payload normalization, Gemini transcript hints, and Anthropic
@@ -775,7 +780,8 @@ api.registerProvider({
   `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
   `tool_stream` defaults, binary thinking UX, modern-model matching, and both
-  usage auth + quota fetching.
+  usage auth + quota fetching; the `tool-stream-default-on` stream family keeps
+  the default-on `tool_stream` wrapper out of per-provider handwritten glue.
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
