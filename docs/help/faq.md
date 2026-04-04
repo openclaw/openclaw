@@ -128,6 +128,21 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+  <Accordion title="Heartbeat keeps skipping. What do the skip reasons mean?">
+    Common heartbeat skip reasons:
+
+    - `quiet-hours`: outside the configured active-hours window
+    - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
+    - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
+    - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
+
+    In task mode, due timestamps are only advanced after a real heartbeat run
+    completes. Skipped runs do not mark tasks as completed.
+
+    Docs: [Heartbeat](/gateway/heartbeat), [Automation & Tasks](/automation).
+
+  </Accordion>
+
   <Accordion title="Recommended way to install and set up OpenClaw">
     The repo recommends running from source and using onboarding:
 
