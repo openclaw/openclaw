@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { note } from "../terminal/note.js";
-import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
+import { noteOpencodeProviderOverrides, noteLegacyTalkConfig } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
@@ -191,6 +191,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
+  noteLegacyTalkConfig(cfg);
 
   return {
     cfg,

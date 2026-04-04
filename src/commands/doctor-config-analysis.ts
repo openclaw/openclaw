@@ -154,3 +154,45 @@ export function noteIncludeConfinementWarning(snapshot: {
     "Doctor warnings",
   );
 }
+
+export function noteLegacyTalkConfig(cfg: OpenClawConfig): void {
+  const talk = cfg.talk;
+  if (!talk) {
+    return;
+  }
+
+  const legacyFields = [
+    talk.voiceId ? "talk.voiceId" : null,
+    talk.voiceAliases ? "talk.voiceAliases" : null,
+    talk.modelId ? "talk.modelId" : null,
+    talk.outputFormat ? "talk.outputFormat" : null,
+    talk.apiKey ? "talk.apiKey" : null,
+  ].filter((f): f is string => Boolean(f));
+
+  if (legacyFields.length === 0) {
+    return;
+  }
+
+  const lines = [
+    `- Found legacy Talk Mode configuration fields at the root level: ${legacyFields.join(", ")}`,
+    "- While these are currently supported for compatibility (mapping to 'elevenlabs'), migration is recommended.",
+    "",
+    "Migration example for 'elevenlabs':",
+    "```json",
+    '// In openclaw.json "talk" section:',
+    "{",
+    '  "provider": "elevenlabs",',
+    '  "providers": {',
+    '    "elevenlabs": {',
+    '      "voiceId": "...",',
+    '      "modelId": "...",',
+    '      "apiKey": "..."',
+    "    }",
+    "  }",
+    "}",
+    "```",
+    "- See https://docs.openclaw.ai/configuration#talk for more details.",
+  ];
+
+  note(lines.join("\n"), "Talk Mode Migration");
+}

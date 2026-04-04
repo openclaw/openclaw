@@ -49,27 +49,70 @@ Supported keys:
 
 ## Config (`~/.openclaw/openclaw.json`)
 
+Talk mode supports multiple providers. It is recommended to use the `providers` block for provider-specific settings.
+
+### ElevenLabs (Default)
+
 ```json5
 {
   talk: {
-    voiceId: "elevenlabs_voice_id",
-    modelId: "eleven_v3",
-    outputFormat: "mp3_44100_128",
-    apiKey: "elevenlabs_api_key",
+    provider: "elevenlabs",
+    providers: {
+      elevenlabs: {
+        voiceId: "elevenlabs_voice_id",
+        modelId: "eleven_v3",
+        outputFormat: "mp3_44100_128",
+        apiKey: "elevenlabs_api_key",
+      },
+    },
     silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
   },
 }
 ```
 
-Defaults:
+### Mistral (Voxtral)
 
-- `interruptOnSpeech`: true
-- `silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
-- `voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` (or first ElevenLabs voice when API key is available)
-- `modelId`: defaults to `eleven_v3` when unset
-- `apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available)
-- `outputFormat`: defaults to `pcm_44100` on macOS/iOS and `pcm_24000` on Android (set `mp3_*` to force MP3 streaming)
+Mistral supports native field names (`model`, `voice`) or the generic OpenClaw names (`modelId`, `voiceId`).
+
+```json5
+{
+  talk: {
+    provider: "mistral",
+    providers: {
+      mistral: {
+        model: "voxtral-mini-tts-2603",
+        voice: "cbe96cf0-85ec-4a10-accb-0b35c93b6dfd", // Jane - Confident
+        outputFormat: "mp3",
+        apiKey: "mistral_api_key",
+      },
+    },
+  },
+}
+```
+
+- **ElevenLabs Defaults**: `eleven_v3` model, `pcm_44100` output.
+- **Mistral Defaults**: `voxtral-mini-tts-2603` model, `mp3` output.
+
+### Merging & Overrides
+
+Talk mode configuration follows a hierarchical merging strategy:
+
+1. **Provider-specific**: Settings inside `talk.providers.<providerID>.*` take the highest precedence.
+2. **Root-level**: Settings at `talk.*` (like `silenceTimeoutMs` or `voiceId`) act as defaults if not overridden in the provider block.
+3. **Environment**: If keys are missing in both, environment-based defaults (like `ELEVENLABS_API_KEY`) or hardcoded client defaults apply.
+
+### Legacy Configuration & Migration
+
+Prior versions of OpenClaw used root-level keys for all Talk settings (e.g. `talk.voiceId`). While these are still supported for backwards compatibility, migration to the `providers` block is recommended for more flexible multi-provider setups.
+
+**Migration via `doctor`**:
+The `openclaw doctor` command will automatically identify legacy configurations and provide migration examples to the modern `providers` structure.
+
+```bash
+# Check for legacy configuration warnings
+openclaw doctor
+```
 
 ## macOS UI
 

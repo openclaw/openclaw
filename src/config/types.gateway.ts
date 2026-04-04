@@ -75,6 +75,16 @@ export type TalkConfig = {
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** @deprecated Use talk.providers.elevenlabs.voiceId instead. */
+  voiceId?: string;
+  /** @deprecated Use talk.providers.elevenlabs.voiceAliases instead. */
+  voiceAliases?: Record<string, string>;
+  /** @deprecated Use talk.providers.elevenlabs.modelId instead. */
+  modelId?: string;
+  /** @deprecated Use talk.providers.elevenlabs.outputFormat instead. */
+  outputFormat?: string;
+  /** @deprecated Use talk.providers.elevenlabs.apiKey instead. */
+  apiKey?: SecretInput;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */

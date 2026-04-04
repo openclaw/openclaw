@@ -49,6 +49,7 @@ Notes:
 - If `gateway.auth.token`/`gateway.auth.password` are SecretRef-managed and unavailable in the current command path, doctor reports a read-only warning and does not write plaintext fallback credentials.
 - If channel SecretRef inspection fails in a fix path, doctor continues and reports a warning instead of exiting early.
 - Telegram `allowFrom` username auto-resolution (`doctor --fix`) requires a resolvable Telegram token in the current command path. If token inspection is unavailable, doctor reports a warning and skips auto-resolution for that pass.
+- Doctor detects legacy Talk Mode configuration (root-level `voiceId`, `apiKey`, etc.) and recommends migrating to the modern `providers` namespace.
 
 ## macOS: `launchctl` env overrides
 
