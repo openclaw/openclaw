@@ -1,0 +1,8 @@
+{
+  "name": "clawd-ci",
+  "engineVersion": "v0.20.3",
+  "sdk": {
+    "source": "typescript"
+  },
+  "source": ".dagger"
+}

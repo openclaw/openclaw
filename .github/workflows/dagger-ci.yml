@@ -1,0 +1,22 @@
+name: 'Dagger CI'
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  dagger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dagger
+        uses: dagger/dagger-for-github@v7
+        with:
+          version: latest
+      - name: Build Website
+        run: dagger call build --source=.
+      - name: Classify Risk
+        if: github.event_name == 'pull_request'
+        run: dagger call classify-risk --source=. --pr-number=${{ github.event.pull_request.number }}
+      - name: Lint
+        run: dagger call lint --source=.

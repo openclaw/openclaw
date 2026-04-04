@@ -1,0 +1,64 @@
+{
+  "version": "1.0.0",
+  "levels": {
+    "L0": {
+      "name": "Full Auto",
+      "safe_extensions": [
+        ".json",
+        ".md",
+        ".css",
+        ".scss"
+      ],
+      "unsafe_patterns": [
+        "package.json",
+        "CLAUDE.md",
+        "AGENTS.md",
+        ".github/",
+        ".env"
+      ],
+      "max_diff_lines": 500,
+      "auto_merge": true,
+      "observation_window_hours": 0
+    },
+    "L1": {
+      "name": "Consensus Auto",
+      "min_approvals": 2,
+      "observation_window_hours": 4,
+      "auto_merge_after_observation": true,
+      "sentinel_must_be_green": true
+    },
+    "L2": {
+      "name": "Human Confirm",
+      "requires_human_approval": true,
+      "cooldown_hours": 24,
+      "triggers": [
+        "api_change",
+        "payment",
+        "third_party"
+      ]
+    },
+    "L3": {
+      "name": "Irreversible",
+      "min_signatures": 3,
+      "human_signature_required": true,
+      "cooling_period_hours": 72,
+      "triggers": [
+        "data_deletion",
+        "permission_change",
+        "secret_rotation"
+      ]
+    }
+  },
+  "agents": {
+    "allowed_authors": [
+      "dependabot[bot]",
+      "github-actions[bot]"
+    ],
+    "label": "agent-pr",
+    "reputation_decay_days": 30
+  },
+  "meta": {
+    "rule_change_level": "L2",
+    "constitution_change_level": "L3"
+  }
+}

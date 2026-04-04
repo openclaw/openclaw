@@ -1,0 +1,9 @@
+{
+  "name": "clawd-dagger",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@dagger.io/dagger": "^0.18.0"
+  }
+}
