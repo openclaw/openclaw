@@ -56,6 +56,7 @@ export default definePluginEntry({
     };
 
     const sessionServices = new Map<string, ScopedServices>();
+    const activeRunKeys = new Set<string>();
     let defaultServices: ScopedServices | null = null;
 
     const createScopedServices = (scope?: LearningLoopScope): ScopedServices => {
@@ -380,6 +381,13 @@ export default definePluginEntry({
     }
 
     // Session lifecycle: clear caches on new sessions
+    api.on("before_agent_start", (_event, ctx) => {
+      const runKey = ctx.runId?.trim() || ctx.sessionId?.trim();
+      if (runKey) {
+        activeRunKeys.add(runKey);
+      }
+    });
+
     api.on("session_start", (event, ctx) => {
       if (isLearningLoopInternalSessionId(event.sessionId)) return;
       const { evolutionService, nudgeManager } = getScopedServices(ctx);
@@ -462,10 +470,16 @@ export default definePluginEntry({
             nudgeManager.checkNudge(event.messages);
           }
         } finally {
-          // One-shot local agent runs should not keep the streamable HTTP
-          // session open after post-turn learning work completes. Keeping the
-          // close in this unified handler avoids racing other agent_end hooks.
-          await graphiti.closeConnection();
+          const runKey = ctx.runId?.trim() || ctx.sessionId?.trim();
+          if (runKey) {
+            activeRunKeys.delete(runKey);
+          }
+
+          // One-shot local agent runs still need cleanup, but concurrent agent
+          // turns must not lose the shared transport underneath in-flight work.
+          if (activeRunKeys.size === 0) {
+            await graphiti.closeConnection();
+          }
         }
       });
     }

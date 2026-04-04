@@ -8,8 +8,8 @@ function makeContext(signals: EvolutionSignal[]): ExperienceContext {
     skillContent: "# search-skill\n\n## Instructions\n\nUse ripgrep for searches.\n",
     signals,
     conversationSnippet: "[assistant]: command failed\n[user]: please use rg",
-    existingDescriptions: ["Keep shell commands concise."],
-    existingBodyEntries: ["Retry after reloading credentials."],
+    existingDescriptions: [{ id: "ev_desc", content: "Keep shell commands concise." }],
+    existingBodyEntries: [{ id: "ev_body", content: "Retry after reloading credentials." }],
   };
 }
 
@@ -183,9 +183,40 @@ describe("SkillEvolver", () => {
       ],
       conversationSnippet: "[user]: prefer bun instead of node",
       existingDescriptions: [],
-      existingBodyEntries: ["Prefer bun instead of node for TypeScript scripts."],
+      existingBodyEntries: [
+        { id: "ev_existing", content: "Prefer bun instead of node for TypeScript scripts." },
+      ],
     });
 
     expect(entries).toEqual([]);
+  });
+
+  it("includes stable entry ids in the dedup prompt for replacement targets", async () => {
+    const callLlm = vi.fn(
+      async () =>
+        '[{"section":"Instructions","action":"replace","content":"Prefer rg over grep for workspace searches.","target":"description","merge_target":"ev_desc","source_signal":"user_correction","context_summary":"Replace the existing description rule."}]',
+    );
+    const evolver = new SkillEvolver(
+      { addObservation: vi.fn(async () => "stored") } as unknown as GraphitiClient,
+      callLlm,
+      2,
+    );
+
+    const entries = await evolver.generateExperiences(
+      "search-skill",
+      makeContext([
+        {
+          type: "user_correction",
+          section: "Instructions",
+          excerpt: "Use rg instead of grep.",
+        },
+      ]),
+    );
+
+    expect(callLlm).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining("- ev_desc: Keep shell commands concise."),
+    );
+    expect(entries[0]?.change.mergeTarget).toBe("ev_desc");
   });
 });

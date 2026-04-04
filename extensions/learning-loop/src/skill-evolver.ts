@@ -26,9 +26,9 @@ export type ExperienceContext = {
   /** Recent conversation messages (last N, truncated) */
   conversationSnippet: string;
   /** Existing description-layer experiences (for dedup) */
-  existingDescriptions: string[];
+  existingDescriptions: Array<{ id: string; content: string }>;
   /** Existing body-layer entries (for dedup) */
-  existingBodyEntries: string[];
+  existingBodyEntries: Array<{ id: string; content: string }>;
 };
 
 type LlmCallFn = (systemPrompt: string, userPrompt: string) => Promise<string>;
@@ -84,7 +84,7 @@ export class SkillEvolver {
 
 DECISION FLOWCHART:
 1. RELEVANCE: Is this signal about the skill's domain? If clearly unrelated (external service outage, user typo, etc.), output action: "skip" with skip_reason: "irrelevant".
-2. DEDUPLICATION: Is this insight already captured in existing experiences? If yes, output action: "skip" with skip_reason: "duplicate". If partially overlapping, output action: "replace" with merge_target set to the index of the entry to replace.
+2. DEDUPLICATION: Is this insight already captured in existing experiences? If yes, output action: "skip" with skip_reason: "duplicate". If partially overlapping, output action: "replace" with merge_target set to the id of the entry to replace.
 3. PRIORITY: Is this high-impact enough to warrant a skill update? Low-value signals get action: "skip" with skip_reason: "low_priority".
 4. GENERATE: Create a concise, reusable rule or insight.
 
@@ -95,7 +95,7 @@ Return a JSON array of objects. Each object has:
 - content: Markdown text (the improvement to add)
 - target: "description" (prompt metadata) | "body" (SKILL.md content)
 - skip_reason: "irrelevant" | "duplicate" | "low_priority" (only when action is "skip")
-- merge_target: index of existing entry to replace (only when action is "replace")
+- merge_target: id of existing entry to replace (prefer the provided ev_xxxxxxxx id; numeric indexes are legacy fallback only)
 - source_signal: "execution_failure" | "user_correction"
 - context_summary: Brief summary of what triggered this
 
@@ -132,15 +132,15 @@ RULES:
 
     if (context.existingDescriptions.length > 0) {
       parts.push(`\n## Existing Description Experiences (check for duplicates):`);
-      context.existingDescriptions.forEach((d, i) => {
-        parts.push(`${i}. ${d}`);
+      context.existingDescriptions.forEach((entry) => {
+        parts.push(`- ${entry.id}: ${entry.content}`);
       });
     }
 
     if (context.existingBodyEntries.length > 0) {
       parts.push(`\n## Existing Body Entries (check for duplicates):`);
-      context.existingBodyEntries.forEach((d, i) => {
-        parts.push(`${i}. ${d}`);
+      context.existingBodyEntries.forEach((entry) => {
+        parts.push(`- ${entry.id}: ${entry.content}`);
       });
     }
 
@@ -288,8 +288,8 @@ RULES:
     }
 
     const existing = [
-      ...context.existingDescriptions,
-      ...context.existingBodyEntries,
+      ...context.existingDescriptions.map((entry) => entry.content),
+      ...context.existingBodyEntries.map((entry) => entry.content),
       context.skillContent ?? "",
     ];
     return existing.some((entry) => this.normalizeForDedup(entry).includes(normalized));

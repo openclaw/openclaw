@@ -225,6 +225,43 @@ describe("learning-loop plugin", () => {
     );
   });
 
+  it("keeps the shared Graphiti connection open while another run is still active", async () => {
+    const { api, on } = createApi();
+
+    learningLoopPlugin.register(api);
+
+    const beforeAgentStartHandler = on.mock.calls.find(
+      ([name]) => name === "before_agent_start",
+    )?.[1];
+    const agentEndHandler = on.mock.calls.find(([name]) => name === "agent_end")?.[1];
+    if (typeof beforeAgentStartHandler !== "function" || typeof agentEndHandler !== "function") {
+      throw new Error("expected learning-loop plugin to register before_agent_start and agent_end");
+    }
+
+    beforeAgentStartHandler({ messages: [] }, { runId: "run-a", sessionId: "session-a" });
+    beforeAgentStartHandler({ messages: [] }, { runId: "run-b", sessionId: "session-b" });
+
+    await agentEndHandler(
+      {
+        success: false,
+        messages: [],
+      },
+      { runId: "run-a", sessionId: "session-a" },
+    );
+
+    expect(pluginMocks.graphiti.closeConnection).not.toHaveBeenCalled();
+
+    await agentEndHandler(
+      {
+        success: false,
+        messages: [],
+      },
+      { runId: "run-b", sessionId: "session-b" },
+    );
+
+    expect(pluginMocks.graphiti.closeConnection).toHaveBeenCalledTimes(1);
+  });
+
   it("scopes evolution storage to the active session workspace", async () => {
     const { api, on } = createApi();
 

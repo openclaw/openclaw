@@ -23,6 +23,18 @@ afterEach(() => {
 });
 
 describe("EvolutionStore", () => {
+  it("returns an empty evolution file only when the file is missing", () => {
+    const { dir, store } = createStore();
+
+    expect(store.loadEvolutionFile("missing-skill").entries).toEqual([]);
+
+    const skillDir = join(dir, "broken-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "evolutions.json"), "{not-json", "utf-8");
+
+    expect(() => store.loadEvolutionFile("broken-skill")).toThrow();
+  });
+
   it("rejects skill names that escape the skills directory", () => {
     const { store } = createStore();
     const entry = createEvolutionEntry("execution_failure", "escape", {

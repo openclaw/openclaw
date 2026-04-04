@@ -42,9 +42,55 @@ export class EvolutionStore {
     try {
       const raw = fs.readFileSync(filePath, "utf-8");
       return JSON.parse(raw) as EvolutionFile;
-    } catch {
-      return createEmptyEvolutionFile(skillName);
+    } catch (error) {
+      if (this.isMissingFileError(error)) {
+        return createEmptyEvolutionFile(skillName);
+      }
+      throw error;
     }
+  }
+
+  /**
+   * Get existing description-layer entries with stable ids for LLM merge targets.
+   */
+  getExistingDescriptionEntries(skillName: string): Array<{ id: string; content: string }> {
+    const file = this.loadEvolutionFile(skillName);
+    return file.entries
+      .filter((e) => e.change.target === "description" && e.change.action !== "skip")
+      .map((e) => ({ id: e.id, content: e.change.content }));
+  }
+
+  /**
+   * Get existing body-layer entries with stable ids for LLM merge targets.
+   */
+  getExistingBodyEntries(skillName: string): Array<{ id: string; content: string }> {
+    const file = this.loadEvolutionFile(skillName);
+    return file.entries
+      .filter((e) => e.change.target === "body" && e.change.action !== "skip")
+      .map((e) => ({ id: e.id, content: e.change.content }));
+  }
+
+  /**
+   * Get existing entry descriptions for dedup context in LLM prompts.
+   */
+  getExistingDescriptions(skillName: string): string[] {
+    return this.getExistingDescriptionEntries(skillName).map((entry) => entry.content);
+  }
+
+  /**
+   * Get existing body entries for dedup context.
+   */
+  getExistingBodyEntryContents(skillName: string): string[] {
+    return this.getExistingBodyEntries(skillName).map((entry) => entry.content);
+  }
+
+  private isMissingFileError(error: unknown): boolean {
+    return (
+      !!error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    );
   }
 
   /**
@@ -76,26 +122,6 @@ export class EvolutionStore {
   getPendingEntries(skillName: string): EvolutionEntry[] {
     const file = this.loadEvolutionFile(skillName);
     return file.entries.filter((e) => !e.applied && e.change.action !== "skip");
-  }
-
-  /**
-   * Get existing entry descriptions for dedup context in LLM prompts.
-   */
-  getExistingDescriptions(skillName: string): string[] {
-    const file = this.loadEvolutionFile(skillName);
-    return file.entries
-      .filter((e) => e.change.target === "description" && e.change.action !== "skip")
-      .map((e) => e.change.content);
-  }
-
-  /**
-   * Get existing body entries for dedup context.
-   */
-  getExistingBodyEntries(skillName: string): string[] {
-    const file = this.loadEvolutionFile(skillName);
-    return file.entries
-      .filter((e) => e.change.target === "body" && e.change.action !== "skip")
-      .map((e) => e.change.content);
   }
 
   /**

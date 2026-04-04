@@ -211,7 +211,7 @@ export class EvolutionService {
       skillContent,
       signals,
       conversationSnippet: snippet,
-      existingDescriptions: this.store.getExistingDescriptions(skillName),
+      existingDescriptions: this.store.getExistingDescriptionEntries(skillName),
       existingBodyEntries: this.store.getExistingBodyEntries(skillName),
     };
   }
