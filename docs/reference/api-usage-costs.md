@@ -34,6 +34,10 @@ per-message dollar estimate that OpenClaw can show in `/usage full`.
 
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows**
   (quota snapshots, not per-message costs).
+- Human output is normalized to `X% left` across providers.
+- MiniMax note: its raw `usage_percent` / `usagePercent` fields mean remaining
+  quota, so OpenClaw inverts them before display. Count-based fields still win
+  when present.
 
 See [Token use & costs](/reference/token-use) for details and examples.
 

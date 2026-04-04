@@ -59,7 +59,7 @@ Other surfaces:
 
 - **TUI/Web TUI:** `/status` + `/usage` are supported.
 - **CLI:** `openclaw status --usage` and `openclaw channels list` show
-  provider quota windows (not per-response costs).
+  normalized provider quota windows (`X% left`, not per-response costs).
 
 ## Cost estimation (when shown)
 

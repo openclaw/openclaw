@@ -180,6 +180,10 @@ Current MiniMax auth choices in the wizard/CLI:
 - The bundled provider catalog currently exposes the chat refs as text-only
   metadata until explicit MiniMax provider config exists
 - Coding Plan usage API: `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains` (requires a coding plan key).
+- OpenClaw normalizes MiniMax coding-plan usage to the same `% left` display
+  used by other providers. MiniMax's raw `usage_percent` / `usagePercent`
+  fields are remaining quota, not consumed quota, so OpenClaw inverts them.
+  Count-based fields win when present.
 - Update pricing values in `models.json` if you need exact cost tracking.
 - Referral link for MiniMax Coding Plan (10% off): [https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link](https://platform.minimax.io/subscribe/coding-plan?code=DbXJTRClnb&source=link)
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
