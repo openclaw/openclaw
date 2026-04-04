@@ -254,6 +254,55 @@ describe("resolveGatewayRuntimeConfig", () => {
     });
   });
 
+  describe("tailscale auth.mode=none guard", () => {
+    it("rejects tailscale serve with auth.mode=none", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "loopback" as const,
+              auth: { mode: "none" as const },
+            },
+          },
+          port: 18789,
+          tailscale: { mode: "serve" },
+        }),
+      ).rejects.toThrow(
+        "tailscale serve requires gateway auth — refusing to start with auth.mode=none when tailscale serve is active",
+      );
+    });
+
+    it("rejects tailscale funnel with auth.mode=none", async () => {
+      await expect(
+        resolveGatewayRuntimeConfig({
+          cfg: {
+            gateway: {
+              bind: "loopback" as const,
+              auth: { mode: "none" as const },
+            },
+          },
+          port: 18789,
+          tailscale: { mode: "funnel" },
+        }),
+      ).rejects.toThrow("tailscale funnel requires gateway auth mode=password");
+    });
+
+    it("allows tailscale serve with auth.mode=token", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TOKEN_AUTH,
+          },
+        },
+        port: 18789,
+        tailscale: { mode: "serve" },
+      });
+      expect(result.authMode).toBe("token");
+      expect(result.tailscaleMode).toBe("serve");
+    });
+  });
+
   describe("HTTP security headers", () => {
     const cases = [
       {
