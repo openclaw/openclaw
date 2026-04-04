@@ -49,3 +49,11 @@ openclaw onboard --auth-choice openrouter-api-key
 - OpenRouter still runs through the proxy-style OpenAI-compatible path, so
   native OpenAI-only request shaping such as `serviceTier`, Responses `store`,
   OpenAI reasoning-compat payloads, and prompt-cache hints is not forwarded.
+- Gemini-backed OpenRouter refs stay on the proxy-Gemini path: OpenClaw keeps
+  Gemini thought-signature sanitation there, but does not enable native Gemini
+  replay validation or bootstrap rewrites.
+- On supported non-`auto` routes, OpenClaw maps the selected thinking level to
+  OpenRouter proxy reasoning payloads. Unsupported model hints and
+  `openrouter/auto` skip that reasoning injection.
+- If you pass OpenRouter provider routing under model params, OpenClaw forwards
+  it as OpenRouter routing metadata before the shared stream wrappers run.

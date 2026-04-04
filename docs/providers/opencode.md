@@ -62,3 +62,7 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 - Entering one OpenCode key during setup stores credentials for both runtime providers.
 - You sign in to OpenCode, add billing details, and copy your API key.
 - Billing and catalog availability are managed from the OpenCode dashboard.
+- Gemini-backed OpenCode refs stay on the proxy-Gemini path, so OpenClaw keeps
+  Gemini thought-signature sanitation there without enabling native Gemini
+  replay validation or bootstrap rewrites.
+- Non-Gemini OpenCode refs keep the minimal OpenAI-compatible replay policy.

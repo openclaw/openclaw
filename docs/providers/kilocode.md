@@ -79,5 +79,11 @@ kilocode/google/gemini-3-pro-preview
   not hard-coded in OpenClaw
 - Kilo Gateway is documented in source as OpenRouter-compatible, so it stays on
   the proxy-style OpenAI-compatible path rather than native OpenAI request shaping
+- Gemini-backed Kilo refs stay on the proxy-Gemini path, so OpenClaw keeps
+  Gemini thought-signature sanitation there without enabling native Gemini
+  replay validation or bootstrap rewrites.
+- Kilo's shared stream wrapper adds the provider app header and normalizes
+  proxy reasoning payloads for supported concrete model refs. `kilocode/kilo/auto`
+  and other proxy-reasoning-unsupported hints skip that reasoning injection.
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - Kilo Gateway uses a Bearer token with your API key under the hood.

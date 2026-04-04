@@ -105,8 +105,8 @@ Current bundled examples:
   traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, Gemini thought-signature sanitation on proxy Gemini traffic, proxy
-  reasoning injection through the `openrouter-thinking` stream family, and
-  cache-TTL policy
+  reasoning injection through the `openrouter-thinking` stream family, routing
+  metadata forwarding, and cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
   Claude-thinking transcript hints, runtime token exchange, and usage endpoint
   fetching
@@ -340,8 +340,13 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - OpenRouter remains on the proxy-style OpenAI-compatible path, so native
   OpenAI-only request shaping (`serviceTier`, Responses `store`,
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
+- Gemini-backed OpenRouter refs keep proxy-Gemini thought-signature sanitation
+  only; native Gemini replay validation and bootstrap rewrites stay off
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/kilo/auto`
+- Gemini-backed Kilo refs keep the same proxy-Gemini thought-signature
+  sanitation path; `kilocode/kilo/auto` and other proxy-reasoning-unsupported
+  hints skip proxy reasoning injection
 - MiniMax: `minimax` (API key) and `minimax-portal` (OAuth)
 - Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY` for `minimax-portal`
 - Example model: `minimax/MiniMax-M2.7` or `minimax-portal/MiniMax-M2.7`
