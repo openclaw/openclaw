@@ -524,8 +524,11 @@ export function isTransientHttpError(raw: string): boolean {
 export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
+  opts?: { provider?: string },
 ): FailoverReason | null {
-  const messageClassification = message ? classifyFailoverClassificationFromMessage(message) : null;
+  const messageClassification = message
+    ? classifyFailoverClassificationFromMessage(message, opts?.provider)
+    : null;
   return failoverReasonFromClassification(
     classifyFailoverClassificationFromHttpStatus(status, message, messageClassification),
   );
@@ -630,13 +633,27 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
-function isAnthropicProvider(provider?: string): boolean {
+function isProvider(provider: string | undefined, match: string): boolean {
   const normalized = provider?.trim().toLowerCase();
-  return Boolean(normalized && normalized.includes("anthropic"));
+  return Boolean(normalized && normalized.includes(match));
 }
 
 function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
-  return isAnthropicProvider(provider) && raw.toLowerCase().includes("an unknown error occurred");
+  return (
+    isProvider(provider, "anthropic") && raw.toLowerCase().includes("an unknown error occurred")
+  );
+}
+
+function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") && raw.toLowerCase().includes("provider returned error")
+  );
+}
+
+function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") && /\bkey\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
+  );
 }
 
 function classifyFailoverClassificationFromMessage(
@@ -661,6 +678,9 @@ function classifyFailoverClassificationFromMessage(
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
+  }
+  if (isOpenRouterKeyLimitExceededError(raw, provider)) {
+    return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
@@ -691,6 +711,9 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("auth");
   }
   if (isAnthropicGenericUnknownError(raw, provider)) {
+    return toReasonClassification("timeout");
+  }
+  if (isOpenRouterProviderReturnedError(raw, provider)) {
     return toReasonClassification("timeout");
   }
   if (isServerErrorMessage(raw)) {

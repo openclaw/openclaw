@@ -2454,6 +2454,16 @@ for usage/billing and raise limits as needed.
     `input is too long for the model` stay on the compaction/retry path instead
     of advancing model fallback.
 
+    Generic server-error text is intentionally narrower than "anything with
+    unknown/error in it". OpenClaw does treat provider-scoped transient shapes
+    such as Anthropic bare `An unknown error occurred`, stop-reason errors like
+    `Unhandled stop reason: error`, and JSON `api_error` payloads with
+    transient server text (`internal server error`, `unknown error, 520`,
+    `upstream error`, `backend error`) as timeout/failover signals. But generic
+    internal fallback text like `LLM request failed with an unknown error.` or
+    a bare `Provider returned error` stays conservative and does not trigger
+    model fallback by itself.
+
   </Accordion>
 
   <Accordion title='What does "No credentials found for profile anthropic:default" mean?'>

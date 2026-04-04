@@ -796,7 +796,9 @@ api.registerProvider({
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
   `isCacheTtlEligible` because it needs provider-owned request headers,
   reasoning payload normalization, Gemini transcript hints, and Anthropic
-  cache-TTL gating.
+  cache-TTL gating; the `kilocode-thinking` stream family keeps Kilo thinking
+  injection on the shared proxy stream path while skipping `kilo/auto` and
+  other proxy model ids that do not support explicit reasoning payloads.
 - Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
   `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
