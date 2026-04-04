@@ -5,6 +5,10 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E9", "F63", "F7", "F82", "I"]
 
+[tool.pyright]
+typeCheckingMode = "basic"
+pythonVersion = "3.10"
+
 [tool.pytest.ini_options]
-testpaths = ["skills"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]

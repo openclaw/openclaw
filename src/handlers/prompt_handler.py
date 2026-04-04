@@ -264,8 +264,8 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
     # executed concurrently through its own brigade pipeline.
     # -------------------------------------------------------------------
     if not is_reply:
-        from src.pipeline._core import _decompose_multi_task
-        _sub_tasks = _decompose_multi_task(prompt)
+        from src.pipeline._multi_task import decompose_multi_task
+        _sub_tasks = decompose_multi_task(prompt)
         if len(_sub_tasks) >= 2:
             logger.info(
                 "v15.4 early decomposition activated",

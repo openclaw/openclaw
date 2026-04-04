@@ -9,9 +9,10 @@ Principles (from Bai et al., arXiv:2212.08073 + TruthRL extensions):
 
 from typing import Dict, List, Optional, Tuple
 
+from src.llm_gateway import route_llm
+
 from src.ai.agents._shared import (
     ConstitutionalResult,
-    call_vllm,
     logger,
 )
 
@@ -26,8 +27,7 @@ class ConstitutionalChecker:
         "Truthfulness: Factual claims in the response are verifiable and not misleading.",
     ]
 
-    def __init__(self, vllm_url: str = "", model: str = ""):
-        self.vllm_url = vllm_url.rstrip("/")
+    def __init__(self, model: str = ""):
         self.model = model
 
     async def check(self, prompt: str, response: str) -> ConstitutionalResult:
@@ -56,13 +56,13 @@ class ConstitutionalChecker:
             "Rewrite the response so that it no longer violates any principle "
             "while remaining helpful and accurate."
         )
-        return await call_vllm(
-            self.vllm_url,
-            self.model,
-            [
+        return await route_llm(
+            "",
+            messages=[
                 {"role": "system", "content": "You rewrite responses to comply with constitutional AI principles."},
                 {"role": "user", "content": revise_prompt},
             ],
+            model=self.model,
             temperature=0.2,
         )
 
@@ -80,13 +80,13 @@ class ConstitutionalChecker:
             "For each principle, output a line:\n"
             "<Principle name>: <score 0.0-1.0> | <PASS or VIOLATION: reason>\n"
         )
-        raw = await call_vllm(
-            self.vllm_url,
-            self.model,
-            [
+        raw = await route_llm(
+            "",
+            messages=[
                 {"role": "system", "content": "You are a constitutional AI auditor. Be strict and fair."},
                 {"role": "user", "content": eval_prompt},
             ],
+            model=self.model,
             temperature=0.1,
             max_tokens=512,
         )

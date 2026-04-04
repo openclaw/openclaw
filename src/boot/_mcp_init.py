@@ -106,36 +106,12 @@ async def configure_llm_and_pipeline(gateway) -> None:
         gateway._discord.run_in_background()
         logger.info("Discord handler started in background")
 
-    # 9. Cloud-only vs vLLM startup
-    or_cfg = gateway.config.get("system", {}).get("openrouter", {})
-    force_cloud = (
-        or_cfg.get("force_cloud", False)
-        and or_cfg.get("enabled", False)
-        and bool(or_cfg.get("api_key", ""))
-        and not or_cfg.get("use_local_models", True)
-    )
-
-    if force_cloud:
-        logger.info("Cloud-Only mode active: OpenRouter primary, vLLM/WSL/Ollama DISABLED")
-        if _tg_log:
-            await _tg_log.stage("☁️", "SmartModelRouter", "Cloud-Only mode. OpenRouter primary.")
-    else:
-        gateway.vllm_manager.start_health_monitor()
-        default_model = (
-            gateway.config.get("system", {})
-            .get("model_router", {})
-            .get("general", "meta-llama/llama-3.3-70b-instruct:free")
-        )
-        preload_task = asyncio.create_task(gateway._preload_model(default_model))
-        gateway._bg_tasks.add(preload_task)
-        preload_task.add_done_callback(gateway._bg_tasks.discard)
-
-    # 10. Brigade REST API
+    # 9. Brigade REST API
     brigade_port = int(os.environ.get("BRIGADE_API_PORT", "8765"))
     try:
         from src.brigade_api import run_brigade_api
         brigade_task = asyncio.create_task(
-            run_brigade_api(gateway.config, gateway.vllm_url, gateway.vllm_manager, port=brigade_port)
+            run_brigade_api(gateway.config, port=brigade_port)
         )
         gateway._bg_tasks.add(brigade_task)
         brigade_task.add_done_callback(gateway._bg_tasks.discard)

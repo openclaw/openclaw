@@ -1,16 +1,13 @@
 """
-vLLM inference client: handles chat completions via OpenAI-compatible API,
-tool call execution, VRAM protection, and streaming response generation.
+Inference client: handles chat completions via OpenAI-compatible API,
+tool call execution, resource protection, and streaming response generation.
 
 Extracted from PipelineExecutor to keep modules under 500 LOC.
 """
 
 import asyncio
 import json
-import logging
 import re
-import time
-from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -22,8 +19,8 @@ from src.pipeline_schemas import ROLE_TOKEN_BUDGET, TOOL_ELIGIBLE_ROLES
 logger = structlog.get_logger(__name__)
 
 
-async def call_vllm(
-    vllm_url: str,
+async def call_llm(
+    api_url: str,
     model: str,
     system_prompt: str,
     user_prompt: str,
@@ -31,20 +28,20 @@ async def call_vllm(
     role_config: Dict[str, Any],
     mcp_client: OpenClawMCPClient,
     config: Dict[str, Any],
-    vllm_manager=None,
+    model_manager=None,
     preserve_think: bool = False,
     json_schema: Optional[Dict] = None,
 ) -> str:
     """
-    Calls local vLLM server (OpenAI-compatible) for a single inference step.
-    Endpoint: POST {vllm_url}/chat/completions
+    Calls local inference server (OpenAI-compatible) for a single inference step.
+    Endpoint: POST {api_url}/chat/completions
 
     Blocked when use_local_models=false (Cloud-Only mode).
     """
-    # Guard: refuse to call local vLLM if local models are disabled
+    # Guard: refuse to call local server if local models are disabled
     or_cfg = config.get("system", {}).get("openrouter", {})
     if not or_cfg.get("use_local_models", True):
-        logger.error(f"call_vllm blocked: local models disabled (use_local_models=false), role={role_name}")
+        logger.error(f"call_llm blocked: local models disabled (use_local_models=false), role={role_name}")
         return (
             f"[ERROR] Локальная модель заблокирована для {role_name}. "
             "use_local_models=false в конфиге. Используйте OpenRouter или включите локальные модели."
@@ -108,16 +105,16 @@ async def call_vllm(
     system_timeout = config.get("system", {}).get("timeout_sec", 450)
     config_timeout = role_config.get("timeout_sec", system_timeout)
 
-    # Ensure the required model is loaded via vLLM manager
-    if vllm_manager:
-        await vllm_manager.ensure_model_loaded(model)
+    # Ensure the required model is loaded via model manager
+    if model_manager:
+        await model_manager.ensure_model_loaded(model)
 
     async def _run_inference():
         async with aiohttp.ClientSession() as session:
             try:
                 timeout = aiohttp.ClientTimeout(total=config_timeout)
                 async with session.post(
-                    f"{vllm_url}/chat/completions",
+                    f"{api_url}/chat/completions",
                     json=payload,
                     timeout=timeout,
                 ) as resp:
@@ -161,7 +158,7 @@ async def call_vllm(
                             payload["messages"] = messages
 
                             async with session.post(
-                                f"{vllm_url}/chat/completions",
+                                f"{api_url}/chat/completions",
                                 json=payload,
                                 timeout=timeout,
                             ) as resp2:
@@ -172,7 +169,7 @@ async def call_vllm(
                                         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
                                         text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
                                     return text
-                                return f"⚠️ vLLM Error after tool call ({resp2.status})"
+                                return f"⚠️ API Error after tool call ({resp2.status})"
                         else:
                             text = msg.get("content", "").strip()
                             if not preserve_think:
@@ -187,11 +184,11 @@ async def call_vllm(
                             pass
                         # Fallback: if 400 due to tool_choice not supported, retry without tools
                         if resp.status == 400 and "tool" in error_body.lower() and model_tools:
-                            logger.warning("vLLM rejected tools, retrying without tool_choice", status=resp.status)
+                            logger.warning("Server rejected tools, retrying without tool_choice", status=resp.status)
                             payload.pop("tools", None)
                             payload.pop("tool_choice", None)
                             async with session.post(
-                                f"{vllm_url}/chat/completions",
+                                f"{api_url}/chat/completions",
                                 json=payload,
                                 timeout=timeout,
                             ) as retry_resp:
@@ -203,13 +200,13 @@ async def call_vllm(
                                         text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
                                     return text
                                 retry_body = await retry_resp.text()
-                                return f"⚠️ vLLM Error ({retry_resp.status}): {retry_body[:200]}"
+                                return f"⚠️ API Error ({retry_resp.status}): {retry_body[:200]}"
                         if resp.status == 404:
                             return (
-                                f"⚠️ Model `{model}` not found on vLLM server (HTTP 404).\n"
+                                f"⚠️ Model `{model}` not found on inference server (HTTP 404).\n"
                                 f"Check that the model is downloaded and available."
                             )
-                        return f"⚠️ vLLM Error ({resp.status}): {error_body[:200]}"
+                        return f"⚠️ API Error ({resp.status}): {error_body[:200]}"
             except asyncio.TimeoutError:
                 return f"❌ Timeout: model did not respond within {config_timeout}s"
             except Exception as e:
@@ -218,32 +215,6 @@ async def call_vllm(
     from src.task_queue import model_queue
 
     return await model_queue.enqueue(model, _run_inference)
-
-
-async def force_unload(model: str):
-    """No-op for vLLM — model lifecycle is managed by VLLMModelManager."""
-    pass
-
-
-@asynccontextmanager
-async def vram_protection(target_model: str, prev_model: Optional[str]):
-    """Context manager to ensure strict VRAM unloading and logging heavy switches."""
-    switch_start = time.time()
-
-    # Unload prev model if different (VRAM Guard 2.0)
-    if prev_model and prev_model != target_model:
-        logger.info(f"[VRAM Guard 2.0] Anti-thrash: unloading {prev_model} before loading {target_model}")
-        unload_start = time.time()
-        await force_unload(prev_model)
-        unload_duration = time.time() - unload_start
-        if unload_duration > 10:
-            logger.warning(f"⚠️ [VRAM ALERT] Unloading {prev_model} took excessive time: {unload_duration:.2f}s!")
-
-    try:
-        yield
-    finally:
-        # Leave model hot. It will be unloaded when switching to a differently named model.
-        pass
 
 
 async def execute_stream(

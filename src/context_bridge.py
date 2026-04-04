@@ -25,6 +25,91 @@ logger = structlog.get_logger("ContextBridge")
 
 # Default paths
 _DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "context_bridge.db"
+_DEFAULT_CHROMA_DIR = Path(__file__).resolve().parent.parent / "data" / "context_embeddings"
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 — Embedding Store (ChromaDB semantic memory)
+# ---------------------------------------------------------------------------
+
+class EmbeddingStore:
+    """ChromaDB-backed semantic memory for long-term context retrieval.
+
+    Provides `where` filter support for efficient pruning without
+    loading all items into memory.
+    """
+
+    def __init__(self, persist_dir: Optional[str] = None, collection_name: str = "context_bridge"):
+        self._persist_dir = str(persist_dir or _DEFAULT_CHROMA_DIR)
+        self._collection_name = collection_name
+        self._collection = None
+        self._client = None
+
+    def _ensure_collection(self):
+        """Lazy-init ChromaDB (optional dependency)."""
+        if self._collection is not None:
+            return
+        try:
+            import chromadb
+            self._client = chromadb.PersistentClient(path=self._persist_dir)
+            self._collection = self._client.get_or_create_collection(
+                name=self._collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+            logger.info("EmbeddingStore initialized", persist_dir=self._persist_dir)
+        except ImportError:
+            logger.warning("chromadb not installed — EmbeddingStore disabled")
+        except Exception as e:
+            logger.error("EmbeddingStore init failed", error=str(e))
+
+    def add(self, doc_id: str, text: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """Add or update a document in the embedding store."""
+        self._ensure_collection()
+        if self._collection is None:
+            return
+        meta = metadata or {}
+        meta.setdefault("timestamp", time.time())
+        self._collection.upsert(ids=[doc_id], documents=[text], metadatas=[meta])
+
+    def query(self, text: str, n_results: int = 5, where: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """Semantic search with optional metadata `where` filter."""
+        self._ensure_collection()
+        if self._collection is None:
+            return []
+        kwargs: Dict[str, Any] = {"query_texts": [text], "n_results": n_results}
+        if where:
+            kwargs["where"] = where
+        try:
+            results = self._collection.query(**kwargs)
+            docs = results.get("documents", [[]])[0]
+            metas = results.get("metadatas", [[]])[0]
+            dists = results.get("distances", [[]])[0]
+            return [
+                {"document": d, "metadata": m, "distance": dist}
+                for d, m, dist in zip(docs, metas, dists)
+            ]
+        except Exception as e:
+            logger.warning("EmbeddingStore query failed", error=str(e))
+            return []
+
+    def prune_old(self, max_age_seconds: float = 86400.0) -> int:
+        """Delete entries older than max_age_seconds using `where` filter."""
+        self._ensure_collection()
+        if self._collection is None:
+            return 0
+        cutoff = time.time() - max_age_seconds
+        try:
+            self._collection.delete(where={"timestamp": {"$lt": cutoff}})
+            return 1  # ChromaDB doesn't return count
+        except Exception as e:
+            logger.warning("EmbeddingStore prune failed", error=str(e))
+            return 0
+
+    def count(self) -> int:
+        self._ensure_collection()
+        if self._collection is None:
+            return 0
+        return self._collection.count()
 
 
 @dataclass
@@ -159,13 +244,16 @@ class ContextBridge:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         bridge_cfg = (config or {}).get("context_bridge", {})
         db_path = bridge_cfg.get("fact_store_path", str(_DEFAULT_DB_PATH))
+        chroma_dir = bridge_cfg.get("embedding_store_path", str(_DEFAULT_CHROMA_DIR))
         self._enabled = bridge_cfg.get("enabled", True)
         self._summary_max_tokens = bridge_cfg.get("summary_max_tokens", 500)
         self._fact_store = FactStore(db_path)
+        self._embedding_store = EmbeddingStore(chroma_dir)
         logger.info(
             "ContextBridge initialized",
             enabled=self._enabled,
             db=db_path,
+            embeddings=chroma_dir,
         )
 
     @property
@@ -212,7 +300,7 @@ class ContextBridge:
     # -- Layer 2: Persist --
 
     def save_before_swap(self, snapshot: PipelineSnapshot) -> None:
-        """Persist snapshot to SQLite before model unload."""
+        """Persist snapshot to SQLite + ChromaDB before model unload."""
         self._fact_store.save_snapshot(snapshot)
         # Also save individual step facts
         for step in snapshot.step_summaries:
@@ -221,6 +309,17 @@ class ContextBridge:
                 step["role"],
                 "step_output",
                 step["summary"],
+            )
+        # Layer 3: embed accumulated context for semantic retrieval
+        if snapshot.accumulated_context:
+            self._embedding_store.add(
+                doc_id=f"snap:{snapshot.pipeline_id}",
+                text=snapshot.accumulated_context[:2000],
+                metadata={
+                    "pipeline_id": snapshot.pipeline_id,
+                    "brigade": snapshot.brigade,
+                    "timestamp": snapshot.timestamp,
+                },
             )
 
     def restore_after_swap(self, pipeline_id: str) -> Optional[str]:
@@ -231,6 +330,13 @@ class ContextBridge:
             return None
 
         facts = self._fact_store.get_facts(pipeline_id)
+
+        # Layer 3: semantic retrieval of related context
+        semantic_hits = self._embedding_store.query(
+            snapshot.accumulated_context[:500] if snapshot.accumulated_context else snapshot.brigade,
+            n_results=3,
+            where={"brigade": snapshot.brigade},
+        )
 
         # Build context briefing for the new model
         lines = [
@@ -253,7 +359,17 @@ class ContextBridge:
             for f in facts[:10]:
                 lines.append(f"  - [{f['role']}] {f['content'][:150]}")
 
+        if semantic_hits:
+            lines.append("")
+            lines.append("Semantic context (related):")
+            for hit in semantic_hits:
+                lines.append(f"  - {hit['document'][:150]}")
+
         return "\n".join(lines)
+
+    def prune_embeddings(self, max_age_seconds: float = 86400.0) -> int:
+        """Delete old embedding entries."""
+        return self._embedding_store.prune_old(max_age_seconds)
 
     def close(self) -> None:
         self._fact_store.close()

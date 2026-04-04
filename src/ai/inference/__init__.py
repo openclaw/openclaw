@@ -7,7 +7,6 @@ from src.ai.inference._shared import (
     ModelProfile,
     RoutingTask,
     TokenBudget,
-    VRAM_TOTAL_GB,
 )
 from src.ai.inference.batch_scheduler import DynamicBatchScheduler
 from src.ai.inference.budget import AdaptiveTokenBudget
@@ -17,7 +16,6 @@ from src.ai.inference.speculative import (
     ChunkedPrefillConfig,
     PrefixCachingConfig,
     SpeculativeDecodingConfig,
-    build_optimized_vllm_args,
 )
 
 __all__ = [
@@ -34,6 +32,4 @@ __all__ = [
     "SmartModelRouter",
     "SpeculativeDecodingConfig",
     "TokenBudget",
-    "VRAM_TOTAL_GB",
-    "build_optimized_vllm_args",
 ]

@@ -79,6 +79,11 @@ apps/ios/*.dSYM.zip
 # provisioning profiles (local)
 apps/ios/*.mobileprovision
 
+# Output/result artifacts
+*_output.txt
+*_result*.txt
+=*
+
 # Local untracked files
 .local/
 docs/.local/
@@ -106,6 +111,15 @@ logs/
 *.log
 *.bak
 *.bak.*
+
+# Build/lint/test output artifacts
+*_output.txt
+*_results.txt
+_imp_*.txt
+benchmark_*.txt
+
+# Pip install artifacts (accidental files named =X.XX)
+=*
 
 # Memory bank generated files
 .memory-bank/embeddings.json

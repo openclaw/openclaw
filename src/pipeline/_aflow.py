@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.ai.agents._shared import call_vllm
+from src.llm_gateway import route_llm
 from src.pipeline._lats_search import classify_complexity
 
 logger = structlog.get_logger("AFlow")
@@ -123,11 +123,9 @@ class AFlowEngine:
 
     def __init__(
         self,
-        vllm_url: str = "",
         model: str = "meta-llama/llama-3.3-70b-instruct:free",
         default_chains: Optional[Dict[str, List[str]]] = None,
     ):
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
         self.model = model
         self.default_chains: Dict[str, List[str]] = default_chains or {
             "Dmarket-Dev": ["Planner", "Coder", "Auditor"],
@@ -320,13 +318,13 @@ class AFlowEngine:
         # Generate N candidates concurrently with temperature diversity
         async def _gen_candidate(idx: int) -> Optional[List[str]]:
             temp = 0.3 + idx * 0.2  # 0.3, 0.5, 0.7
-            raw = await call_vllm(
-                self.vllm_url,
-                self.model,
-                [
+            raw = await route_llm(
+                "",
+                messages=[
                     {"role": "system", "content": sys_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
+                model=self.model,
                 temperature=temp,
                 max_tokens=128,
             )

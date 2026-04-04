@@ -78,7 +78,8 @@ class AdaptiveTokenBudget:
 
     @staticmethod
     def _rough_token_count(text: str) -> int:
-        return max(1, len(text) // 4)
+        from src.utils.token_counter import estimate_tokens
+        return estimate_tokens(text)
 
     @staticmethod
     def _infer_task_type(prompt: str) -> str:

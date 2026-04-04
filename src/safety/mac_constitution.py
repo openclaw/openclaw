@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.ai.agents._shared import call_vllm
+from src.llm_gateway import route_llm
 
 logger = structlog.get_logger("MAC")
 
@@ -48,7 +48,7 @@ _HEURISTIC_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bpnpm\b", re.I),         "Пакетный менеджер Node.js — pnpm (не npm/yarn)"),
     (re.compile(r"\bvitest\b", re.I),       "Тесты JS/TS — Vitest (не Jest)"),
     (re.compile(r"\boxfmt\b", re.I),        "Форматирование — oxfmt (не prettier/black)"),
-    (re.compile(r"\bOpenRouter\b", re.I),   "Инференс — через OpenRouter API (не прямой vLLM в продакшене)"),
+    (re.compile(r"\bOpenRouter\b", re.I),   "Инференс — через OpenRouter API (cloud-only)"),
 ]
 
 
@@ -90,11 +90,9 @@ class MACConstitution:
 
     def __init__(
         self,
-        vllm_url: str = "",
         model: str = "",
         enabled: bool = True,
     ):
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
         self.model = model or "google/gemma-3-12b-it:free"
         self.enabled = enabled
         self._state: Optional[MACState] = None
@@ -135,14 +133,13 @@ class MACConstitution:
             "Выпиши JSON-массив неявных технических правил."
         )
         try:
-            raw = await call_vllm(
-                vllm_url=self.vllm_url,
+            raw = await route_llm(
+                user,
+                system=system,
                 model=self.model,
-                system_prompt=system,
-                user_prompt=user,
-                config=config or {},
-                role_name="MAC_Extractor",
-                role_config={"max_tokens": 512, "temperature": 0.3},
+                task_type="mac_extraction",
+                max_tokens=512,
+                temperature=0.3,
             )
             raw = (raw or "").strip()
             # Ищем JSON-массив в ответе
@@ -196,7 +193,7 @@ class MACConstitution:
         chunks = [combined[i:i+2000] for i in range(0, min(len(combined), 8000), 2000)]
         llm_texts: list[list[str]] = [[] for _ in chunks]
 
-        if chunks and self.vllm_url:
+        if chunks:
             try:
                 async with asyncio.TaskGroup() as tg:
                     tasks = [

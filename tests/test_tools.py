@@ -1,1 +1,0 @@
-import asyncio; import sys; sys.path.append('src'); from mcp_client import OpenClawMCPClient; import json; async def main(): mcp = OpenClawMCPClient(json.load(open('config/openclaw_config.json', encoding='utf-8'))); await mcp.initialize(); print(list(mcp._tool_route_map.keys())); await mcp.cleanup(); asyncio.run(main())

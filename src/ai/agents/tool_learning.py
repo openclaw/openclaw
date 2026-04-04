@@ -6,10 +6,14 @@ Inspired by:
 """
 
 import asyncio
+import json
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.ai.agents._shared import ToolStats, logger
+
+_STATE_VERSION = 1
 
 
 class ToolLearningTracker:
@@ -85,3 +89,38 @@ class ToolLearningTracker:
             return None
         best = max(candidates, key=lambda s: s.success_rate)
         return best.tool_name if best.success_rate > self._RETRY_THRESHOLD else None
+
+    # -- Persistence --
+
+    def save_state(self, path: str) -> None:
+        """Persist tracker state to JSON with version field."""
+        state = {
+            "version": _STATE_VERSION,
+            "stats": {name: s.to_dict() for name, s in self._stats.items()},
+            "task_tool_map": {k: dict(v) for k, v in self._task_tool_map.items()},
+        }
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("ToolLearningTracker state saved", path=path, tools=len(self._stats))
+
+    def restore_state(self, path: str) -> None:
+        """Load tracker state from JSON; silently ignores unknown keys."""
+        p = Path(path)
+        if not p.exists():
+            logger.debug("No saved state found", path=path)
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            version = data.get("version", 0)
+            if version > _STATE_VERSION:
+                logger.warning("State version newer than supported", file_version=version, supported=_STATE_VERSION)
+            for name, d in data.get("stats", {}).items():
+                known_fields = {f for f in ToolStats.__dataclass_fields__} if hasattr(ToolStats, "__dataclass_fields__") else set()
+                filtered = {k: v for k, v in d.items() if not known_fields or k in known_fields}
+                self._stats[name] = ToolStats(**filtered) if known_fields else ToolStats(tool_name=name)
+            for task, mapping in data.get("task_tool_map", {}).items():
+                self._task_tool_map[task] = defaultdict(int, mapping)
+            logger.info("ToolLearningTracker state restored", path=path, tools=len(self._stats))
+        except Exception as e:
+            logger.warning("Failed to restore ToolLearningTracker state", error=str(e))

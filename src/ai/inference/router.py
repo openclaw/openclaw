@@ -1,8 +1,10 @@
 """Smart model router — task-aware model selection.
 
 References: Phi-3 Technical Report, Small Language Models Survey, Scaling Laws.
+UCB1 exploration: Auer et al., "Finite-time Analysis of the Multiarmed Bandit Problem".
 """
 
+import math
 import re
 from collections import defaultdict
 from typing import Any, Dict, List
@@ -36,7 +38,16 @@ _COMPLEXITY_COMPLEX = "complex"
 
 
 class SmartModelRouter:
-    """Intelligent model routing based on task characteristics."""
+    """Intelligent model routing based on task characteristics.
+
+    Includes UCB1 exploration bonus to encourage trying under-explored
+    model–task combinations, preventing the router from getting stuck
+    on a single model indefinitely.
+    """
+
+    # UCB1 exploration parameters
+    _UCB1_C = 1.4           # Exploration constant (sqrt(2) ≈ 1.414)
+    _UCB1_MAX_EXPLORE_BONUS = 3.0  # Cap on exploration bonus
 
     def __init__(self, available_models: Dict[str, ModelProfile]) -> None:
         self._models = dict(available_models)
@@ -44,6 +55,7 @@ class SmartModelRouter:
             lambda: defaultdict(lambda: {"successes": 0.0, "total": 0.0, "quality_sum": 0.0}),
         )
         self._route_counts: Dict[str, int] = defaultdict(int)
+        self._total_routes: int = 0  # Total routes across all models
 
         logger.info(
             "SmartModelRouter initialised",
@@ -53,6 +65,7 @@ class SmartModelRouter:
     def route(self, task: RoutingTask) -> str:
         if task.preferred_model and task.preferred_model in self._models:
             self._route_counts[task.preferred_model] += 1
+            self._total_routes += 1
             return task.preferred_model
 
         task_type = self._classify_task(task)
@@ -61,12 +74,15 @@ class SmartModelRouter:
         scored: List[tuple[float, str]] = []
         for name, profile in self._models.items():
             score = self._score_model(profile, task_type, complexity)
+            # UCB1 exploration bonus for under-explored models
+            score += self._ucb1_bonus(name)
             scored.append((score, name))
 
         scored.sort(key=lambda t: t[0], reverse=True)
         chosen = scored[0][1] if scored else next(iter(self._models))
 
         self._route_counts[chosen] += 1
+        self._total_routes += 1
         logger.info(
             "Model routed",
             model=chosen,
@@ -153,3 +169,15 @@ class SmartModelRouter:
             score += avg_q
 
         return score
+
+    def _ucb1_bonus(self, model_name: str) -> float:
+        """UCB1 exploration bonus: encourages trying under-explored models.
+
+        Returns higher bonus when a model has been tried fewer times
+        relative to the total number of routes.
+        """
+        if self._total_routes < 2:
+            return 0.0
+        n_i = max(self._route_counts.get(model_name, 0), 1)
+        bonus = self._UCB1_C * math.sqrt(math.log(self._total_routes) / n_i)
+        return min(bonus, self._UCB1_MAX_EXPLORE_BONUS)

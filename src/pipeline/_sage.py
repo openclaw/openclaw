@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.ai.agents._shared import call_vllm
+from src.llm_gateway import route_llm
 
 logger = structlog.get_logger("SAGE")
 
@@ -70,11 +70,9 @@ class SAGEEngine:
 
     def __init__(
         self,
-        vllm_url: str = "",
         model: str = "",
         enabled: bool = True,
     ):
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
         self.model = model or "meta-llama/llama-3.3-70b-instruct:free"
         self.enabled = enabled
         self._correction_count = 0
@@ -228,14 +226,12 @@ class SAGEEngine:
             "исправленный подход для следующего запуска."
         )
         try:
-            raw = await call_vllm(
-                vllm_url=self.vllm_url,
+            raw = await route_llm(
+                user,
+                system=system,
                 model=self.model,
-                system_prompt=system,
-                user_prompt=user,
-                config=config or {},
-                role_name="SAGE_Corrector",
-                role_config={"max_tokens": 512, "temperature": 0.3},
+                max_tokens=512,
+                temperature=0.3,
             )
             return (raw or "").strip()
         except Exception as e:

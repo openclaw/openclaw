@@ -7,10 +7,11 @@ Reinforcement Learning", arXiv:2303.11366.
 import time
 from typing import List
 
+from src.llm_gateway import route_llm
+
 from src.ai.agents._shared import (
     EvaluationResult,
     ReflexionResult,
-    call_vllm,
     logger,
 )
 
@@ -20,8 +21,7 @@ class ReflexionAgent:
 
     _SUCCESS_THRESHOLD = 0.7
 
-    def __init__(self, vllm_url: str = "", model: str = ""):
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
+    def __init__(self, model: str = ""):
         self.model = model
 
     async def solve_with_reflection(
@@ -34,13 +34,13 @@ class ReflexionAgent:
 
         for attempt in range(1, max_attempts + 1):
             gen_prompt = self._build_generation_prompt(task, reflections)
-            last_response = await call_vllm(
-                self.vllm_url,
-                self.model,
-                [
+            last_response = await route_llm(
+                "",
+                messages=[
                     {"role": "system", "content": "You are a helpful assistant. Answer concisely and accurately."},
                     {"role": "user", "content": gen_prompt},
                 ],
+                model=self.model,
                 temperature=0.3,
             )
             logger.info("reflexion_attempt", attempt=attempt, response_len=len(last_response))
@@ -84,13 +84,13 @@ class ReflexionAgent:
             "Issues: <comma-separated list or 'none'>\n"
             "Reasoning: <brief explanation>"
         )
-        raw = await call_vllm(
-            self.vllm_url,
-            self.model,
-            [
+        raw = await route_llm(
+            "",
+            messages=[
                 {"role": "system", "content": "You are a strict evaluator. Be honest and concise."},
                 {"role": "user", "content": eval_prompt},
             ],
+            model=self.model,
             temperature=0.1,
             max_tokens=512,
         )
@@ -116,13 +116,13 @@ class ReflexionAgent:
             "Write a short reflection (2-3 sentences) on what went wrong "
             "and what you should do differently next time."
         )
-        return await call_vllm(
-            self.vllm_url,
-            self.model,
-            [
+        return await route_llm(
+            "",
+            messages=[
                 {"role": "system", "content": "You are a self-reflective agent. Be specific and actionable."},
                 {"role": "user", "content": reflect_prompt},
             ],
+            model=self.model,
             temperature=0.3,
             max_tokens=256,
         )

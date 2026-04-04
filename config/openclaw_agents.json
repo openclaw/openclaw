@@ -2,41 +2,100 @@
   {
     "agent_id": "Risk Manager",
     "brigade": "Dmarket",
-    "model": "deepseek-r1:14b",
+    "model": "deepseek/deepseek-r1:free",
     "system_prompt": "Модель-предохранитель. Анализирует баланс и блокирует транзакции при нарушении риск-лимитов API DMarket.",
-    "vram_limit": "16GB_cuda",
-    "dependency_chains": ["Latency Monitor"]
+    "dependency_chains": ["Latency Monitor"],
+    "skills": [
+      "clawhub",
+      "coding-agent",
+      "gemini",
+      "gh-issues",
+      "github",
+      "mcporter",
+      "model-usage",
+      "oracle",
+      "session-logs",
+      "summarize",
+      "tmux"
+    ]
   },
   {
     "agent_id": "Latency Monitor",
     "brigade": "Dmarket",
-    "model": "qwen2.5-coder:14b",
+    "model": "qwen/qwen-2.5-coder-32b-instruct:free",
     "system_prompt": "Эксперт по производительности. Ищет time.sleep и синхронные вызовы, заменяя их на asyncio и httpx.",
-    "vram_limit": "16GB_cuda",
-    "dependency_chains": ["Security Auditor"]
+    "dependency_chains": ["Security Auditor"],
+    "skills": [
+      "clawhub",
+      "coding-agent",
+      "gemini",
+      "gh-issues",
+      "github",
+      "mcporter",
+      "model-usage",
+      "oracle",
+      "session-logs",
+      "summarize",
+      "tmux"
+    ]
   },
   {
     "agent_id": "Security Auditor",
     "brigade": "Dmarket",
-    "model": "gemma3:12b",
+    "model": "google/gemma-3-12b-it:free",
     "system_prompt": "Офицер безопасности. Сканирует код на наличие хардкода API-ключей и утечек .env в логи Telegram.",
-    "vram_limit": "16GB_cuda",
-    "dependency_chains": ["Executor"]
+    "dependency_chains": ["Executor"],
+    "skills": [
+      "clawhub",
+      "coding-agent",
+      "gemini",
+      "gh-issues",
+      "github",
+      "mcporter",
+      "model-usage",
+      "oracle",
+      "session-logs",
+      "summarize",
+      "tmux"
+    ]
   },
   {
     "agent_id": "Tool Smith",
     "brigade": "OpenClaw",
-    "model": "qwen2.5-coder:14b",
+    "model": "qwen/qwen-2.5-coder-32b-instruct:free",
     "system_prompt": "Автономный разработчик инструментов. Пишет новые Python-скрипты в папку /tools для расширения функций системы.",
-    "vram_limit": "16GB_cuda",
-    "dependency_chains": ["Planner"]
+    "dependency_chains": ["Planner"],
+    "skills": [
+      "clawhub",
+      "coding-agent",
+      "gemini",
+      "gh-issues",
+      "github",
+      "mcporter",
+      "model-usage",
+      "oracle",
+      "session-logs",
+      "skill-creator",
+      "summarize",
+      "template-skill",
+      "tmux"
+    ]
   },
   {
     "agent_id": "Memory Garbage Collector",
     "brigade": "OpenClaw",
-    "model": "llama3.1",
+    "model": "meta-llama/llama-3.3-70b-instruct:free",
     "system_prompt": "Чистильщик контекста. Выполняет суммаризацию диалогов и очистку context_window для предотвращения переполнения памяти.",
-    "vram_limit": "16GB_cuda",
-    "dependency_chains": ["Tool Smith"]
+    "dependency_chains": ["Tool Smith"],
+    "skills": [
+      "clawhub",
+      "coding-agent",
+      "gemini",
+      "github",
+      "model-usage",
+      "oracle",
+      "session-logs",
+      "summarize"
+    ]
   }
 ]

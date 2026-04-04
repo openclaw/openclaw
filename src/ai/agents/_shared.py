@@ -6,8 +6,6 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.llm_gateway import route_llm
-
 logger = structlog.get_logger("AgentReasoning")
 
 
@@ -97,21 +95,3 @@ class ToolStats:
             "avg_latency_ms": self.avg_latency_ms,
         }
 
-
-async def call_vllm(
-    url: str,
-    model: str,
-    messages: List[Dict[str, str]],
-    *,
-    temperature: float = 0.3,
-    max_tokens: int = 2048,
-    timeout_sec: int = 120,
-) -> str:
-    """Route through Unified LLM Gateway (url/model args kept for API compat)."""
-    return await route_llm(
-        "",
-        messages=messages,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )

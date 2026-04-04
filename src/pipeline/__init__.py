@@ -8,6 +8,12 @@ from src.safety.mac_constitution import MACConstitution, MACState, ConstitutionR
 from src.pipeline._counterfactual import CounterfactualCredit, CandidateCredit, CreditRecord
 from src.pipeline._prorl import ProRLEngine, RolloutResult, RolloutCandidate
 
+# Decomposed submodules (public API only)
+from src.pipeline._chain_selector import get_chain_static, get_chain_dynamic
+from src.pipeline._ensemble import ensemble_vote
+from src.pipeline._multi_task import decompose_multi_task, route_subtask, execute_multi_task
+from src.pipeline._role_executor import run_single_step, call_llm
+
 __all__ = [
     "PipelineExecutor",
     "rag_necessary",
@@ -25,4 +31,13 @@ __all__ = [
     "ProRLEngine",
     "RolloutResult",
     "RolloutCandidate",
+    # Decomposed submodules
+    "get_chain_static",
+    "get_chain_dynamic",
+    "ensemble_vote",
+    "decompose_multi_task",
+    "route_subtask",
+    "execute_multi_task",
+    "run_single_step",
+    "call_llm",
 ]

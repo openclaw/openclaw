@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import structlog
 
-from src.ai.agents._shared import call_vllm
+from src.llm_gateway import route_llm
 from src.pipeline_utils import _CRITICAL_EXECUTION_DIRECTIVES
 
 logger = structlog.get_logger("LATS")
@@ -105,12 +105,10 @@ class LATSEngine:
 
     def __init__(
         self,
-        vllm_url: str = "",
         model: str = "",
         n_branches: int = _DEFAULT_BRANCHES,
         max_depth: int = 3,
     ):
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
         self.model = model or "meta-llama/llama-3.3-70b-instruct:free"
         self.n_branches = max(2, min(n_branches, 5))
         self.max_depth = max(1, min(max_depth, 5))
@@ -118,7 +116,7 @@ class LATSEngine:
         self._nodes: Dict[int, ThoughtNode] = {}
 
         # Model tiering defaults (overridden at search time from config)
-        self._expand_model = "google/gemma-3-12b-it:free"     # lightweight
+        self._expand_model = self.model                        # cloud model
         self._evaluate_model = self.model                      # heavy
 
     def _next_id(self) -> int:
@@ -262,13 +260,13 @@ class LATSEngine:
                 f"youtube_parser). DO NOT just write a plan — EXECUTE the plan."
                 + _CRITICAL_EXECUTION_DIRECTIVES
             )
-            raw = await call_vllm(
-                self.vllm_url,
-                self._expand_model,
-                [
+            raw = await route_llm(
+                "",
+                messages=[
                     {"role": "system", "content": system_prompt or "You are an expert problem-solver."},
                     {"role": "user", "content": gen_prompt},
                 ],
+                model=self._expand_model,
                 temperature=0.7 + idx * 0.1,  # diversity via temperature spread
                 max_tokens=512,
             )
@@ -312,13 +310,13 @@ class LATSEngine:
                 "Consider: correctness, feasibility, completeness, efficiency.\n"
                 "Reply with ONLY a single float number, e.g. 0.75"
             )
-            raw = await call_vllm(
-                self.vllm_url,
-                self._evaluate_model,
-                [
+            raw = await route_llm(
+                "",
+                messages=[
                     {"role": "system", "content": auditor_system or "You are a strict code reviewer scoring approaches."},
                     {"role": "user", "content": eval_prompt},
                 ],
+                model=self._evaluate_model,
                 temperature=0.1,
                 max_tokens=32,
             )

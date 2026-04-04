@@ -1,27 +1,31 @@
 """Mixture-of-Agents — multi-perspective generation with aggregation.
 
-**WARNING**: On a 16 GB GPU this triples inference time (3 sequential
-generations + 1 aggregation per request).  Use only for high-stakes
-tasks where quality is more important than latency.
+Proposers run in parallel via asyncio.gather() for ~3x speed-up on
+cloud models, with per-proposer timeout and graceful degradation.
 
 Reference: Wang et al., "Mixture-of-Agents Enhances Large Language
 Model Capabilities", arXiv:2406.04692.
 """
 
+import asyncio
 import time
 from typing import List, Optional
 
+from src.llm_gateway import route_llm
+
 from src.ai.agents._shared import (
     MoAResult,
-    call_vllm,
     logger,
 )
+
+# Per-proposer timeout — prevents a single slow model from blocking the batch.
+_PROPOSER_TIMEOUT_SEC = 30.0
 
 
 class MixtureOfAgents:
     """Combines multiple agent perspectives for higher-quality output.
 
-    Layer 1 — *Proposers*: generate diverse candidate responses.
+    Layer 1 — *Proposers*: generate diverse candidate responses (parallel).
     Layer 2 — *Aggregator*: synthesises the best parts into one answer.
     """
 
@@ -33,11 +37,9 @@ class MixtureOfAgents:
 
     def __init__(
         self,
-        vllm_url: str = "",
         model: str = "",
         num_proposers: int = 3,
     ):
-        self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
         self.model = model
         self.num_proposers = num_proposers
 
@@ -49,20 +51,41 @@ class MixtureOfAgents:
         prompts = self._resolve_system_prompts(system_prompts)
         start = time.monotonic()
 
-        # Layer 1 — sequential to stay within 16 GB VRAM
-        proposals: List[str] = []
-        for idx, sys_prompt in enumerate(prompts):
+        # Layer 1 — parallel proposers with timeout
+        async def _run_proposer(idx: int, sys_prompt: str) -> Optional[str]:
             logger.info("moa_proposer", proposer=idx + 1, total=len(prompts))
-            proposal = await call_vllm(
-                self.vllm_url,
-                self.model,
-                [
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.5 + idx * 0.1,
+            try:
+                return await asyncio.wait_for(
+                    route_llm(
+                        "",
+                        messages=[
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": prompt},
+                        ],
+                        model=self.model,
+                        temperature=0.5 + idx * 0.1,
+                    ),
+                    timeout=_PROPOSER_TIMEOUT_SEC,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("moa_proposer_timeout", proposer=idx + 1)
+                return None
+            except Exception as exc:
+                logger.warning("moa_proposer_error", proposer=idx + 1, error=str(exc))
+                return None
+
+        raw_results = await asyncio.gather(
+            *[_run_proposer(i, sp) for i, sp in enumerate(prompts)]
+        )
+        proposals: List[str] = [r for r in raw_results if r]
+
+        if not proposals:
+            return MoAResult(
+                aggregated_response="All proposers failed — no proposals generated.",
+                proposals=[],
+                num_proposers=len(prompts),
+                elapsed_sec=time.monotonic() - start,
             )
-            proposals.append(proposal)
 
         # Layer 2 — Aggregator
         aggregated = await self._aggregate(prompt, proposals)
@@ -91,12 +114,12 @@ class MixtureOfAgents:
             f"{numbered}\n\n"
             "Synthesised answer:"
         )
-        return await call_vllm(
-            self.vllm_url,
-            self.model,
-            [
+        return await route_llm(
+            "",
+            messages=[
                 {"role": "system", "content": "You synthesise multiple expert responses into one best answer."},
                 {"role": "user", "content": agg_prompt},
             ],
+            model=self.model,
             temperature=0.2,
         )

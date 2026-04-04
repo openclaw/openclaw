@@ -153,7 +153,6 @@ def _parse_imports(file_path: str, content: str) -> List[str]:
 _SKIP_DIRS: FrozenSet[str] = frozenset([
     "node_modules", ".git", "__pycache__", ".venv", "venv",
     "dist", "build", ".tox", ".mypy_cache", "target",
-    "unsloth_compiled_cache",
 ])
 
 _MAX_FILE_SIZE = 512 * 1024  # 512 KB

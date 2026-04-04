@@ -362,14 +362,17 @@ class TestHITLPressure(unittest.TestCase):
 
     def setUp(self):
         from src import llm_gateway
+        from src import hitl_approval
         self.gw = llm_gateway
-        self.gw._approval_config = {"enabled": True, "budget_threshold": 0.01, "timeout_sec": 2}
-        self.gw._pending_approvals.clear()
+        self.hitl = hitl_approval
+        self.hitl._approval_config.clear()
+        self.hitl._approval_config.update({"enabled": True, "budget_threshold": 0.01, "timeout_sec": 2})
+        self.hitl._pending_approvals.clear()
 
     def tearDown(self):
-        self.gw._approval_config = {}
-        self.gw._pending_approvals.clear()
-        self.gw._approval_callback = None
+        self.hitl._approval_config.clear()
+        self.hitl._pending_approvals.clear()
+        self.hitl._approval_callback = None
 
     def test_5_concurrent_risky_tasks_no_context_bleed(self):
         """5 simultaneous risky prompts must produce 5 distinct approval requests."""
@@ -427,7 +430,8 @@ class TestHITLPressure(unittest.TestCase):
         """Approval that exceeds timeout must return timeout message."""
         from src.llm_gateway import route_llm
 
-        self.gw._approval_config = {"enabled": True, "budget_threshold": 0.01, "timeout_sec": 1}
+        self.hitl._approval_config.clear()
+        self.hitl._approval_config.update({"enabled": True, "budget_threshold": 0.01, "timeout_sec": 1})
 
         async def _test():
             # This prompt triggers HITL gate (budget > 0.01 estimated)
@@ -447,7 +451,8 @@ class TestHITLPressure(unittest.TestCase):
         """An approved request must continue to the LLM call (not block)."""
         from src.llm_gateway import route_llm
 
-        self.gw._approval_config = {"enabled": True, "budget_threshold": 0.01, "timeout_sec": 5}
+        self.hitl._approval_config.clear()
+        self.hitl._approval_config.update({"enabled": True, "budget_threshold": 0.01, "timeout_sec": 5})
 
         async def _test():
             # Set up auto-approve callback
@@ -493,7 +498,6 @@ class TestModuleImportCoverage(unittest.TestCase):
         "src.openrouter_client",
         "src.intent_classifier",
         "src.code_validator",
-        "src.context_bridge",
         "src.memory_enhanced",
         "src.memory_gc",
         "src.supermemory",
@@ -505,8 +509,6 @@ class TestModuleImportCoverage(unittest.TestCase):
         "src.auto_rollback",
         "src.agent_personas",
         "src.archivist_telegram",
-        "src.vllm_inference",
-        "src.vllm_manager",
         "src.gateway_commands",
         "src.tailscale_monitor",
         # AI subsystem

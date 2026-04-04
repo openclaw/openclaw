@@ -1,19 +1,14 @@
 """
 Unified LLM Gateway — single entry point for ALL LLM inference across OpenClaw Bot.
 
-Consolidates 6 previously scattered call-sites:
-  1. pipeline_executor._call_vllm()
-  2. intent_classifier.py (hardcoded OpenRouter/vLLM)
-  3. deep_research.py (_llm_call_openrouter / _llm_call_vllm)
-  4. memory_mcp.py (direct vLLM localhost:8000)
-  5. ai/agents/_shared.py (bare vLLM POST)
-  6. bot_commands.cmd_test_all_models (vLLM direct)
+Routes all requests through OpenRouter cloud API.
+
+Consolidates previously scattered call-sites into a single gateway.
 
 Architecture:
-  route_llm() → SmartModelRouter (optional) → OpenRouter (primary) → vLLM (fallback)
+  route_llm() → SmartModelRouter (optional) → OpenRouter
 
 Integrates: SmartModelRouter, AdaptiveTokenBudget, InferenceMetricsCollector.
-Respects force_cloud mode: never hits localhost when cloud-only.
 """
 
 from __future__ import annotations
@@ -21,9 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import time
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
@@ -36,9 +29,10 @@ logger = structlog.get_logger("LLMGateway")
 # Singleton-ish config holder (set once at gateway boot)
 # ---------------------------------------------------------------------------
 _gateway_config: Dict[str, Any] = {}
-_force_cloud: bool = False
 _openrouter_config: Dict[str, Any] = {}
-_vllm_url: str = "http://localhost:8000/v1"
+
+# Async lock for circuit breaker state mutations
+_state_lock = asyncio.Lock()
 
 # Lazy-init inference components (singletons — initialized once by configure())
 _smart_router = None
@@ -47,111 +41,20 @@ _metrics_collector = None
 _configured: bool = False
 
 # ---------------------------------------------------------------------------
-# HITL (Human-in-the-Loop) Approval Gate  — Phase 8
+# HITL (Human-in-the-Loop) Approval Gate — extracted to src/hitl_approval.py
+# Re-exported here for backward compatibility.
 # ---------------------------------------------------------------------------
-# Risk patterns that trigger approval
-_HIGH_RISK_PATTERNS: list[str] = [
-    r"\brm\s+-rf\b",
-    r"\bsudo\b",
-    r"\bshutil\.rmtree\b",
-    r"\bos\.remove\b",
-    r"\bos\.unlink\b",
-    r"\bdrop\s+table\b",
-    r"\bdelete\s+from\b",
-    r"\bformat\s+[a-z]:",
-    r"\bkill\s+-9\b",
-    r"\bshutdown\b",
-    r"\breboot\b",
-]
-_COMPILED_RISK_RE = [re.compile(p, re.IGNORECASE) for p in _HIGH_RISK_PATTERNS]
-
-# Budget threshold (USD) above which approval is needed
-_BUDGET_APPROVAL_THRESHOLD: float = 0.05
-
-# Approval callback — set by the Telegram/Discord handler at startup
-_approval_callback: Optional[Callable[..., Coroutine]] = None
-_approval_config: Dict[str, Any] = {}
-
-
-@dataclass
-class ApprovalRequest:
-    """Represents a paused pipeline awaiting human approval."""
-    request_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
-    prompt_preview: str = ""
-    risk_reasons: List[str] = field(default_factory=list)
-    estimated_cost: float = 0.0
-    status: str = "PENDING_APPROVAL"  # PENDING_APPROVAL | APPROVED | REJECTED | EDITED
-    edited_prompt: Optional[str] = None
-
-    def approve(self) -> None:
-        self.status = "APPROVED"
-
-    def reject(self) -> None:
-        self.status = "REJECTED"
-
-    def edit(self, new_prompt: str) -> None:
-        self.status = "EDITED"
-        self.edited_prompt = new_prompt
-
-
-# Active approval requests keyed by request_id
-_pending_approvals: Dict[str, ApprovalRequest] = {}
-
-
-def set_approval_callback(callback: Callable[..., Coroutine]) -> None:
-    """Register the UI callback (Telegram/Discord) for sending approval buttons."""
-    global _approval_callback
-    _approval_callback = callback
-
-
-def get_pending_approval(request_id: str) -> Optional[ApprovalRequest]:
-    """Retrieve a pending approval request by ID."""
-    return _pending_approvals.get(request_id)
-
-
-def resolve_approval(request_id: str, action: str, edited_prompt: str = "") -> bool:
-    """Resolve a pending approval: 'approve', 'reject', or 'edit'."""
-    req = _pending_approvals.get(request_id)
-    if not req or req.status != "PENDING_APPROVAL":
-        return False
-    if action == "approve":
-        req.approve()
-    elif action == "reject":
-        req.reject()
-    elif action == "edit" and edited_prompt:
-        req.edit(edited_prompt)
-    else:
-        return False
-    return True
-
-
-def assess_risk(prompt: str, estimated_cost: float = 0.0) -> Optional[ApprovalRequest]:
-    """Check if a prompt requires human approval. Returns ApprovalRequest or None."""
-    if not _approval_config.get("enabled", False):
-        return None
-
-    reasons: list[str] = []
-    lower = prompt.lower()
-
-    for pat in _COMPILED_RISK_RE:
-        if pat.search(lower):
-            reasons.append(f"dangerous pattern: {pat.pattern}")
-
-    threshold = _approval_config.get("budget_threshold", _BUDGET_APPROVAL_THRESHOLD)
-    if estimated_cost > threshold:
-        reasons.append(f"estimated cost ${estimated_cost:.3f} > ${threshold:.3f}")
-
-    if not reasons:
-        return None
-
-    req = ApprovalRequest(
-        prompt_preview=prompt[:300],
-        risk_reasons=reasons,
-        estimated_cost=estimated_cost,
-    )
-    _pending_approvals[req.request_id] = req
-    logger.warning("HITL approval gate triggered", request_id=req.request_id, reasons=reasons)
-    return req
+import src.hitl_approval as _hitl_mod
+from src.hitl_approval import (
+    ApprovalRequest,
+    assess_risk,
+    get_pending_approval,
+    resolve_approval,
+    set_approval_callback,
+    _approval_callback,
+    _approval_config,
+    _pending_approvals,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +73,7 @@ def configure(config: Dict[str, Any]) -> None:
     Must be called once during startup (from OpenClawGateway.run()).
     Subsequent calls are no-ops to prevent double initialization.
     """
-    global _gateway_config, _force_cloud, _openrouter_config, _vllm_url
+    global _gateway_config, _openrouter_config
     global _smart_router, _token_budget, _metrics_collector, _approval_config
     global _configured
 
@@ -179,20 +82,12 @@ def configure(config: Dict[str, Any]) -> None:
         return
 
     _gateway_config = config
-    _vllm_url = config.get("system", {}).get("vllm_base_url", "http://localhost:8000/v1").rstrip("/")
 
     # HITL configuration
     _approval_config.update(config.get("hitl", {}))
 
     or_cfg = config.get("system", {}).get("openrouter", {})
     _openrouter_config = or_cfg
-
-    _force_cloud = (
-        or_cfg.get("enabled", False)
-        and or_cfg.get("force_cloud", False)
-        and not or_cfg.get("use_local_models", True)
-        and bool(or_cfg.get("api_key", ""))
-    )
 
     # --- SmartModelRouter ---
     try:
@@ -202,15 +97,11 @@ def configure(config: Dict[str, Any]) -> None:
         router_cfg = config.get("system", {}).get("model_router", {})
         profiles: Dict[str, Any] = {}
         for task_type, model_name in router_cfg.items():
-            # In force_cloud mode, skip models that look like local paths (contain AWQ/GPTQ/GGUF)
-            if _force_cloud and any(tag in model_name.upper() for tag in ("AWQ", "GPTQ", "GGUF")):
-                logger.debug("Skipping local model in cloud-only mode", model=model_name)
-                continue
             if model_name not in profiles:
                 is_fast = "7b" in model_name.lower() or "mini" in model_name.lower()
                 profiles[model_name] = ModelProfile(
                     name=model_name,
-                    vram_gb=4.0 if is_fast else 9.5,
+                    vram_gb=0.0,
                     capabilities=[task_type],
                     speed_tier="fast" if is_fast else "medium",
                     quality_tier="medium" if is_fast else "high",
@@ -227,10 +118,8 @@ def configure(config: Dict[str, Any]) -> None:
     try:
         from src.ai.inference.budget import AdaptiveTokenBudget
 
-        vram_gb = config.get("system", {}).get("hardware", {}).get("vram_gb", 16.0)
         _token_budget = AdaptiveTokenBudget(
-            default_max_tokens=config.get("system", {}).get("vllm_max_model_len", 8192),
-            vram_gb=vram_gb,
+            default_max_tokens=config.get("system", {}).get("max_model_tokens", 8192),
         )
     except Exception as e:
         logger.warning("LLMGateway: AdaptiveTokenBudget init failed", error=str(e))
@@ -245,8 +134,7 @@ def configure(config: Dict[str, Any]) -> None:
 
     _configured = True
     logger.info(
-        "LLMGateway configured",
-        force_cloud=_force_cloud,
+        "LLMGateway configured (cloud-only)",
         openrouter_enabled=or_cfg.get("enabled", False),
     )
 
@@ -290,9 +178,9 @@ async def route_llm(
         approval = assess_risk(prompt)
         if approval is not None:
             # Notify via callback (Telegram/Discord buttons)
-            if _approval_callback:
+            if _hitl_mod._approval_callback:
                 try:
-                    await _approval_callback(approval)
+                    await _hitl_mod._approval_callback(approval)
                 except Exception as e:
                     logger.warning("HITL callback failed", error=str(e))
 
@@ -395,11 +283,6 @@ async def route_llm(
                 if result:
                     used_provider = "openrouter"
 
-    if not result and not _force_cloud:
-        result = await _call_vllm_local(messages, selected_model, max_tokens, temperature)
-        if result:
-            used_provider = "vllm"
-
     if not result:
         logger.warning("LLMGateway: all providers failed", model=selected_model, task_type=task_type)
         result = ""
@@ -407,11 +290,12 @@ async def route_llm(
     # --- Record metrics ---
     elapsed_ms = (time.monotonic() - t0) * 1000
     if _metrics_collector and result:
+        from src.utils.token_counter import estimate_tokens as _est_tok
         prompt_tokens_est = sum(
-            len(m.get("content", "") if isinstance(m.get("content"), str) else str(m.get("content", "")))
+            _est_tok(m.get("content", "") if isinstance(m.get("content"), str) else str(m.get("content", "")))
             for m in messages
-        ) // 4
-        completion_tokens_est = len(result) // 4
+        )
+        completion_tokens_est = _est_tok(result)
         _metrics_collector.record_inference(
             model=selected_model or "unknown",
             prompt_tokens=prompt_tokens_est,
@@ -442,8 +326,8 @@ def get_token_budget():
 
 
 def is_cloud_only() -> bool:
-    """Return True if gateway is in cloud-only mode."""
-    return _force_cloud
+    """Return True if gateway is in cloud-only mode (always True)."""
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +335,10 @@ def is_cloud_only() -> bool:
 # ---------------------------------------------------------------------------
 
 def _infer_task_type(prompt: str, hint: str) -> str:
-    """Infer a task type from prompt content when hint is generic."""
+    """Infer a task type from prompt content when hint is generic.
+
+    v5: improved detection with research/analysis task types.
+    """
     if hint not in ("general", ""):
         return hint
     lower = prompt[:500].lower()
@@ -461,6 +348,18 @@ def _infer_task_type(prompt: str, hint: str) -> str:
         return "math"
     if any(kw in lower for kw in ["напиши", "сочини", "creativ", "story", "стих"]):
         return "creative"
+    # v5: research detection
+    if any(kw in lower for kw in [
+        "исследуй", "research", "проанализируй", "analyze", "сравни", "compare",
+        "обзор", "review", "найди", "search", "источник", "source",
+    ]):
+        return "research"
+    # v5: analysis detection
+    if any(kw in lower for kw in [
+        "данны", "data", "метрик", "metric", "статистик", "statistic",
+        "график", "chart", "таблиц", "table",
+    ]):
+        return "analysis"
     return "general"
 
 
@@ -491,7 +390,7 @@ async def _call_openrouter(
         return ""
 
     # Free-tier enforcement: reject models without :free suffix to prevent 402
-    if _force_cloud and ":free" not in model:
+    if ":free" not in model:
         logger.warning("Free-tier guard: model missing :free suffix, auto-appending", model=model)
         model = model + ":free"
 
@@ -578,52 +477,5 @@ async def _call_openrouter(
                 await asyncio.sleep(2 ** attempt)
                 continue
             logger.warning("OpenRouter failed after retries", error=str(e))
-
-    return ""
-
-
-async def _call_vllm_local(
-    messages: List[Dict[str, str]],
-    model: str,
-    max_tokens: int,
-    temperature: float,
-    retries: int = 2,
-) -> str:
-    """Call local vLLM server with retry."""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "stream": False,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
-
-    for attempt in range(retries):
-        try:
-            timeout = aiohttp.ClientTimeout(total=120)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    f"{_vllm_url}/chat/completions",
-                    json=payload,
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        content = (
-                            data.get("choices", [{}])[0]
-                            .get("message", {})
-                            .get("content", "")
-                        )
-                        return content.strip()
-                    if attempt < retries - 1:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            if attempt < retries - 1:
-                logger.warning("vLLM error", error=str(e), attempt=attempt)
-                await asyncio.sleep(2 ** attempt)
-                continue
-            logger.warning("vLLM failed after retries", error=str(e))
 
     return ""

@@ -1,6 +1,5 @@
 """Status, start, models, and help command handlers."""
 
-import aiohttp
 import structlog
 from aiogram.types import (
     InlineKeyboardButton,
@@ -19,9 +18,9 @@ async def cmd_help(gateway, message: Message):
         "🦞 *OpenClaw — Список команд:*\n\n"
         "/start — Главное меню с кнопками\n"
         "/help — Эта справка\n"
-        "/status — Статус системы (vLLM, GPU, бригады)\n"
+        "/status — Статус системы (cloud API, бригады)\n"
         "/models — Список моделей по бригадам\n"
-        "/test — Запустить VRAM-тест\n"
+        "/test — Запустить тест моделей\n"
         "/test_all_models — Тест всех 20 ролей (10-20 мин)\n"
         "/research — Глубокое исследование (web+memory)\n"
         "/history — Последние задачи и результаты\n"
@@ -42,7 +41,7 @@ async def cmd_start(gateway, message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Статус Системы", callback_data="cmd_status")],
         [InlineKeyboardButton(text="🧠 Список Моделей", callback_data="cmd_models")],
-        [InlineKeyboardButton(text="🔬 VRAM Тест", callback_data="cmd_test")],
+        [InlineKeyboardButton(text="🔬 Тест моделей", callback_data="cmd_test")],
         [InlineKeyboardButton(text="📜 История задач", callback_data="cmd_history")],
         [InlineKeyboardButton(text="⚡ Производительность", callback_data="cmd_perf")],
     ])
@@ -55,16 +54,14 @@ async def cmd_start(gateway, message: Message):
             m = role.get("openrouter_model", role.get("model", "")) if openrouter_on else role.get("model", "")
             if m:
                 short = m.rsplit("/", 1)[-1]
-                for suffix in ("-AWQ", "-GGUF", "-GPTQ", ":free"):
-                    short = short.replace(suffix, "")
+                short = short.replace(":free", "")
                 unique_models.add(short)
     models_str = " / ".join(sorted(unique_models)) or "N/A"
 
     await message.reply(
         "🦞 *OpenClaw v2026: Dual-Brigade Online*\n\n"
-        f"🛠️ GPU: {gateway.config['system']['hardware']['target_gpu']}\n"
         f"🧠 Модели: {models_str}\n"
-        f"📡 vLLM: `{gateway.vllm_url}`\n\n"
+        f"☁️ Inference: OpenRouter API\n\n"
         "Выбери нужный раздел меню ниже или отправь задачу текстом для роутинга в бригаду.",
         parse_mode="Markdown",
         reply_markup=keyboard
@@ -75,37 +72,16 @@ async def cmd_status(gateway, message: Message, from_callback: bool = False):
     if message.from_user.id != gateway.admin_id:
         return
 
-    vllm_status = "❌ Недоступен"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{gateway.vllm_url}/models", timeout=aiohttp.ClientTimeout(total=5)
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    model_count = len(data.get("data", []))
-                    vllm_status = f"✅ Online ({model_count} моделей)"
-                else:
-                    vllm_status = f"⚠️ HTTP {resp.status}"
-    except Exception as e:
-        logger.debug("vLLM status check failed", error=str(e))
-
     brigade_names = list(gateway.config.get("brigades", {}).keys())
     total_roles = sum(len(brigade["roles"]) for brigade in gateway.config["brigades"].values())
 
-    openrouter_cfg = gateway.config.get("system", {}).get("openrouter", {})
-    openrouter_on = openrouter_cfg.get("enabled", False) and openrouter_cfg.get("api_key", "")
-    inference_label = "OpenRouter API (vLLM fallback)" if openrouter_on else gateway.config['system']['hardware']['inference_engine']
     brigades_display = " + ".join(brigade_names) if brigade_names else "N/A"
 
     status_msg = (
         f"🛠️ *System Status:*\n\n"
         f"📦 Framework: `{gateway.config['system']['framework']}` v{gateway.config['system']['version']}\n"
-        f"🎮 GPU: `{gateway.config['system']['hardware']['target_gpu']}`\n"
-        f"💾 VRAM: {gateway.config['system']['hardware']['vram_limit_gb']}GB\n"
-        f"📡 vLLM: `{gateway.vllm_url}` — {vllm_status}\n"
+        f"☁️ Inference: OpenRouter API\n"
         f"🏴 Бригады: {brigades_display} ({total_roles} ролей)\n"
-        f"🧠 Inference: {inference_label}"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Обновить статус", callback_data="cmd_status")],

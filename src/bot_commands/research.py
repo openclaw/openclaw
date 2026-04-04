@@ -29,7 +29,6 @@ async def cmd_research(gateway, message: Message):
         router = gateway.config["system"]["model_router"]
         research_model = router.get("research", router.get("general", "meta-llama/llama-3.3-70b-instruct:free"))
         dr = DeepResearchPipeline(
-            vllm_url=gateway.vllm_url,
             model=research_model,
             mcp_client=gateway.pipeline.openclaw_mcp,
         )

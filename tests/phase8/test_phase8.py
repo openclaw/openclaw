@@ -17,15 +17,18 @@ class TestHITLApproval(unittest.TestCase):
 
     def setUp(self):
         from src import llm_gateway
+        from src import hitl_approval
         self.gw = llm_gateway
-        # Enable HITL for testing
-        self.gw._approval_config = {"enabled": True, "budget_threshold": 0.05, "timeout_sec": 5}
-        self.gw._pending_approvals.clear()
+        self.hitl = hitl_approval
+        # Enable HITL for testing (mutate in-place to keep module-level reference)
+        self.hitl._approval_config.clear()
+        self.hitl._approval_config.update({"enabled": True, "budget_threshold": 0.05, "timeout_sec": 5})
+        self.hitl._pending_approvals.clear()
 
     def tearDown(self):
-        self.gw._approval_config = {}
-        self.gw._pending_approvals.clear()
-        self.gw._approval_callback = None
+        self.hitl._approval_config.clear()
+        self.hitl._pending_approvals.clear()
+        self.hitl._approval_callback = None
 
     def test_assess_risk_detects_rm_rf(self):
         req = self.gw.assess_risk("run rm -rf /tmp/test")
@@ -53,7 +56,8 @@ class TestHITLApproval(unittest.TestCase):
         self.assertIsNone(req)
 
     def test_assess_risk_disabled_returns_none(self):
-        self.gw._approval_config = {"enabled": False}
+        self.hitl._approval_config.clear()
+        self.hitl._approval_config.update({"enabled": False})
         req = self.gw.assess_risk("sudo rm -rf /")
         self.assertIsNone(req)
 
@@ -91,7 +95,7 @@ class TestHITLApproval(unittest.TestCase):
         async def dummy(approval):
             pass
         self.gw.set_approval_callback(dummy)
-        self.assertIs(self.gw._approval_callback, dummy)
+        self.assertIs(self.hitl._approval_callback, dummy)
 
     def test_get_pending_approval(self):
         req = self.gw.assess_risk("sudo poweroff")

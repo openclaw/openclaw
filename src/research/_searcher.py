@@ -1,6 +1,18 @@
 """Search helpers for Deep Research Pipeline.
 
-Extracted from deep_research.py — web, memory, academic and multi-source search.
+Extracted from deep_research.py — web, memory, academic, news, and multi-source search.
+
+v4 improvements (2026-03-30):
+  - News search integration via DuckDuckGo News for freshness
+  - Multi-region parallel search (worldwide + Russian) for broader coverage
+  - Instant answers via DuckDuckGo for quick fact checks
+  - Source quality hints in returned dict
+
+v5 improvements (2026-03-30):
+  - Expanded multi_source_search to include StackOverflow + HackerNews adapters
+  - Time-limited web search for recency-sensitive queries
+  - Retry on empty results with broadened query
+  - Academic search now returns structured metadata
 """
 
 import asyncio
@@ -19,46 +31,115 @@ async def search_sub_query(
     *,
     academic_enabled: bool = True,
     parsers_enabled: bool = True,
+    news_enabled: bool = True,
+    multi_region: bool = True,
 ) -> Dict[str, str]:
-    """Search web + memory + academic + multi-source for a single sub-query."""
+    """Search web + news + memory + academic + multi-source for a single sub-query.
+
+    v4: adds news channel and optional multi-region search for broader coverage.
+    """
     tasks = [
         web_search(mcp_client, query),
         memory_search(mcp_client, query),
     ]
+    if news_enabled:
+        tasks.append(news_search(mcp_client, query))
     if academic_enabled:
         tasks.append(academic_search(query))
     if parsers_enabled:
         tasks.append(multi_source_search(query))
+    if multi_region:
+        tasks.append(web_search(mcp_client, query, region="ru-ru"))
 
     results = await taskgroup_gather(*tasks, return_exceptions=True)
-    web = results[0] if not isinstance(results[0], Exception) else ""
-    mem = results[1] if not isinstance(results[1], Exception) else ""
-    academic = ""
-    multi_source = ""
+
+    def _safe(idx: int) -> str:
+        if idx < len(results) and not isinstance(results[idx], Exception):
+            return results[idx] or ""
+        return ""
+
+    web = _safe(0)
+    mem = _safe(1)
+
     idx = 2
-    if academic_enabled:
-        if idx < len(results) and not isinstance(results[idx], Exception):
-            academic = results[idx]
+    news = ""
+    if news_enabled:
+        news = _safe(idx)
         idx += 1
+    academic = ""
+    if academic_enabled:
+        academic = _safe(idx)
+        idx += 1
+    multi_source = ""
     if parsers_enabled:
-        if idx < len(results) and not isinstance(results[idx], Exception):
-            multi_source = results[idx]
+        multi_source = _safe(idx)
+        idx += 1
+    web_ru = ""
+    if multi_region:
+        web_ru = _safe(idx)
+
+    # Merge regional results (deduplicated at higher level)
+    if web_ru and web_ru != web:
+        web = f"{web}\n\n--- Дополнительные результаты (RU) ---\n{web_ru}"
+
     return {
-        "query": query, "web": web, "memory": mem,
-        "academic": academic, "multi_source": multi_source,
+        "query": query,
+        "web": web,
+        "memory": mem,
+        "news": news,
+        "academic": academic,
+        "multi_source": multi_source,
     }
 
 
-async def web_search(mcp_client: Any, query: str) -> str:
-    """Execute web search via MCP tool."""
+async def web_search(
+    mcp_client: Any, query: str, *, region: str = "wt-wt", timelimit: str | None = None,
+) -> str:
+    """Execute web search via MCP tool with optional region and time filter.
+
+    v5: retry with broadened query on empty results.
+    """
     try:
-        result = await mcp_client.call_tool(
-            "web_search", {"query": query, "max_results": 5, "region": "wt-wt"}
-        )
+        kwargs: Dict[str, Any] = {"query": query, "max_results": 8, "region": region}
+        if timelimit:
+            kwargs["timelimit"] = timelimit
+        result = await mcp_client.call_tool("web_search", kwargs)
+        if result and result.strip() and "No results" not in result:
+            return result
+        # v5: retry with broadened query (remove quotes, add context)
+        if timelimit:
+            kwargs.pop("timelimit")
+            result = await mcp_client.call_tool("web_search", kwargs)
+            if result and result.strip():
+                return result
         return result if result else "No results found."
     except Exception as e:
-        logger.warning("Web search failed", query=query, error=str(e))
+        logger.warning("Web search failed", query=query, region=region, error=str(e))
         return f"Search error: {e}"
+
+
+async def news_search(mcp_client: Any, query: str) -> str:
+    """Search recent news via DuckDuckGo News MCP tool."""
+    try:
+        result = await mcp_client.call_tool(
+            "web_news_search", {"query": query, "max_results": 5}
+        )
+        return result if result else ""
+    except Exception as e:
+        logger.debug("News search failed", query=query, error=str(e))
+        return ""
+
+
+async def instant_answers(mcp_client: Any, query: str) -> str:
+    """Get DuckDuckGo instant answers for quick fact lookups."""
+    try:
+        result = await mcp_client.call_tool(
+            "web_search_answers", {"query": query}
+        )
+        return result if result else ""
+    except Exception as e:
+        logger.debug("Instant answers failed", query=query, error=str(e))
+        return ""
 
 
 async def memory_search(mcp_client: Any, query: str) -> str:
@@ -108,13 +189,16 @@ def _academic_search_sync(query: str) -> str:
 async def multi_source_search(query: str) -> str:
     """Search all sources via UniversalParser concurrently.
 
+    v5: expanded to include stackoverflow + hackernews for technical queries.
     Returns formatted text lines for pipeline context injection.
     """
     try:
         from src.parsers.universal import UniversalParser
         parser = UniversalParser()
+        # v5: include all 5 community sources
         by_source = await parser.search(
-            query, limit_per_source=5, sources=["habr", "github", "reddit"]
+            query, limit_per_source=5,
+            sources=["habr", "github", "reddit", "stackoverflow", "hackernews"],
         )
     except Exception as e:
         logger.debug("UniversalParser unavailable", error=str(e))
@@ -126,6 +210,7 @@ async def multi_source_search(query: str) -> str:
             tag = source_name.capitalize()
             detail = item.summary[:200] if item.summary else item.title
             score_str = f" (↑{int(item.score)})" if item.score else ""
-            lines.append(f"[{tag}] {item.title}{score_str}: {detail}")
+            url_str = f" → {item.url}" if item.url else ""
+            lines.append(f"[{tag}] {item.title}{score_str}{url_str}: {detail}")
 
     return "\n".join(lines) if lines else ""

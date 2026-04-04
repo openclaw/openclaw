@@ -49,7 +49,7 @@ class ConfigReloader(FileSystemEventHandler):
 # ---------------------------------------------------------------------------
 # PID-based lock file
 # ---------------------------------------------------------------------------
-LOCK_FILE = "/tmp/openclaw_bot.lock"
+LOCK_FILE = os.path.join(os.environ.get("TEMP", os.environ.get("TMP", "/tmp")), "openclaw_bot.lock")
 
 
 def acquire_lock() -> None:

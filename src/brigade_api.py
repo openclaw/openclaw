@@ -10,7 +10,7 @@ Endpoints:
     POST /brigade/execute          — run a brigade chain-of-agents
     POST /brigade/execute/stream   — stream pipeline step updates (SSE)
     GET  /brigade/brigades         — list available brigades and roles
-    GET  /brigade/status           — health + vLLM connectivity check
+    GET  /brigade/status           — health check
 """
 
 from __future__ import annotations
@@ -68,8 +68,7 @@ class BrigadeInfo(BaseModel):
 class StatusResponse(BaseModel):
     ok: bool
     version: str
-    vllm_url: str
-    vllm_reachable: bool
+    cloud_status: str = "ok"
     brigades: list[str]
     uptime_sec: float
 
@@ -81,11 +80,11 @@ class StatusResponse(BaseModel):
 _start_time = time.monotonic()
 
 
-def create_brigade_app(config: dict[str, Any], vllm_url: str, vllm_manager=None) -> FastAPI:
+def create_brigade_app(config: dict[str, Any]) -> FastAPI:
     """Create the FastAPI application with the given config and executor."""
     from src.pipeline_executor import PipelineExecutor
 
-    executor = PipelineExecutor(config, vllm_url, vllm_manager)
+    executor = PipelineExecutor(config)
 
     app = FastAPI(
         title="OpenClaw Brigade API",
@@ -236,24 +235,10 @@ def create_brigade_app(config: dict[str, Any], vllm_url: str, vllm_manager=None)
     # ------------------------------------------------------------------
     @app.get("/brigade/status", response_model=StatusResponse)
     async def get_status():
-        import aiohttp
-
-        vllm_reachable = False
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{vllm_url}/models",
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    vllm_reachable = resp.status == 200
-        except Exception:
-            pass
-
         return StatusResponse(
             ok=True,
             version=config.get("system", {}).get("version", "unknown"),
-            vllm_url=vllm_url,
-            vllm_reachable=vllm_reachable,
+            cloud_status="ok",
             brigades=list(config.get("brigades", {}).keys()),
             uptime_sec=round(time.monotonic() - _start_time, 1),
         )
@@ -264,9 +249,9 @@ def create_brigade_app(config: dict[str, Any], vllm_url: str, vllm_manager=None)
 # ---------------------------------------------------------------------------
 # Standalone runner (for development/testing)
 # ---------------------------------------------------------------------------
-async def run_brigade_api(config: dict[str, Any], vllm_url: str, vllm_manager=None, port: int = 8765) -> None:
+async def run_brigade_api(config: dict[str, Any], *, port: int = 8765) -> None:
     """Start the Brigade API server as an asyncio task."""
-    app = create_brigade_app(config, vllm_url, vllm_manager)
+    app = create_brigade_app(config)
     cfg = uvicorn.Config(
         app,
         host="127.0.0.1",
@@ -284,5 +269,4 @@ if __name__ == "__main__":
 
     with open("config/openclaw_config.json") as f:
         _config = json.loads(os.path.expandvars(f.read()))
-    _vllm_url = _config["system"].get("vllm_base_url", "http://localhost:8000/v1")
-    asyncio.run(run_brigade_api(_config, _vllm_url))
+    asyncio.run(run_brigade_api(_config))

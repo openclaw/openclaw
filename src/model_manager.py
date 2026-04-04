@@ -1,17 +1,17 @@
 """
-vLLM Model Manager — Dynamic single-GPU multi-model serving via WSL.
+Model Manager — Dynamic single-GPU multi-model serving via WSL.
 
-Manages a vLLM server running in WSL2 Ubuntu for the MAS (Multi-Agent System).
-Since 16GB VRAM can hold only one model at a time, this manager:
+Manages an inference engine server running in WSL2 Ubuntu for the MAS (Multi-Agent System).
+Since 16GB GPU memory can hold only one model at a time, this manager:
   1. Tracks which model is currently loaded
-  2. Swaps models by stopping/restarting the vLLM server in WSL
+  2. Swaps models by stopping/restarting the engine server in WSL
   3. Exposes health checks and a ready-state signal
   4. Integrates with the existing task_queue which batches by model
   5. Supports LoRA adapter hot-swap for fine-tuned models
 
 The OpenAI-compatible API is served at http://localhost:{port}/v1
-Models are stored at /mnt/d/vllm_models (HF_HOME).
-vLLM venv is at /mnt/d/vllm_env.
+Models are stored at /mnt/d/vllm_models (HF_HOME).  # actual disk path — do not rename
+Engine venv is at /mnt/d/vllm_env.  # actual disk path — do not rename
 LoRA adapters are stored at /mnt/d/lora_adapters.
 """
 
@@ -27,10 +27,10 @@ from src.ai.inference import (
     ChunkedPrefillConfig,
     PrefixCachingConfig,
     SpeculativeDecodingConfig,
-    build_optimized_vllm_args,
+    build_optimized_engine_args,
 )
 
-logger = structlog.get_logger("VLLMManager")
+logger = structlog.get_logger("ModelManager")
 
 # WSL paths
 WSL_DISTRO = "Ubuntu"
@@ -55,7 +55,7 @@ def _wsl_cmd(*args: str) -> list[str]:
     return ["wsl", "-d", WSL_DISTRO, "--"] + list(args)
 
 # Models that do NOT support tool-calling.
-# Passing --enable-auto-tool-choice / --tool-call-parser to these causes vLLM
+# Passing --enable-auto-tool-choice / --tool-call-parser to these causes the engine
 # to exit with code 2 (argparse error / capability check).
 _NO_TOOL_CALL_MODELS: frozenset[str] = frozenset({
     "deepseek-r1",
@@ -73,7 +73,7 @@ _TOOL_CALL_FLAGS: frozenset[str] = frozenset({
 def _filter_args_for_model(extra_args: list[str], model_name: str) -> list[str]:
     """Remove tool-call CLI flags for models that don't support them.
 
-    DeepSeek-R1 variants lack a tool-calling head; vLLM rejects
+    DeepSeek-R1 variants lack a tool-calling head; the engine rejects
     ``--enable-auto-tool-choice`` / ``--tool-call-parser`` for those models
     and exits with code 2. This filter omits those flags (plus their values)
     when the model name matches a known incompatible pattern.
@@ -95,13 +95,13 @@ def _filter_args_for_model(extra_args: list[str], model_name: str) -> list[str]:
     return filtered
 
 
-class VLLMModelManager:
+class ModelManager:
     """
-    Manages a local vLLM OpenAI-compatible server process.
+    Manages a local OpenAI-compatible inference server process.
     Supports automatic model swapping on a single GPU.
     Supports LoRA adapter loading for fine-tuned models.
     Accepts optional inference optimisation configs (speculative, chunked_prefill,
-    prefix_caching) which are merged into vllm_extra_args via build_optimized_vllm_args.
+    prefix_caching) which are merged into engine_extra_args via build_optimized_engine_args.
     """
 
     def __init__(
@@ -110,7 +110,7 @@ class VLLMModelManager:
         gpu_memory_utilization: float = 0.90,
         max_model_len: int = 8192,
         quantization: Optional[str] = None,
-        vllm_extra_args: Optional[list] = None,
+        engine_extra_args: Optional[list] = None,
         speculative: Optional[SpeculativeDecodingConfig] = None,
         chunked_prefill: Optional[ChunkedPrefillConfig] = None,
         prefix_caching: Optional[PrefixCachingConfig] = None,
@@ -119,15 +119,15 @@ class VLLMModelManager:
         self.gpu_memory_utilization = gpu_memory_utilization
         self.max_model_len = max_model_len
         self.quantization = quantization  # e.g. "awq", "gptq", None (auto)
-        opt_args = build_optimized_vllm_args(speculative, chunked_prefill, prefix_caching)
-        self.vllm_extra_args = opt_args + (vllm_extra_args or [])
+        opt_args = build_optimized_engine_args(speculative, chunked_prefill, prefix_caching)
+        self.engine_extra_args = opt_args + (engine_extra_args or [])
         self.base_url = f"http://localhost:{port}/v1"
 
         self.current_model: Optional[str] = None
         self.current_lora_adapter: Optional[str] = None  # Path to loaded LoRA adapter
         self._process: Optional[asyncio.subprocess.Process] = None
         self._lock = asyncio.Lock()
-        self._startup_timeout = 600  # seconds to wait for vLLM to start (14B AWQ needs ~5 min)
+        self._startup_timeout = 600  # seconds to wait for engine to start (14B AWQ needs ~5 min)
         self._healthy = False
         self._health_task: Optional[asyncio.Task] = None
 
@@ -234,8 +234,8 @@ class VLLMModelManager:
                     await post_swap_callback(model_name)
 
     async def _start_server(self, model_name: str) -> None:
-        """Start vLLM server in WSL with the specified model."""
-        vllm_args = [
+        """Start inference engine server in WSL with the specified model."""
+        engine_args = [
             WSL_VENV_PYTHON,
             "-m", "vllm.entrypoints.openai.api_server",
             "--model", model_name,
@@ -248,21 +248,21 @@ class VLLMModelManager:
         ]
 
         if self.quantization:
-            vllm_args.extend(["--quantization", self.quantization])
+            engine_args.extend(["--quantization", self.quantization])
 
         # Strip tool-call flags for models that don't support them (e.g. DeepSeek-R1).
-        # Passing these flags to an incompatible model causes vLLM exit code 2.
-        vllm_args.extend(_filter_args_for_model(self.vllm_extra_args, model_name))
+        # Passing these flags to an incompatible model causes engine exit code 2.
+        engine_args.extend(_filter_args_for_model(self.engine_extra_args, model_name))
 
         # Build the bash command to run inside WSL
         # Redirect stdout/stderr to log file to prevent pipe buffer deadlock
-        # (vLLM produces megabytes of output during torch.compile / CUDA graph capture)
+        # (engine produces megabytes of output during torch.compile / CUDA graph capture)
         # Use shlex.quote per arg so JSON values (e.g. --speculative-config) survive bash
-        args_str = " ".join(shlex.quote(a) for a in vllm_args)
+        args_str = " ".join(shlex.quote(a) for a in engine_args)
         log_path = f"{WSL_HF_HOME}/vllm_server.log"
         bash_cmd = f"export HF_HOME={WSL_HF_HOME} && {args_str} > {log_path} 2>&1"
 
-        logger.info("Starting vLLM server in WSL", model=model_name, port=self.port, log=log_path)
+        logger.info("Starting inference engine in WSL", model=model_name, port=self.port, log=log_path)
         self._healthy = False
 
         self._process = await asyncio.create_subprocess_exec(
@@ -273,10 +273,10 @@ class VLLMModelManager:
 
         # Wait for the server to become healthy
         await self._wait_for_ready(model_name)
-        logger.info("vLLM server ready", model=model_name, pid=self._process.pid)
+        logger.info("Engine server ready", model=model_name, pid=self._process.pid)
 
     async def _stop_server(self) -> None:
-        """Gracefully stop the current vLLM server running in WSL."""
+        """Gracefully stop the current inference engine server running in WSL."""
         if self._process is None:
             return
 
@@ -286,10 +286,10 @@ class VLLMModelManager:
             self._healthy = False
             return
 
-        logger.info("Stopping vLLM server", model=self.current_model, pid=self._process.pid)
+        logger.info("Stopping engine server", model=self.current_model, pid=self._process.pid)
 
         try:
-            # Kill vLLM processes inside WSL
+            # Kill engine processes inside WSL
             kill_proc = await asyncio.create_subprocess_exec(
                 *_wsl_cmd("bash", "-c",
                     "pkill -f 'vllm.entrypoints' 2>/dev/null; sleep 1; pkill -9 -f 'vllm.entrypoints' 2>/dev/null"),
@@ -306,20 +306,20 @@ class VLLMModelManager:
                 self._process.kill()
                 await self._process.wait()
         except (ProcessLookupError, Exception) as e:
-            logger.warning("Error stopping vLLM", error=str(e) or type(e).__name__)
+            logger.warning("Error stopping engine", error=str(e) or type(e).__name__)
 
         self._process = None
         self.current_model = None
         self._healthy = False
 
-        # Brief pause to let the GPU release VRAM
+        # Brief pause to let the GPU release memory
         await asyncio.sleep(2)
 
         # Wait for port to be fully released (TCP TIME_WAIT)
         await self._wait_for_port_free()
 
     async def _wait_for_port_free(self, timeout: int = 15) -> None:
-        """Wait until the vLLM port is no longer bound in WSL."""
+        """Wait until the engine port is no longer bound in WSL."""
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             try:
@@ -344,7 +344,7 @@ class VLLMModelManager:
         while time.monotonic() - start < self._startup_timeout:
             # Check if process crashed
             if self._process and self._process.returncode is not None:
-                # Read last lines from vLLM log file for diagnostics
+                # Read last lines from engine log file for diagnostics
                 log_tail = ""
                 try:
                     tail_proc = await asyncio.create_subprocess_exec(
@@ -357,7 +357,7 @@ class VLLMModelManager:
                 except Exception:
                     pass
                 raise RuntimeError(
-                    f"vLLM process exited with code {self._process.returncode}. "
+                    f"Engine process exited with code {self._process.returncode}. "
                     f"Log tail: {log_tail}"
                 )
 
@@ -368,7 +368,7 @@ class VLLMModelManager:
                         timeout=aiohttp.ClientTimeout(total=3),
                     ) as resp:
                         if resp.status == 200:
-                            # content_type=None: vLLM may return text/plain during startup
+                            # content_type=None: engine may return text/plain during startup
                             try:
                                 data = await resp.json(content_type=None)
                             except (ValueError, Exception):
@@ -385,7 +385,7 @@ class VLLMModelManager:
             await asyncio.sleep(2)
 
         raise RuntimeError(
-            f"vLLM server did not become ready within {self._startup_timeout}s. "
+            f"Engine server did not become ready within {self._startup_timeout}s. "
             f"Model: {model_name}. Last error: {last_error}"
         )
 
@@ -415,7 +415,7 @@ class VLLMModelManager:
             except asyncio.CancelledError:
                 pass
         await self._stop_server()
-        logger.info("VLLMModelManager shut down")
+        logger.info("ModelManager shut down")
 
     # --- LoRA Adapter Support (arXiv:2503.16219, Unsloth) ---
 
@@ -458,8 +458,8 @@ class VLLMModelManager:
     async def _start_server_with_lora(
         self, model_name: str, lora_adapter_path: Optional[str] = None
     ) -> None:
-        """Start vLLM server with optional LoRA adapter support."""
-        vllm_args = [
+        """Start inference engine server with optional LoRA adapter support."""
+        engine_args = [
             WSL_VENV_PYTHON,
             "-m", "vllm.entrypoints.openai.api_server",
             "--model", model_name,
@@ -472,15 +472,15 @@ class VLLMModelManager:
         ]
 
         if self.quantization:
-            vllm_args.extend(["--quantization", self.quantization])
+            engine_args.extend(["--quantization", self.quantization])
 
         # Strip tool-call flags for models that don't support them (e.g. DeepSeek-R1).
-        filtered_extra = _filter_args_for_model(self.vllm_extra_args, model_name)
+        filtered_extra = _filter_args_for_model(self.engine_extra_args, model_name)
 
         # LoRA adapter support
         if lora_adapter_path:
             adapter_name = os.path.basename(lora_adapter_path.rstrip("/"))
-            vllm_args.extend([
+            engine_args.extend([
                 "--enable-lora",
                 "--lora-modules", f"{adapter_name}={lora_adapter_path}",
                 "--max-lora-rank", "64",  # Support up to rank 64
@@ -491,14 +491,14 @@ class VLLMModelManager:
                 adapter_path=lora_adapter_path,
             )
 
-        vllm_args.extend(filtered_extra)
+        engine_args.extend(filtered_extra)
 
-        args_str = " ".join(vllm_args)
+        args_str = " ".join(engine_args)
         log_path = f"{WSL_HF_HOME}/vllm_server.log"
         bash_cmd = f"export HF_HOME={WSL_HF_HOME} && {args_str} > {log_path} 2>&1"
 
         logger.info(
-            "Starting vLLM server with LoRA",
+            "Starting engine server with LoRA",
             model=model_name,
             lora=lora_adapter_path,
             port=self.port,
@@ -513,7 +513,7 @@ class VLLMModelManager:
 
         await self._wait_for_ready(model_name)
         logger.info(
-            "vLLM server ready with LoRA",
+            "Engine server ready with LoRA",
             model=model_name,
             lora=lora_adapter_path,
             pid=self._process.pid,

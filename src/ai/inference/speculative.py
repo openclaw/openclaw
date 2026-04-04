@@ -1,23 +1,22 @@
 """Speculative decoding, chunked prefill, and prefix caching configs.
 
-References:
+DEPRECATED (2025-07): These dataclass definitions are retained for reference only.
+The bot is now cloud-only (OpenRouter API) — use ``route_llm`` from
+``src.llm_gateway`` for all inference. vLLM CLI args and local inference
+optimisations are no longer used.
+
+References (historical):
 - vLLM: Efficient Memory Management for LLM Serving (arXiv:2309.06180)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
 
 
 @dataclass
 class SpeculativeDecodingConfig:
-    """Configuration for speculative decoding (vLLM paper).
-
-    Two modes:
-    - N-gram (``use_ngram=True``, default): no extra VRAM.
-    - Draft-model (``use_ngram=False``): small draft model verifies in batch.
-    """
+    """Configuration for speculative decoding (historical, unused in cloud mode)."""
 
     enabled: bool = False
     use_ngram: bool = True
@@ -25,26 +24,6 @@ class SpeculativeDecodingConfig:
     ngram_prompt_lookup_min: int = 1
     draft_model: str = "Qwen/Qwen2.5-0.5B-Instruct"
     num_speculative_tokens: int = 8
-
-    def to_vllm_args(self) -> List[str]:
-        if not self.enabled:
-            return []
-        import json as _json
-
-        if self.use_ngram:
-            cfg = {
-                "method": "ngram",
-                "num_speculative_tokens": self.num_speculative_tokens,
-                "ngram_prompt_lookup_max": self.ngram_prompt_lookup_max,
-                "ngram_prompt_lookup_min": self.ngram_prompt_lookup_min,
-            }
-        else:
-            cfg = {
-                "method": "draft_model",
-                "draft_model": self.draft_model,
-                "num_speculative_tokens": self.num_speculative_tokens,
-            }
-        return ["--speculative-config", _json.dumps(cfg)]
 
     def estimated_vram_overhead_gb(self) -> float:
         if not self.enabled:
@@ -54,44 +33,14 @@ class SpeculativeDecodingConfig:
 
 @dataclass
 class ChunkedPrefillConfig:
-    """Chunked prefill — break long prompts to reduce TTFT."""
+    """Chunked prefill config (historical, unused in cloud mode)."""
 
     enabled: bool = False
     max_num_batched_tokens: int = 4096
 
-    def to_vllm_args(self) -> List[str]:
-        if not self.enabled:
-            return []
-        return [
-            "--enable-chunked-prefill",
-            "--max-num-batched-tokens",
-            str(self.max_num_batched_tokens),
-        ]
-
 
 @dataclass
 class PrefixCachingConfig:
-    """Automatic KV-cache reuse for shared prompt prefixes."""
+    """Automatic KV-cache reuse config (historical, unused in cloud mode)."""
 
     enabled: bool = False
-
-    def to_vllm_args(self) -> List[str]:
-        if not self.enabled:
-            return []
-        return ["--enable-prefix-caching"]
-
-
-def build_optimized_vllm_args(
-    speculative: Optional[SpeculativeDecodingConfig] = None,
-    chunked_prefill: Optional[ChunkedPrefillConfig] = None,
-    prefix_caching: Optional[PrefixCachingConfig] = None,
-) -> List[str]:
-    """Merge all optimisation configs into a single vLLM CLI argument list."""
-    result: List[str] = []
-    if speculative is not None:
-        result.extend(speculative.to_vllm_args())
-    if chunked_prefill is not None:
-        result.extend(chunked_prefill.to_vllm_args())
-    if prefix_caching is not None:
-        result.extend(prefix_caching.to_vllm_args())
-    return result

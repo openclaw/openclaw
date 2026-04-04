@@ -8,7 +8,6 @@ logger = structlog.get_logger(__name__)
 
 
 async def reflexion_fallback(
-    vllm_url: str,
     config: dict,
     prompt: str,
     error_response: str,
@@ -18,7 +17,6 @@ async def reflexion_fallback(
         from src.ai.agents.reflexion import ReflexionAgent
 
         agent = ReflexionAgent(
-            vllm_url=vllm_url,
             model=config.get("system", {}).get("model_router", {}).get(
                 "general", "meta-llama/llama-3.3-70b-instruct:free"
             ),
@@ -30,9 +28,9 @@ async def reflexion_fallback(
             f"Reflect on what went wrong and produce a corrected answer."
         )
         result = await agent.solve_with_reflection(task, max_attempts=2)
-        if result and result.final_answer:
-            logger.info("Reflexion fallback succeeded", attempts=result.attempts_used)
-            return result.final_answer
+        if result and result.final_response:
+            logger.info("Reflexion fallback succeeded", attempts=result.attempts)
+            return result.final_response
     except Exception as e:
         logger.warning("Reflexion fallback failed", error=str(e))
     return None

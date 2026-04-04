@@ -5,10 +5,11 @@ Loads persona markdown files from agents/ directory, provides persona
 lookup by slug/role, and augments system prompts with persona context.
 
 Based on the copilot/add-agents-module-structure branch design,
-with fixes: YAML parsed via pyyaml, proper singleton pattern.
+with fixes: YAML parsed via pyyaml, proper singleton pattern, hot-reload.
 """
 
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -19,6 +20,8 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 AGENTS_DIR = Path(__file__).parent.parent / "agents"
+
+_RELOAD_DEBOUNCE_SEC = 30.0
 
 
 @dataclass
@@ -50,6 +53,8 @@ class AgentPersonaManager:
             return
         self._agents_dir = agents_dir or AGENTS_DIR
         self._personas: Dict[str, AgentPersona] = {}
+        self._file_mtimes: Dict[str, float] = {}
+        self._last_check_time: float = 0.0
         self._load_all()
         self._loaded = True
 
@@ -67,7 +72,12 @@ class AgentPersonaManager:
                 persona = self._parse_persona(md_file, category)
                 if persona:
                     self._personas[persona.slug] = persona
+                    try:
+                        self._file_mtimes[str(md_file)] = md_file.stat().st_mtime
+                    except OSError:
+                        pass
 
+        self._last_check_time = time.monotonic()
         logger.info(f"Loaded {len(self._personas)} agent personas from {self._agents_dir}")
 
     def _parse_persona(self, path: Path, category: str) -> Optional[AgentPersona]:
@@ -112,8 +122,45 @@ class AgentPersonaManager:
         )
 
     def get(self, slug: str) -> Optional[AgentPersona]:
-        """Get persona by slug."""
+        """Get persona by slug (triggers reload check if debounce expired)."""
+        self.reload_if_changed()
         return self._personas.get(slug)
+
+    def reload_if_changed(self) -> None:
+        """Reload changed persona files if debounce period has elapsed."""
+        now = time.monotonic()
+        if now - self._last_check_time < _RELOAD_DEBOUNCE_SEC:
+            return
+        self._last_check_time = now
+
+        changed = False
+        for path_str, old_mtime in list(self._file_mtimes.items()):
+            try:
+                current_mtime = Path(path_str).stat().st_mtime
+                if current_mtime > old_mtime:
+                    changed = True
+                    break
+            except OSError:
+                changed = True
+                break
+
+        # Also check for new files
+        if not changed and self._agents_dir.is_dir():
+            for category_dir in self._agents_dir.iterdir():
+                if not category_dir.is_dir() or category_dir.name.startswith("."):
+                    continue
+                for md_file in category_dir.glob("*.md"):
+                    if str(md_file) not in self._file_mtimes:
+                        changed = True
+                        break
+                if changed:
+                    break
+
+        if changed:
+            logger.info("Persona files changed — reloading")
+            self._personas.clear()
+            self._file_mtimes.clear()
+            self._load_all()
 
     def list_all(self) -> List[AgentPersona]:
         """Return all loaded personas."""

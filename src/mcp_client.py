@@ -8,14 +8,16 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 # Get the path to the virtual environment python assuming it exists locally or using global if needed
-# A more robust enterprise approach is to provide explicit exact paths
 PYTHON_BIN = sys.executable
+
+# Timeout for starting each MCP server (seconds)
+_SERVER_INIT_TIMEOUT = 30
 
 class OpenClawMCPClient:
     """
     MCP Client integrated into OpenClaw Gateway.
     Responsible for initializing and managing connections to local MCP tools (Filesystem, SQLite)
-    and exposing their tools in OpenAI-compatible format for vLLM.
+    and exposing their tools in OpenAI-compatible format for the LLM API.
     """
 
     def __init__(self, db_path: Optional[str], fs_allowed_dirs: List[str]):
@@ -30,20 +32,43 @@ class OpenClawMCPClient:
         self._server_sessions: List[ClientSession] = []
         self._exit_stack = contextlib.AsyncExitStack()
         
-        # Aggregated tools (OpenAI-compatible format for vLLM)
+        # Aggregated tools (OpenAI-compatible format for LLM API)
         self.available_tools_openai: List[Dict[str, Any]] = []
         self._tool_route_map: Dict[str, ClientSession] = {}
 
     async def initialize(self):
         """Starts local MCP servers and establishes Stdio connections via anyio.
-        Each server starts independently — one failure won't block others."""
+        Each server starts independently and concurrently — one failure won't block others."""
+        starters = []
         if self.db_path:
-            await self._start_sqlite_server()
-        await self._start_filesystem_server()
-        await self._start_parsers_server()
-        await self._start_memory_server()
-        await self._start_websearch_server()
-        await self._start_shell_server()
+            starters.append(("SQLite", self._start_sqlite_server))
+        starters += [
+            ("Filesystem", self._start_filesystem_server),
+            ("Parsers", self._start_parsers_server),
+            ("Memory", self._start_memory_server),
+            ("WebSearch", self._start_websearch_server),
+            ("Shell", self._start_shell_server),
+            ("CodeAnalysis", self._start_code_analysis_server),
+        ]
+        results = await asyncio.gather(
+            *[self._start_server_safe(name, fn) for name, fn in starters],
+            return_exceptions=True,
+        )
+        ok = sum(1 for r in results if r is True)
+        total = len(starters)
+        print(f"[MCP] Initialized {ok}/{total} servers successfully.")
+
+    async def _start_server_safe(self, name: str, starter) -> bool:
+        """Start a server with timeout protection."""
+        try:
+            await asyncio.wait_for(starter(), timeout=_SERVER_INIT_TIMEOUT)
+            return True
+        except asyncio.TimeoutError:
+            print(f"[MCP Error] {name} server timed out after {_SERVER_INIT_TIMEOUT}s — skipping.")
+            return False
+        except Exception as e:
+            print(f"[MCP Error] {name} server failed: {e}")
+            return False
 
     async def _start_memory_server(self):
         """Starts custom Python MCP server for hybrid memory search.
@@ -158,6 +183,27 @@ class OpenClawMCPClient:
         except Exception as e:
             print(f"[MCP Error] Failed to start Parsers Server: {e}")
 
+    async def _start_code_analysis_server(self):
+        """Starts custom Python MCP server for AST-based code analysis and metrics."""
+        print("[MCP] Starting Code Analysis Server...")
+        server_params = StdioServerParameters(
+            command=PYTHON_BIN,
+            args=[os.path.join(os.path.dirname(__file__), "code_analysis_mcp.py")],
+            env=None
+        )
+        try:
+            read, write = await self._exit_stack.enter_async_context(stdio_client(server_params))
+            session = await self._exit_stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+            self._server_sessions.append(session)
+
+            response = await session.list_tools()
+            for tool in response.tools:
+                self._register_tool(tool, session)
+            print("[MCP] Code Analysis Server initialized successfully.")
+        except Exception as e:
+            print(f"[MCP Error] Failed to start Code Analysis Server: {e}")
+
     async def _start_filesystem_server(self):
         """Starts Node.js @modelcontextprotocol/server-filesystem via npx"""
         print(f"[MCP] Starting Filesystem Server. Allowed dirs: {self.fs_allowed_dirs}")
@@ -184,7 +230,7 @@ class OpenClawMCPClient:
             print(f"[MCP Error] Failed to start Filesystem Server: {e}")
 
     def _register_tool(self, tool_spec: Any, session: ClientSession):
-        """Converts MCP tool specification into OpenAI-compatible payload for vLLM"""
+        """Converts MCP tool specification into OpenAI-compatible payload for the LLM API."""
         # MCP tool_spec has attributes like name, description, inputSchema
         tool_name = tool_spec.name
         self._tool_route_map[tool_name] = session

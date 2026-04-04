@@ -46,13 +46,7 @@ from src.pipeline_utils import (
     sanitize_file_content,
 )
 from src.code_validator import CodeValidator
-from src.context_bridge import ContextBridge
-from src.vllm_inference import (
-    call_vllm,
-    execute_stream,
-    force_unload,
-    vram_protection,
-)
+from src.llm_gateway import route_llm
 from src.openrouter_client import call_openrouter, reset_circuit_breakers
 from src.ai.agents.react import ReActReasoner
 from src.ai.agents.constitutional import ConstitutionalChecker
@@ -93,7 +87,7 @@ logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _NUMBERED_RE = re.compile(
-    r"(?:^|\n)\s*(\d+)\.\s+(.+?)(?=\n\s*\d+\.\s|\Z)",
+    r"(?:^|\n)\s{0,10}(\d+)\.\s+(.+?)(?=\n\s{0,10}\d+\.\s|\Z)",
     re.DOTALL,
 )
 
@@ -212,25 +206,16 @@ async def _async_save_trajectory(supermemory, prompt, chain, complexity, steps_r
 class PipelineExecutor:
     """
     Executes a chain of agent roles sequentially, passing compressed
-    context between each step. Uses vLLM (OpenAI-compatible local server)
-    for all inference calls. Model swapping managed by VLLMModelManager.
+    context between each step. Uses cloud LLM routing for all inference calls.
     """
 
-    def __init__(self, config: Dict[str, Any], vllm_url: str, vllm_manager=None):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.vllm_url = vllm_url.rstrip("/")
-        self.vllm_manager = vllm_manager
-        self.gc_model = config.get("memory", {}).get("model", "google/gemma-3-12b-it")
 
         # OpenRouter configuration (primary inference)
         self.openrouter_config = config.get("system", {}).get("openrouter", {})
         self.openrouter_enabled = self.openrouter_config.get("enabled", False) and bool(self.openrouter_config.get("api_key", ""))
-        self._use_local_models = self.openrouter_config.get("use_local_models", True)
-        self.force_cloud = (
-            self.openrouter_enabled
-            and self.openrouter_config.get("force_cloud", False)
-            and not self._use_local_models
-        )
+        self.force_cloud = True  # Cloud-only mode (OpenRouter)
 
         self.default_chains = {
             "Dmarket-Dev": ["Planner", "Coder", "Auditor"],
@@ -238,7 +223,7 @@ class PipelineExecutor:
             "Research-Ops": ["Researcher", "Analyst", "Summarizer"],
         }
 
-        self._ctx_budget = self.config.get("system", {}).get("vllm_max_model_len", 16384)
+        self._ctx_budget = self.config.get("system", {}).get("max_model_len", 16384)
 
         # Initialize MCP Clients dynamically
         framework_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -259,7 +244,7 @@ class PipelineExecutor:
         self.metrics_collector = get_metrics_collector() or InferenceMetricsCollector()
         vram_gb = config.get("system", {}).get("hardware", {}).get("vram_gb", 16.0)
         self.token_budget = get_token_budget() or AdaptiveTokenBudget(
-            default_max_tokens=config.get("system", {}).get("vllm_max_model_len", 8192),
+            default_max_tokens=config.get("system", {}).get("max_model_len", 8192),
             vram_gb=vram_gb,
         )
         logger.info("InferenceMetrics + AdaptiveTokenBudget activated (shared)")
@@ -270,30 +255,22 @@ class PipelineExecutor:
         # SmartModelRouter (delegated to _state.py)
         self._smart_router = init_smart_router(config, self.force_cloud)
 
-        # Context Bridge
-        if self.force_cloud:
-            self.context_bridge = ContextBridge({"context_bridge": {"enabled": False}})
-            logger.info("Context Bridge DISABLED (cloud-only mode, no local model swaps)")
-        else:
-            self.context_bridge = ContextBridge(config.get("system", {}))
-
-        self._react_reasoner = ReActReasoner(vllm_url=self.vllm_url, model="")
-        self._constitutional = ConstitutionalChecker(vllm_url=self.vllm_url, model="")
+        self._react_reasoner = ReActReasoner(model="")
+        self._constitutional = ConstitutionalChecker(model="")
         self._sandbox = DynamicSandbox()
 
         # v11.7: LATS tree search + MARCH hallucination control
         lats_model = self.config.get("model_router", {}).get(
             "research", "meta-llama/llama-3.3-70b-instruct:free"
         )
-        self._lats_engine = LATSEngine(model=lats_model, vllm_url=self.vllm_url)
-        self._march_protocol = MARCHProtocol(vllm_url=self.vllm_url)
+        self._lats_engine = LATSEngine(model=lats_model)
+        self._march_protocol = MARCHProtocol()
 
         # v13.2: AFlow dynamic chain generator
         aflow_model = self.config.get("system", {}).get("model_router", {}).get(
             "intent", "meta-llama/llama-3.3-70b-instruct:free"
         )
         self._aflow = AFlowEngine(
-            vllm_url=self.vllm_url,
             model=aflow_model,
             default_chains=self.default_chains,
         )
@@ -301,7 +278,6 @@ class PipelineExecutor:
         # v14.0: SAGE self-evolution engine
         sage_cfg = self.config.get("system", {}).get("sage", {})
         self._sage = SAGEEngine(
-            vllm_url=self.vllm_url,
             model=aflow_model,
             enabled=sage_cfg.get("enabled", True),
         )
@@ -309,7 +285,6 @@ class PipelineExecutor:
         # v14.0: MAC Dynamic Constitution
         mac_cfg = self.config.get("system", {}).get("mac", {})
         self._mac = MACConstitution(
-            vllm_url=self.vllm_url,
             model=self.config.get("system", {}).get("model_router", {}).get(
                 "expand", "google/gemma-3-12b-it:free"
             ),
@@ -335,47 +310,18 @@ class PipelineExecutor:
         return await recall_memory_context(self, prompt)
 
     async def _reflexion_fallback(self, prompt: str, error_response: str) -> Optional[str]:
-        return await reflexion_fallback(self.vllm_url, self.config, prompt, error_response)
+        return await reflexion_fallback(self.config, prompt, error_response)
 
     async def _quick_inference(self, prompt: str) -> str:
         """v16.4: Fast LLM inference for autonomous reflection (Self-Healing)."""
         try:
-            if self.force_cloud and self.openrouter_config:
-                response = await call_openrouter(
-                    openrouter_config=self.openrouter_config,
-                    vllm_url=self.vllm_url,
-                    model="meta-llama/llama-3.3-70b-instruct:free",
-                    fallback_model="meta-llama/llama-3.3-70b-instruct:free",
-                    system_prompt="You are a debugging assistant. Be concise. Answer in Russian.",
-                    user_prompt=prompt,
-                    role_name="Reflection",
-                    role_config={"temperature": 0.3, "max_tokens": 512},
-                    mcp_client=None,
-                    config=self.config,
-                )
-            else:
-                async with aiohttp.ClientSession() as sess:
-                    payload = {
-                        "model": "meta-llama/llama-3.3-70b-instruct",
-                        "messages": [
-                            {"role": "system", "content": "You are a debugging assistant. Be concise. Answer in Russian."},
-                            {"role": "user", "content": prompt},
-                        ],
-                        "stream": False,
-                        "max_tokens": 512,
-                        "temperature": 0.3,
-                    }
-                    async with sess.post(
-                        f"{self.vllm_url}/chat/completions",
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(total=30),
-                    ) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            response = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                        else:
-                            response = ""
-            return (response or "").strip()
+            return await route_llm(
+                prompt,
+                system="You are a debugging assistant. Be concise. Answer in Russian.",
+                model="meta-llama/llama-3.3-70b-instruct:free",
+                max_tokens=512,
+                temperature=0.3,
+            )
         except Exception as e:
             logger.warning("v16.4 quick inference failed", error=str(e))
             return ""
@@ -395,28 +341,9 @@ class PipelineExecutor:
 
         self._init_supermemory()
 
-        if not self.force_cloud:
-            await self._validate_vllm()
-
-    async def _validate_vllm(self):
-        """Checks that the vLLM server is reachable (or manager is configured)."""
-        if self.vllm_manager:
-            logger.info("vLLM model manager configured — models will be loaded on demand")
-            return
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.vllm_url}/models",
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        models = [m["id"] for m in data.get("data", [])]
-                        logger.info("vLLM server reachable", models=models)
-                    else:
-                        logger.warning("vLLM server responded with", status=resp.status)
-        except Exception as e:
-            logger.warning("vLLM server not reachable (will start on first request)", error=str(e))
+    async def _validate_cloud(self):
+        """Checks that the cloud LLM gateway is configured."""
+        logger.info("Cloud-only mode: LLM gateway configured via OpenRouter")
 
     def get_chain(self, brigade: str) -> List[str]:
         brigade_config = self.config.get("brigades", {}).get(brigade, {})
@@ -821,24 +748,6 @@ class PipelineExecutor:
 
             prev_model = self.last_loaded_model
 
-            if not self.force_cloud:
-                if (prev_model and prev_model != model
-                        and self.context_bridge.enabled and self.vllm_manager):
-                    import uuid
-                    _pipeline_id = str(uuid.uuid4())
-                    _snapshot = self.context_bridge.build_handoff_summary(
-                        pipeline_id=_pipeline_id, brigade=brigade, chain_position=step_index,
-                        source_model=prev_model, target_model=model,
-                        steps_results=steps_results, accumulated_context=context_briefing,
-                    )
-                    self.context_bridge.save_before_swap(_snapshot)
-                    logger.info("Context Bridge: snapshot saved before model swap",
-                                pipeline_id=_pipeline_id, source=prev_model, target=model)
-                    _restored = self.context_bridge.restore_after_swap(_pipeline_id)
-                    if _restored:
-                        context_briefing = _restored
-                        logger.info("Context Bridge: context restored for new model")
-
             did_handoff = False
             _autoheal_used = False  # v16.4: one self-healing retry per step
 
@@ -873,7 +782,7 @@ class PipelineExecutor:
                         auditor_role_config=_auditor_cfg,
                     )
                 else:
-                    response = await self._call_vllm(
+                    response = await self._call_llm(
                         model, system_prompt, step_prompt, role_name, role_config, active_mcp,
                         preserve_think=preserve_think, json_schema=role_schema
                     )
@@ -950,7 +859,7 @@ class PipelineExecutor:
                                 "Используй результаты инструментов выше для финального ответа. "
                                 "Не выводи XML-теги tool_call."
                             )
-                            response = await self._call_vllm(
+                            response = await self._call_llm(
                                 model, system_prompt, _tc_followup, role_name,
                                 role_config, active_mcp,
                                 preserve_think=preserve_think, json_schema=role_schema,
@@ -981,7 +890,7 @@ class PipelineExecutor:
                         if status_callback:
                             await status_callback(role_name, display_model, f"🔄 Гарантия качества: повтор {retry_i + 1} — {feedback[:60]}")
                         retry_prompt = f"{step_prompt}\n\n[GUARDRAIL FEEDBACK — исправь ответ]:\n{feedback}"
-                        response = await self._call_vllm(
+                        response = await self._call_llm(
                             model, system_prompt, retry_prompt, role_name, role_config, active_mcp,
                             preserve_think=preserve_think, json_schema=role_schema
                         )
@@ -998,7 +907,7 @@ class PipelineExecutor:
                             if status_callback:
                                 await status_callback(role_name, display_model, f"🔍 Статический анализ: {_issues_count} проблем — исправляю...")
                             _cv_retry_prompt = f"{step_prompt}\n\n{_cv_fix_prompt}"
-                            response = await self._call_vllm(
+                            response = await self._call_llm(
                                 model, system_prompt, _cv_retry_prompt, role_name, role_config,
                                 active_mcp, preserve_think=preserve_think, json_schema=role_schema,
                             )
@@ -1039,7 +948,7 @@ class PipelineExecutor:
                                     f"[FIX RULE]: {_fix_rule}\n\n"
                                     "Предыдущий ответ содержал ошибку. Используй правило фикса и исправь."
                                 )
-                                response = await self._call_vllm(
+                                response = await self._call_llm(
                                     model, system_prompt, _heal_prompt, role_name, role_config,
                                     active_mcp, preserve_think=preserve_think, json_schema=role_schema,
                                 )
@@ -1083,34 +992,13 @@ class PipelineExecutor:
                         {"role": "user", "content": retry_prompt}
                     ]
                     try:
-                        if self.force_cloud:
-                            new_response = await call_openrouter(
-                                openrouter_config=self.openrouter_config,
-                                vllm_url=self.vllm_url,
-                                model=model,
-                                fallback_model=role_config.get("fallback_model", model),
-                                system_prompt=system_prompt,
-                                user_prompt=step_prompt + "\n\n" + retry_prompt,
-                                role_name=role_name,
-                                role_config=role_config,
-                                mcp_client=active_mcp,
-                                config=self.config,
-                            )
-                        else:
-                            _payload = {
-                                "model": model,
-                                "messages": retry_messages,
-                                "stream": False,
-                                "max_tokens": 2048,
-                            }
-                            async with aiohttp.ClientSession() as _sess:
-                                async with _sess.post(f"{self.vllm_url}/chat/completions", json=_payload, timeout=aiohttp.ClientTimeout(total=60)) as retry_resp:
-                                    if retry_resp.status == 200:
-                                        r_data = await retry_resp.json()
-                                        _raw = r_data.get("choices", [{}])[0].get("message", {}).get("content") or ""
-                                        new_response = _raw.strip()
-                                    else:
-                                        new_response = ""
+                        new_response = await route_llm(
+                            step_prompt + "\n\n" + retry_prompt,
+                            system=system_prompt,
+                            model=model,
+                            messages=retry_messages,
+                            max_tokens=2048,
+                        )
                         new_response = re.sub(r"<think>.*?</think>", "", (new_response or ""), flags=re.DOTALL)
                         new_response = re.sub(r"<think>.*$", "", new_response, flags=re.DOTALL).strip()
                         if new_response:
@@ -1346,7 +1234,7 @@ class PipelineExecutor:
         if status_callback:
             await status_callback(role_name, display_model, f"⚡ Параллельно: {role_name} работает...")
         active_mcp = self.openclaw_mcp if brigade == "OpenClaw" else self.dmarket_mcp
-        return await self._call_vllm(model, system_prompt, step_prompt, role_name, role_config, active_mcp)
+        return await self._call_llm(model, system_prompt, step_prompt, role_name, role_config, active_mcp)
 
     def _display_model(self, role_config: Dict[str, Any], fallback_model: str = "") -> str:
         if self.openrouter_enabled:
@@ -1388,7 +1276,7 @@ class PipelineExecutor:
             patched_config = dict(role_config)
             patched_config["temperature"] = temp
             try:
-                return await self._call_vllm(
+                return await self._call_llm(
                     model, system_prompt, step_prompt,
                     role_name, patched_config, active_mcp,
                     preserve_think=False,
@@ -1412,7 +1300,7 @@ class PipelineExecutor:
 
         if not candidates:
             logger.warning("Ensemble: all instances failed, single fallback")
-            return await self._call_vllm(
+            return await self._call_llm(
                 model, system_prompt, step_prompt, role_name, role_config, active_mcp,
             )
 
@@ -1442,7 +1330,7 @@ class PipelineExecutor:
         )
 
         try:
-            verdict = await self._call_vllm(
+            verdict = await self._call_llm(
                 auditor_model,
                 vote_system,
                 vote_prompt,
@@ -1483,7 +1371,7 @@ class PipelineExecutor:
         # Last resort: return longest (most complete) candidate
         return max(candidates, key=len)
 
-    async def _call_vllm(self, model, system_prompt, user_prompt, role_name, role_config, mcp_client, preserve_think=False, json_schema=None) -> str:
+    async def _call_llm(self, model, system_prompt, user_prompt, role_name, role_config, mcp_client, preserve_think=False, json_schema=None) -> str:
         or_model = role_config.get("openrouter_model")
         if not or_model and self._smart_router:
             task_type = "general"
@@ -1518,7 +1406,6 @@ class PipelineExecutor:
         if self.openrouter_enabled and or_model:
             result = await call_openrouter(
                 openrouter_config=self.openrouter_config,
-                vllm_url=self.vllm_url,
                 model=or_model,
                 fallback_model=fallback,
                 system_prompt=system_prompt,
@@ -1527,23 +1414,16 @@ class PipelineExecutor:
                 role_config=role_config,
                 mcp_client=mcp_client,
                 config=self.config,
-                vllm_manager=self.vllm_manager,
                 preserve_think=preserve_think,
                 json_schema=json_schema,
             )
         else:
-            result = await call_vllm(
-                vllm_url=self.vllm_url,
+            result = await route_llm(
+                user_prompt,
+                system=system_prompt,
                 model=model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                role_name=role_name,
-                role_config=role_config,
-                mcp_client=mcp_client,
-                config=self.config,
-                vllm_manager=self.vllm_manager,
-                preserve_think=preserve_think,
-                json_schema=json_schema,
+                max_tokens=role_config.get("max_tokens", 2048),
+                temperature=role_config.get("temperature", 0.3),
             )
         elapsed_ms = (time.monotonic() - t0) * 1000
 
@@ -1633,15 +1513,12 @@ class PipelineExecutor:
         }
 
     async def _force_unload(self, model: str):
-        await force_unload(model)
+        pass  # No-op in cloud-only mode
 
     async def execute_stream(self, prompt, brigade="Dmarket", max_steps=5, status_callback=None, task_type=None):
-        return await execute_stream(self, prompt, brigade, max_steps, status_callback, task_type)
+        # Streaming delegates to regular execute in cloud-only mode
+        return await self.execute(prompt, brigade=brigade, max_steps=max_steps, status_callback=status_callback, task_type=task_type)
 
     @asynccontextmanager
     async def _vram_protection(self, target_model: str, prev_model: Optional[str]):
-        if self.force_cloud:
-            yield
-        else:
-            async with vram_protection(target_model, prev_model):
-                yield
+        yield  # No-op in cloud-only mode

@@ -51,7 +51,8 @@ class MemoryRecord:
         self.access_count += 1
 
     def token_estimate(self) -> int:
-        return max(1, len(self.content) // 4)
+        from src.utils.token_counter import estimate_tokens
+        return estimate_tokens(self.content)
 
 
 @dataclass

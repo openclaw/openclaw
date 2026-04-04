@@ -8,7 +8,6 @@ from src.ai.agents._shared import (
     ReActStep,
     ReflexionResult,
     ToolStats,
-    call_vllm,
 )
 from src.ai.agents.constitutional import ConstitutionalChecker
 from src.ai.agents.moa import MixtureOfAgents
@@ -29,5 +28,4 @@ __all__ = [
     "ReflexionResult",
     "ToolLearningTracker",
     "ToolStats",
-    "call_vllm",
 ]

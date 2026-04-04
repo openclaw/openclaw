@@ -7,5 +7,4 @@ from src.bot_commands import cmd_agents, cmd_agent, cmd_openrouter_test
 from src.pipeline_schemas import ROLE_GUARDRAILS, ROLE_TOKEN_BUDGET
 from src.intent_classifier import classify_intent
 from src.pipeline_utils import clean_response_for_user
-from src.vllm_manager import VLLMModelManager
 print("ALL IMPORTS OK")

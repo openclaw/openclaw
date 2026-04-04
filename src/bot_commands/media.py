@@ -3,7 +3,6 @@
 import base64
 import io
 
-import aiohttp
 import structlog
 from aiogram.types import Message
 from prometheus_client import Counter
@@ -107,26 +106,7 @@ async def handle_voice(gateway, message: Message):
 
 
 async def _transcribe_audio(gateway, audio_data: bytes) -> str:
-    """Transcribe audio bytes using vLLM whisper endpoint or local fallback."""
-    # Try vLLM /audio/transcriptions endpoint first (OpenAI-compatible)
-    try:
-        form = aiohttp.FormData()
-        form.add_field("file", audio_data, filename="voice.ogg", content_type="audio/ogg")
-        form.add_field("model", "whisper-1")
-
-        base_url = gateway.vllm_url.replace("/v1", "")
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{base_url}/v1/audio/transcriptions",
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    return result.get("text", "")
-    except Exception as e:
-        logger.debug("Whisper API transcription failed", error=str(e))
-
+    """Transcribe audio bytes using local whisper fallback."""
     # Fallback: use whisper-cpp via subprocess if available
     try:
         import tempfile

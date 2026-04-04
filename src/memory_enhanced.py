@@ -26,13 +26,7 @@ import structlog
 logger = structlog.get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Shared token estimator (matches memory_gc.py heuristic)
-# ---------------------------------------------------------------------------
-
-def _estimate_tokens(text: str) -> int:
-    """~4 chars ≈ 1 token (English/Russian mix)."""
-    return max(1, len(text) // 4)
+from src.utils.token_counter import estimate_tokens as _estimate_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +486,42 @@ class TieredMemoryManager:
                     importance=0.3,
                     source="archive",
                 )
+
+    # -- Persistence (save/restore with version field) --
+
+    _STATE_VERSION = 1
+
+    def save_state(self, path: str) -> None:
+        """Persist hot + warm tiers to JSON with version field."""
+        state = {
+            "version": self._STATE_VERSION,
+            "hot": {k: v.to_dict() for k, v in self._hot.items()},
+            "warm": {k: v.to_dict() for k, v in self._warm.items()},
+        }
+        from pathlib import Path as _P
+        p = _P(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("TieredMemory state saved", path=path, hot=len(self._hot), warm=len(self._warm))
+
+    def restore_state(self, path: str) -> None:
+        """Load hot + warm tiers from JSON; ignores unknown keys."""
+        from pathlib import Path as _P
+        p = _P(path)
+        if not p.exists():
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            version = data.get("version", 0)
+            if version > self._STATE_VERSION:
+                logger.warning("State file version newer than supported", file_version=version)
+            for k, d in data.get("hot", {}).items():
+                self._hot[k] = MemoryItem.from_dict(d)
+            for k, d in data.get("warm", {}).items():
+                self._warm[k] = MemoryItem.from_dict(d)
+            logger.info("TieredMemory state restored", path=path, hot=len(self._hot), warm=len(self._warm))
+        except Exception as e:
+            logger.warning("Failed to restore TieredMemory state", error=str(e))
 
 
 # ---------------------------------------------------------------------------

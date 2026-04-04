@@ -64,7 +64,7 @@ async def test_boot():
         import src.llm_gateway as gw_mod
         gw_mod.configure(config)
         assert gw_mod._configured, "_configured flag not set after configure()"
-        record_ok("llm_gateway", f"Configured (force_cloud={gw_mod._force_cloud})")
+        record_ok("llm_gateway", "Configured (cloud-only)")
 
         # Call configure() again — should be no-op
         gw_mod.configure(config)
@@ -81,8 +81,7 @@ async def test_boot():
     print("\n── Step 3: PipelineExecutor Init ──")
     try:
         from src.pipeline_executor import PipelineExecutor
-        vllm_url = config.get("system", {}).get("vllm_base_url", "http://localhost:8000/v1")
-        pipeline = PipelineExecutor(config, vllm_url, vllm_manager=None)
+        pipeline = PipelineExecutor(config)
         record_ok("pipeline_executor", "PipelineExecutor created")
 
         # Check it reuses shared singletons

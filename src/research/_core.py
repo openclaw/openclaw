@@ -3,10 +3,19 @@ Deep Research Pipeline — core orchestration module.
 
 Contains DeepResearchPipeline class, data classes, and constants.
 Helper functions live in sibling modules (_searcher, _analyzer, _scraper).
+
+v5 improvements (2026-03-30):
+  - Evidence deduplication: skip near-duplicate evidence blocks across iterations
+  - Instant-answers pre-check: quick factual lookup before heavy research
+  - Weighted synthesis: sort evidence by confidence before synthesis
+  - Source tracking: track all source types (news, academic, multi_source)
+  - Research metadata export: timing, token usage, search stats
 """
 
 import asyncio
+import hashlib
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +25,12 @@ from src.llm_gateway import route_llm
 from src.research._searcher import (
     search_sub_query,
     multi_source_search,
+    instant_answers,
+)
+from src.research_enhanced import (
+    EvidenceQualityScorer,
+    ResearchQualityMetrics,
+    MultiPerspectiveResearcher,
 )
 from src.research._analyzer import (
     score_evidence,
@@ -40,13 +55,18 @@ logger = structlog.get_logger("DeepResearch")
 class EvidencePiece:
     """A single piece of evidence with provenance and confidence."""
     query: str
-    source_type: str  # "web", "memory", "academic"
+    source_type: str  # "web", "memory", "academic", "news", "multi_source", "web_full"
     content: str
     confidence: float = 0.5
     perspective: str = "default"
 
     def summary(self, max_len: int = 500) -> str:
         return self.content[:max_len]
+
+    def content_hash(self) -> str:
+        """Short hash for deduplication."""
+        normalized = self.content[:500].strip().lower()
+        return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
 
 @dataclass
@@ -61,6 +81,13 @@ class ResearchState:
     confidence_score: float = 0.0
     iterations: int = 0
     sources: List[str] = field(default_factory=list)
+    # v5: metadata tracking
+    _evidence_hashes: set = field(default_factory=set, repr=False)
+    start_time: float = field(default_factory=time.monotonic)
+    search_stats: Dict[str, int] = field(default_factory=lambda: {
+        "web_searches": 0, "news_searches": 0, "academic_searches": 0,
+        "pages_fetched": 0, "duplicates_skipped": 0,
+    })
 
     @property
     def evidence_count(self) -> int:
@@ -71,11 +98,29 @@ class ResearchState:
         """Number of distinct source types used."""
         return len({e.source_type for e in self.evidence})
 
-    def add_evidence(self, piece: EvidencePiece):
+    @property
+    def elapsed_seconds(self) -> float:
+        return time.monotonic() - self.start_time
+
+    def add_evidence(self, piece: EvidencePiece) -> bool:
+        """Add evidence with dedup. Returns True if added (not a duplicate)."""
+        # v5: dedup by content hash
+        h = piece.content_hash()
+        if h in self._evidence_hashes:
+            self.search_stats["duplicates_skipped"] += 1
+            return False
+        self._evidence_hashes.add(h)
+
         self.evidence.append(piece)
-        if piece.source_type == "web" and piece.content and piece.content != "No results found.":
+        # v5: track all source types in sources list, not just "web"
+        if piece.content and piece.content not in ("No results found.", "No memory results.", ""):
             if piece.query not in self.sources:
                 self.sources.append(piece.query)
+        return True
+
+    def get_evidence_sorted_by_confidence(self) -> List[EvidencePiece]:
+        """Return evidence sorted by confidence (highest first) for weighted synthesis."""
+        return sorted(self.evidence, key=lambda e: e.confidence, reverse=True)
 
 
 # Depth profiles keyed by complexity level
@@ -94,17 +139,18 @@ class DeepResearchPipeline:
     V2: Multi-perspective reformulation, evidence scoring, contradiction detection,
         academic paper search, adaptive stopping, structured evidence chain.
     V3: OpenRouter primary, multi-source parsers, page enrichment, token budgeting.
+    V4: DuckDuckGo news, multi-region search, instant answers, URL priority.
+    V5: Evidence dedup, instant-answers pre-check, weighted synthesis, metadata export.
     """
 
     def __init__(
         self,
-        vllm_url: str,
         model: str,
         mcp_client,
         openrouter_config: Optional[Dict[str, Any]] = None,
         openrouter_model: str = "",
+        
     ):
-        self.vllm_url = vllm_url.rstrip("/")
         self.model = model
         self.mcp_client = mcp_client
         self._research_context: List[str] = []
@@ -125,12 +171,28 @@ class DeepResearchPipeline:
     ) -> Dict[str, Any]:
         """
         Returns {report, sources, iterations, verified_facts, refuted_facts,
-                 confidence_score, evidence_count, source_diversity, contradictions}.
+                 confidence_score, evidence_count, source_diversity, contradictions,
+                 elapsed_seconds, search_stats, instant_answer}.
         """
         self._research_context = []
         state = ResearchState(question=question)
 
-        # Step 0: Adaptive depth
+        # Step 0a: Instant-answer pre-check (v5) — quick factual lookup
+        instant_answer = ""
+        if status_callback:
+            await status_callback("DeepResearch", self.model, "⚡ Быстрая проверка фактов...")
+        try:
+            instant_answer = await instant_answers(self.mcp_client, question)
+            if instant_answer:
+                self._research_context.append(f"Мгновенный ответ: {instant_answer[:200]}")
+                state.add_evidence(EvidencePiece(
+                    query=question, source_type="instant_answer",
+                    content=instant_answer, confidence=0.6,
+                ))
+        except Exception:
+            pass
+
+        # Step 0b: Adaptive depth
         if status_callback:
             await status_callback("DeepResearch", self.model, "🔍 Оценка сложности...")
         complexity = await self._estimate_complexity(question)
@@ -203,6 +265,13 @@ class DeepResearchPipeline:
                 state.add_evidence(EvidencePiece(
                     query=res["query"], source_type="multi_source",
                     content=res["multi_source"], confidence=0.6,
+                ))
+            # v4: integrate DuckDuckGo news results
+            if res.get("news"):
+                all_evidence.append(f"[News: {res['query']}]\n{res['news']}")
+                state.add_evidence(EvidencePiece(
+                    query=res["query"], source_type="news",
+                    content=res["news"], confidence=0.7,
                 ))
 
         self._research_context.append(
@@ -311,6 +380,42 @@ class DeepResearchPipeline:
             self._llm_call, question, report, all_evidence,
         )
 
+        # Step 9: Multi-perspective cross-check for complex topics (v6)
+        quality_metrics_dict = {}
+        if complexity == "complex" and state.evidence_count >= 4:
+            if status_callback:
+                await status_callback("DeepResearch", self.model, "🔬 Мульти-перспективный анализ...")
+            try:
+                mpr = MultiPerspectiveResearcher(model=self.model)
+                mp_result = await mpr.research(question, all_evidence[:10])
+                if mp_result.synthesis:
+                    report = await self._refine(question, report, [
+                        f"[Multi-perspective synthesis]\n{mp_result.synthesis}"
+                    ])
+                    self._research_context.append(
+                        f"Мульти-перспективный анализ завершён (уверенность {mp_result.confidence:.0%})."
+                    )
+            except Exception as e:
+                logger.warning("Multi-perspective analysis skipped", error=str(e))
+
+            # Compute quality metrics (heuristic, no LLM)
+            try:
+                scorer = EvidenceQualityScorer()
+                evidence_texts = [ep.content for ep in state.evidence if ep.content]
+                scores_list = [scorer.score(text) for text in evidence_texts[:20]]
+                metrics_calc = ResearchQualityMetrics()
+                qm = metrics_calc.compute(report, evidence_texts, sources)
+                quality_metrics_dict = {
+                    "coverage": round(qm.coverage, 2),
+                    "depth": round(qm.depth, 2),
+                    "source_diversity": round(qm.source_diversity, 2),
+                    "citation_density": round(qm.citation_density, 2),
+                    "consistency": round(qm.consistency, 2),
+                    "total_score": round(qm.total_score, 2),
+                }
+            except Exception as e:
+                logger.debug("Quality metrics skipped", error=str(e))
+
         total_iterations = iteration + 1 if sub_queries else 0
         state.iterations = total_iterations
         state.verified_facts = final_check.get("verified", [])
@@ -336,6 +441,12 @@ class DeepResearchPipeline:
             "evidence_count": state.evidence_count,
             "source_diversity": state.source_diversity,
             "contradictions": state.contradictions,
+            # v5: enhanced metadata
+            "elapsed_seconds": round(state.elapsed_seconds, 1),
+            "search_stats": state.search_stats,
+            "instant_answer": instant_answer,
+            # v6: quality metrics (for complex topics)
+            "quality_metrics": quality_metrics_dict,
         }
 
     # ------------------------------------------------------------------
@@ -344,7 +455,7 @@ class DeepResearchPipeline:
     async def _llm_call(
         self, system: str, user: str, max_tokens: int = 2048, retries: int = 2
     ) -> str:
-        """LLM inference via Unified LLM Gateway (handles OpenRouter/vLLM routing)."""
+        """LLM inference via Unified LLM Gateway (handles OpenRouter routing)."""
         messages = [{"role": "system", "content": system}]
         if self._research_context:
             ctx = "\n".join(self._research_context[-6:])

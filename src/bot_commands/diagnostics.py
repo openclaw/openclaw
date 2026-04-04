@@ -27,7 +27,7 @@ async def cmd_test(gateway, message: Message):
         return
 
     await message.reply(
-        "🔬 Запускаю VRAM-тестирование всех моделей...\nЭто может занять 10-20 минут.",
+        "🔬 Запускаю Cloud API тестирование всех моделей...\nЭто может занять 10-20 минут.",
         parse_mode="Markdown",
     )
 
@@ -65,46 +65,32 @@ async def cmd_test_all_models(gateway, message: Message):
 
     final_report = "📊 *Отчет: Парад Планет (20 Ролей)*\n\n"
 
-    async def fetch_hello(session, role_name, model_name, sys_prompt):
-        payload = {
-            "model": model_name,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": f"{sys_prompt}. Представься одним коротким предложением (максимум 5-7 слов), используя свои эмодзи.",
-                },
-                {"role": "user", "content": "Привет, проверка связи!"},
-            ],
-            "stream": False,
-            "max_tokens": 128,
-        }
+    from src.llm_gateway import route_llm
+
+    async def fetch_hello(role_name, model_name, sys_prompt):
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with session.post(
-                f"{gateway.vllm_url}/chat/completions", json=payload, timeout=timeout
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data["choices"][0]["message"]["content"].strip().replace("\n", " ")
-                else:
-                    return f"⚠️ Ошибка vLLM ({resp.status})"
+            prompt = f"{sys_prompt}. Представься одним коротким предложением (максимум 5-7 слов), используя свои эмодзи."
+            result = await route_llm(
+                "Привет, проверка связи!",
+                model=model_name,
+                system=prompt,
+                max_tokens=128,
+            )
+            return (result or "⚠️ Пустой ответ").replace("\n", " ")
         except Exception as e:
             return f"❌ Error: {e}"
 
-    async with aiohttp.ClientSession() as session:
-        for brigade_name, brigade_info in gateway.config["brigades"].items():
-            final_report += f"🏴 *Бригада: {brigade_name}*\n"
+    for brigade_name, brigade_info in gateway.config["brigades"].items():
+        final_report += f"🏴 *Бригада: {brigade_name}*\n"
 
-            for role, data in brigade_info["roles"].items():
-                sys_prompt = data.get("system_prompt", "Обычный ассистент")
-                model_name = data.get("model")
+        for role, data in brigade_info["roles"].items():
+            sys_prompt = data.get("system_prompt", "Обычный ассистент")
+            model_name = data.get("model")
 
-                await gateway.archivist.send_status(role, model_name, "Пингую vLLM...")
+            response_text = await fetch_hello(role, model_name, sys_prompt)
+            final_report += f"• `{role}`: {response_text}\n"
 
-                response_text = await fetch_hello(session, role, model_name, sys_prompt)
-                final_report += f"• `{role}`: {response_text}\n"
-
-            final_report += "\n"
+        final_report += "\n"
 
     await gateway.archivist.send_summary("Результаты тестирования всех ролей", final_report)
     await status_msg.edit_text(
