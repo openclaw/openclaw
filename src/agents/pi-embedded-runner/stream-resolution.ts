@@ -24,6 +24,30 @@ export function resetEmbeddedAgentBaseStreamFnCacheForTest(): void {
   embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 }
 
+export function describeEmbeddedAgentStreamStrategy(params: {
+  currentStreamFn: StreamFn | undefined;
+  providerStreamFn?: StreamFn;
+  shouldUseWebSocketTransport: boolean;
+  wsApiKey?: string;
+  model: EmbeddedRunAttemptParams["model"];
+}): string {
+  if (params.providerStreamFn) {
+    return "provider";
+  }
+  if (params.shouldUseWebSocketTransport) {
+    return params.wsApiKey ? "openai-websocket" : "session-http-fallback";
+  }
+  if (params.model.provider === "anthropic-vertex") {
+    return "anthropic-vertex";
+  }
+  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+    return createBoundaryAwareStreamFnForModel(params.model)
+      ? `boundary-aware:${params.model.api}`
+      : "stream-simple";
+  }
+  return "session-custom";
+}
+
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
