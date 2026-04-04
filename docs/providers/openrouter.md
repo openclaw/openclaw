@@ -37,3 +37,9 @@ openclaw onboard --auth-choice openrouter-api-key
   `openclaw models set openrouter/<provider>/<model>`.
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - OpenRouter uses a Bearer token with your API key under the hood.
+- On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also
+  adds OpenRouter's documented app-attribution headers:
+  `HTTP-Referer: https://openclaw.ai`, `X-OpenRouter-Title: OpenClaw`, and
+  `X-OpenRouter-Categories: cli-agent`.
+- If you repoint the OpenRouter provider at some other proxy/base URL, OpenClaw
+  does not inject those OpenRouter-specific headers.
