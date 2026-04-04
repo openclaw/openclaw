@@ -21,7 +21,7 @@ capabilities to the agent as a node.
 - Exposes macOS‑only tools (Canvas, Camera, Screen Recording, `system.run`).
 - Starts the local node host service in **remote** mode (launchd), and stops it in **local** mode.
 - Optionally hosts **PeekabooBridge** for UI automation.
-- Installs the global CLI (`openclaw`) via npm/pnpm on request (bun not recommended for the Gateway runtime).
+- Installs the global CLI (`openclaw`) on request via npm, pnpm, or bun (the app prefers npm, then pnpm, then bun; Node remains the recommended Gateway runtime).
 
 ## Local vs remote mode
 

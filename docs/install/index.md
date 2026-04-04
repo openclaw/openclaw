@@ -63,7 +63,7 @@ curl -fsSL https://openclaw.ai/install-cli.sh | bash
 It supports npm installs by default, plus git-checkout installs under the same
 prefix flow. Full reference: [Installer internals](/install/installer#install-clish).
 
-### npm or pnpm
+### npm, pnpm, or bun
 
 If you already manage Node yourself:
 
@@ -83,6 +83,17 @@ If you already manage Node yourself:
 
     <Note>
     pnpm requires explicit approval for packages with build scripts. Run `pnpm approve-builds -g` after the first install.
+    </Note>
+
+  </Tab>
+  <Tab title="bun">
+    ```bash
+    bun add -g openclaw@latest
+    openclaw onboard --install-daemon
+    ```
+
+    <Note>
+    Bun is supported for the global CLI install path. For the Gateway runtime, Node remains the recommended daemon runtime.
     </Note>
 
   </Tab>

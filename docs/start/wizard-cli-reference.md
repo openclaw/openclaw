@@ -90,7 +90,7 @@ It does not install or modify anything on the remote host.
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
-    - Lets you choose node manager: npm or pnpm (bun not recommended).
+    - Lets you choose node manager: npm, pnpm, or bun.
     - Installs optional dependencies (some use Homebrew on macOS).
   </Step>
   <Step title="Finish">
