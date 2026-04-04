@@ -335,6 +335,25 @@ describe("session_status tool", () => {
     expect(details.statusText).not.toContain("OAuth/token status");
   });
 
+  it("enables transcript usage fallback for session_status", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-transcript-usage", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeTranscriptUsage: true,
+      }),
+    );
+  });
+
   it("errors for unknown session keys", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },

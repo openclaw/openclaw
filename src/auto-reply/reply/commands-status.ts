@@ -149,6 +149,7 @@ export async function buildStatusText(params: {
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;
   activeModelAuthOverride?: string;
+  includeTranscriptUsage?: boolean;
 }): Promise<string> {
   const {
     cfg,
@@ -345,7 +346,7 @@ export async function buildStatusText(params: {
     subagentsLine,
     taskLine,
     mediaDecisions: params.mediaDecisions,
-    includeTranscriptUsage: true,
+    includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });
 
   return statusText;
