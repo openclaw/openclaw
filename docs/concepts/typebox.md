@@ -51,13 +51,15 @@ Common methods + events:
 | Nodes     | `node.list`, `node.invoke`, `node.pair.*`                 | Gateway WS + node actions          |
 | Events    | `tick`, `presence`, `agent`, `chat`, `health`, `shutdown` | server push                        |
 
-Authoritative list lives in `src/gateway/server.ts` (`METHODS`, `EVENTS`).
+Authoritative advertised method/event inventory lives in
+`src/gateway/server-methods-list.ts` (`listGatewayMethods`, `GATEWAY_EVENTS`).
 
 ## Where the schemas live
 
 - Source: `src/gateway/protocol/schema.ts`
 - Runtime validators (AJV): `src/gateway/protocol/index.ts`
-- Server handshake + method dispatch: `src/gateway/server.ts`
+- Advertised method/event registry: `src/gateway/server-methods-list.ts`
+- Server handshake + method dispatch: `src/gateway/server.impl.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json`
 - Generated Swift models: `apps/macos/Sources/OpenClawProtocol/GatewayModels.swift`
@@ -78,7 +80,7 @@ Authoritative list lives in `src/gateway/server.ts` (`METHODS`, `EVENTS`).
 - **Client side**: the JS client validates event and response frames before
   using them.
 - **Method surface**: the Gateway advertises the supported `methods` and
-  `events` in `hello-ok`.
+  `events` in `hello-ok` from `listGatewayMethods()` and `GATEWAY_EVENTS`.
 
 ## Example frames
 
@@ -239,7 +241,12 @@ export const systemHandlers: GatewayRequestHandlers = {
 ```
 
 Register it in `src/gateway/server-methods.ts` (already merges `systemHandlers`),
-then add `"system.echo"` to `METHODS` in `src/gateway/server.ts`.
+then add `"system.echo"` to `listGatewayMethods` input in
+`src/gateway/server-methods-list.ts`.
+
+If the method is callable by operator or node clients, also classify it in
+`src/gateway/method-scopes.ts` so scope enforcement and `hello-ok` feature
+advertising stay aligned.
 
 4. **Regenerate**
 
@@ -287,5 +294,8 @@ published raw file is typically available at:
 ## When you change schemas
 
 1. Update the TypeBox schemas.
-2. Run `pnpm protocol:check`.
-3. Commit the regenerated schema + Swift models.
+2. Register the method/event in `src/gateway/server-methods-list.ts`.
+3. Update `src/gateway/method-scopes.ts` when the new RPC needs operator or
+   node scope classification.
+4. Run `pnpm protocol:check`.
+5. Commit the regenerated schema + Swift models.
