@@ -4,6 +4,7 @@ export type MemoryCommandOptions = {
   deep?: boolean;
   index?: boolean;
   force?: boolean;
+  fix?: boolean;
   verbose?: boolean;
 };
 

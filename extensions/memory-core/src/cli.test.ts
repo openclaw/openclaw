@@ -275,6 +275,8 @@ describe("memory cli", () => {
   it("documents memory help examples", () => {
     const helpText = getMemoryHelpText();
 
+    expect(helpText).toContain("openclaw memory status --fix");
+    expect(helpText).toContain("Repair stale recall locks and normalize promotion metadata.");
     expect(helpText).toContain("openclaw memory status --deep");
     expect(helpText).toContain("Probe embedding provider readiness.");
     expect(helpText).toContain('openclaw memory search "meeting notes"');
@@ -325,6 +327,99 @@ describe("memory cli", () => {
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
     expect(close).toHaveBeenCalled();
+  });
+
+  it("prints recall-store audit details during status", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router vlan",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 3,
+            score: 0.93,
+            snippet: "Configured router VLAN 10 for IoT clients.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Recall store: 1 entries"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dreaming: off"));
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("repairs invalid recall metadata and stale locks with status --fix", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              good: {
+                key: "good",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 2,
+                source: "memory",
+                snippet: "QMD router cache note",
+                recallCount: 1,
+                totalScore: 0.8,
+                maxScore: 0.8,
+                firstRecalledAt: "2026-04-04T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["a"],
+              },
+              bad: {
+                path: "",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      const lockPath = path.join(workspaceDir, "memory", ".dreams", "short-term-promotion.lock");
+      await fs.writeFile(lockPath, "999999:0\n", "utf-8");
+      const staleMtime = new Date(Date.now() - 120_000);
+      await fs.utimes(lockPath, staleMtime, staleMtime);
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--fix"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Repair: rewrote store"));
+      await expect(fs.stat(lockPath)).rejects.toThrow();
+      const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        entries: Record<string, { conceptTags?: string[] }>;
+      };
+      expect(repaired.entries.good?.conceptTags).toContain("router");
+      expect(close).toHaveBeenCalled();
+    });
   });
 
   it("enables verbose logging with --verbose", async () => {
@@ -395,6 +490,36 @@ describe("memory cli", () => {
       expectCliSync(sync);
       expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD index: "));
       expect(log).toHaveBeenCalledWith("Memory index updated (main).");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("surfaces qmd audit details in status output", async () => {
+    const close = vi.fn(async () => {});
+    await withQmdIndexDb("sqlite-bytes", async (dbPath) => {
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () =>
+          makeMemoryStatus({
+            backend: "qmd",
+            provider: "qmd",
+            model: "qmd",
+            requestedProvider: "qmd",
+            dbPath,
+            custom: {
+              qmd: {
+                collections: 2,
+              },
+            },
+          }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status"]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("QMD audit:"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("2 collections"));
       expect(close).toHaveBeenCalled();
     });
   });
@@ -751,6 +876,62 @@ describe("memory cli", () => {
       expect(memoryText).toContain("Promoted From Short-Term Memory");
       expect(memoryText).toContain("memory/2026-04-01.md:10-14");
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Promoted 1 candidate(s) to"));
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("prints symbolic promotion signals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router vlan",
+        nowMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 4,
+            endLine: 8,
+            score: 0.9,
+            snippet: "Configured router VLAN 10 and Glacier backup notes for QMD.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier backup",
+        nowMs: Date.parse("2026-04-03T00:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 4,
+            endLine: 8,
+            score: 0.88,
+            snippet: "Configured router VLAN 10 and Glacier backup notes for QMD.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("consolidate="));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("concepts="));
       expect(close).toHaveBeenCalled();
     });
   });
