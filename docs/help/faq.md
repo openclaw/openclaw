@@ -651,10 +651,13 @@ for usage/billing and raise limits as needed.
 
     Steps:
 
-    1. Enable the plugin: `openclaw plugins enable google`
-    2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    3. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
-    4. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
+    1. Install Gemini CLI locally so `gemini` is on `PATH`
+       - Homebrew: `brew install gemini-cli`
+       - npm: `npm install -g @google/gemini-cli`
+    2. Enable the plugin: `openclaw plugins enable google`
+    3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+    4. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    5. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
@@ -999,6 +1002,24 @@ for usage/billing and raise limits as needed.
     - Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
 
     Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
+
+  </Accordion>
+
+  <Accordion title="A subagent finished, but the completion update went to the wrong place or never posted. What should I check?">
+    Check the resolved requester route first:
+
+    - Completion-mode subagent delivery prefers any bound thread or conversation route when one exists.
+    - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
+    - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
+    - Invalid or stale targets can still force queue fallback or final delivery failure.
+
+    Debug:
+
+    ```bash
+    openclaw tasks show <runId-or-sessionKey>
+    ```
+
+    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks), [Session Tools](/concepts/session-tool).
 
   </Accordion>
 
@@ -2638,6 +2659,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - If mismatch persists after the one retry, rotate/re-approve the paired device token:
       - `openclaw devices list`
       - `openclaw devices rotate --device <id> --role operator`
+    - If that rotate call says it was denied, check two things:
+      - paired-device sessions can rotate only their **own** device unless they also have `operator.admin`
+      - explicit `--scope` values cannot exceed the caller's current operator scopes
     - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
   </Accordion>
