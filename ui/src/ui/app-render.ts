@@ -1,9 +1,4 @@
 import { html, nothing } from "lit";
-import {
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../../src/routing/session-key.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
@@ -70,6 +65,11 @@ import {
   rotateDeviceToken,
 } from "./controllers/devices.ts";
 import {
+  loadDreamingStatus,
+  updateDreamingMode,
+  type DreamingMode,
+} from "./controllers/dreaming.ts";
+import {
   loadExecApprovals,
   removeExecApprovalsFormValue,
   saveExecApprovals,
@@ -80,16 +80,26 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
+  closeClawHubDetail,
+  installFromClawHub,
   installSkill,
+  loadClawHubDetail,
   loadSkills,
   saveSkillApiKey,
+  searchClawHub,
+  setClawHubSearchQuery,
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
-import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "./session-key.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -138,6 +148,45 @@ const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
+const lazyDreams = createLazy(() => import("./views/dreams.ts"));
+const DREAMING_MODE_OPTIONS: Array<{ id: DreamingMode; label: string; detail: string }> = [
+  { id: "off", label: "Off", detail: "No automatic promotions" },
+  { id: "core", label: "Core", detail: "Nightly cadence, balanced thresholds" },
+  { id: "rem", label: "REM", detail: "Every 6 hours, more active consolidation" },
+  { id: "deep", label: "Deep", detail: "Every 12 hours, stricter promotion gates" },
+];
+
+function resolveDreamingMode(configValue: Record<string, unknown> | null): DreamingMode {
+  if (!configValue) {
+    return "off";
+  }
+  const plugins = configValue.plugins as Record<string, unknown> | undefined;
+  const entries = plugins?.entries as Record<string, unknown> | undefined;
+  const memoryCore = entries?.["memory-core"] as Record<string, unknown> | undefined;
+  const config = memoryCore?.config as Record<string, unknown> | undefined;
+  const dreaming = config?.dreaming as Record<string, unknown> | undefined;
+  const mode = typeof dreaming?.mode === "string" ? dreaming.mode.trim().toLowerCase() : "";
+  if (mode === "core" || mode === "rem" || mode === "deep" || mode === "off") {
+    return mode;
+  }
+  return "off";
+}
+
+function isDreamingEnabled(configValue: Record<string, unknown> | null): boolean {
+  return resolveDreamingMode(configValue) !== "off";
+}
+
+function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
+  if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
+    return null;
+  }
+  return new Date(nextRunAtMs).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
 
 function lazyRender<M>(getter: () => M | null, render: (mod: M) => unknown) {
   const mod = getter();
@@ -322,6 +371,25 @@ export function renderApp(state: AppViewState) {
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const configuredDreamingMode = resolveDreamingMode(configValue);
+  const dreamingMode = state.dreamingStatus?.mode ?? configuredDreamingMode;
+  const dreamingOn = state.dreamingStatus?.enabled ?? isDreamingEnabled(configValue);
+  const dreamingNextCycle = formatDreamNextCycle(state.dreamingStatus?.nextRunAtMs);
+  const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
+  const refreshDreamingStatus = () => loadDreamingStatus(state);
+  const applyDreamingMode = (mode: DreamingMode) => {
+    if (state.dreamingModeSaving || mode === dreamingMode) {
+      return;
+    }
+    void (async () => {
+      const updated = await updateDreamingMode(state, mode);
+      if (!updated) {
+        return;
+      }
+      await loadConfig(state);
+      await loadDreamingStatus(state);
+    })();
+  };
   const basePath = normalizeBasePath(state.basePath ?? "");
   const resolvedAgentId =
     state.agentsSelectedId ??
@@ -616,6 +684,45 @@ export function renderApp(state: AppViewState) {
                 ${isChat ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
               </div>
               <div class="page-meta">
+                ${state.tab === "dreams"
+                  ? html`
+                      <div class="dreaming-header-controls">
+                        <button
+                          class="btn btn--subtle btn--sm"
+                          ?disabled=${dreamingLoading}
+                          @click=${refreshDreamingStatus}
+                        >
+                          ${state.dreamingStatusLoading ? "Refreshing…" : "Refresh"}
+                        </button>
+                        <div
+                          class="dreaming-header-controls__modes"
+                          role="group"
+                          aria-label="Dreaming mode"
+                        >
+                          ${DREAMING_MODE_OPTIONS.map(
+                            (option) => html`
+                              <button
+                                class="dreaming-header-controls__mode ${dreamingMode === option.id
+                                  ? "dreaming-header-controls__mode--active"
+                                  : ""}"
+                                ?disabled=${dreamingLoading}
+                                title=${`${option.label}: ${option.detail}`}
+                                aria-label=${`${option.label}: ${option.detail}`}
+                                @click=${() => applyDreamingMode(option.id)}
+                              >
+                                <span class="dreaming-header-controls__mode-label"
+                                  >${option.label}</span
+                                >
+                                <span class="dreaming-header-controls__mode-detail"
+                                  >${option.detail}</span
+                                >
+                              </button>
+                            `,
+                          )}
+                        </div>
+                      </div>
+                    `
+                  : nothing}
                 ${state.lastError
                   ? html`<div class="pill danger">${state.lastError}</div>`
                   : nothing}
@@ -1313,6 +1420,16 @@ export function renderApp(state: AppViewState) {
                 messages: state.skillMessages,
                 busyKey: state.skillsBusyKey,
                 detailKey: state.skillsDetailKey,
+                clawhubQuery: state.clawhubSearchQuery,
+                clawhubResults: state.clawhubSearchResults,
+                clawhubSearchLoading: state.clawhubSearchLoading,
+                clawhubSearchError: state.clawhubSearchError,
+                clawhubDetail: state.clawhubDetail,
+                clawhubDetailSlug: state.clawhubDetailSlug,
+                clawhubDetailLoading: state.clawhubDetailLoading,
+                clawhubDetailError: state.clawhubDetailError,
+                clawhubInstallSlug: state.clawhubInstallSlug,
+                clawhubInstallMessage: state.clawhubInstallMessage,
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onStatusFilterChange: (next) => (state.skillsStatusFilter = next),
                 onRefresh: () => loadSkills(state, { clearMessages: true }),
@@ -1323,6 +1440,16 @@ export function renderApp(state: AppViewState) {
                   installSkill(state, skillKey, name, installId),
                 onDetailOpen: (key) => (state.skillsDetailKey = key),
                 onDetailClose: () => (state.skillsDetailKey = null),
+                onClawHubQueryChange: (query) => {
+                  setClawHubSearchQuery(state, query);
+                  if (clawhubSearchTimer) {
+                    clearTimeout(clawhubSearchTimer);
+                  }
+                  clawhubSearchTimer = setTimeout(() => searchClawHub(state, query), 300);
+                },
+                onClawHubDetailOpen: (slug) => loadClawHubDetail(state, slug),
+                onClawHubDetailClose: () => closeClawHubDetail(state),
+                onClawHubInstall: (slug) => installFromClawHub(state, slug),
               }),
             )
           : nothing}
@@ -1975,6 +2102,25 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadLogs(state, { reset: true }),
                 onExport: (lines, label) => state.exportLogs(lines, label),
                 onScroll: (event) => state.handleLogsScroll(event),
+              }),
+            )
+          : nothing}
+        ${state.tab === "dreams"
+          ? lazyRender(lazyDreams, (m) =>
+              m.renderDreams({
+                active: dreamingOn,
+                shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
+                longTermCount: state.dreamingStatus?.promotedTotal ?? 0,
+                promotedCount: state.dreamingStatus?.promotedToday ?? 0,
+                dreamingOf: null,
+                nextCycle: dreamingNextCycle,
+                mode: dreamingMode,
+                statusLoading: state.dreamingStatusLoading,
+                statusError: state.dreamingStatusError,
+                modeSaving: state.dreamingModeSaving,
+                managedCronPresent: state.dreamingStatus?.managedCronPresent ?? false,
+                onRefresh: refreshDreamingStatus,
+                onModeChange: applyDreamingMode,
               }),
             )
           : nothing}

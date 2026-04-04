@@ -41,10 +41,14 @@ These commands work on channels that support persistent thread bindings. See **T
 
 - The spawn command is non-blocking; it returns a run id immediately.
 - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
+- On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 - For manual spawns, delivery is resilient:
   - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
   - If direct delivery fails, it falls back to queue routing.
   - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
+- Completion delivery keeps the resolved requester route:
+  - thread-bound or conversation-bound completion routes win when available
+  - if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works
 - The completion handoff to the requester session is runtime-generated internal context (not user-authored text) and includes:
   - `Result` (`assistant` reply text, or latest `toolResult` if the assistant reply is empty)
   - `Status` (`completed successfully` / `failed` / `timed out` / `unknown`)
@@ -126,6 +130,7 @@ See [Configuration Reference](/gateway/configuration-reference) and [Slash comma
 Allowlist:
 
 - `agents.list[].subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- `agents.defaults.subagents.allowAgents`: default target-agent allowlist used when the requester agent does not set its own `subagents.allowAgents`.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `agents.defaults.subagents.requireAgentId` / `agents.list[].subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Default: false.
 
@@ -141,6 +146,7 @@ Auto-archive:
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
 - `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
+- Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
 ## Nested Sub-Agents
 
@@ -220,6 +226,7 @@ Sub-agents report back via an announce step:
   - top-level requester sessions use a follow-up `agent` call with external delivery (`deliver=true`)
   - nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session
   - if a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available
+- For top-level requester sessions, completion-mode direct delivery first resolves any bound conversation/thread route and hook override, then fills missing channel-target fields from the requester session's stored route. That keeps completions on the right chat/topic even when the completion origin only identifies the channel.
 - Child completion aggregation is scoped to the current requester run when building nested completion findings, preventing stale prior-run child outputs from leaking into the current announce.
 - Announce replies preserve thread/topic routing when available on channel adapters.
 - Announce context is normalized to a stable internal event block:

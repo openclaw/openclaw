@@ -1,3 +1,4 @@
+import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -54,18 +55,88 @@ export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
 }
 
 /**
+ * Create a lightweight no-op HTTP plugin stub that satisfies the Teams SDK's
+ * plugin discovery by name ("http") but does NOT spin up an Express server.
+ *
+ * The default HttpPlugin in @microsoft/teams.apps registers an Express
+ * middleware with the pattern `/api*`.  When the host application (OpenClaw)
+ * uses Express 5 — which depends on path-to-regexp v8 — that pattern is
+ * invalid and throws:
+ *
+ *   Missing parameter name at index 5: /api*
+ *
+ * OpenClaw manages its own Express server for the Teams webhook endpoint, so
+ * the SDK's built-in HTTP server is unnecessary.  Passing this stub prevents
+ * the SDK from creating the default HttpPlugin and avoids the crash.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/55161
+ */
+async function createNoOpHttpPlugin(): Promise<unknown> {
+  // Lazy-import reflect-metadata (required by the Teams SDK decorator system)
+  // and the decorator key constants so we can tag the stub class correctly.
+  //
+  // FRAGILE: these are internal SDK paths (not public API).  If
+  // @microsoft/teams.apps changes its dist layout, these imports will break.
+  // Pin the SDK version and re-verify after any upgrade.
+  await import("reflect-metadata");
+  const { PLUGIN_METADATA_KEY } =
+    await import("@microsoft/teams.apps/dist/types/plugin/decorators/plugin.js");
+  const { PLUGIN_DEPENDENCIES_METADATA_KEY } =
+    await import("@microsoft/teams.apps/dist/types/plugin/decorators/dependency.js");
+  const { PLUGIN_EVENTS_METADATA_KEY } =
+    await import("@microsoft/teams.apps/dist/types/plugin/decorators/event.js");
+
+  class NoOpHttpPlugin {
+    onInit() {}
+    async onStart() {}
+    onStop() {}
+    asServer() {
+      return {
+        onRequest: undefined as unknown,
+        initialize: async () => {},
+        start: async () => {},
+        stop: async () => {},
+      } as {
+        onRequest: unknown;
+        initialize: (opts?: unknown) => Promise<void>;
+        start: (port?: number | string) => Promise<void>;
+        stop: () => Promise<void>;
+      };
+    }
+  }
+
+  Reflect.defineMetadata(
+    PLUGIN_METADATA_KEY,
+    { name: "http", version: "0.0.0", description: "no-op stub (express 5 compat)" },
+    NoOpHttpPlugin,
+  );
+  Reflect.defineMetadata(PLUGIN_DEPENDENCIES_METADATA_KEY, [], NoOpHttpPlugin);
+  Reflect.defineMetadata(PLUGIN_EVENTS_METADATA_KEY, [], NoOpHttpPlugin);
+
+  return new NoOpHttpPlugin();
+}
+
+/**
  * Create a Teams SDK App instance from credentials. The App manages token
  * acquisition, JWT validation, and the HTTP server lifecycle.
  *
  * This replaces the previous CloudAdapter + MsalTokenProvider + authorizeJWT
  * from @microsoft/agents-hosting.
  */
-export function createMSTeamsApp(creds: MSTeamsCredentials, sdk: MSTeamsTeamsSdk): MSTeamsApp {
+export async function createMSTeamsApp(
+  creds: MSTeamsCredentials,
+  sdk: MSTeamsTeamsSdk,
+): Promise<MSTeamsApp> {
+  const noOpHttp = await createNoOpHttpPlugin();
+  // Use type assertion: the SDK's AppOptions generic narrows `plugins` to
+  // Array<TPlugin>, but our no-op stub satisfies the runtime contract without
+  // matching the decorator-heavy IPlugin type at compile time.
   return new sdk.App({
     clientId: creds.appId,
     clientSecret: creds.appPassword,
     tenantId: creds.tenantId,
-  });
+    plugins: [noOpHttp],
+  } as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
 }
 
 /**
@@ -379,7 +450,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         }
       } catch (err) {
         if (!isInvoke) {
-          response.status(500).send({ error: String(err) });
+          response.status(500).send({ error: formatUnknownError(err) });
         }
       }
     },
@@ -396,7 +467,7 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
 
 export async function loadMSTeamsSdkWithAuth(creds: MSTeamsCredentials) {
   const sdk = await loadMSTeamsSdk();
-  const app = createMSTeamsApp(creds, sdk);
+  const app = await createMSTeamsApp(creds, sdk);
   return { sdk, app };
 }
 

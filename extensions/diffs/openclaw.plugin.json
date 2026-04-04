@@ -4,6 +4,10 @@
   "description": "Read-only diff viewer and file renderer for agents.",
   "skills": ["./skills"],
   "uiHints": {
+    "viewerBaseUrl": {
+      "label": "Viewer Base URL",
+      "help": "Persistent gateway base URL used for returned viewer links when a tool call does not pass baseUrl."
+    },
     "defaults.fontFamily": {
       "label": "Default Font",
       "help": "Preferred font family name for diff content and headers."
@@ -69,6 +73,14 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "viewerBaseUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+        "not": {
+          "pattern": "[?#]"
+        }
+      },
       "defaults": {
         "type": "object",
         "additionalProperties": false,

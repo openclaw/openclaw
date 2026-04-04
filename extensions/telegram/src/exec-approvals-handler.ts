@@ -1,10 +1,9 @@
-import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-runtime";
+import { buildPluginApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
-  createExecApprovalChannelRuntime,
+  createChannelNativeApprovalRuntime,
+  resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalChannelRuntime,
-  resolveChannelNativeApprovalDeliveryPlan,
-  resolveExecApprovalSessionTarget,
 } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -17,15 +16,13 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { parseAgentSessionKey, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
 import { telegramNativeApprovalAdapter } from "./approval-native.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import {
-  getTelegramExecApprovalApprovers,
-  resolveTelegramExecApprovalConfig,
+  isTelegramExecApprovalHandlerConfigured,
+  shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
 import { editMessageReplyMarkupTelegram, sendMessageTelegram, sendTypingTelegram } from "./send.js";
 
@@ -33,68 +30,14 @@ const log = createSubsystemLogger("telegram/exec-approvals");
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
-type ApprovalKind = "exec" | "plugin";
-
 type PendingMessage = {
   chatId: string;
   messageId: string;
 };
-
-function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
-function toExecLikeRequest(request: ApprovalRequest): ExecApprovalRequest {
-  if (isExecApprovalRequest(request)) {
-    return request;
-  }
-  return {
-    id: request.id,
-    request: {
-      command: request.request.title,
-      agentId: request.request.agentId ?? undefined,
-      sessionKey: request.request.sessionKey ?? undefined,
-      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
-      turnSourceTo: request.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
-    },
-    createdAtMs: request.createdAtMs,
-    expiresAtMs: request.expiresAtMs,
-  };
-}
-
-function resolveBoundTelegramAccountId(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequest;
-}): string | null {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase();
-  const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || undefined;
-  if (turnSourceChannel === "telegram") {
-    if (turnSourceAccountId) {
-      return turnSourceAccountId;
-    }
-  }
-  const allowSessionAccountFallback = turnSourceChannel === "telegram" && !turnSourceAccountId;
-  const sessionTarget = resolveExecApprovalSessionTarget({
-    cfg: params.cfg,
-    request: toExecLikeRequest(params.request),
-    turnSourceChannel: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceChannel ?? undefined),
-    turnSourceTo: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceTo ?? undefined),
-    turnSourceAccountId: allowSessionAccountFallback ? undefined : turnSourceAccountId,
-    turnSourceThreadId: allowSessionAccountFallback
-      ? undefined
-      : (params.request.request.turnSourceThreadId ?? undefined),
-  });
-  if (!sessionTarget || sessionTarget.channel !== "telegram") {
-    return null;
-  }
-  return sessionTarget.accountId?.trim() || null;
-}
+type TelegramPendingDelivery = {
+  text: string;
+  buttons: ReturnType<typeof resolveTelegramInlineButtons>;
+};
 
 export type TelegramExecApprovalHandlerOpts = {
   token: string;
@@ -111,76 +54,8 @@ export type TelegramExecApprovalHandlerDeps = {
   editReplyMarkup?: typeof editMessageReplyMarkupTelegram;
 };
 
-function matchesFilters(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  request: ApprovalRequest;
-}): boolean {
-  const config = resolveTelegramExecApprovalConfig({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (!config?.enabled) {
-    return false;
-  }
-  const approvers = getTelegramExecApprovalApprovers({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (approvers.length === 0) {
-    return false;
-  }
-  if (config.agentFilter?.length) {
-    const agentId =
-      params.request.request.agentId ??
-      parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
-    if (!agentId || !config.agentFilter.includes(agentId)) {
-      return false;
-    }
-  }
-  if (config.sessionFilter?.length) {
-    const sessionKey = params.request.request.sessionKey;
-    if (!sessionKey) {
-      return false;
-    }
-    const matches = config.sessionFilter.some((pattern) => {
-      if (sessionKey.includes(pattern)) {
-        return true;
-      }
-      const regex = compileSafeRegex(pattern);
-      return regex ? testRegexWithBoundedInput(regex, sessionKey) : false;
-    });
-    if (!matches) {
-      return false;
-    }
-  }
-  const boundAccountId = resolveBoundTelegramAccountId({
-    cfg: params.cfg,
-    request: params.request,
-  });
-  if (
-    boundAccountId &&
-    normalizeAccountId(boundAccountId) !== normalizeAccountId(params.accountId)
-  ) {
-    return false;
-  }
-  return true;
-}
-
 function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string }): boolean {
-  const config = resolveTelegramExecApprovalConfig({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (!config?.enabled) {
-    return false;
-  }
-  return (
-    getTelegramExecApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }).length > 0
-  );
+  return isTelegramExecApprovalHandlerConfigured(params);
 }
 
 export class TelegramExecApprovalHandler {
@@ -198,26 +73,97 @@ export class TelegramExecApprovalHandler {
     this.sendTyping = deps.sendTyping ?? sendTypingTelegram;
     this.sendMessage = deps.sendMessage ?? sendMessageTelegram;
     this.editReplyMarkup = deps.editReplyMarkup ?? editMessageReplyMarkupTelegram;
-    this.runtime = createExecApprovalChannelRuntime<
+    this.runtime = createChannelNativeApprovalRuntime<
       PendingMessage,
+      { chatId: string; messageThreadId?: number },
+      TelegramPendingDelivery,
       ApprovalRequest,
       ApprovalResolved
     >({
       label: "telegram/exec-approvals",
       clientDisplayName: `Telegram Exec Approvals (${this.opts.accountId})`,
       cfg: this.opts.cfg,
+      accountId: this.opts.accountId,
       gatewayUrl: this.opts.gatewayUrl,
       eventKinds: ["exec", "plugin"],
       nowMs: this.nowMs,
+      nativeAdapter: telegramNativeApprovalAdapter.native,
       isConfigured: () =>
         isHandlerConfigured({ cfg: this.opts.cfg, accountId: this.opts.accountId }),
       shouldHandle: (request) =>
-        matchesFilters({
+        shouldHandleTelegramExecApprovalRequest({
           cfg: this.opts.cfg,
           accountId: this.opts.accountId,
           request,
         }),
-      deliverRequested: async (request) => await this.deliverRequested(request),
+      buildPendingContent: ({ request, approvalKind, nowMs }) => {
+        const payload =
+          approvalKind === "plugin"
+            ? buildPluginApprovalPendingReplyPayload({
+                request: request as PluginApprovalRequest,
+                nowMs,
+              })
+            : buildExecApprovalPendingReplyPayload({
+                approvalId: request.id,
+                approvalSlug: request.id.slice(0, 8),
+                approvalCommandId: request.id,
+                command: resolveExecApprovalCommandDisplay((request as ExecApprovalRequest).request)
+                  .commandText,
+                cwd: (request as ExecApprovalRequest).request.cwd ?? undefined,
+                host: (request as ExecApprovalRequest).request.host === "node" ? "node" : "gateway",
+                nodeId: (request as ExecApprovalRequest).request.nodeId ?? undefined,
+                allowedDecisions: resolveExecApprovalRequestAllowedDecisions(
+                  (request as ExecApprovalRequest).request,
+                ),
+                expiresAtMs: request.expiresAtMs,
+                nowMs,
+              } satisfies ExecApprovalPendingReplyParams);
+        return {
+          text: payload.text ?? "",
+          buttons: resolveTelegramInlineButtons({
+            interactive: payload.interactive,
+          }),
+        };
+      },
+      prepareTarget: ({ plannedTarget }) => ({
+        dedupeKey: `${plannedTarget.target.to}:${plannedTarget.target.threadId == null ? "" : String(plannedTarget.target.threadId)}`,
+        target: {
+          chatId: plannedTarget.target.to,
+          messageThreadId:
+            typeof plannedTarget.target.threadId === "number"
+              ? plannedTarget.target.threadId
+              : undefined,
+        },
+      }),
+      deliverTarget: async ({ preparedTarget, pendingContent }) => {
+        await this.sendTyping(preparedTarget.chatId, {
+          cfg: this.opts.cfg,
+          token: this.opts.token,
+          accountId: this.opts.accountId,
+          ...(preparedTarget.messageThreadId != null
+            ? { messageThreadId: preparedTarget.messageThreadId }
+            : {}),
+        }).catch(() => {});
+
+        const result = await this.sendMessage(preparedTarget.chatId, pendingContent.text, {
+          cfg: this.opts.cfg,
+          token: this.opts.token,
+          accountId: this.opts.accountId,
+          buttons: pendingContent.buttons,
+          ...(preparedTarget.messageThreadId != null
+            ? { messageThreadId: preparedTarget.messageThreadId }
+            : {}),
+        });
+        return {
+          chatId: result.chatId,
+          messageId: result.messageId,
+        };
+      },
+      onDeliveryError: ({ error, request }) => {
+        log.error(
+          `telegram exec approvals: failed to send request ${request.id}: ${String(error)}`,
+        );
+      },
       finalizeResolved: async ({ resolved, entries }) => {
         await this.finalizeResolved(resolved, entries);
       },
@@ -228,7 +174,7 @@ export class TelegramExecApprovalHandler {
   }
 
   shouldHandle(request: ApprovalRequest): boolean {
-    return matchesFilters({
+    return shouldHandleTelegramExecApprovalRequest({
       cfg: this.opts.cfg,
       accountId: this.opts.accountId,
       request,
@@ -245,73 +191,6 @@ export class TelegramExecApprovalHandler {
 
   async handleRequested(request: ApprovalRequest): Promise<void> {
     await this.runtime.handleRequested(request);
-  }
-
-  private async deliverRequested(request: ApprovalRequest): Promise<PendingMessage[]> {
-    const approvalKind: ApprovalKind = request.id.startsWith("plugin:") ? "plugin" : "exec";
-    const deliveryPlan = await resolveChannelNativeApprovalDeliveryPlan({
-      cfg: this.opts.cfg,
-      accountId: this.opts.accountId,
-      approvalKind,
-      request,
-      adapter: telegramNativeApprovalAdapter.native,
-    });
-    if (deliveryPlan.targets.length === 0) {
-      return [];
-    }
-
-    const payload =
-      approvalKind === "plugin"
-        ? buildPluginApprovalPendingReplyPayload({
-            request: request as PluginApprovalRequest,
-            nowMs: this.nowMs(),
-          })
-        : buildExecApprovalPendingReplyPayload({
-            approvalId: request.id,
-            approvalSlug: request.id.slice(0, 8),
-            approvalCommandId: request.id,
-            command: resolveExecApprovalCommandDisplay((request as ExecApprovalRequest).request)
-              .commandText,
-            cwd: (request as ExecApprovalRequest).request.cwd ?? undefined,
-            host: (request as ExecApprovalRequest).request.host === "node" ? "node" : "gateway",
-            nodeId: (request as ExecApprovalRequest).request.nodeId ?? undefined,
-            expiresAtMs: request.expiresAtMs,
-            nowMs: this.nowMs(),
-          } satisfies ExecApprovalPendingReplyParams);
-    const buttons = resolveTelegramInlineButtons({
-      interactive: payload.interactive,
-    });
-    const sentMessages: PendingMessage[] = [];
-
-    for (const target of deliveryPlan.targets) {
-      try {
-        await this.sendTyping(target.target.to, {
-          cfg: this.opts.cfg,
-          token: this.opts.token,
-          accountId: this.opts.accountId,
-          ...(typeof target.target.threadId === "number"
-            ? { messageThreadId: target.target.threadId }
-            : {}),
-        }).catch(() => {});
-
-        const result = await this.sendMessage(target.target.to, payload.text ?? "", {
-          cfg: this.opts.cfg,
-          token: this.opts.token,
-          accountId: this.opts.accountId,
-          buttons,
-          ...(typeof target.target.threadId === "number"
-            ? { messageThreadId: target.target.threadId }
-            : {}),
-        });
-        sentMessages.push({
-          chatId: result.chatId,
-          messageId: result.messageId,
-        });
-      } catch (err) {
-        log.error(`telegram exec approvals: failed to send request ${request.id}: ${String(err)}`);
-      }
-    }
-    return sentMessages;
   }
 
   async handleResolved(resolved: ApprovalResolved): Promise<void> {

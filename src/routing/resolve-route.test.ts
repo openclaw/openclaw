@@ -922,6 +922,145 @@ describe("role-based agent routing", () => {
   });
 });
 
+describe("wildcard peer bindings (peer.id=*)", () => {
+  test("peer.id=* matches any direct peer and routes to the bound agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "second-ana" }] },
+      bindings: [
+        {
+          agentId: "second-ana",
+          match: {
+            channel: "telegram",
+            accountId: "second-ana",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "second-ana",
+      peer: { kind: "direct", id: "12345678" },
+    });
+    expect(route.agentId).toBe("second-ana");
+    expect(route.sessionKey).toContain("agent:second-ana:");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
+  });
+
+  test("peer.id=* does not match group peers when kind is direct", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "dm-only" }] },
+      bindings: [
+        {
+          agentId: "dm-only",
+          match: {
+            channel: "telegram",
+            accountId: "bot1",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      accountId: "bot1",
+      peer: { kind: "group", id: "group-999" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
+  test("exact peer binding wins over wildcard peer binding", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "exact" }, { id: "wild" }] },
+      bindings: [
+        {
+          agentId: "wild",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+        {
+          agentId: "exact",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "+1000" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: "biz",
+      peer: { kind: "direct", id: "+1000" },
+    });
+    expect(route.agentId).toBe("exact");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("wildcard peer binding wins over default fallback for unmatched peers", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "exact" }, { id: "wild" }] },
+      bindings: [
+        {
+          agentId: "wild",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "*" },
+          },
+        },
+        {
+          agentId: "exact",
+          match: {
+            channel: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "direct", id: "+1000" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      accountId: "biz",
+      peer: { kind: "direct", id: "+9999" },
+    });
+    expect(route.agentId).toBe("wild");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
+  });
+
+  test("group wildcard peer matches any group peer", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "grp" }] },
+      bindings: [
+        {
+          agentId: "grp",
+          match: {
+            channel: "discord",
+            accountId: "default",
+            peer: { kind: "group", id: "*" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      accountId: "default",
+      peer: { kind: "group", id: "g-42" },
+    });
+    expect(route.agentId).toBe("grp");
+    expect(route.matchedBy).toBe("binding.peer.wildcard");
+  });
+});
+
 describe("binding evaluation cache scalability", () => {
   test("does not rescan full bindings after channel/account cache rollover (#36915)", () => {
     const bindingCount = 2_205;

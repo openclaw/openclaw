@@ -35,7 +35,7 @@ function makeModelSwitchConfig(home: string) {
     model: { primary: "openai/gpt-4.1-mini" },
     models: {
       "openai/gpt-4.1-mini": {},
-      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
     },
   });
 }
@@ -44,10 +44,10 @@ function makeMoonshotConfig(home: string, storePath: string) {
   return {
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         workspace: path.join(home, "openclaw"),
         models: {
-          "anthropic/claude-opus-4-5": {},
+          "anthropic/claude-opus-4-6": {},
           "moonshot/kimi-k2-0905-preview": {},
         },
       },
@@ -209,10 +209,10 @@ describe("directive behavior", () => {
         {
           agents: {
             defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
+              model: { primary: "anthropic/claude-opus-4-6" },
               workspace: path.join(home, "openclaw"),
               models: {
-                "anthropic/claude-opus-4-5": {},
+                "anthropic/claude-opus-4-6": {},
                 "moonshot/kimi-k2-0905-preview": { alias: "Kimi" },
                 "lmstudio/kimi-k2-0905-preview": {},
               },
@@ -295,7 +295,7 @@ describe("directive behavior", () => {
       );
 
       let events = drainSystemEvents(MAIN_SESSION_KEY);
-      expect(events).toContain("Model switched to Opus (anthropic/claude-opus-4-5).");
+      expect(events).toContain("Model switched to Opus (anthropic/claude-opus-4-6).");
 
       drainSystemEvents(MAIN_SESSION_KEY);
 

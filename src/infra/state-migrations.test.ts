@@ -19,6 +19,7 @@ function createConfig(): OpenClawConfig {
     },
     channels: {
       telegram: {
+        defaultAccount: "alpha",
         accounts: {
           beta: {},
           alpha: {},
@@ -96,19 +97,19 @@ describe("state migrations", () => {
     expect(detected.sessions.hasLegacy).toBe(true);
     expect(detected.sessions.legacyKeys).toEqual(["group:123@g.us"]);
     expect(detected.agentDir.hasLegacy).toBe(true);
-    expect(detected.whatsappAuth.hasLegacy).toBe(true);
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(detected.pairingAllowFrom.copyPlans.map((plan) => plan.targetPath)).toEqual([
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
+      path.join(stateDir, "credentials", "whatsapp", "default", "creds.json"),
+      path.join(stateDir, "credentials", "whatsapp", "default", "pre-key-1.json"),
       resolveChannelAllowFromPath("telegram", env, "alpha"),
-      resolveChannelAllowFromPath("telegram", env, "beta"),
     ]);
     expect(detected.preview).toEqual([
       `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
       `- Sessions: canonicalize legacy keys in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       `- Agent dir: ${path.join(stateDir, "agent")} → ${path.join(stateDir, "agents", "worker-1", "agent")}`,
-      `- WhatsApp auth: ${path.join(stateDir, "credentials")} → ${path.join(stateDir, "credentials", "whatsapp", "default")} (keep oauth.json)`,
+      `- WhatsApp auth creds.json: ${path.join(stateDir, "credentials", "creds.json")} → ${path.join(stateDir, "credentials", "whatsapp", "default", "creds.json")}`,
+      `- WhatsApp auth pre-key-1.json: ${path.join(stateDir, "credentials", "pre-key-1.json")} → ${path.join(stateDir, "credentials", "whatsapp", "default", "pre-key-1.json")}`,
       `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `- Telegram pairing allowFrom: ${resolveChannelAllowFromPath("telegram", env)} → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
     ]);
   });
 
@@ -132,10 +133,9 @@ describe("state migrations", () => {
       "Canonicalized 1 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
-      "Moved WhatsApp auth creds.json → whatsapp/default",
-      "Moved WhatsApp auth pre-key-1.json → whatsapp/default",
+      `Moved WhatsApp auth creds.json → ${path.join(stateDir, "credentials", "whatsapp", "default", "creds.json")}`,
+      `Moved WhatsApp auth pre-key-1.json → ${path.join(stateDir, "credentials", "whatsapp", "default", "pre-key-1.json")}`,
       `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
-      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "beta")}`,
     ]);
 
     const mergedStore = JSON.parse(
@@ -176,7 +176,10 @@ describe("state migrations", () => {
       fs.readFile(resolveChannelAllowFromPath("telegram", env, "alpha"), "utf8"),
     ).resolves.toBe('["123","456"]\n');
     await expect(
-      fs.readFile(resolveChannelAllowFromPath("telegram", env, "beta"), "utf8"),
-    ).resolves.toBe('["123","456"]\n');
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "default")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(resolveChannelAllowFromPath("telegram", env, "beta")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

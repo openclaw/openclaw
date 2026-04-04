@@ -5,7 +5,7 @@ summary: OpenClaw 何时显示输入指示器以及如何调整它们
 title: 输入指示器
 x-i18n:
   generated_at: "2026-02-01T20:24:47Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8ee82d02829c4ff58462be8bf5bb52f23f519aeda816c2fd8a583e7a317a2e98
   source_path: concepts/typing-indicators.md

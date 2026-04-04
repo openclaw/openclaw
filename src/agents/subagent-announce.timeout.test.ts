@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
   method?: string;
@@ -45,15 +46,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-function createSessionsModuleMock() {
-  return {
-    loadSessionStore: vi.fn(() => sessionStore),
-    resolveAgentIdFromSessionKey: () => "main",
-    resolveStorePath: () => "/tmp/sessions-main.json",
-    resolveMainSessionKey: () => "agent:main:main",
-  };
-}
-
 function createSubagentDepthModuleMock() {
   return {
     getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
@@ -79,60 +71,48 @@ function createTimeoutHistoryWithNoReply() {
 }
 
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    ...createSessionsModuleMock(),
-  };
-});
 vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./pi-embedded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
-  return {
-    ...actual,
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
+    callGateway: async (request: unknown) => {
+      const typed = request as GatewayCall;
+      gatewayCalls.push(typed);
+      if (typed.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(typed);
+    },
+    loadConfig: () => configOverride,
+    loadSessionStore: () => sessionStore,
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
-    waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
-      waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
-  };
-});
-vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun: () => 0,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    replaceSubagentRunAfterSteer: () => true,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
-  };
-});
-vi.mock("./subagent-registry-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry-runtime.js")>();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun: () => 0,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    replaceSubagentRunAfterSteer: () => true,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
-  };
-});
+    queueEmbeddedPiMessage: () => false,
+  }),
+);
+vi.mock("./subagent-announce.runtime.js", () => ({
+  callGateway: createGatewayCallModuleMock().callGateway,
+  loadConfig: () => configOverride,
+  loadSessionStore: vi.fn(() => sessionStore),
+  resolveAgentIdFromSessionKey: () => "main",
+  resolveStorePath: () => "/tmp/sessions-main.json",
+  resolveMainSessionKey: () => "agent:main:main",
+  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
+  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
+}));
+vi.mock("./subagent-announce.registry.runtime.js", () => ({
+  countActiveDescendantRuns: () => 0,
+  countPendingDescendantRuns: () => pendingDescendantRuns,
+  countPendingDescendantRunsExcludingRun: () => 0,
+  listSubagentRunsForRequester: () => [],
+  isSubagentSessionRunActive: () => subagentSessionRunActive,
+  shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+  replaceSubagentRunAfterSteer: () => true,
+  resolveRequesterForChildSession: () => fallbackRequesterResolution,
+}));
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
   typeof import("./subagent-announce.js").runSubagentAnnounceFlow

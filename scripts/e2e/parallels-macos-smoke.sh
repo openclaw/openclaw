@@ -474,6 +474,62 @@ wait_for_current_user() {
   return 1
 }
 
+host_timeout_exec() {
+  local timeout_s="$1"
+  shift
+  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(os.environ["HOST_TIMEOUT_S"])
+args = sys.argv[1:]
+
+try:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.buffer.write(exc.stdout)
+    if exc.stderr:
+        sys.stderr.buffer.write(exc.stderr)
+    sys.stderr.write(f"host timeout after {timeout}s\n")
+    raise SystemExit(124)
+
+if completed.stdout:
+    sys.stdout.buffer.write(completed.stdout)
+if completed.stderr:
+    sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+PY
+}
+
+snapshot_switch_with_retry() {
+  local snapshot_id="$1"
+  local attempt rc status
+  rc=0
+  for attempt in 1 2; do
+    set +e
+    host_timeout_exec "$TIMEOUT_SNAPSHOT_S" prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+      return 0
+    fi
+    # Tahoe occasionally gets stuck mid snapshot-switch and leaves the guest
+    # running or suspended. Reset that state and try once more before failing
+    # the whole lane.
+    warn "snapshot-switch attempt $attempt failed (rc=$rc)"
+    status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+    [[ -n "$status" ]] && warn "vm status after snapshot-switch failure: $status"
+    if [[ "$status" == *" running" || "$status" == *" suspended" ]]; then
+      prlctl stop "$VM_NAME" --kill >/dev/null 2>&1 || true
+      wait_for_vm_status "stopped" || true
+    fi
+    sleep 3
+  done
+  return "$rc"
+}
+
 guest_current_user_exec() {
   prlctl exec "$VM_NAME" --current-user /usr/bin/env \
     PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin \
@@ -551,7 +607,7 @@ guest_current_user_sh() {
 restore_snapshot() {
   local snapshot_id="$1"
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
-  prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+  snapshot_switch_with_retry "$snapshot_id" || die "snapshot switch failed for $VM_NAME"
   if [[ "$SNAPSHOT_STATE" == "poweroff" ]]; then
     wait_for_vm_status "stopped" || die "restored poweroff snapshot did not reach stopped state in $VM_NAME"
     say "Start restored poweroff snapshot $SNAPSHOT_NAME"
@@ -1290,7 +1346,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
-  SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
+  SUMMARY_CURRENT_HEAD="${PACKED_MAIN_COMMIT_SHORT:-$(git rev-parse --short HEAD)}" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \
   SUMMARY_FRESH_MAIN_VERSION="$FRESH_MAIN_VERSION" \

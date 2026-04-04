@@ -1,17 +1,5 @@
-import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveMainSessionKey,
-  resolveStorePath,
-} from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
-import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
-import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -30,7 +18,21 @@ import {
 } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
+import {
+  callGateway,
+  createBoundDeliveryRouter,
+  getGlobalHookRunner,
+  isEmbeddedPiRunActive,
+  loadConfig,
+  loadSessionStore,
+  queueEmbeddedPiMessage,
+  resolveAgentIdFromSessionKey,
+  resolveConversationIdFromTargets,
+  resolveExternalBestEffortDeliveryTarget,
+  resolveMainSessionKey,
+  resolveQueueSettings,
+  resolveStorePath,
+} from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
@@ -90,6 +92,27 @@ function summarizeDeliveryError(error: unknown): string {
   } catch {
     return "error";
   }
+}
+
+function shouldStripThreadFromAnnounceEntry(
+  normalizedRequester?: DeliveryContext,
+  normalizedEntry?: DeliveryContext,
+): boolean {
+  if (
+    !normalizedRequester?.to ||
+    normalizedRequester.threadId != null ||
+    normalizedEntry?.threadId == null
+  ) {
+    return false;
+  }
+  const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
+  return Boolean(
+    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
+      requester: normalizedRequester,
+      entry: normalizedEntry,
+    }),
+  );
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -196,9 +219,7 @@ export function resolveAnnounceOrigin(
     );
   }
   const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
+    normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
       ? (() => {
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;
@@ -477,9 +498,13 @@ async function sendSubagentAnnounceDirectly(params: {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
+    // Merge completionDirectOrigin with directOrigin so that missing fields
+    // (channel, to, accountId) fall back to the originating session's
+    // lastChannel / lastTo. Without this, a completion origin that carries a
+    // channel but not a `to` would prevent external delivery.
     const effectiveDirectOrigin =
       params.expectsCompletionMessage && completionDirectOrigin
-        ? completionDirectOrigin
+        ? mergeDeliveryContext(completionDirectOrigin, directOrigin)
         : directOrigin;
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin

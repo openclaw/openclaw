@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -12,6 +13,11 @@ import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
   isHealthy(): boolean;
+  doctor?(): Promise<{
+    ok: boolean;
+    message: string;
+    details?: string[];
+  }>;
 };
 
 type AcpxRuntimeFactoryParams = {
@@ -23,7 +29,24 @@ type AcpxRuntimeFactoryParams = {
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
+  healthProbeRetryDelaysMs?: number[];
 };
+
+const DEFAULT_HEALTH_PROBE_RETRY_DELAYS_MS = [250, 1_000, 2_500];
+
+function delay(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
+  const detailText = report.details?.filter(Boolean).join("; ").trim();
+  return detailText ? `${report.message} (${detailText})` : report.message;
+}
 
 function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
   return new AcpxRuntime(params.pluginConfig, {
@@ -45,6 +68,11 @@ export function createAcpxRuntimeService(
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
+      if (ctx.workspaceDir?.trim()) {
+        await fs.mkdir(ctx.workspaceDir, { recursive: true });
+      }
+      const healthProbeRetryDelaysMs =
+        params.healthProbeRetryDelaysMs ?? DEFAULT_HEALTH_PROBE_RETRY_DELAYS_MS;
       const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
       runtime = runtimeFactory({
         pluginConfig,
@@ -80,12 +108,46 @@ export function createAcpxRuntimeService(
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          await runtime?.probeAvailability();
-          if (runtime?.isHealthy()) {
-            ctx.logger.info("acpx runtime backend ready");
-          } else {
-            ctx.logger.warn("acpx runtime backend probe failed after local install");
+          let lastFailureMessage: string | undefined;
+          for (let attempt = 0; attempt <= healthProbeRetryDelaysMs.length; attempt += 1) {
+            await runtime?.probeAvailability();
+            if (currentRevision !== lifecycleRevision) {
+              return;
+            }
+            if (runtime?.isHealthy()) {
+              ctx.logger.info(
+                attempt === 0
+                  ? "acpx runtime backend ready"
+                  : `acpx runtime backend ready after ${attempt + 1} probe attempts`,
+              );
+              return;
+            }
+
+            const doctorReport = await runtime?.doctor?.();
+            if (currentRevision !== lifecycleRevision) {
+              return;
+            }
+            if (doctorReport) {
+              lastFailureMessage = formatDoctorFailureMessage(doctorReport);
+            } else {
+              lastFailureMessage = "acpx runtime backend remained unhealthy after probe";
+            }
+
+            const retryDelayMs = healthProbeRetryDelaysMs[attempt];
+            if (retryDelayMs == null) {
+              break;
+            }
+            ctx.logger.warn(
+              `acpx runtime backend probe attempt ${attempt + 1} failed: ${lastFailureMessage}; retrying in ${retryDelayMs}ms`,
+            );
+            await delay(retryDelayMs);
+            if (currentRevision !== lifecycleRevision) {
+              return;
+            }
           }
+          ctx.logger.warn(
+            `acpx runtime backend probe failed: ${lastFailureMessage ?? "backend remained unhealthy after setup"}`,
+          );
         } catch (err) {
           if (currentRevision !== lifecycleRevision) {
             return;

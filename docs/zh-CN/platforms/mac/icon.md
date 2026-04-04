@@ -5,7 +5,7 @@ summary: macOS 上 OpenClaw 菜单栏图标的状态和动画
 title: 菜单栏图标
 x-i18n:
   generated_at: "2026-02-01T21:32:49Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: a67a6e6bbdc2b611ba365d3be3dd83f9e24025d02366bc35ffcce9f0b121872b
   source_path: platforms/mac/icon.md

@@ -3,7 +3,6 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveApiKeyForProvider } from "./model-auth.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
@@ -31,34 +30,31 @@ describe("NVIDIA provider", () => {
       expect(auth.source).toContain("NVIDIA_API_KEY");
     });
   });
-
-  it("should build nvidia provider with correct configuration", () => {
-    const provider = buildNvidiaProvider();
-    expect(provider.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
-    expect(provider.api).toBe("openai-completions");
-    expect(provider.models).toBeDefined();
-    expect(provider.models.length).toBeGreaterThan(0);
-  });
-
-  it("should include default nvidia models", () => {
-    const provider = buildNvidiaProvider();
-    const modelIds = provider.models.map((m) => m.id);
-    expect(modelIds).toContain("nvidia/llama-3.1-nemotron-70b-instruct");
-    expect(modelIds).toContain("meta/llama-3.3-70b-instruct");
-    expect(modelIds).toContain("nvidia/mistral-nemo-minitron-8b-8k-instruct");
-  });
 });
 
 describe("MiniMax implicit provider (#15275)", () => {
   it("should use anthropic-messages API for API-key provider", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ MINIMAX_API_KEY: "test-key" }, async () => {
+    await withEnvAsync({ MINIMAX_API_KEY: "test-key", MINIMAX_API_HOST: undefined }, async () => {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.minimax).toBeDefined();
       expect(providers?.minimax?.api).toBe("anthropic-messages");
       expect(providers?.minimax?.authHeader).toBe(true);
       expect(providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     });
+  });
+
+  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await withEnvAsync(
+      { MINIMAX_API_KEY: "test-key", MINIMAX_API_HOST: "https://api.minimaxi.com" },
+      async () => {
+        const providers = await resolveImplicitProvidersForTest({ agentDir });
+        expect(providers?.minimax).toBeDefined();
+        expect(providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+        expect(providers?.["minimax-portal"]?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+      },
+    );
   });
 
   it("should set authHeader for minimax portal provider", async () => {

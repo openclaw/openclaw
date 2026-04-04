@@ -10,8 +10,11 @@ import { loadPluginManifestRegistry } from "../../../src/plugins/manifest-regist
 type PluginRegistrationContractParams = {
   pluginId: string;
   providerIds?: string[];
+  webFetchProviderIds?: string[];
   webSearchProviderIds?: string[];
   speechProviderIds?: string[];
+  realtimeTranscriptionProviderIds?: string[];
+  realtimeVoiceProviderIds?: string[];
   mediaUnderstandingProviderIds?: string[];
   imageGenerationProviderIds?: string[];
   cliBackendIds?: string[];
@@ -104,12 +107,36 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
       });
     }
 
+    if (params.webFetchProviderIds) {
+      it("keeps bundled web fetch ownership explicit", () => {
+        expect(findRegistration(params.pluginId).webFetchProviderIds).toEqual(
+          params.webFetchProviderIds,
+        );
+      });
+    }
+
     if (params.speechProviderIds) {
       it("keeps bundled speech ownership explicit", () => {
         expect(findRegistration(params.pluginId).speechProviderIds).toEqual(
           params.speechProviderIds,
         );
         expect(findSpeechProviderIds(params.pluginId)).toEqual(params.speechProviderIds);
+      });
+    }
+
+    if (params.realtimeTranscriptionProviderIds) {
+      it("keeps bundled realtime-transcription ownership explicit", () => {
+        expect(findRegistration(params.pluginId).realtimeTranscriptionProviderIds).toEqual(
+          params.realtimeTranscriptionProviderIds,
+        );
+      });
+    }
+
+    if (params.realtimeVoiceProviderIds) {
+      it("keeps bundled realtime-voice ownership explicit", () => {
+        expect(findRegistration(params.pluginId).realtimeVoiceProviderIds).toEqual(
+          params.realtimeVoiceProviderIds,
+        );
       });
     }
 

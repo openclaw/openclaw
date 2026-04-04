@@ -5,7 +5,7 @@ summary: 使用 SSH 隧道（Gateway WS）和 tailnet 进行远程访问
 title: 远程访问
 x-i18n:
   generated_at: "2026-02-03T07:48:40Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 7e00bd2e048dfbd829913bef0f40a791b8d8c3e2f8a115fc0a13b03f136ebc93
   source_path: gateway/remote.md

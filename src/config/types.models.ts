@@ -1,4 +1,5 @@
 import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
+import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export const MODEL_APIS = [
@@ -59,6 +60,12 @@ export type ModelDefinitionConfig = {
     cacheWrite: number;
   };
   contextWindow: number;
+  /**
+   * Optional effective runtime cap used for compaction/session budgeting.
+   * Keeps provider/native contextWindow metadata intact while letting configs
+   * prefer a smaller practical window.
+   */
+  contextTokens?: number;
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
@@ -72,6 +79,7 @@ export type ModelProviderConfig = {
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
+  request?: ConfiguredModelProviderRequest;
   models: ModelDefinitionConfig[];
 };
 

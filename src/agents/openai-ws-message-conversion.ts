@@ -8,7 +8,9 @@ import type {
   OpenAIResponsesAssistantPhase,
   ResponseObject,
 } from "./openai-ws-connection.js";
+import { normalizeToolParameterSchema } from "./pi-tools.schema.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
+import { normalizeUsage } from "./usage.js";
 
 type AnyMessage = Message & { role: string; content: unknown };
 type AssistantMessageWithPhase = AssistantMessage & { phase?: OpenAIResponsesAssistantPhase };
@@ -276,12 +278,14 @@ export function convertTools(tools: Context["tools"]): FunctionToolDefinition[] 
   if (!tools || tools.length === 0) {
     return [];
   }
-  return tools.map((tool) => ({
-    type: "function" as const,
-    name: tool.name,
-    description: typeof tool.description === "string" ? tool.description : undefined,
-    parameters: (tool.parameters ?? {}) as Record<string, unknown>,
-  }));
+  return tools.map((tool) => {
+    return {
+      type: "function" as const,
+      name: tool.name,
+      description: typeof tool.description === "string" ? tool.description : undefined,
+      parameters: normalizeToolParameterSchema(tool.parameters ?? {}) as Record<string, unknown>,
+    };
+  });
 }
 
 export function planTurnInput(params: {
@@ -535,15 +539,17 @@ export function buildAssistantMessageFromResponse(
 
   const hasToolCalls = content.some((part) => part.type === "toolCall");
   const stopReason: StopReason = hasToolCalls ? "toolUse" : "stop";
+  const normalizedUsage = normalizeUsage(response.usage);
+  const rawTotalTokens = normalizedUsage?.total;
 
   const message = buildAssistantMessage({
     model: modelInfo,
     content,
     stopReason,
     usage: buildUsageWithNoCost({
-      input: response.usage?.input_tokens ?? 0,
-      output: response.usage?.output_tokens ?? 0,
-      totalTokens: response.usage?.total_tokens ?? 0,
+      input: normalizedUsage?.input ?? 0,
+      output: normalizedUsage?.output ?? 0,
+      totalTokens: rawTotalTokens && rawTotalTokens > 0 ? rawTotalTokens : undefined,
     }),
   });
 

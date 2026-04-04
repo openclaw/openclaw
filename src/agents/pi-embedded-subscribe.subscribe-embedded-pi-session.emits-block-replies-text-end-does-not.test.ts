@@ -7,14 +7,16 @@ import {
 } from "./pi-embedded-subscribe.e2e-harness.js";
 
 describe("subscribeEmbeddedPiSession", () => {
-  it("emits block replies on text_end and does not duplicate on message_end", () => {
+  it("emits block replies on text_end and does not duplicate on message_end", async () => {
     const onBlockReply = vi.fn();
     const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
     emitAssistantTextDelta({ emit, delta: "Hello block" });
     emitAssistantTextEnd({ emit });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
     const payload = onBlockReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello block");
     expect(subscription.assistantTexts).toEqual(["Hello block"]);

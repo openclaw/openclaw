@@ -1,3 +1,7 @@
+import {
+  applyProviderNativeStreamingUsageCompat,
+  supportsNativeStreamingUsageCompat,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
@@ -51,53 +55,20 @@ const MOONSHOT_MODEL_CATALOG = [
   },
 ] as const;
 
-function normalizeMoonshotBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const url = new URL(trimmed);
-    url.hash = "";
-    url.search = "";
-    return url.toString().replace(/\/+$/, "").toLowerCase();
-  } catch {
-    return trimmed.replace(/\/+$/, "").toLowerCase();
-  }
-}
-
 export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
-  const normalized = normalizeMoonshotBaseUrl(baseUrl);
-  return normalized === MOONSHOT_BASE_URL || normalized === MOONSHOT_CN_BASE_URL;
-}
-
-function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return provider;
-  }
-
-  let changed = false;
-  const models = provider.models.map((model) => {
-    if (model.compat?.supportsUsageInStreaming !== undefined) {
-      return model;
-    }
-    changed = true;
-    return {
-      ...model,
-      compat: {
-        ...model.compat,
-        supportsUsageInStreaming: true,
-      },
-    };
+  return supportsNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    baseUrl,
   });
-
-  return changed ? { ...provider, models } : provider;
 }
 
 export function applyMoonshotNativeStreamingUsageCompat(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
-  return isNativeMoonshotBaseUrl(provider.baseUrl) ? withStreamingUsageCompat(provider) : provider;
+  return applyProviderNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    providerConfig: provider,
+  });
 }
 
 export function buildMoonshotProvider(): ModelProviderConfig {

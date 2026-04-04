@@ -330,33 +330,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     },
   };
 
-  const anthropicTokenChoice: ChoiceHandler = {
-    providerId: "anthropic",
-    label: "Anthropic",
-    runNonInteractive: async (ctx) => {
-      const token = normalizeText(ctx.opts.token);
-      if (!token) {
-        ctx.runtime.error("Missing --token for --auth-choice token.");
-        ctx.runtime.exit(1);
-        return null;
-      }
-      upsertAuthProfile({
-        profileId: "anthropic:default",
-        credential: {
-          type: "token",
-          provider: "anthropic",
-          token,
-        },
-        agentDir: ctx.agentDir,
-      });
-      return providerApiKeyAuthRuntime.applyAuthProfileConfig(ctx.config as never, {
-        profileId: "anthropic:default",
-        provider: "anthropic",
-        mode: "token",
-      });
-    },
-  };
-
   const choiceMap = new Map<string, ChoiceHandler>([
     [
       "apiKey",
@@ -581,7 +554,6 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
           }),
       }),
     ],
-    ["token", anthropicTokenChoice],
   ]);
 
   return {
@@ -631,8 +603,9 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
   };
 });
 
-vi.mock("./onboard-helpers.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
+vi.mock("./onboard-helpers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./onboard-helpers.js")>("./onboard-helpers.js");
   return {
     ...actual,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
@@ -706,6 +679,33 @@ async function withZaiProbeFetch<T>(
     } else {
       process.env.VITEST = originalVitest;
     }
+  }
+}
+
+function expectZaiProbeCalls(
+  fetchMock: FetchLike,
+  expected: Array<{ url: string; modelId: string }>,
+): void {
+  const calls = (
+    fetchMock as unknown as { mock: { calls: Array<[RequestInfo | URL, RequestInit?]> } }
+  ).mock.calls;
+
+  expect(calls).toHaveLength(expected.length);
+  for (const [index, probe] of expected.entries()) {
+    const [input, init] = calls[index] ?? [];
+    const requestUrl =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input && typeof input === "object" && "url" in input && typeof input.url === "string"
+            ? input.url
+            : undefined;
+    expect(requestUrl).toBe(probe.url);
+    expect(init?.method).toBe("POST");
+    const body =
+      typeof init?.body === "string" ? (JSON.parse(init.body) as { model?: string }) : {};
+    expect(body.model).toBe(probe.modelId);
   }
 }
 
@@ -860,10 +860,9 @@ describe("onboard (non-interactive): provider auth", () => {
     resetFileLockStateForTest();
     clearPluginDiscoveryCache();
     clearPluginManifestRegistryCache();
-    ensureWorkspaceAndSessionsMock.mockClear();
   });
 
-  it("stores MiniMax API key and uses global baseUrl by default", async () => {
+  it("stores MiniMax API key in the global auth profile", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "minimax-global-api",
@@ -872,8 +871,6 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["minimax:global"]?.provider).toBe("minimax");
       expect(cfg.auth?.profiles?.["minimax:global"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.7");
       await expectApiKeyProfile({
         profileId: "minimax:global",
         provider: "minimax",
@@ -891,8 +888,6 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["minimax:cn"]?.provider).toBe("minimax");
       expect(cfg.auth?.profiles?.["minimax:cn"]?.mode).toBe("api_key");
-      expect(cfg.models?.providers?.minimax?.baseUrl).toBe(MINIMAX_CN_API_BASE_URL);
-      expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.7");
       await expectApiKeyProfile({
         profileId: "minimax:cn",
         provider: "minimax",
@@ -901,7 +896,7 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("stores Z.AI API key and uses global baseUrl by default", async () => {
+  it("stores Z.AI API key after probing the global endpoint", async () => {
     await withZaiProbeFetch(
       {
         [`${ZAI_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
@@ -915,9 +910,12 @@ describe("onboard (non-interactive): provider auth", () => {
 
           expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
           expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
-          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
-          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-          expect(fetchMock).toHaveBeenCalled();
+          expectZaiProbeCalls(fetchMock, [
+            {
+              url: `${ZAI_GLOBAL_BASE_URL}/chat/completions`,
+              modelId: "glm-5",
+            },
+          ]);
           await expectApiKeyProfile({
             profileId: "zai:default",
             provider: "zai",
@@ -940,14 +938,28 @@ describe("onboard (non-interactive): provider auth", () => {
             zaiApiKey: "zai-test-key", // pragma: allowlist secret
           });
 
-          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
-          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-4.7");
-          expect(fetchMock).toHaveBeenCalled();
+          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
+          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
+          expectZaiProbeCalls(fetchMock, [
+            {
+              url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
+              modelId: "glm-5",
+            },
+            {
+              url: `${ZAI_CODING_CN_BASE_URL}/chat/completions`,
+              modelId: "glm-4.7",
+            },
+          ]);
+          await expectApiKeyProfile({
+            profileId: "zai:default",
+            provider: "zai",
+            key: "zai-test-key",
+          });
         }),
     );
   });
 
-  it("supports Z.AI Coding Plan global endpoint with GLM-5 when available", async () => {
+  it("supports Z.AI Coding Plan global endpoint detection", async () => {
     await withZaiProbeFetch(
       {
         [`${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions::glm-5`]: 200,
@@ -959,14 +971,24 @@ describe("onboard (non-interactive): provider auth", () => {
             zaiApiKey: "zai-test-key", // pragma: allowlist secret
           });
 
-          expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
-          expect(cfg.agents?.defaults?.model?.primary).toBe("zai/glm-5");
-          expect(fetchMock).toHaveBeenCalled();
+          expect(cfg.auth?.profiles?.["zai:default"]?.provider).toBe("zai");
+          expect(cfg.auth?.profiles?.["zai:default"]?.mode).toBe("api_key");
+          expectZaiProbeCalls(fetchMock, [
+            {
+              url: `${ZAI_CODING_GLOBAL_BASE_URL}/chat/completions`,
+              modelId: "glm-5",
+            },
+          ]);
+          await expectApiKeyProfile({
+            profileId: "zai:default",
+            provider: "zai",
+            key: "zai-test-key",
+          });
         }),
     );
   });
 
-  it("stores xAI API key and sets default model", async () => {
+  it("stores xAI API key in the default auth profile", async () => {
     await withOnboardEnv("openclaw-onboard-xai-", async (env) => {
       const rawKey = "xai-test-\r\nkey";
       const cfg = await runOnboardingAndReadConfig(env, {
@@ -976,12 +998,11 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["xai:default"]?.provider).toBe("xai");
       expect(cfg.auth?.profiles?.["xai:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-4");
       await expectApiKeyProfile({ profileId: "xai:default", provider: "xai", key: "xai-test-key" });
     });
   });
 
-  it("infers Mistral auth choice from --mistral-api-key and sets default model", async () => {
+  it("infers Mistral auth choice from --mistral-api-key", async () => {
     await withOnboardEnv("openclaw-onboard-mistral-infer-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         mistralApiKey: "mistral-test-key", // pragma: allowlist secret
@@ -989,7 +1010,6 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["mistral:default"]?.provider).toBe("mistral");
       expect(cfg.auth?.profiles?.["mistral:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("mistral/mistral-large-latest");
       await expectApiKeyProfile({
         profileId: "mistral:default",
         provider: "mistral",
@@ -1039,30 +1059,31 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("stores token auth profile", async () => {
+  it("rejects legacy Anthropic token onboarding", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await runNonInteractiveSetupWithDefaults(runtime, {
-        authChoice: "token",
-        tokenProvider: "anthropic",
-        token,
-        tokenProfileId: "anthropic:default",
-      });
+      await expect(
+        runNonInteractiveSetupWithDefaults(runtime, {
+          authChoice: "token",
+          tokenProvider: "anthropic",
+          token,
+          tokenProfileId: "anthropic:default",
+        }),
+      ).rejects.toThrow("Process exited with code 1");
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        [
+          'Auth choice "token" is no longer supported for Anthropic onboarding.',
+          "Existing Anthropic token profiles still run if they are already configured.",
+          'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
+        ].join("\n"),
+      );
 
       const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
-
-      expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
-      expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
-
-      const store = ensureAuthProfileStore();
-      const profile = store.profiles["anthropic:default"];
-      expect(profile?.type).toBe("token");
-      if (profile?.type === "token") {
-        expect(profile.provider).toBe("anthropic");
-        expect(profile.token).toBe(cleanToken);
-      }
+      expect(cfg.auth?.profiles?.["anthropic:default"]).toBeUndefined();
+      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toBeUndefined();
     });
   });
 
@@ -1254,7 +1275,7 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("stores LiteLLM API key and sets default model", async () => {
+  it("stores LiteLLM API key in the default auth profile", async () => {
     await withOnboardEnv("openclaw-onboard-litellm-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
         authChoice: "litellm-api-key",
@@ -1263,7 +1284,6 @@ describe("onboard (non-interactive): provider auth", () => {
 
       expect(cfg.auth?.profiles?.["litellm:default"]?.provider).toBe("litellm");
       expect(cfg.auth?.profiles?.["litellm:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("litellm/claude-opus-4-6");
       await expectApiKeyProfile({
         profileId: "litellm:default",
         provider: "litellm",
