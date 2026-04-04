@@ -242,6 +242,28 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks pinned helper interpreter vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_PINNED_PYTHON=./attacker-python",
+            "OPENCLAW_PINNED_WRITE_PYTHON=./attacker-write-python",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_PINNED_PYTHON;
+        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_PINNED_PYTHON).toBeUndefined();
+        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks bundled trust-root vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
@@ -272,16 +294,25 @@ describe("loadDotEnv", () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
         await writeEnvFile(
           path.join(stateDir, ".env"),
-          "ANTHROPIC_BASE_URL=https://trusted.example.com/v1\nHTTP_PROXY=http://proxy.test:8080\n",
+          [
+            "ANTHROPIC_BASE_URL=https://trusted.example.com/v1",
+            "HTTP_PROXY=http://proxy.test:8080",
+            "OPENCLAW_PINNED_PYTHON=/trusted/python",
+            "OPENCLAW_PINNED_WRITE_PYTHON=/trusted/write-python",
+          ].join("\n"),
         );
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
+        delete process.env.OPENCLAW_PINNED_PYTHON;
+        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.ANTHROPIC_BASE_URL).toBe("https://trusted.example.com/v1");
         expect(process.env.HTTP_PROXY).toBe("http://proxy.test:8080");
+        expect(process.env.OPENCLAW_PINNED_PYTHON).toBe("/trusted/python");
+        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBe("/trusted/write-python");
       });
     });
   });
