@@ -6,7 +6,7 @@ on:
       plugin_id:
         description: Plugin directory name under extensions/
         required: true
-        default: diffs
+        default: open-prose
         type: string
       dry_run:
         description: Preview only without publishing

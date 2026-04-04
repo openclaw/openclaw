@@ -491,7 +491,9 @@ final class WebChatSwiftUIWindowController {
                 defer: false)
             panel.level = .statusBar
             panel.hidesOnDeactivate = true
-            panel.hasShadow = true
+            // Render a single custom glass shadow from the content surface so
+            // the panel edge stays crisp instead of stacking two shadows.
+            panel.hasShadow = false
             panel.isMovable = false
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.titleVisibility = .hidden
@@ -517,8 +519,34 @@ final class WebChatSwiftUIWindowController {
         hosting: NSHostingController<AnyView>) -> NSViewController
     {
         let controller = NSViewController()
+        let rootView = NSView()
+        rootView.wantsLayer = true
+        rootView.layer?.backgroundColor = NSColor.clear.cgColor
+
+        let isPanel: Bool = switch presentation {
+        case .panel:
+            true
+        case .window:
+            false
+        }
+        let cornerRadius: CGFloat = isPanel ? 30 : 0
+        let chromeInset: CGFloat = isPanel ? 8 : 0
+
+        let shadowView = NSView()
+        shadowView.translatesAutoresizingMaskIntoConstraints = false
+        shadowView.wantsLayer = true
+        shadowView.layer?.cornerCurve = .continuous
+        shadowView.layer?.cornerRadius = cornerRadius
+        shadowView.layer?.backgroundColor = isPanel
+            ? NSColor.black.withAlphaComponent(0.05).cgColor
+            : NSColor.clear.cgColor
+        shadowView.layer?.shadowColor = NSColor.black.withAlphaComponent(0.24).cgColor
+        shadowView.layer?.shadowOpacity = isPanel ? 1 : 0
+        shadowView.layer?.shadowRadius = isPanel ? 34 : 0
+        shadowView.layer?.shadowOffset = CGSize(width: 0, height: -10)
+
         let effectView = NSVisualEffectView()
-        effectView.material = .sidebar
+        effectView.material = isPanel ? .hudWindow : .sidebar
         effectView.blendingMode = switch presentation {
         case .panel:
             .withinWindow
@@ -528,19 +556,17 @@ final class WebChatSwiftUIWindowController {
         effectView.state = .active
         effectView.wantsLayer = true
         effectView.layer?.cornerCurve = .continuous
-        let cornerRadius: CGFloat = switch presentation {
-        case .panel:
-            16
-        case .window:
-            0
-        }
         effectView.layer?.cornerRadius = cornerRadius
         effectView.layer?.masksToBounds = true
-        effectView.layer?.backgroundColor = NSColor.clear.cgColor
+        effectView.layer?.borderWidth = isPanel ? 1 : 0
+        effectView.layer?.borderColor = isPanel
+            ? NSColor.white.withAlphaComponent(0.16).cgColor
+            : NSColor.clear.cgColor
+        effectView.layer?.backgroundColor = isPanel
+            ? NSColor.white.withAlphaComponent(0.06).cgColor
+            : NSColor.clear.cgColor
 
-        effectView.translatesAutoresizingMaskIntoConstraints = true
-        effectView.autoresizingMask = [.width, .height]
-        let rootView = effectView
+        effectView.translatesAutoresizingMaskIntoConstraints = false
 
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.wantsLayer = true
@@ -550,10 +576,22 @@ final class WebChatSwiftUIWindowController {
         hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
 
         controller.addChild(hosting)
+        rootView.addSubview(shadowView)
+        rootView.addSubview(effectView)
         effectView.addSubview(hosting.view)
         controller.view = rootView
 
         NSLayoutConstraint.activate([
+            shadowView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: chromeInset),
+            shadowView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -chromeInset),
+            shadowView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: chromeInset),
+            shadowView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -chromeInset),
+
+            effectView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: chromeInset),
+            effectView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -chromeInset),
+            effectView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: chromeInset),
+            effectView.bottomAnchor.constraint(equalTo: rootView.bottomAnchor, constant: -chromeInset),
+
             hosting.view.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
             hosting.view.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
             hosting.view.topAnchor.constraint(equalTo: effectView.topAnchor),

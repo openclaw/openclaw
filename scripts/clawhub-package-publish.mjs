@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 
 function fail(message) {
@@ -56,10 +56,124 @@ function normalizeGitHubRepo(remoteUrl) {
 
 function resolvePluginDir(repoRoot, input) {
   const maybePath = path.resolve(process.cwd(), input);
-  if (existsSync(maybePath)) {
+  if (fs.existsSync(maybePath)) {
     return maybePath;
   }
   return path.join(repoRoot, "extensions", input);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+}
+
+function globToRegExp(pattern) {
+  const trimmed = pattern.replace(/^\/+/, "").replace(/\/+$/, "");
+  let source = pattern.startsWith("/") ? "^" : "(^|/)";
+
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    const next = trimmed[index + 1];
+    const nextNext = trimmed[index + 2];
+
+    if (char === "*" && next === "*" && nextNext === "/") {
+      source += "(?:.*/)?";
+      index += 2;
+      continue;
+    }
+    if (char === "*" && next === "*") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    if (char === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    if (char === "?") {
+      source += "[^/]";
+      continue;
+    }
+    source += escapeRegExp(char);
+  }
+
+  source += "$";
+  return new RegExp(source);
+}
+
+function loadIgnoreMatchers(pluginDir) {
+  const matchers = [];
+  for (const fileName of [".clawhubignore", ".clawdhubignore"]) {
+    const filePath = path.join(pluginDir, fileName);
+    if (!fs.existsSync(filePath)) {
+      continue;
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("!")) {
+        continue;
+      }
+      matchers.push(globToRegExp(trimmed));
+    }
+  }
+  return matchers;
+}
+
+function shouldIgnore(relPath, ignoreMatchers) {
+  if (
+    relPath.startsWith(".git/") ||
+    relPath.startsWith("node_modules/") ||
+    relPath.startsWith(".clawhub/") ||
+    relPath.startsWith(".clawdhub/")
+  ) {
+    return true;
+  }
+  return ignoreMatchers.some((matcher) => matcher.test(relPath));
+}
+
+function listPackageFiles(pluginDir) {
+  const files = [];
+  const ignoreMatchers = loadIgnoreMatchers(pluginDir);
+
+  function walk(currentDir) {
+    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      const absPath = path.join(currentDir, entry.name);
+      const relPath = path.relative(pluginDir, absPath).split(path.sep).join("/");
+      if (!relPath || shouldIgnore(relPath, ignoreMatchers)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        walk(absPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      files.push({
+        relPath,
+        size: fs.statSync(absPath).size,
+      });
+    }
+  }
+
+  walk(pluginDir);
+  return files;
+}
+
+function readJson(filePath, label) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (error) {
+    fail(`Failed to read ${label}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function readTrimmedString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function isSemverLike(value) {
+  return /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value);
 }
 
 function parseArgs(argv) {
@@ -121,14 +235,48 @@ const options = parseArgs(process.argv.slice(2));
 const repoRoot = runGit(process.cwd(), ["rev-parse", "--show-toplevel"]);
 const pluginDir = resolvePluginDir(repoRoot, options.plugin);
 
-if (!existsSync(pluginDir)) {
+if (!fs.existsSync(pluginDir)) {
   fail(`Plugin directory not found: ${pluginDir}`);
 }
-if (!existsSync(path.join(pluginDir, "package.json"))) {
+if (!fs.existsSync(path.join(pluginDir, "package.json"))) {
   fail(`Missing package.json in ${pluginDir}`);
 }
-if (!existsSync(path.join(pluginDir, "openclaw.plugin.json"))) {
+if (!fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"))) {
   fail(`Missing openclaw.plugin.json in ${pluginDir}`);
+}
+
+const packageJson = readJson(path.join(pluginDir, "package.json"), "package.json");
+const pluginManifest = readJson(
+  path.join(pluginDir, "openclaw.plugin.json"),
+  "openclaw.plugin.json",
+);
+const openclaw = packageJson && typeof packageJson === "object" ? (packageJson.openclaw ?? {}) : {};
+const compat = openclaw && typeof openclaw === "object" ? (openclaw.compat ?? {}) : {};
+const build = openclaw && typeof openclaw === "object" ? (openclaw.build ?? {}) : {};
+const version = options.version || readTrimmedString(packageJson.version);
+const name = readTrimmedString(packageJson.name) || readTrimmedString(pluginManifest.id);
+const displayName =
+  readTrimmedString(packageJson.displayName) ||
+  readTrimmedString(pluginManifest.name) ||
+  path.basename(pluginDir);
+
+if (!name) {
+  fail("Package name is missing.");
+}
+if (!displayName) {
+  fail("Display name is missing.");
+}
+if (!version) {
+  fail("Version is missing.");
+}
+if (!isSemverLike(version)) {
+  fail(`Version must look like semver for ClawHub code plugins: ${version}`);
+}
+if (!readTrimmedString(compat.pluginApi)) {
+  fail("package.json is missing openclaw.compat.pluginApi");
+}
+if (!readTrimmedString(build.openclawVersion)) {
+  fail("package.json is missing openclaw.build.openclawVersion");
 }
 
 const remotes = runGit(repoRoot, ["remote"], false)
@@ -153,6 +301,49 @@ const sourceRef =
   runGit(repoRoot, ["branch", "--show-current"], false) ||
   sourceCommit;
 const sourcePath = path.relative(repoRoot, pluginDir).split(path.sep).join("/");
+const files = listPackageFiles(pluginDir);
+const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+
+if (files.length === 0) {
+  fail(`No publishable files found in ${pluginDir}`);
+}
+
+const dryRunPlan = {
+  source: `${sourceRepo}@${sourceRef}:${sourcePath}`,
+  name,
+  displayName,
+  family: "code-plugin",
+  version,
+  commit: sourceCommit,
+  files: files.length,
+  totalBytes,
+  compatibility: {
+    pluginApiRange: readTrimmedString(compat.pluginApi),
+    builtWithOpenClawVersion: readTrimmedString(build.openclawVersion),
+    pluginSdkVersion: readTrimmedString(build.pluginSdkVersion),
+    minGatewayVersion: readTrimmedString(compat.minGatewayVersion),
+  },
+};
+
+if (!options.publish) {
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(dryRunPlan, null, 2)}\n`);
+  } else {
+    console.log(`ClawHub source remote: ${remoteName} -> ${sourceRepo}`);
+    console.log(`ClawHub source path: ${sourcePath}`);
+    console.log(`ClawHub source ref: ${sourceRef}`);
+    console.log(`Name: ${name}`);
+    console.log(`Display name: ${displayName}`);
+    console.log(`Version: ${version}`);
+    console.log(`Files: ${files.length}`);
+    console.log(`Total bytes: ${totalBytes}`);
+    console.log(
+      `Compat: pluginApi=${dryRunPlan.compatibility.pluginApiRange}, builtWith=${dryRunPlan.compatibility.builtWithOpenClawVersion}, minGateway=${dryRunPlan.compatibility.minGatewayVersion || "-"}`,
+    );
+    console.log("Mode: dry-run (local preflight)");
+  }
+  process.exit(0);
+}
 
 const command = [
   "-y",
@@ -168,11 +359,10 @@ const command = [
   sourceRef,
   "--source-path",
   sourcePath,
+  "--version",
+  version,
 ];
 
-if (!options.publish) {
-  command.push("--dry-run");
-}
 if (options.json) {
   command.push("--json");
 }
@@ -182,15 +372,12 @@ if (options.owner) {
 if (options.tags) {
   command.push("--tags", options.tags);
 }
-if (options.version) {
-  command.push("--version", options.version);
-}
 
 if (!options.json) {
   console.log(`ClawHub source remote: ${remoteName} -> ${sourceRepo}`);
   console.log(`ClawHub source path: ${sourcePath}`);
   console.log(`ClawHub source ref: ${sourceRef}`);
-  console.log(`Mode: ${options.publish ? "publish" : "dry-run"}`);
+  console.log("Mode: publish");
 }
 
 const result = spawnSync("npx", command, {

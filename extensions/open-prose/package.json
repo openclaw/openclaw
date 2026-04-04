@@ -1,12 +1,31 @@
 {
   "name": "@openclaw/open-prose",
+  "displayName": "OpenProse",
   "version": "2026.3.14",
   "private": true,
   "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
+  "homepage": "https://github.com/openclaw/openclaw/tree/main/extensions/open-prose",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "extensions/open-prose"
+  },
   "type": "module",
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.14",
+      "minGatewayVersion": "2026.3.14"
+    },
+    "build": {
+      "openclawVersion": "2026.3.14",
+      "pluginSdkVersion": "2026.3.14"
+    }
   }
 }
