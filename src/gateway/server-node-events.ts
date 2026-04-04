@@ -152,6 +152,7 @@ async function touchSessionStore(params: {
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
+  sessionFile?: string;
 }) {
   const { storePath } = params;
   if (!storePath) {
@@ -166,6 +167,7 @@ async function touchSessionStore(params: {
     store[primaryKey] = {
       ...store[primaryKey],
       sessionId: params.sessionId,
+      sessionFile: params.sessionFile ?? store[primaryKey]?.sessionFile,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
       fastMode: params.entry?.fastMode,
