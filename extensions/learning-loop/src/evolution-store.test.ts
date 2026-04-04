@@ -226,11 +226,12 @@ describe("EvolutionStore", () => {
     );
 
     const bodyEntry = createEvolutionEntry("execution_failure", "regex", {
-      section: "Instructions(",
+      section: "Instructions",
       action: "append",
       content: "Do not crash when a section name includes regex characters.",
       target: "body",
     });
+    bodyEntry.change.section = "Instructions(" as unknown as typeof bodyEntry.change.section;
 
     await store.appendEntry(skillName, bodyEntry);
     await expect(store.solidify(skillName)).resolves.toBe(1);
