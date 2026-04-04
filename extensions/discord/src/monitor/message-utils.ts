@@ -372,6 +372,7 @@ async function appendResolvedMediaFromAttachments(params: {
         fetched.contentType ?? attachment.content_type,
         "inbound",
         params.maxBytes,
+        attachment.filename,
       );
       params.out.push({
         path: saved.path,
@@ -491,6 +492,7 @@ async function appendResolvedMediaFromStickers(params: {
           fetched.contentType,
           "inbound",
           params.maxBytes,
+          candidate.fileName,
         );
         params.out.push({
           path: saved.path,
