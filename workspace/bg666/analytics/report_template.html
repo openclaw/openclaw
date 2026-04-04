@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} — {{ date_start }} ~ {{ date_end }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #6366f1; --secondary: #ec4899; --accent: #06b6d4;
+            --success: #22c55e; --warning: #f59e0b; --danger: #ef4444;
+            --bg: #0f172a; --card-bg: rgba(30,41,59,0.85);
+            --glass: rgba(255,255,255,0.05); --text: #f8fafc; --muted: #94a3b8;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family:'Inter',sans-serif; background:var(--bg); color:var(--text);
+            overflow-x:hidden; min-height:100vh;
+            background-image:
+                radial-gradient(circle at 10% 20%, rgba(99,102,241,0.12) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(236,72,153,0.12) 0%, transparent 40%),
+                radial-gradient(circle at 50% 50%, rgba(6,182,212,0.08) 0%, transparent 50%);
+        }
+        h1,h2,h3,h4 { font-family:'Outfit',sans-serif; }
+        .container { max-width:1100px; margin:0 auto; padding:40px 20px; }
+        .slide { margin-bottom:100px; opacity:0; transform:translateY(30px); transition:all .8s cubic-bezier(.22,1,.36,1); }
+        .slide.visible { opacity:1; transform:translateY(0); }
+        header { text-align:center; padding:80px 0 40px; }
+        .hero-title { font-size:2.8rem; font-weight:700; background:linear-gradient(135deg,var(--primary),var(--accent),var(--secondary)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; margin-bottom:12px; }
+        .hero-sub { font-size:1.1rem; color:var(--muted); font-weight:300; }
+        .tag { display:inline-block; background:linear-gradient(135deg,var(--primary),var(--accent)); color:white; padding:6px 16px; border-radius:20px; font-size:.75rem; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:16px; font-weight:600; }
+        .stitle { font-size:1.8rem; margin-bottom:8px; font-weight:700; }
+        .sdesc { color:var(--muted); font-size:.95rem; margin-bottom:32px; line-height:1.6; }
+        .card { background:var(--card-bg); backdrop-filter:blur(20px); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:28px; margin-bottom:20px; transition:transform .3s,box-shadow .3s; }
+        .card:hover { transform:translateY(-2px); box-shadow:0 8px 30px rgba(0,0,0,.3); }
+        .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+        .grid-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; }
+        .grid-4 { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+        @media(max-width:768px) { .grid-2,.grid-3,.grid-4 { grid-template-columns:1fr; } .hero-title { font-size:1.8rem; } }
+        .mc { text-align:center; padding:24px 16px; }
+        .mv { font-size:2rem; font-weight:700; font-family:'Outfit',sans-serif; }
+        .ml { font-size:.8rem; color:var(--muted); margin-top:4px; text-transform:uppercase; letter-spacing:1px; }
+        .md { font-size:.85rem; margin-top:6px; font-weight:600; }
+        .up { color:var(--success); } .down { color:var(--danger); } .neutral { color:var(--warning); }
+        .chart-box { position:relative; height:280px; margin:20px 0; }
+        table { width:100%; border-collapse:collapse; font-size:.9rem; }
+        th { text-align:left; padding:12px 10px; border-bottom:2px solid rgba(255,255,255,.1); color:var(--muted); font-weight:600; font-size:.75rem; text-transform:uppercase; letter-spacing:1px; }
+        td { padding:10px; border-bottom:1px solid rgba(255,255,255,.05); }
+        tr:hover td { background:rgba(255,255,255,.03); }
+        .pill { display:inline-block; padding:3px 10px; border-radius:12px; font-size:.75rem; font-weight:600; }
+        .pill-green { background:rgba(34,197,94,.2); color:var(--success); }
+        .pill-yellow { background:rgba(245,158,11,.2); color:var(--warning); }
+        .pill-red { background:rgba(239,68,68,.2); color:var(--danger); }
+        .pill-blue { background:rgba(6,182,212,.2); color:var(--accent); }
+        .insight { background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(6,182,212,.1)); border-left:4px solid var(--accent); padding:20px 24px; border-radius:0 12px 12px 0; margin:20px 0; }
+        .insight h4 { color:var(--accent); margin-bottom:8px; font-size:.9rem; }
+        .insight p { font-size:.9rem; line-height:1.7; }
+        .action { background:linear-gradient(135deg,rgba(34,197,94,.12),rgba(34,197,94,.05)); border-left:4px solid var(--success); padding:20px 24px; border-radius:0 12px 12px 0; margin:16px 0; }
+        .action h4 { color:var(--success); margin-bottom:8px; font-size:.9rem; }
+        .action ul { font-size:.9rem; line-height:1.8; padding-left:16px; }
+        .warn { background:linear-gradient(135deg,rgba(239,68,68,.12),rgba(239,68,68,.05)); border-left:4px solid var(--danger); padding:20px 24px; border-radius:0 12px 12px 0; margin:16px 0; }
+        .warn h4 { color:var(--danger); margin-bottom:8px; font-size:.9rem; }
+        .warn p { font-size:.9rem; line-height:1.6; }
+        .heatmap-grid { display:grid; grid-template-columns:repeat(24,1fr); gap:3px; }
+        .hm-cell { aspect-ratio:1; border-radius:4px; display:flex; align-items:center; justify-content:center; font-size:.6rem; color:rgba(255,255,255,.7); position:relative; }
+        .hm-cell:hover::after { content:attr(data-tip); position:absolute; bottom:110%; left:50%; transform:translateX(-50%); background:rgba(0,0,0,.9); padding:4px 8px; border-radius:6px; white-space:nowrap; font-size:.7rem; z-index:10; }
+        .footer { text-align:center; padding:60px 0; color:var(--muted); font-size:.8rem; }
+    </style>
+</head>
+<body>
+<div class="container">
+
+<!-- HERO -->
+<header class="slide">
+    <h1 class="hero-title">{{ title }} II</h1>
+    <p class="hero-sub">{{ subtitle }} — 数据驱动增长策略</p>
+    <p style="color:var(--muted); margin-top:12px; font-size:.85rem;">
+        数据范围: {{ date_start }} ~ {{ date_end }}
+        {% if matomo %} · Matomo {{ "{:,}".format(matomo.visits|default(0)|int) }} 访次{% endif %}
+        · 生成于 {{ generated_at }}
+    </p>
+</header>
+
+<!-- SLIDE 1: Executive Summary -->
+<section class="slide">
+    <span class="tag">Executive Summary</span>
+    <h2 class="stitle">平台运营全景</h2>
+    <p class="sdesc">过去 {{ summary.days }} 天核心运营指标</p>
+
+    <div class="grid-4">
+        <div class="card mc">
+            <div class="mv" style="color:var(--accent);">{{ "₹{:,.0f}".format(summary.avg_daily_recharge) }}</div>
+            <div class="ml">日均充值</div>
+        </div>
+        <div class="card mc">
+            <div class="mv" style="color:var(--primary);">{{ "{:,.0f}".format(summary.avg_daily_active) }}</div>
+            <div class="ml">日均活跃</div>
+        </div>
+        <div class="card mc">
+            <div class="mv" style="color:var(--success);">{{ "{:.1f}%".format(summary.avg_retention_d1) }}</div>
+            <div class="ml">次日留存</div>
+        </div>
+        <div class="card mc">
+            <div class="mv" style="color:var(--warning);">{{ "{:.1f}x".format(summary.bet_recharge_ratio) }}</div>
+            <div class="ml">投注/充值比</div>
+        </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:20px;">
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">每日净收入趋势 (Rs.)</h3>
+            <div class="chart-box" style="height:220px;"><canvas id="netRevenueChart"></canvas></div>
+        </div>
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">活跃玩家趋势</h3>
+            <div class="chart-box" style="height:220px;"><canvas id="activePlayersChart"></canvas></div>
+        </div>
+    </div>
+</section>
+
+{% if data.matomo_hourly %}
+<!-- SLIDE 2: Page Dwell Analysis -->
+<section class="slide">
+    <span class="tag">Page Dwell Analysis</span>
+    <h2 class="stitle">页面停留时间深度剖析</h2>
+    <p class="sdesc">基于 Matomo 会话数据，平均会话 {{ "{:.1f}".format(matomo.avg_session_sec|default(0)|float / 60) }} 分钟 / {{ "{:.1f}".format(matomo.avg_actions|default(0)|float) }} 个页面</p>
+
+    <div class="grid-3">
+        <div class="card mc">
+            <div class="mv" style="color:var(--accent);">{{ "{:.0f}s".format(matomo.avg_session_sec|default(0)|float) }}</div>
+            <div class="ml">平均会话时长</div>
+        </div>
+        <div class="card mc">
+            <div class="mv" style="color:var(--primary);">{{ "{:.1f}".format(matomo.avg_actions|default(0)|float) }}</div>
+            <div class="ml">平均页面浏览</div>
+        </div>
+        <div class="card mc">
+            <div class="mv" style="color:var(--danger);">{{ "{:.1f}%".format(matomo.bounce_rate|default(0)|float) }}</div>
+            <div class="ml">跳出率</div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+        <h3 style="font-size:1rem; margin-bottom:8px;">24小时用户活跃热力图</h3>
+        <p style="color:var(--muted); font-size:.8rem; margin-bottom:16px;">IST 时区 · 颜色越亮 = 访问量越高 · 悬停查看详情</p>
+        <div class="heatmap-grid" id="heatmap"></div>
+        <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:.7rem; color:var(--muted);">
+            <span>0:00</span><span>6:00</span><span>12:00</span><span>18:00</span><span>23:00</span>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+        <h3 style="font-size:1rem; margin-bottom:16px;">各时段会话深度</h3>
+        <div class="chart-box"><canvas id="hourlyEngagement"></canvas></div>
+    </div>
+
+    {% if data.matomo_domains %}
+    <div class="card" style="margin-top:20px;">
+        <h3 style="font-size:1rem; margin-bottom:16px;">域名流量分布 Top 15</h3>
+        <p style="color:var(--muted); font-size:.8rem; margin-bottom:16px;">平台使用多域名分发，同一 App 的流量分散在不同域名下</p>
+        <table>
+            <thead><tr><th>域名</th><th style="text-align:right">访次</th><th style="text-align:right">页面操作</th><th style="text-align:right">次均操作</th></tr></thead>
+            <tbody>
+            {% for row in data.matomo_domains[:15] %}
+            <tr>
+                <td><code style="font-size:.85rem;">{{ row.domain }}</code></td>
+                <td style="text-align:right">{{ "{:,}".format(row.visits|int) }}</td>
+                <td style="text-align:right">{{ "{:,}".format(row.actions|int) }}</td>
+                <td style="text-align:right">{{ "{:.1f}".format(row.actions_per_visit|float) }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+    <div class="insight">
+        <h4>SPA 内页追踪盲区</h4>
+        <p>Matomo 仅记录着陆页（域名根路径），App 内部导航（<code>/#/pages/...</code>）不可见。
+        上方域名表可见流量分布，但无法追踪用户在 App 内的具体行为路径。<br>
+        <strong>修复建议：</strong>前端加 <code>_paq.push(['setCustomUrl', ...])</code> 让 SPA 路由变更触发 pageview。</p>
+    </div>
+</section>
+{% endif %}
+
+{% if data.matomo_device_daily %}
+<!-- SLIDE 2.5: Device Analytics -->
+<section class="slide">
+    <span class="tag">Device Analytics</span>
+    <h2 class="stitle">iOS / Android / 裝置類型分析</h2>
+    <p class="sdesc">過去 {{ device_summary.days }} 天 · 移動端佔比 <strong style="color:var(--accent);">{{ device_summary.mobile_pct }}%</strong></p>
+
+    <div class="grid-3">
+        <div class="card mc">
+            <div class="mv" style="color:var(--primary);">{{ "{:,}".format(device_summary.smartphone|int) }}</div>
+            <div class="ml">手機訪次 <span style="font-size:.7rem;">({{ device_summary.smartphone_pct }}%)</span></div>
+            <div class="md {% if device_summary.mobile_trend == 'up' %}up{% elif device_summary.mobile_trend == 'down' %}down{% else %}neutral{% endif %}">{{ device_summary.mobile_trend }}</div>
+        </div>
+        <div class="card mc">
+            <div class="mv" style="color:var(--warning);">{{ "{:,}".format(device_summary.desktop|int) }}</div>
+            <div class="ml">桌面訪次 <span style="font-size:.7rem;">({{ device_summary.desktop_pct }}%)</span></div>
+            <div class="md {% if device_summary.desktop_trend == 'up' %}up{% elif device_summary.desktop_trend == 'down' %}down{% else %}neutral{% endif %}">{{ device_summary.desktop_trend }}</div>
+        </div>
+        <div class="card mc">
+            <div class="mv" style="color:var(--secondary);">{{ "{:,}".format(device_summary.tablet|int) }}</div>
+            <div class="ml">平板訪次 <span style="font-size:.7rem;">({{ device_summary.tablet_pct }}%)</span></div>
+        </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:20px;">
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">裝置類型日趨勢</h3>
+            <div class="chart-box"><canvas id="deviceTrendChart"></canvas></div>
+        </div>
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">iOS vs Android 日趨勢</h3>
+            <div class="chart-box"><canvas id="osTrendChart"></canvas></div>
+        </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:20px;">
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">作業系統分布</h3>
+            <div class="chart-box" style="height:260px;"><canvas id="osDonutChart"></canvas></div>
+        </div>
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">各 OS 參與度指標</h3>
+            <table>
+                <thead><tr><th>OS</th><th style="text-align:right">訪次</th><th style="text-align:right">佔比</th><th style="text-align:right">均時長</th><th style="text-align:right">均操作</th><th style="text-align:right">跳出率</th></tr></thead>
+                <tbody>
+                {% for row in data.matomo_device_os[:8] %}
+                <tr>
+                    <td><span class="pill pill-blue">{{ row.os_name }}</span></td>
+                    <td style="text-align:right">{{ "{:,}".format(row.visits|int) }}</td>
+                    <td style="text-align:right">{{ "{:.1f}%".format(row.pct|float) }}</td>
+                    <td style="text-align:right">{{ "{:.0f}s".format(row.avg_duration_sec|float) }}</td>
+                    <td style="text-align:right">{{ "{:.1f}".format(row.avg_actions|float) }}</td>
+                    <td style="text-align:right"><span class="pill {% if row.bounce_rate|float > 30 %}pill-red{% elif row.bounce_rate|float > 15 %}pill-yellow{% else %}pill-green{% endif %}">{{ "{:.1f}%".format(row.bounce_rate|float) }}</span></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:20px;">
+        <div class="card" style="border-left:3px solid #ec4899;">
+            <h4 style="color:#ec4899; margin-bottom:8px; font-size:.9rem;">iOS 用戶畫像</h4>
+            <p style="font-size:.9rem; line-height:1.7; color:var(--muted);">
+                訪次 <strong style="color:var(--text);">{{ "{:,}".format(device_summary.ios|int) }}</strong>
+                ({{ device_summary.ios_pct }}%) ·
+                均時長 <strong style="color:var(--text);">{{ "{:.0f}s".format(device_summary.ios_engagement.avg_duration_sec|default(0)|float) }}</strong> ·
+                均操作 <strong style="color:var(--text);">{{ "{:.1f}".format(device_summary.android_engagement.avg_actions|default(0)|float) }}</strong> ·
+                跳出率 <strong style="color:var(--text);">{{ "{:.1f}%".format(device_summary.ios_engagement.bounce_rate|default(0)|float) }}</strong>
+            </p>
+        </div>
+        <div class="card" style="border-left:3px solid #22c55e;">
+            <h4 style="color:#22c55e; margin-bottom:8px; font-size:.9rem;">Android 用戶畫像</h4>
+            <p style="font-size:.9rem; line-height:1.7; color:var(--muted);">
+                訪次 <strong style="color:var(--text);">{{ "{:,}".format(device_summary.android|int) }}</strong>
+                ({{ device_summary.android_pct }}%) ·
+                均時長 <strong style="color:var(--text);">{{ "{:.0f}s".format(device_summary.android_engagement.avg_duration_sec|default(0)|float) }}</strong> ·
+                均操作 <strong style="color:var(--text);">{{ "{:.1f}".format(device_summary.android_engagement.avg_actions|default(0)|float) }}</strong> ·
+                跳出率 <strong style="color:var(--text);">{{ "{:.1f}%".format(device_summary.android_engagement.bounce_rate|default(0)|float) }}</strong>
+            </p>
+        </div>
+    </div>
+
+    <div class="insight" style="margin-top:20px;">
+        <h4>行動端主導策略</h4>
+        <p>平台 {{ device_summary.mobile_pct }}% 流量來自行動裝置。
+        iOS 用戶均操作數 <strong>{{ "{:.1f}".format(device_summary.ios_engagement.avg_actions|default(0)|float) }}</strong>
+        {% if device_summary.ios_engagement.avg_actions|default(0)|float > device_summary.android_engagement.avg_actions|default(0)|float %}
+        高於 Android 的 <strong>{{ "{:.1f}".format(device_summary.android_engagement.avg_actions|default(0)|float) }}</strong>，iOS 用戶黏性更強。
+        {% else %}
+        與 Android 的 <strong>{{ "{:.1f}".format(device_summary.android_engagement.avg_actions|default(0)|float) }}</strong> 接近，兩端體驗一致。
+        {% endif %}
+        平板端 ({{ device_summary.tablet_pct }}%) 佔比極低，可暫不優先。</p>
+    </div>
+</section>
+{% endif %}
+
+<!-- SLIDE 3: Game Analytics -->
+<section class="slide">
+    <span class="tag">Game Analytics</span>
+    <h2 class="stitle">游戏品类深度分析</h2>
+    <p class="sdesc">{{ data.game_categories|length }} 大品类 · {{ "₹{:,.0f}".format(summary.total_game_bet) }} 总投注额</p>
+
+    <div class="card">
+        <h3 style="font-size:1rem; margin-bottom:20px;">品类矩阵 — 投注额 vs 玩家数 vs 利润率</h3>
+        <table>
+            <thead><tr><th>品类</th><th style="text-align:right">玩家数</th><th style="text-align:right">投注额</th><th style="text-align:right">占比</th><th style="text-align:right">ARPU</th><th style="text-align:right">利润</th><th style="text-align:right">利润率</th></tr></thead>
+            <tbody>
+            {% for row in data.game_categories %}
+            <tr>
+                <td><span class="pill pill-blue">{{ row.game_category }}</span> {{ row.cat_name }}</td>
+                <td style="text-align:right">{{ "{:,}".format(row.players|int) }}</td>
+                <td style="text-align:right">{{ "₹{:,.0f}".format(row.total_bet) }}</td>
+                <td style="text-align:right">{{ "{:.1f}%".format(row.total_bet / summary.total_game_bet * 100) }}</td>
+                <td style="text-align:right">{{ "₹{:,.0f}".format(row.arpu) }}</td>
+                <td style="text-align:right">{{ "₹{:,.0f}".format(row.total_profit) }}</td>
+                <td style="text-align:right"><span class="pill {% if row.profit_rate > 0 %}pill-green{% else %}pill-red{% endif %}">{{ "{:.1f}%".format(row.profit_rate) }}</span></td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="grid-2" style="margin-top:20px;">
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">Top 游戏（投注额）</h3>
+            <div class="chart-box"><canvas id="topGamesChart"></canvas></div>
+        </div>
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">品类日趋势</h3>
+            <div class="chart-box"><canvas id="categoryTrendChart"></canvas></div>
+        </div>
+    </div>
+</section>
+
+<!-- SLIDE 4: Player Segmentation -->
+<section class="slide">
+    <span class="tag">Player Segmentation</span>
+    <h2 class="stitle">玩家价值分层与行为画像</h2>
+
+    <div class="card">
+        <table>
+            <thead><tr><th>层级</th><th style="text-align:right">玩家数</th><th style="text-align:right">占比</th><th style="text-align:right">投注额</th><th style="text-align:right">投注占比</th><th style="text-align:right">充值</th><th style="text-align:right">提现</th></tr></thead>
+            <tbody>
+            {% for row in data.player_segments if row.segment != 'Inactive' %}
+            <tr {% if 'VIP' in row.segment %}style="background:rgba(99,102,241,.08)"{% endif %}>
+                <td><span class="pill {% if 'VIP' in row.segment %}pill-blue{% elif 'High' in row.segment %}pill-yellow{% else %}{% endif %}">{{ row.segment }}</span></td>
+                <td style="text-align:right">{{ "{:,}".format(row.players|int) }}</td>
+                <td style="text-align:right">{{ "{:.1f}%".format(row.players / summary.total_players * 100) }}</td>
+                <td style="text-align:right">{{ "₹{:,.0f}".format(row.total_bet) }}</td>
+                <td style="text-align:right">{{ "{:.1f}%".format(row.total_bet / summary.total_bet * 100) }}</td>
+                <td style="text-align:right">{{ "₹{:,.0f}".format(row.total_recharge) }}</td>
+                <td style="text-align:right">{{ "₹{:,.0f}".format(row.total_withdraw) }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="grid-2" style="margin-top:20px;">
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">80/20 法则</h3>
+            <div style="text-align:center; padding:20px;">
+                <p style="font-size:3rem; font-weight:700; font-family:'Outfit',sans-serif; color:var(--accent);">{{ "{:.1f}%".format(summary.top_player_pct) }}</p>
+                <p style="color:var(--muted); font-size:.85rem; margin-top:8px;">
+                    只有 <strong>{{ "{:.1f}%".format(summary.top_player_pct) }}</strong> 的头部玩家（VIP + High）<br>
+                    就贡献了 <strong>{{ "{:.1f}%".format(summary.top_bet_pct) }}</strong> 的投注额<br>
+                    <span style="font-size:.75rem;">留住这 {{ "{:,}".format(summary.top_players|int) }} 人 = 守住一半以上的流水</span>
+                </p>
+            </div>
+        </div>
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">跨品类参与度</h3>
+            <table>
+                <thead><tr><th>品类数</th><th style="text-align:right">玩家数</th><th style="text-align:right">人均投注</th><th style="text-align:right">投注占比</th></tr></thead>
+                <tbody>
+                {% for row in data.cross_category %}
+                <tr>
+                    <td>{{ row.games_played }} 个品类</td>
+                    <td style="text-align:right">{{ "{:,}".format(row.players|int) }}</td>
+                    <td style="text-align:right">{{ "₹{:,.0f}".format(row.avg_bet) }}</td>
+                    <td style="text-align:right">{{ "{:.1f}%".format(row.total_bet / summary.total_game_bet * 100) }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            <div class="insight" style="margin-top:16px;">
+                <h4>跨品类 = 更高价值</h4>
+                <p>{{ "{:.0f}%".format(summary.single_cat_pct) }} 的玩家只玩一个品类。引导尝试第二个品类是最直接的 LTV 提升路径。</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- SLIDE 5: Retention -->
+<section class="slide">
+    <span class="tag">Retention Analysis</span>
+    <h2 class="stitle">留存率与资金流分析</h2>
+
+    <div class="card">
+        <h3 style="font-size:1rem; margin-bottom:16px;">次日留存趋势（D1 Retention）</h3>
+        <div class="chart-box" style="height:250px;"><canvas id="retentionChart"></canvas></div>
+    </div>
+
+    <div class="grid-2" style="margin-top:20px;">
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">每日资金流</h3>
+            <div class="chart-box" style="height:240px;"><canvas id="cashFlowChart"></canvas></div>
+        </div>
+        <div class="card">
+            <h3 style="font-size:1rem; margin-bottom:16px;">彩金/奖励分布 Top 5</h3>
+            <table>
+                <thead><tr><th>类型</th><th style="text-align:right">笔数</th><th style="text-align:right">总额</th></tr></thead>
+                <tbody>
+                {% for row in data.bonus_breakdown[:5] %}
+                <tr>
+                    <td>{{ row.type_name }} ({{ row.change_type }})</td>
+                    <td style="text-align:right">{{ "{:,}".format(row.cnt|int) }}</td>
+                    <td style="text-align:right">{{ "₹{:,.0f}".format(row.total_amount) }}</td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<footer class="footer">
+    <p>{{ title }} Report · Generated {{ generated_at }}</p>
+    <p>Pipeline: report.yaml → report_gen.py → report_template.html</p>
+</footer>
+
+</div>
+
+<script>
+// ── Data from Python ──
+const overview = {{ data.daily_overview | tojson }};
+const hourlyData = {{ data.matomo_hourly | tojson }};
+const topGames = {{ data.top_games | tojson }};
+const catDaily = {{ data.game_category_daily | tojson }};
+const retention = {{ data.retention_d1 | tojson }};
+const catNames = {{ cat_names | tojson }};
+const deviceDaily = {{ data.matomo_device_daily | tojson }};
+const deviceOs = {{ data.matomo_device_os | tojson }};
+
+// ── Intersection Observer ──
+const obs = new IntersectionObserver(es => es.forEach(e => { if(e.isIntersecting) e.target.classList.add('visible'); }), {threshold:.1});
+document.querySelectorAll('.slide').forEach(el => obs.observe(el));
+
+// ── Chart.js defaults ──
+Chart.defaults.color = '#94a3b8';
+Chart.defaults.borderColor = 'rgba(255,255,255,.06)';
+Chart.defaults.font.family = 'Inter';
+
+// Net Revenue
+if(overview.length) {
+    new Chart(document.getElementById('netRevenueChart'), {
+        type:'bar',
+        data: {
+            labels: overview.map(r => r.dt.slice(5)),
+            datasets: [{
+                label:'净收入', data: overview.map(r => r.recharge - r.withdraw),
+                backgroundColor: overview.map(r => (r.recharge-r.withdraw) > 500000 ? 'rgba(34,197,94,.7)' : 'rgba(6,182,212,.5)'),
+                borderRadius:6,
+            }]
+        },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+            scales:{y:{ticks:{callback:v=>'₹'+(v/1000).toFixed(0)+'K'}}} }
+    });
+
+    new Chart(document.getElementById('activePlayersChart'), {
+        type:'line',
+        data: {
+            labels: overview.map(r => r.dt.slice(5)),
+            datasets: [{
+                label:'活跃玩家', data: overview.map(r => r.active_players),
+                borderColor:'#6366f1', backgroundColor:'rgba(99,102,241,.1)',
+                fill:true, tension:.4, pointRadius:4,
+            }]
+        },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}} }
+    });
+}
+
+// Hourly Heatmap + Chart
+if(hourlyData && hourlyData.length) {
+    const hm = document.getElementById('heatmap');
+    if(hm) {
+        const maxV = Math.max(...hourlyData.map(d=>d.visits));
+        const minV = Math.min(...hourlyData.map(d=>d.visits));
+        hourlyData.forEach(d => {
+            const cell = document.createElement('div');
+            cell.className = 'hm-cell';
+            const intensity = (d.visits - minV) / (maxV - minV);
+            const r = Math.round(99 + (236-99)*intensity);
+            const g = Math.round(102 + (72-102)*intensity);
+            const b = Math.round(241 + (153-241)*intensity);
+            cell.style.background = `rgba(${r},${g},${b},${.3+intensity*.6})`;
+            cell.setAttribute('data-tip', `${d.hour_of_day}:00 — ${d.visits.toLocaleString()} visits, ${d.avg_duration_sec}s`);
+            cell.textContent = d.hour_of_day;
+            hm.appendChild(cell);
+        });
+    }
+
+    new Chart(document.getElementById('hourlyEngagement'), {
+        type:'bar',
+        data: {
+            labels: hourlyData.map(d => d.hour_of_day+':00'),
+            datasets: [
+                { label:'会话时长(s)', data:hourlyData.map(d=>d.avg_duration_sec),
+                  backgroundColor:hourlyData.map(d=> d.avg_duration_sec>360?'rgba(99,102,241,.8)': d.avg_duration_sec>320?'rgba(99,102,241,.5)':'rgba(99,102,241,.3)'),
+                  borderRadius:3, yAxisID:'y' },
+                { label:'访问量', data:hourlyData.map(d=>d.visits), type:'line',
+                  borderColor:'#ec4899', backgroundColor:'transparent', tension:.4, pointRadius:2, yAxisID:'y1' }
+            ]
+        },
+        options: { responsive:true, maintainAspectRatio:false,
+            plugins:{legend:{position:'bottom',labels:{boxWidth:12}}},
+            scales:{ y:{position:'left',title:{display:true,text:'时长(s)'}}, y1:{position:'right',grid:{display:false},title:{display:true,text:'访问量'}} }
+        }
+    });
+}
+
+// Top Games
+if(topGames && topGames.length) {
+    new Chart(document.getElementById('topGamesChart'), {
+        type:'bar',
+        data: {
+            labels: topGames.slice(0,10).map(r => '#'+r.game_id+' '+catNames[r.game_category]),
+            datasets: [{ label:'投注额', data:topGames.slice(0,10).map(r=>r.total_bet),
+                backgroundColor:['rgba(99,102,241,.8)','rgba(99,102,241,.7)','rgba(6,182,212,.7)','rgba(6,182,212,.6)','rgba(236,72,153,.6)','rgba(236,72,153,.5)','rgba(245,158,11,.6)','rgba(245,158,11,.5)','rgba(34,197,94,.5)','rgba(34,197,94,.4)'],
+                borderRadius:6 }]
+        },
+        options: { indexAxis:'y', responsive:true, maintainAspectRatio:false,
+            plugins:{legend:{display:false}},
+            scales:{x:{ticks:{callback:v=>'₹'+(v/1000000).toFixed(1)+'M'}}} }
+    });
+}
+
+// Category Trend
+if(catDaily && catDaily.length) {
+    const dates = [...new Set(catDaily.map(r=>r.dt))].sort();
+    const cats = [...new Set(catDaily.map(r=>r.game_category))];
+    const colors = {'1':'#ec4899','2':'#22c55e','3':'#ef4444','4':'#f59e0b','5':'#6366f1','6':'#06b6d4'};
+    new Chart(document.getElementById('categoryTrendChart'), {
+        type:'line',
+        data: {
+            labels: dates.map(d=>d.slice(5)),
+            datasets: cats.map(c => ({
+                label: catNames[c]||('Cat'+c),
+                data: dates.map(d => { const r = catDaily.find(x=>x.dt===d && x.game_category==c); return r?r.total_bet:0; }),
+                borderColor: colors[c]||'#94a3b8', tension:.3, pointRadius:3,
+            }))
+        },
+        options: { responsive:true, maintainAspectRatio:false,
+            plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:10}}}},
+            scales:{y:{ticks:{callback:v=>'₹'+(v/1000000).toFixed(0)+'M'}}} }
+    });
+}
+
+// Retention
+if(retention && retention.length) {
+    const validRet = retention.filter(r => r.retention_pct > 0);
+    new Chart(document.getElementById('retentionChart'), {
+        type:'line',
+        data: {
+            labels: validRet.map(r=>r.day1.slice(5)),
+            datasets: [{
+                label:'D1 留存率', data:validRet.map(r=>r.retention_pct),
+                borderColor:'#22c55e', backgroundColor:'rgba(34,197,94,.1)',
+                fill:true, tension:.4, pointRadius:5,
+                pointBackgroundColor: validRet.map(r => r.retention_pct < 54 ? '#ef4444' : '#22c55e'),
+            }]
+        },
+        options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
+            scales:{y:{min:50,max:60,ticks:{callback:v=>v+'%'}}} }
+    });
+}
+
+// Cash Flow
+if(overview.length) {
+    new Chart(document.getElementById('cashFlowChart'), {
+        type:'bar',
+        data:{
+            labels:overview.map(r=>r.dt.slice(5)),
+            datasets:[
+                {label:'充值',data:overview.map(r=>r.recharge),backgroundColor:'rgba(34,197,94,.6)',borderRadius:4},
+                {label:'提现',data:overview.map(r=>-r.withdraw),backgroundColor:'rgba(239,68,68,.5)',borderRadius:4},
+            ]
+        },
+        options:{responsive:true,maintainAspectRatio:false,
+            plugins:{legend:{position:'bottom',labels:{boxWidth:12}}},
+            scales:{x:{stacked:true},y:{ticks:{callback:v=>'₹'+(Math.abs(v)/1000000).toFixed(1)+'M'}}}}
+    });
+}
+
+// Device Trend
+if(deviceDaily && deviceDaily.length) {
+    const dLabels = deviceDaily.map(r=>r.dt.slice(5));
+
+    new Chart(document.getElementById('deviceTrendChart'), {
+        type:'line',
+        data:{
+            labels:dLabels,
+            datasets:[
+                {label:'手機',data:deviceDaily.map(r=>r.smartphone),borderColor:'#6366f1',backgroundColor:'rgba(99,102,241,.08)',fill:true,tension:.4,pointRadius:4},
+                {label:'桌面',data:deviceDaily.map(r=>r.desktop),borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,.08)',fill:true,tension:.4,pointRadius:3},
+                {label:'平板',data:deviceDaily.map(r=>r.tablet),borderColor:'#ec4899',backgroundColor:'transparent',tension:.4,pointRadius:2,borderDash:[5,3]},
+            ]
+        },
+        options:{responsive:true,maintainAspectRatio:false,
+            plugins:{legend:{position:'bottom',labels:{boxWidth:12}}},
+            scales:{y:{ticks:{callback:v=>(v/1000).toFixed(0)+'K'}}}}
+    });
+
+    new Chart(document.getElementById('osTrendChart'), {
+        type:'line',
+        data:{
+            labels:dLabels,
+            datasets:[
+                {label:'Android',data:deviceDaily.map(r=>r.android),borderColor:'#22c55e',backgroundColor:'rgba(34,197,94,.08)',fill:true,tension:.4,pointRadius:4},
+                {label:'iOS',data:deviceDaily.map(r=>r.ios),borderColor:'#06b6d4',backgroundColor:'rgba(6,182,212,.08)',fill:true,tension:.4,pointRadius:4},
+            ]
+        },
+        options:{responsive:true,maintainAspectRatio:false,
+            plugins:{legend:{position:'bottom',labels:{boxWidth:12}}},
+            scales:{y:{ticks:{callback:v=>(v/1000).toFixed(0)+'K'}}}}
+    });
+
+    if(deviceOs && deviceOs.length) {
+        const top5 = deviceOs.slice(0, 5);
+        const otherPct = 100 - top5.reduce((s,r)=>s+r.pct, 0);
+        const donutColors = ['#22c55e','#06b6d4','#3b82f6','#f59e0b','#ec4899','#64748b'];
+        new Chart(document.getElementById('osDonutChart'), {
+            type:'doughnut',
+            data:{
+                labels:[...top5.map(r=>r.os_name), otherPct > 0.5 ? 'Other' : ''],
+                datasets:[{
+                    data:[...top5.map(r=>r.pct), Math.max(0, otherPct)],
+                    backgroundColor:donutColors,
+                    borderWidth:0,
+                }]
+            },
+            options:{responsive:true,maintainAspectRatio:false,
+                plugins:{legend:{position:'bottom',labels:{boxWidth:12,font:{size:11},padding:16}},
+                tooltip:{callbacks:{label:ctx=>ctx.label+': '+ctx.parsed+'%'}}},
+                cutout:'55%'}
+        });
+    }
+}
+</script>
+</body>
+</html>

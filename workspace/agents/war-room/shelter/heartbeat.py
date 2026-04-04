@@ -42,6 +42,59 @@ hour = now.hour
 weekday = now.weekday()  # 0=Monday, 6=Sunday
 
 
+# ── Ambient mood derivation ──────────────────────────────────────
+
+def _derive_mood(doing: str) -> str:
+    """Map Cruz's activity to a cafe mood for ambient reactions."""
+    doing_lower = doing.lower()
+    if any(k in doing_lower for k in ["會議", "meeting", "開會"]):
+        return "busy"
+    if any(k in doing_lower for k in ["下班", "休息", "睡"]):
+        return "rest"
+    if any(k in doing_lower for k in ["開發", "coding", "寫code", "重構"]):
+        return "deep_work"
+    if any(k in doing_lower for k in ["教學", "上課", "lecture"]):
+        return "teaching"
+    return "present"
+
+# ── Harvest Echo ─────────────────────────────────────────────────
+
+def _run_harvest_echo():
+    """Run harvest-echo.js --source git to update creator-state.json.
+
+    Only runs once per hour (checks last run time).
+    """
+    import subprocess, time
+
+    HARVEST_SCRIPT = "/Users/sulaxd/Documents/thinker_official_website/projects/website/scripts/cafe-pipeline/harvest-echo.js"
+    MARKER = "/tmp/harvest-echo-last-run"
+
+    # Check if we ran in the last hour
+    try:
+        if os.path.exists(MARKER):
+            last_run = os.path.getmtime(MARKER)
+            if time.time() - last_run < 3600:  # 1 hour
+                return
+    except Exception:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["node", HARVEST_SCRIPT, "--source", "git"],
+            capture_output=True, text=True, timeout=120,
+            cwd=os.path.dirname(HARVEST_SCRIPT),
+        )
+        if result.returncode == 0:
+            # Touch marker
+            with open(MARKER, 'w') as f:
+                f.write(str(time.time()))
+            print(f"[harvest-echo] OK: {result.stdout[:200]}")
+        else:
+            print(f"[harvest-echo] FAIL: {result.stderr[:200]}")
+    except Exception as e:
+        print(f"[harvest-echo] ERROR: {e}")
+
+
 # ── Beat counter ──────────────────────────────────────────────────
 
 def _load_beat_state() -> dict:
@@ -92,19 +145,17 @@ def layer0_vital_signs() -> dict:
         status["gateway"] = False
         _act(f"[L0] Gateway unreachable: {e}")
 
-    # Ollama
+    # Ollama — optional (nen-bridge now uses GLM cloud, Ollama not required)
     try:
         result = subprocess.run(
             ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:11434/api/tags"],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=3
         )
         ol_code = result.stdout.strip()
         status["ollama"] = ol_code == "200"
-        if ol_code != "200":
-            _act(f"[L0] Ollama DOWN (HTTP {ol_code})")
-    except Exception as e:
+        # Not a critical failure — just note it
+    except Exception:
         status["ollama"] = False
-        _act(f"[L0] Ollama unreachable: {e}")
 
     # Guardian threat score
     try:
@@ -1005,6 +1056,68 @@ def main():
         )
     except Exception:
         pass  # Non-critical
+
+    # ── Export cafe-notebook JSON (for notebook.js 晨報 Tab) ──
+    try:
+        notebook_data = {
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M"),
+            "beat": beat_n,
+            "status": "quiet" if not _actions else "active",
+            "guardian_mode": l0_status.get("guardian_mode", "unknown"),
+            "guardian_score": l0_status.get("guardian_score", 0),
+            "evo_phase": l0_status.get("evo_phase", -1),
+            "threads_unreplied": perception_result.get("threads", {}).get("unreplied", 0),
+            "cpu_load": l0_status.get("cpu_load", 0),
+            "gateway": l0_status.get("gateway", False),
+            "ollama": l0_status.get("ollama", False),
+            "actions": _actions[:10],
+            "generated_at": now.isoformat(),
+        }
+        # Write to shelter data
+        notebook_json_path = DATA_DIR / "notebook-briefing.json"
+        notebook_json_path.write_text(json.dumps(notebook_data, ensure_ascii=False, indent=2))
+        # Also copy to cafe-game data dir for Vercel access
+        cafe_data_dir = Path("/Users/sulaxd/Documents/thinker_official_website/projects/website/public/cafe-game/data")
+        if cafe_data_dir.exists():
+            (cafe_data_dir / "briefing.json").write_text(json.dumps(notebook_data, ensure_ascii=False, indent=2))
+            # Also copy latest morning brief (deep news) to cafe-morning.json
+            try:
+                import glob
+                briefs = sorted(glob.glob(str(Path.home() / "clawd/workspace/memory/morning-brief-*.md")))
+                if briefs:
+                    latest_brief = Path(briefs[-1])
+                    brief_text = latest_brief.read_text().strip()
+                    # Extract date from filename: morning-brief-YYYY-MM-DD.md
+                    brief_date = latest_brief.stem.replace("morning-brief-", "")
+                    morning_json = {"date": brief_date, "content": brief_text, "source": "morning-brief"}
+                    (cafe_data_dir / "cafe-morning.json").write_text(json.dumps(morning_json, ensure_ascii=False, indent=2))
+            except Exception:
+                pass
+            # Write ambient state from shared_brain for Cafe OS
+            try:
+                import sqlite3 as _sql3
+                _brain_db = Path.home() / "clawd/workspace/shared_brain/brain.db"
+                if _brain_db.exists():
+                    _conn = _sql3.connect(str(_brain_db))
+                    _row = _conn.execute("SELECT doing, [where], who_with, updated_at FROM state ORDER BY updated_at DESC LIMIT 1").fetchone()
+                    _conn.close()
+                    if _row:
+                        _ambient = {
+                            "doing": _row[0] or "unknown",
+                            "where": _row[1] or "unknown",
+                            "with": _row[2] or "",
+                            "updated_at": _row[3] or "",
+                            "mood": _derive_mood(_row[0] or ""),
+                            "generated_at": now.isoformat(),
+                        }
+                        (cafe_data_dir / "ambient-state.json").write_text(json.dumps(_ambient, ensure_ascii=False, indent=2))
+            except Exception:
+                pass
+    except Exception:
+        pass  # Non-critical
+
+    _run_harvest_echo()
 
     # ── Summary line ──
     action_summary = "; ".join(_actions) if _actions else "quiet"

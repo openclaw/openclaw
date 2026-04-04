@@ -282,6 +282,26 @@ class Sentinel:
                 "risk": "high", "action": "notify",
             })
 
+        # Audio input delta
+        audio_cfg = actual.get("details", {}).get("system", {}).get("audio_input", {})
+        if not audio_cfg.get("is_correct", False):
+            current = audio_cfg.get("device", "unknown")
+            expected = "MacBook Pro的麥克風"
+            deltas.append({
+                "kind": "system", "name": "audio_input",
+                "issue": "wrong_device",
+                "desired": expected,
+                "actual": current,
+                "risk": "low",  # low risk = auto-repair with backoff
+                "action": "fix_audio_input",
+                "repair_cfg": {
+                    "method": "fix_audio_input",
+                    "backoff": 60,  # 60s backoff between repairs
+                    "cap": 300,  # max 5min
+                    "max_retries": 10,
+                },
+            })
+
         return deltas
 
     def _act(self, deltas):
@@ -398,9 +418,14 @@ class Sentinel:
         label = delta.get("label", "")
         method = delta.get("action", "kickstart")
         self.logger.info("[Reconcile] auto-repair %s (attempt %d): %s %s",
-                         dkey, bo["retries"] + 1, method, label)
+                         dkey, bo["retries"] +1, method, label)
 
-        success = execute_repair(label, method)
+        # Special handling for audio input repair
+        if method == "fix_audio_input":
+            from lib.reconciler import execute_audio_repair
+            success = execute_audio_repair()
+        else:
+            success = execute_repair(label, method)
 
         bo["retries"] = bo["retries"] + 1
         if success:
@@ -1017,6 +1042,7 @@ class Sentinel:
             "api_errors": self._get_api_error_stats(),
             "river": self._get_river_stats(),
             "matomo_health": self.state["sentinel"].get("matomo_health", {}),
+            "bioCorpus": self._get_bio_corpus(),
         }
         js_path = BASE / "dashboard-state.js"
         tmp = js_path.with_suffix(".js.tmp")
@@ -1200,6 +1226,27 @@ class Sentinel:
         except Exception as e:
             self.logger.warning("river stats failed: %s", e)
             return None
+
+    def _get_bio_corpus(self):
+        """Collect 5 bio-metrics mapped to chakra system."""
+        try:
+            import importlib.util
+            script = BASE.parent / "workspace" / "scripts" / "bio_corpus_sync.py"
+            spec = importlib.util.spec_from_file_location("bio_corpus_sync", str(script))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod.collect_bio_corpus()
+        except Exception as e:
+            self.logger.warning("bioCorpus sync failed: %s", e)
+            return {
+                "updated_at": datetime.now().isoformat(),
+                "hormone": {"chakra": "muladhara", "label": "Hormone", "score": 0, "status": "error"},
+                "nerve": {"chakra": "svadhisthana", "label": "Nerve", "score": 0, "status": "error"},
+                "threads": {"chakra": "manipura", "label": "Threads", "score": 0, "status": "error"},
+                "shadow_clone": {"chakra": "vishuddhi", "label": "ShadowClone", "score": 0, "status": "error"},
+                "memory": {"chakra": "sahasrara", "label": "Memory", "score": 0, "status": "error"},
+                "maturity": {"level": "M0", "overall": 0},
+            }
 
     def _get_api_error_stats(self):
         """Parse gateway logs for API errors (overloaded, auth, failover)."""

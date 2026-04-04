@@ -1,0 +1,254 @@
+# BG666 Deep Analytics Report — Data Definitions
+# Used by report_gen.py to query data + render HTML
+
+report:
+  title: "BG666 深度分析"
+  subtitle: "页面停留 · 游戏偏好 · 留存优化"
+
+# ── Data Queries ──────────────────────────────────────────
+# Each query runs against either 'local' (SQLite) or 'matomo' (MySQL via tunnel)
+# {date_end} = report date, {date_start} = date_end - range_days
+
+queries:
+  # ── Overview ──
+  daily_overview:
+    db: local
+    sql: |
+      SELECT statistics_day AS dt,
+        COUNT(DISTINCT player_id) AS active_players,
+        ROUND(SUM(CAST(recharge_amount AS REAL)), 2) AS recharge,
+        ROUND(SUM(CAST(withdraw_amount AS REAL)), 2) AS withdraw,
+        ROUND(SUM(CAST(bet_amount AS REAL)), 2) AS bet,
+        ROUND(SUM(CAST(profit_amount AS REAL)), 2) AS profit
+      FROM player_statistics_day
+      WHERE statistics_day >= '{date_start}' AND statistics_day < '{date_end}'
+      GROUP BY statistics_day ORDER BY statistics_day
+
+  # ── Game Categories ──
+  game_categories:
+    db: local
+    sql: |
+      SELECT game_category,
+        COUNT(DISTINCT player_id) AS players,
+        SUM(CAST(bet_num AS INTEGER)) AS total_bets,
+        ROUND(SUM(CAST(bet_amount AS REAL)), 2) AS total_bet,
+        ROUND(SUM(CAST(effective_amount AS REAL)), 2) AS total_valid,
+        ROUND(SUM(CAST(profit_amount AS REAL)), 2) AS total_profit,
+        ROUND(SUM(CAST(win_amount AS REAL)), 2) AS total_win,
+        ROUND(SUM(CAST(bet_amount AS REAL)) / COUNT(DISTINCT player_id), 2) AS arpu
+      FROM player_game_statistics
+      WHERE statistics_day >= '{date_start}' AND statistics_day < '{date_end}'
+      GROUP BY game_category ORDER BY total_bet DESC
+
+  game_category_daily:
+    db: local
+    sql: |
+      SELECT statistics_day AS dt, game_category,
+        COUNT(DISTINCT player_id) AS players,
+        ROUND(SUM(CAST(bet_amount AS REAL)), 2) AS total_bet
+      FROM player_game_statistics
+      WHERE statistics_day >= '{date_start}' AND statistics_day < '{date_end}'
+      GROUP BY statistics_day, game_category
+      ORDER BY statistics_day, total_bet DESC
+
+  top_games:
+    db: remote
+    sql: |
+      SELECT game_id, game_category,
+        COUNT(DISTINCT player_id) AS players,
+        SUM(bet_num) AS total_bets,
+        ROUND(SUM(bet_amount), 2) AS total_bet,
+        ROUND(SUM(profit_amount), 2) AS total_profit
+      FROM player_game_statistics
+      WHERE statistics_day >= '{date_start}' AND statistics_day < '{date_end}'
+      GROUP BY game_id, game_category
+      ORDER BY total_bet DESC LIMIT 15
+
+  # ── Player Segmentation ──
+  player_segments:
+    db: local
+    sql: |
+      SELECT
+        CASE
+          WHEN CAST(bet_amount AS REAL) >= 100000 THEN 'VIP (100K+)'
+          WHEN CAST(bet_amount AS REAL) >= 10000 THEN 'High (10K-100K)'
+          WHEN CAST(bet_amount AS REAL) >= 1000 THEN 'Mid (1K-10K)'
+          WHEN CAST(bet_amount AS REAL) > 0 THEN 'Low (<1K)'
+          ELSE 'Inactive'
+        END AS segment,
+        COUNT(DISTINCT player_id) AS players,
+        ROUND(SUM(CAST(bet_amount AS REAL)), 2) AS total_bet,
+        ROUND(SUM(CAST(recharge_amount AS REAL)), 2) AS total_recharge,
+        ROUND(SUM(CAST(withdraw_amount AS REAL)), 2) AS total_withdraw,
+        ROUND(SUM(CAST(profit_amount AS REAL)), 2) AS total_profit
+      FROM player_statistics_day
+      WHERE statistics_day >= '{date_start}' AND statistics_day < '{date_end}'
+      GROUP BY segment ORDER BY total_bet DESC
+
+  cross_category:
+    db: local
+    sql: |
+      WITH player_cats AS (
+        SELECT player_id, COUNT(DISTINCT game_category) AS cat_count,
+          SUM(CAST(bet_amount AS REAL)) AS total_bet
+        FROM player_game_statistics
+        WHERE statistics_day >= '{date_start}' AND statistics_day < '{date_end}'
+        GROUP BY player_id
+      )
+      SELECT cat_count AS games_played,
+        COUNT(*) AS players,
+        ROUND(AVG(total_bet), 2) AS avg_bet,
+        ROUND(SUM(total_bet), 2) AS total_bet
+      FROM player_cats
+      GROUP BY cat_count ORDER BY cat_count
+
+  # ── Retention ──
+  retention_d1:
+    db: local
+    sql: |
+      WITH daily_players AS (
+        SELECT DISTINCT player_id, statistics_day
+        FROM player_statistics_day
+        WHERE statistics_day >= '{date_start}' AND statistics_day < '{date_end}'
+        AND CAST(bet_amount AS REAL) > 0
+      )
+      SELECT d1.statistics_day AS day1,
+        COUNT(DISTINCT d1.player_id) AS active_d1,
+        COUNT(DISTINCT d2.player_id) AS returned_d2,
+        ROUND(COUNT(DISTINCT d2.player_id) * 100.0 / COUNT(DISTINCT d1.player_id), 1) AS retention_pct
+      FROM daily_players d1
+      LEFT JOIN daily_players d2
+        ON d1.player_id = d2.player_id
+        AND d2.statistics_day = DATE(d1.statistics_day, '+1 day')
+      GROUP BY d1.statistics_day ORDER BY d1.statistics_day
+
+  # ── Bonus ──
+  bonus_breakdown:
+    db: local
+    sql: |
+      SELECT change_type,
+        COUNT(*) AS cnt,
+        COUNT(DISTINCT player_id) AS players,
+        ROUND(SUM(CAST(change_amount AS REAL)), 2) AS total_amount,
+        ROUND(AVG(CAST(change_amount AS REAL)), 2) AS avg_amount
+      FROM player_change_record
+      WHERE change_type IN ('1','5','6','17','18','19','23','28','35','48','54','71','84','85','86')
+      AND create_time >= '{date_start}' AND create_time < '{date_end}'
+      GROUP BY change_type ORDER BY total_amount DESC
+
+  # ── Matomo ──
+  matomo_domains:
+    db: matomo
+    sql: |
+      SET SESSION tmp_table_size = 268435456;
+      SET SESSION max_heap_table_size = 268435456;
+      SELECT SUBSTRING_INDEX(la.name, '/', 1) AS domain,
+        COUNT(DISTINCT lva.idvisit) AS visits,
+        COUNT(*) AS actions,
+        ROUND(COUNT(*) / COUNT(DISTINCT lva.idvisit), 1) AS actions_per_visit
+      FROM matomo_log_link_visit_action lva
+      JOIN matomo_log_action la ON lva.idaction_url = la.idaction
+      WHERE lva.server_time >= '{date_start}' AND lva.server_time < '{date_end}'
+      GROUP BY domain
+      ORDER BY visits DESC
+      LIMIT 20
+
+  matomo_sessions:
+    db: matomo
+    sql: |
+      SELECT idsite, COUNT(*) AS visits,
+        ROUND(AVG(visit_total_time), 1) AS avg_session_sec,
+        ROUND(AVG(visit_total_actions), 1) AS avg_actions,
+        SUM(CASE WHEN visit_total_actions = 1 THEN 1 ELSE 0 END) AS bounces,
+        ROUND(SUM(CASE WHEN visit_total_actions = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) AS bounce_rate
+      FROM matomo_log_visit
+      WHERE visit_first_action_time >= '{date_start}'
+      GROUP BY idsite ORDER BY visits DESC LIMIT 5
+
+  matomo_hourly:
+    db: matomo
+    sql: |
+      SELECT HOUR(visit_first_action_time) AS hour_of_day,
+        COUNT(*) AS visits,
+        ROUND(AVG(visit_total_time), 1) AS avg_duration_sec,
+        ROUND(AVG(visit_total_actions), 1) AS avg_actions
+      FROM matomo_log_visit
+      WHERE visit_first_action_time >= '{date_start}'
+      GROUP BY HOUR(visit_first_action_time)
+      ORDER BY hour_of_day
+
+  matomo_device_daily:
+    db: matomo
+    sql: |
+      SELECT DATE(visit_last_action_time) AS dt,
+        SUM(CASE WHEN config_device_type = 0 THEN 1 ELSE 0 END) AS desktop,
+        SUM(CASE WHEN config_device_type IN (1, 10) THEN 1 ELSE 0 END) AS smartphone,
+        SUM(CASE WHEN config_device_type = 2 THEN 1 ELSE 0 END) AS tablet,
+        SUM(CASE WHEN config_os = 'IOS' AND config_device_type = 1 THEN 1 ELSE 0 END) AS ios,
+        SUM(CASE WHEN config_os = 'AND' AND config_device_type IN (1, 10) THEN 1 ELSE 0 END) AS android,
+        COUNT(*) AS total
+      FROM matomo_log_visit FORCE INDEX (index_idsite_datetime)
+      WHERE idsite = 1
+        AND visit_last_action_time >= '{date_start}' AND visit_last_action_time < '{date_end}'
+        AND config_client_type = 1
+      GROUP BY dt
+      ORDER BY dt
+
+  matomo_device_os:
+    db: matomo
+    sql: |
+      SELECT
+        CASE config_os
+          WHEN 'WIN' THEN 'Windows'
+          WHEN 'MAC' THEN 'macOS'
+          WHEN 'LIN' THEN 'Linux'
+          WHEN 'IOS' THEN 'iOS (iPhone)'
+          WHEN 'AND' THEN 'Android'
+          WHEN 'IPA' THEN 'iPadOS'
+          WHEN 'COS' THEN 'ChromeOS'
+          WHEN 'UBT' THEN 'Ubuntu'
+          WHEN 'KOS' THEN 'KaiOS'
+          ELSE config_os
+        END AS os_name,
+        config_os AS os_code,
+        COUNT(*) AS visits,
+        ROUND(AVG(visit_total_time), 1) AS avg_duration_sec,
+        ROUND(AVG(visit_total_actions), 1) AS avg_actions,
+        SUM(CASE WHEN visit_total_actions = 1 THEN 1 ELSE 0 END) AS bounces
+      FROM matomo_log_visit FORCE INDEX (index_idsite_datetime)
+      WHERE idsite = 1
+        AND visit_last_action_time >= '{date_start}' AND visit_last_action_time < '{date_end}'
+        AND config_client_type = 1
+      GROUP BY config_os
+      ORDER BY visits DESC
+
+# ── Reference Data ──
+game_category_names:
+  1: "真人/Live"
+  2: "体育/Sports"
+  3: "电竞/eSports"
+  4: "棋牌/Chess"
+  5: "彩票/Lottery"
+  6: "老虎机/Slots"
+
+bonus_type_names:
+  1: "充值"
+  5: "后台加币"
+  6: "会员加币"
+  17: "每日任务"
+  18: "VIP礼金"
+  19: "邀请奖励"
+  23: "救济金"
+  28: "代理转账"
+  35: "代理佣金"
+  48: "活动充值"
+  54: "转盘奖励"
+  71: "VIP月礼金"
+  84: "红包奖励"
+  85: "签到奖励"
+  86: "新人签到"
+
+# ── Report Defaults ──
+defaults:
+  range_days: 7
+  output_dir: "~/Downloads/Telegram Desktop"
