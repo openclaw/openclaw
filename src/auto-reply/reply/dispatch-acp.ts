@@ -232,15 +232,11 @@ export type AcpDispatchAttemptResult = {
 
 const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 
-function isStaleSessionInitError(params: { code: string; message: string }): boolean {
-  return isAcpStaleSessionError(params);
-}
-
 async function maybeUnbindStaleBoundConversations(params: {
   targetSessionKey: string;
   error: { code: string; message: string };
 }): Promise<void> {
-  if (!isStaleSessionInitError(params.error)) {
+  if (!isAcpStaleSessionError(params.error)) {
     return;
   }
   try {

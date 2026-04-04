@@ -737,6 +737,35 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("does not unbind valid bindings on ACP turn-time resource errors", async () => {
+    const aliasSessionKey = "main";
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta(),
+    });
+    const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new FreshAcpRuntimeError("ACP_TURN_FAILED", "Resource not found: tool output artifact"),
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      sessionKeyOverride: aliasSessionKey,
+    });
+
+    expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("Resource not found: tool output artifact"),
+      }),
+    );
+  });
+
   it("unbinds stale bindings on ACP runTurn missing-cwd failures", async () => {
     const aliasSessionKey = "main";
     const canonicalSessionKey = "agent:main:main";
