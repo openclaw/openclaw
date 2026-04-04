@@ -92,10 +92,29 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
-    summarize: (item) => getFollowupSummaryLine(item) ?? "[Hidden message]",
+    summarize: (item) =>
+      getFollowupSummaryLine(item) ?? getFollowupAgentPrompt(item) ?? "[Hidden message]", 
   });
   if (!shouldEnqueue) {
     return false;
+  }
+
+  if (run.messageId?.trim()) {
+    const sameMessageTarget = queue.items.find(
+      (item) =>
+        item.messageId?.trim() === run.messageId?.trim() &&
+        item.originatingChannel === run.originatingChannel &&
+        item.originatingTo === run.originatingTo &&
+        item.originatingAccountId === run.originatingAccountId &&
+        item.originatingThreadId === run.originatingThreadId,
+    );
+    if (sameMessageTarget) {
+      sameMessageTarget.execution = run.execution;
+      sameMessageTarget.display = run.display;
+      sameMessageTarget.enqueuedAt = run.enqueuedAt;
+      sameMessageTarget.run = run.run;
+      return true;
+    }
   }
 
   queue.items.push(run);

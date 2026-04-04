@@ -89,7 +89,7 @@ export function scheduleFollowupDrain(
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
   void (async () => {
     try {
-      const collectState = { forceIndividualCollect: queue.collectForceIndividual };
+      const collectState = { forceIndividualCollect: false };
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
