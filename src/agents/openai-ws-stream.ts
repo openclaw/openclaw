@@ -30,6 +30,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import * as piAi from "@mariozechner/pi-ai";
 import {
+  getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,
   type FunctionToolDefinition,
   type OpenAIWebSocketManagerOptions,
@@ -231,6 +232,37 @@ function resetWsSession(params: { sessionId: string; session: WsSession }): void
   wsRegistry.delete(params.sessionId);
 }
 
+function formatOpenAIWebSocketError(
+  event: Parameters<OpenAIWebSocketManager["onMessage"]>[0] extends (arg: infer T) => void
+    ? Extract<T, { type: "error" }>
+    : never,
+): string {
+  const details = getOpenAIWebSocketErrorDetails(event);
+  const code = details.code ?? "unknown";
+  const message = details.message ?? "Unknown error";
+  const extras = [
+    typeof details.status === "number" ? `status=${details.status}` : null,
+    details.type ? `type=${details.type}` : null,
+    details.param ? `param=${details.param}` : null,
+  ].filter(Boolean);
+  return extras.length > 0
+    ? `${message} (code=${code}; ${extras.join(", ")})`
+    : `${message} (code=${code})`;
+}
+
+function formatOpenAIWebSocketResponseFailure(response: {
+  error?: { code?: string; message?: string };
+  incomplete_details?: { reason?: string };
+}): string {
+  if (response.error) {
+    return `${response.error.code || "unknown"}: ${response.error.message || "no message"}`;
+  }
+  if (response.incomplete_details?.reason) {
+    return `incomplete: ${response.incomplete_details.reason}`;
+  }
+  return "Unknown error (no error details in response)";
+}
+
 async function runWarmUp(params: {
   manager: OpenAIWebSocketManager;
   modelId: string;
@@ -261,11 +293,12 @@ async function runWarmUp(params: {
         resolve();
       } else if (event.type === "response.failed") {
         cleanup();
-        const errMsg = event.response?.error?.message ?? "Response failed";
-        reject(new Error(`warm-up failed: ${errMsg}`));
+        reject(
+          new Error(`warm-up failed: ${formatOpenAIWebSocketResponseFailure(event.response)}`),
+        );
       } else if (event.type === "error") {
         cleanup();
-        reject(new Error(`warm-up error: ${event.message} (code=${event.code})`));
+        reject(new Error(`warm-up error: ${formatOpenAIWebSocketError(event)}`));
       }
     });
 
@@ -609,11 +642,14 @@ export function createOpenAIWebSocketStreamFn(
               resolve();
             } else if (event.type === "response.failed") {
               cleanup();
-              const errMsg = event.response?.error?.message ?? "Response failed";
-              reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
+              reject(
+                new Error(
+                  `OpenAI WebSocket response failed: ${formatOpenAIWebSocketResponseFailure(event.response)}`,
+                ),
+              );
             } else if (event.type === "error") {
               cleanup();
-              reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
+              reject(new Error(`OpenAI WebSocket error: ${formatOpenAIWebSocketError(event)}`));
             } else if (event.type === "response.output_text.delta") {
               // Stream partial text updates for responsive UI
               const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
