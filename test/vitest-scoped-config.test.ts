@@ -7,6 +7,7 @@ import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
 import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
+import { createExtensionChannelsVitestConfig } from "../vitest.extension-channels.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
@@ -69,6 +70,7 @@ describe("scoped vitest configs", () => {
   const defaultChannelsConfig = createChannelsVitestConfig({});
   const defaultAcpConfig = createAcpVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
+  const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
   const defaultGatewayConfig = createGatewayVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
@@ -78,6 +80,13 @@ describe("scoped vitest configs", () => {
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
     expect(defaultChannelsConfig.test?.pool).toBe("forks");
+  });
+
+  it("keeps the core channel lane limited to non-extension roots", () => {
+    expect(defaultChannelsConfig.test?.include).toEqual([
+      "src/browser/**/*.test.ts",
+      "src/line/**/*.test.ts",
+    ]);
   });
 
   it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
@@ -110,6 +119,17 @@ describe("scoped vitest configs", () => {
   it("defaults extension tests to non-isolated mode", () => {
     expect(defaultExtensionsConfig.test?.isolate).toBe(false);
     expect(defaultExtensionsConfig.test?.pool).toBe("forks");
+  });
+
+  it("normalizes extension channel include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionChannelsConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionChannelsConfig.test?.include).toEqual([
+      "discord/**/*.test.ts",
+      "whatsapp/**/*.test.ts",
+      "slack/**/*.test.ts",
+      "signal/**/*.test.ts",
+      "imessage/**/*.test.ts",
+    ]);
   });
 
   it("normalizes extension include patterns relative to the scoped dir", () => {
