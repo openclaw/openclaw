@@ -103,6 +103,9 @@ function resolveStaleSessionEndReason(params: {
     params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
   const staleIdle =
     params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
+  if (staleIdle && staleDaily) {
+    return "adaptive";
+  }
   if (staleIdle) {
     return "idle";
   }
