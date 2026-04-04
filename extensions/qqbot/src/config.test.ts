@@ -5,11 +5,7 @@ import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.j
 import { qqbotPlugin } from "./channel.js";
 import { qqbotSetupPlugin } from "./channel.setup.js";
 import { QQBotConfigSchema } from "./config-schema.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  resolveDefaultQQBotAccountId,
-  resolveQQBotAccount,
-} from "./config.js";
+import { DEFAULT_ACCOUNT_ID, resolveDefaultQQBotAccountId, resolveQQBotAccount } from "./config.js";
 
 describe("qqbot config", () => {
   it("accepts top-level speech overrides in the manifest schema", () => {

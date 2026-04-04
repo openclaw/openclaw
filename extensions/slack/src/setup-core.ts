@@ -166,8 +166,7 @@ export function createSlackSetupWizardBase(handlers: {
       unconfiguredHint: "needs tokens",
       configuredScore: 2,
       unconfiguredScore: 1,
-      resolveConfigured: ({ cfg, accountId }) =>
-        inspectSlackAccount({ cfg, accountId }).configured,
+      resolveConfigured: ({ cfg, accountId }) => inspectSlackAccount({ cfg, accountId }).configured,
     }),
     introNote: {
       title: "Slack socket mode tokens",

@@ -80,10 +80,7 @@ function resolveDiscordPolicyContext(params: ChannelGroupContext) {
     (params.accountId
       ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
       : undefined) ?? params.cfg.channels?.discord?.guilds;
-  const guildEntry = resolveDiscordGuildEntry(
-    guilds,
-    params.groupSpace,
-  );
+  const guildEntry = resolveDiscordGuildEntry(guilds, params.groupSpace);
   const channelEntries = guildEntry?.channels;
   const channelEntry =
     channelEntries && Object.keys(channelEntries).length > 0

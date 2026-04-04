@@ -149,14 +149,9 @@ const dmPolicy: ChannelSetupDmPolicy = {
     resolveBlueBubblesAccount({
       cfg,
       accountId: accountId ?? resolveDefaultBlueBubblesAccountId(cfg),
-    }).config
-      .dmPolicy ?? "pairing",
+    }).config.dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) =>
-    setBlueBubblesDmPolicy(
-      cfg,
-      accountId ?? resolveDefaultBlueBubblesAccountId(cfg),
-      policy,
-    ),
+    setBlueBubblesDmPolicy(cfg, accountId ?? resolveDefaultBlueBubblesAccountId(cfg), policy),
   promptAllowFrom: promptBlueBubblesAllowFrom,
 };
 

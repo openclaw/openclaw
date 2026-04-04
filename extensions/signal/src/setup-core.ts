@@ -140,7 +140,11 @@ export const signalDmPolicy = {
   getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
     resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }).config
       .dmPolicy ?? "pairing",
-  setPolicy: (cfg: OpenClawConfig, policy: "pairing" | "allowlist" | "open" | "disabled", accountId?: string) =>
+  setPolicy: (
+    cfg: OpenClawConfig,
+    policy: "pairing" | "allowlist" | "open" | "disabled",
+    accountId?: string,
+  ) =>
     patchChannelConfigForAccount({
       cfg,
       channel,

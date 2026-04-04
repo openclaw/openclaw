@@ -94,9 +94,7 @@ export function resolveLineAccount(params: {
   accountId?: string;
 }): ResolvedLineAccount {
   const cfg = params.cfg;
-  const accountId = normalizeSharedAccountId(
-    params.accountId ?? resolveDefaultLineAccountId(cfg),
-  );
+  const accountId = normalizeSharedAccountId(params.accountId ?? resolveDefaultLineAccountId(cfg));
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
   const accountConfig =

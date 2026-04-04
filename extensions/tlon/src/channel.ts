@@ -32,7 +32,9 @@ const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.r
 
 const tlonSetupWizardProxy = createTlonSetupWizardBase({
   resolveConfigured: async ({ cfg, accountId }) =>
-    await (await loadTlonChannelRuntime()).tlonSetupWizard.status.resolveConfigured({
+    await (
+      await loadTlonChannelRuntime()
+    ).tlonSetupWizard.status.resolveConfigured({
       cfg,
       accountId,
     }),
