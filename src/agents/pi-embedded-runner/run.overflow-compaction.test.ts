@@ -81,6 +81,24 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     );
   });
 
+  it("passes bootstrap context mode and run kind into run attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-bootstrap-context-passthrough",
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "cron",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "cron",
+      }),
+    );
+  });
+
   it("blocks undersized models before dispatching a provider attempt", async () => {
     mockedResolveContextWindowInfo.mockReturnValue({
       tokens: 800,
