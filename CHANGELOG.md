@@ -11,6 +11,11 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Memory/dreaming (experimental): add weighted short-term recall promotion, managed dreaming modes (`off|core|rem|deep`), a `/dreaming` command, Dreams UI, multilingual conceptual tagging, and doctor/status repair support so durable memory promotion can run in the background with less manual setup. (#60569, #60697)
+- Channels/context visibility: add configurable `contextVisibility` per channel (`all`, `allowlist`, `allowlist_quote`) so supplemental quote, thread, and fetched history context can be filtered by sender allowlists instead of always passing through as received.
+- Matrix/exec approvals: add Matrix-native exec approval prompts with account-scoped approvers, channel-or-DM delivery, and room-thread aware resolution handling. (#58635) Thanks @gumadeiras.
+- Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
+- Providers/config: add `models.providers.*.request` overrides for headers and auth on model-provider paths, and full request transport overrides for media provider HTTP paths.
+- MiniMax/TTS: add a bundled MiniMax speech provider backed by the T2A v2 API so speech synthesis can run through MiniMax-native voices and auth. (#55921) Thanks @duncanita.
 - Control UI/skills: add ClawHub search, detail, and install flows directly in the Skills panel. (#60134) Thanks @samzong.
 - Providers/StepFun: add the bundled StepFun provider plugin with standard and Step Plan endpoints, China/global onboarding choices, `step-3.5-flash` on both catalogs, and `step-3.5-flash-2603` currently exposed on Step Plan. (#60032) Thanks @hengm3467.
 - Providers/Ollama: add a bundled Ollama Web Search provider for key-free `web_search` via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
