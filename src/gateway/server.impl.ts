@@ -41,6 +41,7 @@ import {
   formatPluginInstallPathIssue,
 } from "../infra/plugin-install-path-warnings.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { initSessionCrashRecovery } from "../infra/session-crash-recovery.js";
 import {
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
@@ -547,6 +548,7 @@ export async function startGatewayServer(
   }
 
   initSubagentRegistry();
+  initSessionCrashRecovery();
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
   const deferredConfiguredChannelPluginIds = minimalTestGateway

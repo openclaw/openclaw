@@ -1,4 +1,8 @@
 import {
+  registerActiveSession,
+  unregisterActiveSession,
+} from "../../infra/session-crash-recovery.js";
+import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
@@ -242,6 +246,10 @@ export function setActiveEmbeddedRun(
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }
+  // Register for crash recovery tracking
+  if (sessionKey) {
+    registerActiveSession(sessionKey);
+  }
 }
 
 export function updateActiveEmbeddedRunSnapshot(
@@ -265,6 +273,10 @@ export function clearActiveEmbeddedRun(
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
+    }
+    // Unregister from crash recovery tracking (normal completion)
+    if (sessionKey) {
+      unregisterActiveSession(sessionKey);
     }
     notifyEmbeddedRunEnded(sessionId);
   } else {
