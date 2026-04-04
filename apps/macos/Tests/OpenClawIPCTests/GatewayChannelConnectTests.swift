@@ -63,12 +63,26 @@ struct GatewayChannelConnectTests {
             loopbackConnectChallengeTimeoutSeconds: 0.05)
     }
 
+    private func makeConnectOptions() -> GatewayConnectOptions {
+        GatewayConnectOptions(
+            role: "operator",
+            scopes: ["operator.read"],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "tests.gateway-channel-connect",
+            clientMode: "test",
+            clientDisplayName: "Gateway Channel Connect Tests",
+            includeDeviceIdentity: false)
+    }
+
     @Test func `concurrent connect is single flight on success`() async throws {
         let session = self.makeSession(response: .helloOk(delayMs: 200))
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: self.makeConnectOptions())
 
         let t1 = Task { try await channel.connect() }
         let t2 = Task { try await channel.connect() }
@@ -84,7 +98,8 @@ struct GatewayChannelConnectTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: self.makeConnectOptions())
 
         let t1 = Task { try await channel.connect() }
         let t2 = Task { try await channel.connect() }
@@ -110,7 +125,8 @@ struct GatewayChannelConnectTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: self.makeConnectOptions())
 
         do {
             try await channel.connect()
@@ -143,7 +159,8 @@ struct GatewayChannelConnectTests {
             url: #require(URL(string: "ws://127.0.0.1:18789")),
             token: nil,
             session: WebSocketSessionBox(session: session),
-            timeoutProfile: self.makeChallengeTimeoutProfile())
+            timeoutProfile: self.makeChallengeTimeoutProfile(),
+            connectOptions: self.makeConnectOptions())
 
         try await channel.connect()
         #expect(session.snapshotMakeCount() == 1)
@@ -166,7 +183,8 @@ struct GatewayChannelConnectTests {
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session),
-            timeoutProfile: self.makeChallengeTimeoutProfile())
+            timeoutProfile: self.makeChallengeTimeoutProfile(),
+            connectOptions: self.makeConnectOptions())
 
         do {
             try await channel.connect()
@@ -193,7 +211,8 @@ struct GatewayChannelConnectTests {
             url: #require(URL(string: "ws://127.0.0.1:18789")),
             token: nil,
             session: WebSocketSessionBox(session: session),
-            timeoutProfile: self.makeConnectTimeoutProfile())
+            timeoutProfile: self.makeConnectTimeoutProfile(),
+            connectOptions: self.makeConnectOptions())
 
         try await channel.connect()
     }
@@ -215,7 +234,8 @@ struct GatewayChannelConnectTests {
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
             session: WebSocketSessionBox(session: session),
-            timeoutProfile: self.makeConnectTimeoutProfile())
+            timeoutProfile: self.makeConnectTimeoutProfile(),
+            connectOptions: self.makeConnectOptions())
 
         do {
             try await channel.connect()

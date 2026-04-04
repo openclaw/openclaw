@@ -2173,10 +2173,21 @@ private struct HoverHUDView: View {
         }
         .padding(self.controller.model.isCharm ? 6 : (self.controller.model.isCompact ? 10 : 16))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(self.widgetBackground(cornerRadius: self.controller.model.isCharm ? 22 : (self.controller.model.isCompact ? 20 : 24)))
-        .clipShape(RoundedRectangle(cornerRadius: self.controller.model.isCharm ? 22 : (self.controller.model.isCompact ? 20 : 24), style: .continuous))
-        .shadow(color: Color.black.opacity(self.controller.model.isCharm ? 0.10 : (self.controller.model.isCompact ? 0.12 : 0.14)), radius: self.controller.model.isCharm ? 14 : (self.controller.model.isCompact ? 18 : 24), y: self.controller.model.isCharm ? 8 : 14)
-        .contentShape(RoundedRectangle(cornerRadius: self.controller.model.isCharm ? 22 : (self.controller.model.isCompact ? 20 : 24), style: .continuous))
+        .background(self.widgetBackground(cornerRadius: self.widgetCornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: self.widgetCornerRadius, style: .continuous)
+                .strokeBorder(Color.white.opacity(self.controller.model.isCharm ? 0.10 : 0.12), lineWidth: 0.6)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: self.widgetCornerRadius, style: .continuous))
+        .shadow(
+            color: Color.black.opacity(self.controller.model.isCharm ? 0.10 : (self.controller.model.isCompact ? 0.12 : 0.14)),
+            radius: self.controller.model.isCharm ? 14 : (self.controller.model.isCompact ? 18 : 26),
+            y: self.controller.model.isCharm ? 8 : 14)
+        .shadow(
+            color: Color.white.opacity(self.controller.model.isCharm ? 0.04 : 0.05),
+            radius: self.controller.model.isCharm ? 6 : 10,
+            y: -2)
+        .contentShape(RoundedRectangle(cornerRadius: self.widgetCornerRadius, style: .continuous))
         .onHover { inside in
             self.controller.panelHoverChanged(inside: inside)
         }
@@ -2188,6 +2199,16 @@ private struct HoverHUDView: View {
                 self.reloadCasebookSnapshot()
             }
         }
+    }
+
+    private var widgetCornerRadius: CGFloat {
+        if self.controller.model.isCharm {
+            return 24
+        }
+        if self.controller.model.isCompact {
+            return 22
+        }
+        return 28
     }
 }
 
