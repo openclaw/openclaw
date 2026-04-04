@@ -20,7 +20,7 @@ export type TelegramSequentialKeyContext = {
 };
 
 export type TelegramSequentialKeyOptions = {
-  isRunActiveForChat?: (chatId: number, threadId?: number) => boolean;
+  isRunActiveForChat?: (chatId: number, threadId?: number, senderId?: number) => boolean;
 };
 
 export function getTelegramSequentialKey(
@@ -71,7 +71,8 @@ export function getTelegramSequentialKey(
   // ordering.  Run-level serialization is handled by the session lane queue
   // (enqueueCommandInLane, maxConcurrent=1).
   const messageId = msg?.message_id;
-  const runActive = typeof chatId === "number" && opts?.isRunActiveForChat?.(chatId, threadId ?? undefined);
+  const senderId = msg?.from?.id;
+  const runActive = typeof chatId === "number" && opts?.isRunActiveForChat?.(chatId, threadId ?? undefined, senderId);
   if (typeof chatId === "number") {
     const base = threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
     return runActive && typeof messageId === "number" ? `${base}:${messageId}` : base;

@@ -104,6 +104,18 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 
+/** Build a consistent cache key for the chatId:threadId:senderId → sessionKey map. */
+export function buildChatSessionCacheKey(
+  chatId: number | string,
+  threadId?: number,
+  senderId?: string | number | null,
+): string {
+  let key = `${chatId}`;
+  if (threadId != null) key += `:${threadId}`;
+  if (senderId != null) key += `:${senderId}`;
+  return key;
+}
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -347,7 +359,7 @@ export const registerTelegramHandlers = ({
     // key middleware can check whether an embedded run is active.
     if (chatSessionCache && typeof params.chatId === "number") {
       const resolvedThread = resolvedThreadId ?? dmThreadId;
-      const cacheKey = resolvedThread != null ? `${params.chatId}:${resolvedThread}` : `${params.chatId}`;
+      const cacheKey = buildChatSessionCacheKey(params.chatId, resolvedThread, params.senderId);
       chatSessionCache.set(cacheKey, sessionKey);
     }
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {

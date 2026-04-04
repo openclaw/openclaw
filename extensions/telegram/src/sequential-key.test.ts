@@ -142,12 +142,13 @@ describe("getTelegramSequentialKey", () => {
     expect(getTelegramSequentialKey(input, opts)).toBe(expected);
   });
 
-  it("passes threadId to isRunActiveForChat for forum topics", () => {
-    const spy = { chatId: 0, threadId: undefined as number | undefined };
+  it("passes threadId and senderId to isRunActiveForChat for forum topics", () => {
+    const spy = { chatId: 0, threadId: undefined as number | undefined, senderId: undefined as number | undefined };
     const opts: TelegramSequentialKeyOptions = {
-      isRunActiveForChat: (chatId, threadId) => {
+      isRunActiveForChat: (chatId, threadId, senderId) => {
         spy.chatId = chatId;
         spy.threadId = threadId;
+        spy.senderId = senderId;
         return true;
       },
     };
@@ -156,11 +157,13 @@ describe("getTelegramSequentialKey", () => {
         chat: mockChat({ id: 123, type: "supergroup", is_forum: true }),
         message_thread_id: 7,
         message_id: 99,
+        from: { id: 456, is_bot: false, first_name: "Test" },
       }),
     };
     const key = getTelegramSequentialKey(input, opts);
     expect(spy.chatId).toBe(123);
     expect(spy.threadId).toBe(7);
+    expect(spy.senderId).toBe(456);
     expect(key).toBe("telegram:123:topic:7:99");
   });
 });
