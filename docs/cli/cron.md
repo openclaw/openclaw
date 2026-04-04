@@ -44,6 +44,10 @@ first result is just an interim status update and no descendant subagent run is
 responsible for the eventual answer, cron re-prompts once for the real result
 before delivery.
 
+Note: if an isolated cron run returns only the silent token (`NO_REPLY` /
+`no_reply`), cron suppresses direct outbound delivery and the fallback queued
+summary path as well, so nothing is posted back to chat.
+
 Note: `cron add|edit --model ...` uses that selected allowed model for the job.
 If the model is not allowed, cron warns and falls back to the job's agent/default
 model selection instead. Configured fallback chains still apply, but a plain

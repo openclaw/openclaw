@@ -389,6 +389,9 @@ openclaw doctor
 - Delivery mode is `none` means no external message is expected.
 - Delivery target missing/invalid (`channel`/`to`) means outbound was skipped.
 - Channel auth errors (`unauthorized`, `Forbidden`) mean delivery was blocked by credentials.
+- If the isolated run returns only the silent token (`NO_REPLY` / `no_reply`),
+  OpenClaw suppresses direct outbound delivery and also suppresses the fallback
+  queued summary path, so nothing is posted back to chat.
 - For cron-owned isolated jobs, do not expect the agent to use the message tool
   as a fallback. The runner owns final delivery; `--no-deliver` keeps it
   internal instead of allowing a direct send.

@@ -1050,6 +1050,7 @@ for usage/billing and raise limits as needed.
     - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
     - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
+    - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so the runner also suppresses queued fallback delivery.
 
     For isolated cron jobs, the runner owns final delivery. The agent is expected
     to return a plain-text summary for the runner to send. `--no-deliver` keeps
