@@ -75,7 +75,7 @@ explicitly promotes one as public.
     | `plugin-sdk/config-schema` | Root `openclaw.json` Zod schema export (`OpenClawSchema`) |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
-    | `plugin-sdk/setup-runtime` | `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
+    | `plugin-sdk/setup-runtime` | `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
     | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
@@ -210,7 +210,7 @@ explicitly promotes one as public.
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
-    | `plugin-sdk/error-runtime` | Error graph and formatting helpers |
+    | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, and pinned lookup helpers |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
@@ -224,7 +224,7 @@ explicitly promotes one as public.
     | --- | --- |
     | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
     | `plugin-sdk/media-understanding-runtime` | Media-understanding runner facade and typed result helpers |
-    | `plugin-sdk/text-runtime` | Shared text, markdown, logging, and formatting helpers |
+    | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech-runtime` | Speech-core runtime facade for TTS resolution and synthesis |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
@@ -232,6 +232,9 @@ explicitly promotes one as public.
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
+    | `plugin-sdk/video-generation` | Video generation provider types |
+    | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
+    | `plugin-sdk/video-generation-runtime` | Shared runtime `generateVideo` / `listRuntimeVideoGenerationProviders` facade |
     | `plugin-sdk/media-understanding` | Media understanding provider types |
     | `plugin-sdk/speech` | Speech provider types |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |

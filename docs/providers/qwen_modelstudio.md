@@ -1,17 +1,19 @@
----
 title: "Qwen / Model Studio"
-summary: "Alibaba Cloud Model Studio setup (Standard pay-as-you-go and Coding Plan, dual region endpoints)"
+summary: "Endpoint detail for the bundled qwen provider and its legacy modelstudio compatibility surface"
 read_when:
-  - You want to use Qwen (Alibaba Cloud Model Studio) with OpenClaw
-  - You need the API key env var for Model Studio
-  - You want to use the Standard (pay-as-you-go) or Coding Plan endpoint
+
+- You want endpoint-level detail for Qwen Cloud / Alibaba DashScope
+- You need the env var compatibility story for the qwen provider
+- You want to use the Standard (pay-as-you-go) or Coding Plan endpoint
+
 ---
 
 # Qwen / Model Studio (Alibaba Cloud)
 
-The Model Studio provider gives access to Alibaba Cloud models including Qwen
-and third-party models hosted on the platform. Two billing plans are supported:
-**Standard** (pay-as-you-go) and **Coding Plan** (subscription).
+This page documents the endpoint mapping behind OpenClaw's bundled `qwen`
+provider. The provider keeps `modelstudio` provider ids, auth-choice ids, and
+model refs working as compatibility aliases while `qwen` becomes the canonical
+surface.
 
 <Info>
 
@@ -22,8 +24,9 @@ model list.
 
 </Info>
 
-- Provider: `modelstudio`
-- Auth: `MODELSTUDIO_API_KEY`
+- Provider: `qwen` (legacy alias: `modelstudio`)
+- Auth: `QWEN_API_KEY`
+- Also accepted: `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY`
 - API: OpenAI-compatible
 
 ## Quick start
@@ -32,21 +35,23 @@ model list.
 
 ```bash
 # China endpoint
-openclaw onboard --auth-choice modelstudio-standard-api-key-cn
+openclaw onboard --auth-choice qwen-standard-api-key-cn
 
 # Global/Intl endpoint
-openclaw onboard --auth-choice modelstudio-standard-api-key
+openclaw onboard --auth-choice qwen-standard-api-key
 ```
 
 ### Coding Plan (subscription)
 
 ```bash
 # China endpoint
-openclaw onboard --auth-choice modelstudio-api-key-cn
+openclaw onboard --auth-choice qwen-api-key-cn
 
 # Global/Intl endpoint
-openclaw onboard --auth-choice modelstudio-api-key
+openclaw onboard --auth-choice qwen-api-key
 ```
+
+Legacy `modelstudio-*` auth-choice ids still work.
 
 After onboarding, set a default model:
 
@@ -54,7 +59,7 @@ After onboarding, set a default model:
 {
   agents: {
     defaults: {
-      model: { primary: "modelstudio/qwen3.5-plus" },
+      model: { primary: "qwen/qwen3.5-plus" },
     },
   },
 }
@@ -62,12 +67,12 @@ After onboarding, set a default model:
 
 ## Plan types and endpoints
 
-| Plan                       | Region | Auth choice                       | Endpoint                                         |
-| -------------------------- | ------ | --------------------------------- | ------------------------------------------------ |
-| Standard (pay-as-you-go)   | China  | `modelstudio-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`      |
-| Standard (pay-as-you-go)   | Global | `modelstudio-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1` |
-| Coding Plan (subscription) | China  | `modelstudio-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
-| Coding Plan (subscription) | Global | `modelstudio-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
+| Plan                       | Region | Auth choice                | Endpoint                                         |
+| -------------------------- | ------ | -------------------------- | ------------------------------------------------ |
+| Standard (pay-as-you-go)   | China  | `qwen-standard-api-key-cn` | `dashscope.aliyuncs.com/compatible-mode/v1`      |
+| Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
+| Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
 
 The provider auto-selects the endpoint based on your auth choice. You can
 override with a custom `baseUrl` in config.
@@ -76,28 +81,28 @@ Native Model Studio endpoints advertise streaming usage compatibility on the
 shared `openai-completions` transport. OpenClaw keys that off endpoint
 capabilities now, so DashScope-compatible custom provider ids targeting the
 same native hosts inherit the same streaming-usage behavior instead of
-requiring the built-in `modelstudio` provider id specifically.
+requiring the built-in `qwen` provider id specifically.
 
 ## Get your API key
 
-- **China**: [bailian.console.aliyun.com](https://bailian.console.aliyun.com/)
-- **Global/Intl**: [modelstudio.console.alibabacloud.com](https://modelstudio.console.alibabacloud.com/)
+- **Manage keys**: [home.qwencloud.com/api-keys](https://home.qwencloud.com/api-keys)
+- **Docs**: [docs.qwencloud.com](https://docs.qwencloud.com/developer-guides/getting-started/introduction)
 
 ## Built-in catalog
 
-OpenClaw currently ships this bundled Model Studio catalog:
+OpenClaw currently ships this bundled Qwen catalog:
 
-| Model ref                          | Input       | Context   | Notes                                              |
-| ---------------------------------- | ----------- | --------- | -------------------------------------------------- |
-| `modelstudio/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                      |
-| `modelstudio/qwen3.6-plus`         | text, image | 1,000,000 | Prefer Standard endpoints when you need this model |
-| `modelstudio/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                      |
-| `modelstudio/qwen3-coder-next`     | text        | 262,144   | Coding                                             |
-| `modelstudio/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                             |
-| `modelstudio/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning enabled                                  |
-| `modelstudio/glm-5`                | text        | 202,752   | GLM                                                |
-| `modelstudio/glm-4.7`              | text        | 202,752   | GLM                                                |
-| `modelstudio/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
+| Model ref                   | Input       | Context   | Notes                                              |
+| --------------------------- | ----------- | --------- | -------------------------------------------------- |
+| `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                      |
+| `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Prefer Standard endpoints when you need this model |
+| `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                      |
+| `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                                             |
+| `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                             |
+| `qwen/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning enabled                                  |
+| `qwen/glm-5`                | text        | 202,752   | GLM                                                |
+| `qwen/glm-4.7`              | text        | 202,752   | GLM                                                |
+| `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
 
 Availability can still vary by endpoint and billing plan even when a model is
 present in the bundled catalog.
@@ -125,5 +130,5 @@ endpoint/key pair.
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure
-`MODELSTUDIO_API_KEY` is available to that process (for example, in
+`QWEN_API_KEY` is available to that process (for example, in
 `~/.openclaw/.env` or via `env.shellEnv`).

@@ -33,6 +33,12 @@ openclaw channels logs --channel all
 - `channels resolve`: `<entries...>`, `--channel <name>`, `--account <id>`, `--kind <auto|user|group>`, `--json`
 - `channels logs`: `--channel <name|all>`, `--lines <n>`, `--json`
 
+`channels status --probe` is the live path: on a reachable gateway it runs per-account
+`probeAccount` and optional `auditAccount` checks, so output can include transport
+state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
+If the gateway is unreachable, `channels status` falls back to config-only summaries
+instead of live probe output.
+
 ## Add / remove accounts
 
 ```bash

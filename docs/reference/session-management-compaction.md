@@ -210,6 +210,19 @@ After compaction, future turns see:
 
 Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
+## Compaction chunk boundaries and tool pairing
+
+When OpenClaw splits a long transcript into compaction chunks, it keeps
+assistant tool calls paired with their matching `toolResult` entries.
+
+- If the token-share split lands between a tool call and its result, OpenClaw
+  shifts the boundary to the assistant tool-call message instead of separating
+  the pair.
+- If a trailing tool-result block would otherwise push the chunk over target,
+  OpenClaw preserves that pending tool block and keeps the unsummarized tail
+  intact.
+- Aborted/error tool-call blocks do not hold a pending split open.
+
 ---
 
 ## When auto-compaction happens (Pi runtime)
@@ -280,6 +293,8 @@ Convention:
 
 - The assistant starts its output with `NO_REPLY` to indicate “do not deliver a reply to the user”.
 - OpenClaw strips/suppresses this in the delivery layer.
+- Exact silent-token suppression is case-insensitive, so `NO_REPLY` and
+  `no_reply` both count when the whole payload is just the silent token.
 
 As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
 
@@ -326,4 +341,4 @@ flush logic lives on the Gateway side today.
   - model context window (too small)
   - compaction settings (`reserveTokens` too high for the model window can cause earlier compaction)
   - tool-result bloat: enable/tune session pruning
-- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (exact token) and you’re on a build that includes the streaming suppression fix.
+- Silent turns leaking? Confirm the reply starts with `NO_REPLY` (case-insensitive exact token) and you’re on a build that includes the streaming suppression fix.

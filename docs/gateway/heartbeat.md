@@ -256,6 +256,8 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - If the main queue is busy, the heartbeat is skipped and retried later.
 - If `target` resolves to no external destination, the run still happens but no
   outbound message is sent.
+- If `showOk`, `showAlerts`, and `useIndicator` are all disabled, the run is skipped up front as `reason=alerts-disabled`.
+- If only alert delivery is disabled, OpenClaw can still run the heartbeat, update due-task timestamps, restore the session idle timestamp, and suppress the outward alert payload.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
 - Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.
@@ -330,6 +332,7 @@ safe to include every 30 minutes.
 
 If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
 headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+That skip is reported as `reason=empty-heartbeat-file`.
 If the file is missing, the heartbeat still runs and the model decides what to do.
 
 Keep it tiny (short checklist or reminders) to avoid prompt bloat.
@@ -374,6 +377,7 @@ Behavior:
 - If no tasks are due, the heartbeat is skipped entirely (`reason=no-tasks-due`) to avoid a wasted model call.
 - Non-task content in `HEARTBEAT.md` is preserved and appended as additional context after the due-task list.
 - Task last-run timestamps are stored in session state (`heartbeatTaskState`), so intervals survive normal restarts.
+- Task timestamps are only advanced after a heartbeat run completes its normal reply path. Skipped `empty-heartbeat-file` / `no-tasks-due` runs do not mark tasks as completed.
 
 Task mode is useful when you want one heartbeat file to hold several periodic checks without paying for all of them every tick.
 

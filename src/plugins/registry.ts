@@ -69,6 +69,7 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
   SpeechProviderPlugin,
+  VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
@@ -153,6 +154,8 @@ export type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
 export type PluginImageGenerationProviderRegistration =
   PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
+export type PluginVideoGenerationProviderRegistration =
+  PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>;
 export type PluginWebFetchProviderRegistration =
   PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
@@ -224,6 +227,7 @@ export type PluginRecord = {
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  videoGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   gatewayMethods: string[];
@@ -252,6 +256,7 @@ export type PluginRegistry = {
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
+  videoGenerationProviders: PluginVideoGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
@@ -772,6 +777,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerVideoGenerationProvider = (
+    record: PluginRecord,
+    provider: VideoGenerationProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "video-generation provider",
+      registrations: registry.videoGenerationProviders,
+      ownedIds: record.videoGenerationProviderIds,
+    });
+  };
+
   const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) => {
     registerUniqueProviderLike({
       record,
@@ -1064,6 +1082,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMediaUnderstandingProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
                 registerImageGenerationProvider(record, provider),
+              registerVideoGenerationProvider: (provider) =>
+                registerVideoGenerationProvider(record, provider),
               registerWebFetchProvider: (provider) => registerWebFetchProvider(record, provider),
               registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
@@ -1253,6 +1273,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
     registerImageGenerationProvider,
+    registerVideoGenerationProvider,
     registerWebSearchProvider,
     registerGatewayMethod,
     registerCli,

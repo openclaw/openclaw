@@ -30,6 +30,22 @@ The prompt is intentionally compact and uses fixed sections:
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
+The Tooling section also includes runtime guidance for long-running work:
+
+- use cron for future follow-up (`check back later`, reminders, recurring work)
+  instead of `exec` sleep loops, `yieldMs` delay tricks, or repeated `process`
+  polling
+- use `exec` / `process` only for commands that start now and continue running
+  in the background
+- when automatic completion wake is enabled, start the command once and rely on
+  the push-based wake path when it emits output or fails
+- use `process` for logs, status, input, or intervention when you need to
+  inspect a running command
+- if the task is larger, prefer `sessions_spawn`; sub-agent completion is
+  push-based and auto-announces back to the requester
+- do not poll `subagents list` / `sessions_list` in a loop just to wait for
+  completion
+
 Safety guardrails in the system prompt are advisory. They guide model behavior but do not enforce policy. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable these by design.
 
 ## Prompt modes

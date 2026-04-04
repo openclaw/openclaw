@@ -222,28 +222,15 @@ export function isRequestedExecTargetAllowed(params: {
   requestedTarget: ExecTarget;
   sandboxAvailable?: boolean;
 }) {
-  // Exact match is always allowed (e.g. configured=node, requested=node).
   if (params.requestedTarget === params.configuredTarget) {
     return true;
   }
-  // `auto` is a routing strategy that selects a host at runtime. Per-call
-  // overrides to a concrete host are allowed so agents and directives can
-  // pin individual commands to a specific target without requiring a global
-  // config change.
-  //
-  // However, when a sandbox runtime is available the session is implicitly
-  // sandboxed — allowing a per-call jump to gateway would bypass sandbox
-  // confinement. Only overrides *to* sandbox (or node, which has its own
-  // approval layer) are safe in that scenario. The ask/approval flow
-  // remains the primary security gate for all non-sandbox hosts.
   if (params.configuredTarget === "auto") {
     if (params.sandboxAvailable && params.requestedTarget === "gateway") {
       return false;
     }
     return true;
   }
-  // Non-auto configured targets require an exact match to prevent silent
-  // host-hopping (e.g. a node-pinned session should not route to gateway).
   return false;
 }
 
@@ -256,11 +243,6 @@ export function resolveExecTarget(params: {
   const configuredTarget = params.configuredTarget ?? "auto";
   const requestedTarget = params.requestedTarget ?? null;
   if (params.elevatedRequested) {
-    // Elevated execution runs with host-level permissions. When the target is
-    // explicitly pinned to "node", honour that binding — the node's own
-    // approval/security layer handles elevated semantics on the remote host.
-    // Only redirect to gateway when the configured target is auto/sandbox
-    // (i.e. the intent is local elevated execution on the gateway machine).
     const elevatedTarget = configuredTarget === "node" ? ("node" as const) : ("gateway" as const);
     return {
       configuredTarget,
@@ -283,9 +265,6 @@ export function resolveExecTarget(params: {
     );
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
-  // `auto` preserves the no-config "just work" default: sandbox when available,
-  // otherwise gateway. The YOLO part comes from security/ask defaults, not from
-  // `auto` itself.
   const effectiveHost =
     selectedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : selectedTarget;
   return {

@@ -30,6 +30,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -66,6 +67,13 @@ type OpenResponsesHttpOptions = {
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
+
+function wrapUntrustedFileContent(content: string): string {
+  return wrapExternalContent(content, {
+    source: "unknown",
+    includeWarning: false,
+  });
+}
 
 // In-memory map from responseId -> sessionKey for previous_response_id continuity.
 // Entries are evicted after 30 minutes to bound memory usage.
@@ -197,6 +205,7 @@ export const __testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
+  wrapUntrustedFileContent,
   storeResponseSessionAt(
     responseId: string,
     sessionKey: string,
@@ -593,11 +602,12 @@ export async function handleOpenResponsesHttpRequest(
                       },
                 limits: limits.files,
               });
-              if (file.text?.trim()) {
+              const rawText = file.text;
+              if (rawText?.trim()) {
                 fileContexts.push(
                   renderFileContextBlock({
                     filename: file.filename,
-                    content: file.text,
+                    content: wrapUntrustedFileContent(rawText),
                   }),
                 );
               } else if (file.images && file.images.length > 0) {
