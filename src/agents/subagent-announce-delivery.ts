@@ -382,7 +382,10 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
-      message: requesterIsSubagent ? item.execution.agentPrompt : (userFacing?.text ?? ""),
+      message:
+        requesterIsSubagent
+          ? item.execution.agentPrompt
+          : ((item.display.visibility === "user-visible" ? item.display.text ?? item.display.summaryLine : undefined) || ""),
       channel: requesterIsSubagent ? undefined : origin?.channel,
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
