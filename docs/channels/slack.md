@@ -513,7 +513,11 @@ Notes:
 
 ## Exec approvals in Slack
 
-Exec approval prompts can route natively through Slack using interactive buttons and interactions, instead of falling back to the Web UI or terminal. Approver authorization is enforced: only users identified as approvers can approve or deny requests through Slack.
+Slack can act as a native approval client with interactive buttons and interactions, instead of falling back to the Web UI or terminal.
+
+- Exec approvals use `channels.slack.execApprovals.*` for native DM/channel routing.
+- Plugin approvals can still resolve through the same Slack-native button surface when the request already lands in Slack and the approval id kind is `plugin:`.
+- Approver authorization is still enforced: only users identified as approvers can approve or deny requests through Slack.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
 
@@ -555,8 +559,10 @@ opt into origin-chat delivery:
 }
 ```
 
-Shared `approvals.exec` forwarding is separate. Use it only when approval prompts must also route
-to other chats or explicit out-of-band targets.
+Shared `approvals.exec` forwarding is separate. Use it only when exec approval prompts must also
+route to other chats or explicit out-of-band targets. Shared `approvals.plugin` forwarding is also
+separate; Slack-native buttons can still resolve plugin approvals when those requests already land
+in Slack.
 
 Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 

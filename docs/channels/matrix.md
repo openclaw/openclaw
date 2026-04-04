@@ -667,6 +667,12 @@ Matrix can act as an exec approval client for a Matrix account.
 
 Approvers must be Matrix user IDs such as `@owner:example.org`. Matrix auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `channels.matrix.dm.allowFrom`. Set `enabled: false` to disable Matrix as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
+Native Matrix routing is exec-only today:
+
+- `channels.matrix.execApprovals.*` controls native DM/channel routing for exec approvals only.
+- Plugin approvals still use shared same-chat `/approve` plus any configured `approvals.plugin` forwarding.
+- Matrix can still reuse `channels.matrix.dm.allowFrom` for plugin-approval authorization when it can infer approvers safely, but it does not expose a separate native plugin-approval DM/channel fanout path.
+
 Delivery rules:
 
 - `target: "dm"` sends approval prompts to approver DMs
@@ -677,7 +683,7 @@ Matrix uses text approval prompts today. Approvers resolve them with `/approve <
 
 Only resolved approvers can approve or deny. Channel delivery includes the command text, so only enable `channel` or `both` in trusted rooms.
 
-Matrix approval prompts reuse the shared core approval planner. The Matrix-specific surface is transport only: room/DM routing and message send/update/delete behavior.
+Matrix approval prompts reuse the shared core approval planner. The Matrix-specific native surface is transport only for exec approvals: room/DM routing and message send/update/delete behavior.
 
 Per-account override:
 

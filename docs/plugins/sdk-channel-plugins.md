@@ -69,6 +69,11 @@ Most channel plugins do not need approval-specific code.
 - Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
 - Preserve the delivered approval id kind end-to-end. Native clients should not
   guess or rewrite exec vs plugin approval routing from channel-local state.
+- Different approval kinds can intentionally expose different native surfaces.
+  Current bundled examples:
+  - Slack keeps native approval routing available for both exec and plugin ids.
+  - Matrix keeps native DM/channel routing for exec approvals only and leaves
+    plugin approvals on the shared same-chat `/approve` path.
 - `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
 
 For hot channel entrypoints, prefer the narrower runtime subpaths when you only
