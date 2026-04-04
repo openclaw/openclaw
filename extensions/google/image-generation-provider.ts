@@ -3,13 +3,10 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
-  resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  DEFAULT_GOOGLE_API_BASE_URL,
-  normalizeGoogleApiBaseUrl,
   normalizeGoogleModelId,
-  parseGeminiAuth,
+  resolveGoogleGenerativeAiHttpRequestConfig,
 } from "./api.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
@@ -51,10 +48,6 @@ type GoogleGenerateImageResponse = {
     };
   }>;
 };
-
-function resolveGoogleBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
-  return normalizeGoogleApiBaseUrl(cfg?.models?.providers?.google?.baseUrl);
-}
 
 function normalizeGoogleImageModel(model: string | undefined): string {
   const trimmed = model?.trim();
@@ -135,13 +128,9 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
 
       const model = normalizeGoogleImageModel(req.model);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveGoogleBaseUrl(req.cfg),
-          defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-          allowPrivateNetwork: Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim()),
-          defaultHeaders: parseGeminiAuth(auth.apiKey).headers,
-          provider: "google",
-          api: "google-generative-ai",
+        resolveGoogleGenerativeAiHttpRequestConfig({
+          apiKey: auth.apiKey,
+          baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
           capability: "image",
           transport: "http",
         });
