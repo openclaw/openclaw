@@ -4,7 +4,7 @@ export {
   DEFAULT_CONTEXT_TOKENS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 export {
-  composeProviderStreamWrappers,
+  buildProviderStreamFamilyHooks,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   getOpenRouterModelCapabilities,

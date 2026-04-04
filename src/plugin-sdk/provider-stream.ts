@@ -16,6 +16,18 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../agents/pi-embedded-runner/proxy-stream-wrappers.js";
+import {
+  createCodexNativeWebSearchWrapper,
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAIFastModeWrapper,
+  createOpenAIReasoningCompatibilityWrapper,
+  createOpenAIResponsesContextManagementWrapper,
+  createOpenAIServiceTierWrapper,
+  createOpenAITextVerbosityWrapper,
+  resolveOpenAIFastMode,
+  resolveOpenAIServiceTier,
+  resolveOpenAITextVerbosity,
+} from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
 import { createToolStreamWrapper, createZaiToolStreamWrapper } from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
 
 export type ProviderStreamWrapperFactory =
@@ -38,6 +50,8 @@ export type ProviderStreamFamily =
   | "google-thinking"
   | "moonshot-thinking"
   | "minimax-fast-mode"
+  | "openai-responses-defaults"
+  | "openrouter-thinking"
   | "tool-stream-default-on";
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
@@ -65,6 +79,45 @@ export function buildProviderStreamFamilyHooks(
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
           createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      };
+    case "openai-responses-defaults":
+      return {
+        wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
+
+          if (resolveOpenAIFastMode(ctx.extraParams)) {
+            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn);
+          }
+
+          const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
+          if (serviceTier) {
+            nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
+          }
+
+          const textVerbosity = resolveOpenAITextVerbosity(ctx.extraParams);
+          if (textVerbosity) {
+            nextStreamFn = createOpenAITextVerbosityWrapper(nextStreamFn, textVerbosity);
+          }
+
+          nextStreamFn = createCodexNativeWebSearchWrapper(nextStreamFn, {
+            config: ctx.config,
+            agentDir: ctx.agentDir,
+          });
+          return createOpenAIResponsesContextManagementWrapper(
+            createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
+            ctx.extraParams,
+          );
+        },
+      };
+    case "openrouter-thinking":
+      return {
+        wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          const thinkingLevel =
+            ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
+              ? undefined
+              : ctx.thinkingLevel;
+          return createOpenRouterWrapper(ctx.streamFn, thinkingLevel);
+        },
       };
     case "tool-stream-default-on":
       return {

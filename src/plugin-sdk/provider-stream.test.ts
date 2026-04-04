@@ -41,6 +41,7 @@ describe("buildProviderStreamFamilyHooks", () => {
   it("covers the stream family matrix", () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let capturedModelId: string | undefined;
+    let capturedHeaders: Record<string, string> | undefined;
 
     const baseStreamFn: StreamFn = (model, _context, options) => {
       capturedModelId = String(model.id);
@@ -50,6 +51,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       >;
       options?.onPayload?.(payload as never, model as never);
       capturedPayload = payload;
+      capturedHeaders = options?.headers as Record<string, string> | undefined;
       return {} as never;
     };
 
@@ -98,6 +100,49 @@ describe("buildProviderStreamFamilyHooks", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
     });
+
+    const openAiHooks = buildProviderStreamFamilyHooks("openai-responses-defaults");
+    openAiHooks.wrapStreamFn?.({
+      streamFn: baseStreamFn,
+      extraParams: { serviceTier: "flex" },
+      config: {},
+      agentDir: "/tmp/provider-stream-test",
+    } as never)(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      service_tier: "flex",
+    });
+    expect(capturedHeaders).toBeDefined();
+
+    const openRouterHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
+    openRouterHooks.wrapStreamFn?.({
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+      modelId: "openai/gpt-5.4",
+    } as never)({ provider: "openrouter", id: "openai/gpt-5.4" } as never, {} as never, {});
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      reasoning: { effort: "high" },
+    });
+
+    openRouterHooks.wrapStreamFn?.({
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+      modelId: "x-ai/grok-3",
+    } as never)({ provider: "openrouter", id: "x-ai/grok-3" } as never, {} as never, {});
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+    });
+    expect(capturedPayload).not.toHaveProperty("reasoning");
 
     const toolStreamHooks = buildProviderStreamFamilyHooks("tool-stream-default-on");
     toolStreamHooks.wrapStreamFn?.({
