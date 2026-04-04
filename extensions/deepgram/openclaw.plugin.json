@@ -1,5 +1,6 @@
 {
   "id": "deepgram",
+  "enabledByDefault": true,
   "contracts": {
     "mediaUnderstandingProviders": ["deepgram"]
   },
