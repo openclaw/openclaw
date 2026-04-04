@@ -570,6 +570,12 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBeNull();
   });
 
+  it("lets billing-classified HTTP 401 responses bypass generic auth", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)"),
+    ).toBe("billing");
+  });
+
   it("treats HTTP 499 as transient for structured errors", () => {
     expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");

@@ -550,6 +550,11 @@ function classifyFailoverClassificationFromHttpStatus(
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
     }
+    // billing message on 401/403 takes precedence over generic auth (e.g. OpenRouter
+    // "Key limit exceeded" 401/403 should trigger model fallback, not auth)
+    if (messageReason === "billing") {
+      return toReasonClassification("billing");
+    }
     return toReasonClassification("auth");
   }
   if (status === 408) {
