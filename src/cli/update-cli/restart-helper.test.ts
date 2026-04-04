@@ -3,16 +3,22 @@ import fs from "node:fs/promises";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
-vi.mock("node:child_process", () => ({
-  spawn: vi.fn(),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: vi.fn(),
+    },
+  );
+});
 
 describe("restart-helper", () => {
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
 
-  async function prepareAndReadScript(env: Record<string, string>) {
-    const scriptPath = await prepareRestartScript(env);
+  async function prepareAndReadScript(env: Record<string, string>, gatewayPort = 18789) {
+    const scriptPath = await prepareRestartScript(env, gatewayPort);
     expect(scriptPath).toBeTruthy();
     const content = await fs.readFile(scriptPath!, "utf-8");
     return { scriptPath: scriptPath!, content };
@@ -20,6 +26,39 @@ describe("restart-helper", () => {
 
   async function cleanupScript(scriptPath: string) {
     await fs.unlink(scriptPath);
+  }
+
+  function expectWindowsRestartWaitOrdering(content: string, port = 18789) {
+    const endCommand = 'schtasks /End /TN "';
+    const pollAttemptsInit = "set /a attempts=0";
+    const pollLabel = ":wait_for_port_release";
+    const pollAttemptIncrement = "set /a attempts+=1";
+    const pollNetstatCheck = `netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul`;
+    const forceKillLabel = ":force_kill_listener";
+    const forceKillCommand = "taskkill /F /PID %%P >nul 2>&1";
+    const portReleasedLabel = ":port_released";
+    const runCommand = 'schtasks /Run /TN "';
+    const endIndex = content.indexOf(endCommand);
+    const attemptsInitIndex = content.indexOf(pollAttemptsInit, endIndex);
+    const pollLabelIndex = content.indexOf(pollLabel, attemptsInitIndex);
+    const pollAttemptIncrementIndex = content.indexOf(pollAttemptIncrement, pollLabelIndex);
+    const pollNetstatCheckIndex = content.indexOf(pollNetstatCheck, pollAttemptIncrementIndex);
+    const forceKillLabelIndex = content.indexOf(forceKillLabel, pollNetstatCheckIndex);
+    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillLabelIndex);
+    const portReleasedLabelIndex = content.indexOf(portReleasedLabel, forceKillCommandIndex);
+    const runIndex = content.indexOf(runCommand, portReleasedLabelIndex);
+
+    expect(endIndex).toBeGreaterThanOrEqual(0);
+    expect(attemptsInitIndex).toBeGreaterThan(endIndex);
+    expect(pollLabelIndex).toBeGreaterThan(attemptsInitIndex);
+    expect(pollAttemptIncrementIndex).toBeGreaterThan(pollLabelIndex);
+    expect(pollNetstatCheckIndex).toBeGreaterThan(pollAttemptIncrementIndex);
+    expect(forceKillLabelIndex).toBeGreaterThan(pollNetstatCheckIndex);
+    expect(forceKillCommandIndex).toBeGreaterThan(forceKillLabelIndex);
+    expect(portReleasedLabelIndex).toBeGreaterThan(forceKillCommandIndex);
+    expect(runIndex).toBeGreaterThan(portReleasedLabelIndex);
+
+    expect(content).not.toContain("timeout /t 3 /nobreak >nul");
   }
 
   beforeEach(() => {
@@ -65,6 +104,9 @@ describe("restart-helper", () => {
       expect(scriptPath.endsWith(".sh")).toBe(true);
       expect(content).toContain("#!/bin/sh");
       expect(content).toContain("launchctl kickstart -k 'gui/501/ai.openclaw.gateway'");
+      // Should clear disabled state and fall back to bootstrap when kickstart fails.
+      expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
+      expect(content).toContain("launchctl bootstrap 'gui/501'");
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });
@@ -91,6 +133,7 @@ describe("restart-helper", () => {
       expect(content).toContain("@echo off");
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway"');
       expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway"');
+      expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
       await cleanupScript(scriptPath);
@@ -105,6 +148,25 @@ describe("restart-helper", () => {
       });
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (custom)"');
       expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)"');
+      expectWindowsRestartWaitOrdering(content);
+      await cleanupScript(scriptPath);
+    });
+
+    it("uses passed gateway port for port polling on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const customPort = 9999;
+
+      const { scriptPath, content } = await prepareAndReadScript(
+        {
+          OPENCLAW_PROFILE: "default",
+        },
+        customPort,
+      );
+      expect(content).toContain(`netstat -ano | findstr /R /C:":${customPort} .*LISTENING" >nul`);
+      expect(content).toContain(
+        `for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${customPort} .*LISTENING"') do (`,
+      );
+      expectWindowsRestartWaitOrdering(content, customPort);
       await cleanupScript(scriptPath);
     });
 
@@ -135,6 +197,7 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "production",
       });
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (production)"');
+      expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
 
@@ -169,6 +232,45 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("expands HOME in plist path instead of leaving literal $HOME", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_PROFILE: "default",
+      });
+      // The plist path must contain the resolved home dir, not literal $HOME
+      expect(content).toMatch(/[\\/]Users[\\/]testuser[\\/]Library[\\/]LaunchAgents[\\/]/);
+      expect(content).not.toContain("$HOME");
+      await cleanupScript(scriptPath);
+    });
+
+    it("prefers env parameter HOME over process.env.HOME for plist path", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 502;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/envhome",
+        OPENCLAW_PROFILE: "default",
+      });
+      expect(content).toMatch(/[\\/]Users[\\/]envhome[\\/]Library[\\/]LaunchAgents[\\/]/);
+      await cleanupScript(scriptPath);
+    });
+
+    it("shell-escapes the label in the plist path on macOS", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
+      });
+      // The plist path must also shell-escape the label to prevent injection
+      expect(content).toContain("ai.openclaw.it'\\''s-a-test.plist");
+      await cleanupScript(scriptPath);
+    });
+
     it("rejects unsafe batch profile names on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = await prepareRestartScript({
@@ -191,6 +293,7 @@ describe("restart-helper", () => {
       expect(spawn).toHaveBeenCalledWith("/bin/sh", [scriptPath], {
         detached: true,
         stdio: "ignore",
+        windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
     });
@@ -203,11 +306,27 @@ describe("restart-helper", () => {
 
       await runRestartScript(scriptPath);
 
-      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/c", scriptPath], {
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", scriptPath], {
         detached: true,
         stdio: "ignore",
+        windowsHide: true,
       });
       expect(mockChild.unref).toHaveBeenCalled();
+    });
+
+    it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
+      const mockChild = { unref: vi.fn() };
+      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+
+      await runRestartScript(scriptPath);
+
+      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", `"${scriptPath}"`], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      });
     });
   });
 });

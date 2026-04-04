@@ -1,20 +1,21 @@
 import crypto from "node:crypto";
-import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
-import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
+import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import {
+  startBrowserBridgeServer,
+  stopBrowserBridgeServer,
+} from "../../plugin-sdk/browser-bridge.js";
 import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
-} from "../../browser/constants.js";
+  resolveProfile,
+  type ResolvedBrowserConfig,
+} from "../../plugin-sdk/browser-config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
-import {
-  DEFAULT_SANDBOX_BROWSER_IMAGE,
-  SANDBOX_AGENT_WORKSPACE_MOUNT,
-  SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
-} from "./constants.js";
+import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "./constants.js";
 import {
   buildSandboxCreateArgs,
   dockerContainerState,
@@ -24,7 +25,6 @@ import {
   readDockerPort,
 } from "./docker.js";
 import {
-  buildNoVncDirectUrl,
   buildNoVncObserverTokenUrl,
   consumeNoVncObserverToken,
   generateNoVncPassword,
@@ -37,6 +37,7 @@ import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
+import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
@@ -71,6 +72,7 @@ function buildSandboxBrowserResolvedConfig(params: {
   evaluateEnabled: boolean;
 }): ResolvedBrowserConfig {
   const cdpHost = "127.0.0.1";
+  const cdpPortRange = deriveDefaultBrowserCdpPortRange(params.controlPort);
   return {
     enabled: true,
     evaluateEnabled: params.evaluateEnabled,
@@ -78,6 +80,8 @@ function buildSandboxBrowserResolvedConfig(params: {
     cdpProtocol: "http",
     cdpHost,
     cdpIsLoopback: true,
+    cdpPortRangeStart: cdpPortRange.start,
+    cdpPortRangeEnd: cdpPortRange.end,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
     color: DEFAULT_OPENCLAW_BROWSER_COLOR,
@@ -165,6 +169,7 @@ export async function ensureSandboxBrowser(params: {
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
   });
 
   const now = Date.now();
@@ -234,18 +239,13 @@ export async function ensureSandboxBrowser(params: {
       includeBinds: false,
       bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
     });
-    const mainMountSuffix =
-      params.cfg.workspaceAccess === "ro" && params.workspaceDir === params.agentWorkspaceDir
-        ? ":ro"
-        : "";
-    args.push("-v", `${params.workspaceDir}:${params.cfg.docker.workdir}${mainMountSuffix}`);
-    if (params.cfg.workspaceAccess !== "none" && params.workspaceDir !== params.agentWorkspaceDir) {
-      const agentMountSuffix = params.cfg.workspaceAccess === "ro" ? ":ro" : "";
-      args.push(
-        "-v",
-        `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
-      );
-    }
+    appendWorkspaceMountArgs({
+      args,
+      workspaceDir: params.workspaceDir,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      workdir: params.cfg.docker.workdir,
+      workspaceAccess: params.cfg.workspaceAccess,
+    });
     if (browserDockerCfg.binds?.length) {
       for (const bind of browserDockerCfg.binds) {
         args.push("-v", bind);
@@ -336,8 +336,8 @@ export async function ensureSandboxBrowser(params: {
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
-          const state = await dockerContainerState(containerName);
-          if (state.exists && !state.running) {
+          const currentState = await dockerContainerState(containerName);
+          if (currentState.exists && !currentState.running) {
             await execDocker(["start", containerName]);
           }
           const ok = await waitForSandboxCdp({
@@ -390,8 +390,10 @@ export async function ensureSandboxBrowser(params: {
   const noVncUrl =
     mappedNoVnc && noVncEnabled
       ? (() => {
-          const directUrl = buildNoVncDirectUrl(mappedNoVnc, noVncPassword);
-          const token = issueNoVncObserverToken({ url: directUrl });
+          const token = issueNoVncObserverToken({
+            noVncPort: mappedNoVnc,
+            password: noVncPassword,
+          });
           return buildNoVncObserverTokenUrl(resolvedBridge.baseUrl, token);
         })()
       : undefined;

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   rewriteUpdateFlagArgv,
+  resolveMissingBrowserCommandMessage,
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
+  shouldUseRootHelpFastPath,
 } from "./run-main.js";
 
 describe("rewriteUpdateFlagArgv", () => {
@@ -114,6 +116,7 @@ describe("shouldEnsureCliPath", () => {
 
   it("skips path bootstrap for read-only fast paths", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "status"])).toBe(false);
+    expect(shouldEnsureCliPath(["node", "openclaw", "--log-level", "debug", "status"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
     expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);
@@ -123,5 +126,50 @@ describe("shouldEnsureCliPath", () => {
     expect(shouldEnsureCliPath(["node", "openclaw", "message", "send"])).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "voicecall", "status"])).toBe(true);
     expect(shouldEnsureCliPath(["node", "openclaw", "acp", "-v"])).toBe(true);
+  });
+});
+
+describe("shouldUseRootHelpFastPath", () => {
+  it("uses the fast path for root help only", () => {
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help"])).toBe(true);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
+  });
+});
+
+describe("resolveMissingBrowserCommandMessage", () => {
+  it("explains plugins.allow misses for the browser command", () => {
+    expect(
+      resolveMissingBrowserCommandMessage({
+        plugins: {
+          allow: ["telegram"],
+        },
+      }),
+    ).toContain('`plugins.allow` excludes "browser"');
+  });
+
+  it("explains explicit bundled browser disablement", () => {
+    expect(
+      resolveMissingBrowserCommandMessage({
+        plugins: {
+          entries: {
+            browser: {
+              enabled: false,
+            },
+          },
+        },
+      }),
+    ).toContain("plugins.entries.browser.enabled=false");
+  });
+
+  it("returns null when browser is already allowed", () => {
+    expect(
+      resolveMissingBrowserCommandMessage({
+        plugins: {
+          allow: ["browser"],
+        },
+      }),
+    ).toBeNull();
   });
 });

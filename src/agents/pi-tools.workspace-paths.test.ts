@@ -8,8 +8,9 @@ import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
@@ -19,6 +20,35 @@ async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
+}
+
+function createExecTool(workspaceDir: string) {
+  const tools = createOpenClawCodingTools({
+    workspaceDir,
+    exec: { host: "gateway", ask: "off", security: "full" },
+  });
+  const execTool = tools.find((tool) => tool.name === "exec");
+  expect(execTool).toBeDefined();
+  return execTool;
+}
+
+async function expectExecCwdResolvesTo(
+  execTool: ReturnType<typeof createExecTool>,
+  callId: string,
+  params: { command: string; workdir?: string },
+  expectedDir: string,
+) {
+  const result = await execTool?.execute(callId, params);
+  const cwd =
+    result?.details && typeof result.details === "object" && "cwd" in result.details
+      ? (result.details as { cwd?: string }).cwd
+      : undefined;
+  expect(cwd).toBeTruthy();
+  const [resolvedOutput, resolvedExpected] = await Promise.all([
+    fs.realpath(String(cwd)),
+    fs.realpath(expectedDir),
+  ]);
+  expect(resolvedOutput).toBe(resolvedExpected);
 }
 
 describe("workspace path resolution", () => {
@@ -86,55 +116,52 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it("supports multi-edit edits[] payloads", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (otherDir) => {
+        const testFile = "batch.txt";
+        await fs.writeFile(path.join(workspaceDir, testFile), "alpha beta gamma delta", "utf8");
+
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
+        try {
+          const tools = createOpenClawCodingTools({ workspaceDir });
+          const { editTool } = expectReadWriteEditTools(tools);
+
+          await editTool.execute("ws-edit-batch", {
+            path: testFile,
+            edits: [
+              { oldText: "alpha", newText: "ALPHA" },
+              { oldText: "delta", newText: "DELTA" },
+            ],
+          });
+
+          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe(
+            "ALPHA beta gamma DELTA",
+          );
+        } finally {
+          cwdSpy.mockRestore();
+        }
+      });
+    });
+  });
+
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        exec: { host: "gateway", ask: "off", security: "full" },
-      });
-      const execTool = tools.find((tool) => tool.name === "exec");
-      expect(execTool).toBeDefined();
-
-      const result = await execTool?.execute("ws-exec", {
-        command: "echo ok",
-      });
-      const cwd =
-        result?.details && typeof result.details === "object" && "cwd" in result.details
-          ? (result.details as { cwd?: string }).cwd
-          : undefined;
-      expect(cwd).toBeTruthy();
-      const [resolvedOutput, resolvedWorkspace] = await Promise.all([
-        fs.realpath(String(cwd)),
-        fs.realpath(workspaceDir),
-      ]);
-      expect(resolvedOutput).toBe(resolvedWorkspace);
+      const execTool = createExecTool(workspaceDir);
+      await expectExecCwdResolvesTo(execTool, "ws-exec", { command: "echo ok" }, workspaceDir);
     });
   });
 
   it("lets exec workdir override the workspace default", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-override-", async (overrideDir) => {
-        const tools = createOpenClawCodingTools({
-          workspaceDir,
-          exec: { host: "gateway", ask: "off", security: "full" },
-        });
-        const execTool = tools.find((tool) => tool.name === "exec");
-        expect(execTool).toBeDefined();
-
-        const result = await execTool?.execute("ws-exec-override", {
-          command: "echo ok",
-          workdir: overrideDir,
-        });
-        const cwd =
-          result?.details && typeof result.details === "object" && "cwd" in result.details
-            ? (result.details as { cwd?: string }).cwd
-            : undefined;
-        expect(cwd).toBeTruthy();
-        const [resolvedOutput, resolvedOverride] = await Promise.all([
-          fs.realpath(String(cwd)),
-          fs.realpath(overrideDir),
-        ]);
-        expect(resolvedOutput).toBe(resolvedOverride);
+        const execTool = createExecTool(workspaceDir);
+        await expectExecCwdResolvesTo(
+          execTool,
+          "ws-exec-override",
+          { command: "echo ok", workdir: overrideDir },
+          overrideDir,
+        );
       });
     });
   });

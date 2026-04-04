@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_URL="${OPENCLAW_INSTALL_URL:-${CLAWDBOT_INSTALL_URL:-https://openclaw.bot/install.sh}}"
-MODELS_MODE="${OPENCLAW_E2E_MODELS:-${CLAWDBOT_E2E_MODELS:-both}}" # both|openai|anthropic
-INSTALL_TAG="${OPENCLAW_INSTALL_TAG:-${CLAWDBOT_INSTALL_TAG:-latest}}"
-E2E_PREVIOUS_VERSION="${OPENCLAW_INSTALL_E2E_PREVIOUS:-${CLAWDBOT_INSTALL_E2E_PREVIOUS:-}}"
-SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-${CLAWDBOT_INSTALL_E2E_SKIP_PREVIOUS:-0}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERIFY_HELPER_PATH="/usr/local/install-sh-common/version-parse.sh"
+if [[ ! -f "$VERIFY_HELPER_PATH" ]]; then
+  VERIFY_HELPER_PATH="${SCRIPT_DIR}/../install-sh-common/version-parse.sh"
+fi
+# shellcheck source=../install-sh-common/version-parse.sh
+source "$VERIFY_HELPER_PATH"
+
+INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
+MODELS_MODE="${OPENCLAW_E2E_MODELS:-both}" # both|openai|anthropic
+INSTALL_TAG="${OPENCLAW_INSTALL_TAG:-latest}"
+E2E_PREVIOUS_VERSION="${OPENCLAW_INSTALL_E2E_PREVIOUS:-}"
+SKIP_PREVIOUS="${OPENCLAW_INSTALL_E2E_SKIP_PREVIOUS:-0}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 ANTHROPIC_API_TOKEN="${ANTHROPIC_API_TOKEN:-}"
@@ -60,15 +68,16 @@ fi
 
 echo "==> Run official installer one-liner"
 if [[ "$INSTALL_TAG" == "beta" ]]; then
-  OPENCLAW_BETA=1 CLAWDBOT_BETA=1 curl -fsSL "$INSTALL_URL" | bash
+  OPENCLAW_BETA=1 curl -fsSL "$INSTALL_URL" | bash
 elif [[ "$INSTALL_TAG" != "latest" ]]; then
-  OPENCLAW_VERSION="$INSTALL_TAG" CLAWDBOT_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash
+  OPENCLAW_VERSION="$INSTALL_TAG" curl -fsSL "$INSTALL_URL" | bash
 else
   curl -fsSL "$INSTALL_URL" | bash
 fi
 
 echo "==> Verify installed version"
 INSTALLED_VERSION="$(openclaw --version 2>/dev/null | head -n 1 | tr -d '\r')"
+INSTALLED_VERSION="$(extract_openclaw_semver "$INSTALLED_VERSION")"
 echo "installed=$INSTALLED_VERSION expected=$EXPECTED_VERSION"
 if [[ "$INSTALLED_VERSION" != "$EXPECTED_VERSION" ]]; then
   echo "ERROR: expected openclaw@$EXPECTED_VERSION, got openclaw@$INSTALLED_VERSION" >&2
@@ -401,14 +410,10 @@ run_profile() {
   else
     agent_model="$(set_agent_model "$profile" \
       "anthropic/claude-opus-4-6" \
-      "claude-opus-4-6" \
-      "anthropic/claude-opus-4-5" \
-      "claude-opus-4-5")"
+      "claude-opus-4-6")"
     image_model="$(set_image_model "$profile" \
       "anthropic/claude-opus-4-6" \
-      "claude-opus-4-6" \
-      "anthropic/claude-opus-4-5" \
-      "claude-opus-4-5")"
+      "claude-opus-4-6")"
   fi
   echo "model=$agent_model"
   echo "imageModel=$image_model"

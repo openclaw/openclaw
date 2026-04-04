@@ -3,7 +3,7 @@ import path from "node:path";
 const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
 
-function normalizeWindowsPathForComparison(input: string): string {
+export function normalizeWindowsPathForComparison(input: string): string {
   let normalized = path.win32.normalize(input);
   if (normalized.startsWith("\\\\?\\")) {
     normalized = normalized.slice(4);
@@ -33,16 +33,15 @@ export function isSymlinkOpenError(value: unknown): boolean {
 }
 
 export function isPathInside(root: string, target: string): boolean {
-  const resolvedRoot = path.resolve(root);
-  const resolvedTarget = path.resolve(target);
-
   if (process.platform === "win32") {
-    const rootForCompare = normalizeWindowsPathForComparison(resolvedRoot);
-    const targetForCompare = normalizeWindowsPathForComparison(resolvedTarget);
+    const rootForCompare = normalizeWindowsPathForComparison(path.win32.resolve(root));
+    const targetForCompare = normalizeWindowsPathForComparison(path.win32.resolve(target));
     const relative = path.win32.relative(rootForCompare, targetForCompare);
     return relative === "" || (!relative.startsWith("..") && !path.win32.isAbsolute(relative));
   }
 
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
   const relative = path.relative(resolvedRoot, resolvedTarget);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

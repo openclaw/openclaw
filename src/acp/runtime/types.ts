@@ -2,6 +2,19 @@ export type AcpRuntimePromptMode = "prompt" | "steer";
 
 export type AcpRuntimeSessionMode = "persistent" | "oneshot";
 
+export type AcpSessionUpdateTag =
+  | "agent_message_chunk"
+  | "agent_thought_chunk"
+  | "tool_call"
+  | "tool_call_update"
+  | "usage_update"
+  | "available_commands_update"
+  | "current_mode_update"
+  | "config_option_update"
+  | "session_info_update"
+  | "plan"
+  | (string & {});
+
 export type AcpRuntimeControl = "session/set_mode" | "session/set_config_option" | "session/status";
 
 export type AcpRuntimeHandle = {
@@ -22,13 +35,20 @@ export type AcpRuntimeEnsureInput = {
   sessionKey: string;
   agent: string;
   mode: AcpRuntimeSessionMode;
+  resumeSessionId?: string;
   cwd?: string;
   env?: Record<string, string>;
+};
+
+export type AcpRuntimeTurnAttachment = {
+  mediaType: string;
+  data: string;
 };
 
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
+  attachments?: AcpRuntimeTurnAttachment[];
   mode: AcpRuntimePromptMode;
   requestId: string;
   signal?: AbortSignal;
@@ -67,14 +87,22 @@ export type AcpRuntimeEvent =
       type: "text_delta";
       text: string;
       stream?: "output" | "thought";
+      tag?: AcpSessionUpdateTag;
     }
   | {
       type: "status";
       text: string;
+      tag?: AcpSessionUpdateTag;
+      used?: number;
+      size?: number;
     }
   | {
       type: "tool_call";
       text: string;
+      tag?: AcpSessionUpdateTag;
+      toolCallId?: string;
+      status?: string;
+      title?: string;
     }
   | {
       type: "done";
@@ -96,7 +124,7 @@ export interface AcpRuntime {
     handle?: AcpRuntimeHandle;
   }): Promise<AcpRuntimeCapabilities> | AcpRuntimeCapabilities;
 
-  getStatus?(input: { handle: AcpRuntimeHandle }): Promise<AcpRuntimeStatus>;
+  getStatus?(input: { handle: AcpRuntimeHandle; signal?: AbortSignal }): Promise<AcpRuntimeStatus>;
 
   setMode?(input: { handle: AcpRuntimeHandle; mode: string }): Promise<void>;
 

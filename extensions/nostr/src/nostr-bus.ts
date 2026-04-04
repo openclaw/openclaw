@@ -7,7 +7,12 @@ import {
   type Event,
 } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
+import {
+  createDirectDmPreCryptoGuardPolicy,
+  type DirectDmPreCryptoGuardPolicyOverrides,
+} from "../runtime-api.js";
 import type { NostrProfile } from "./config-schema.js";
+import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
   createMetrics,
   createNoopMetrics,
@@ -25,8 +30,6 @@ import {
 } from "./nostr-state-store.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 
-export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
-
 // ============================================================================
 // Constants
 // ============================================================================
@@ -34,6 +37,7 @@ export const DEFAULT_RELAYS = ["wss://relay.damus.io", "wss://nos.lol"];
 const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
+const DEFAULT_INBOUND_GUARD_POLICY = createDirectDmPreCryptoGuardPolicy();
 
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
@@ -58,7 +62,15 @@ export interface NostrBusOptions {
     pubkey: string,
     text: string,
     reply: (text: string) => Promise<void>,
+    meta: { eventId: string; createdAt: number },
   ) => Promise<void>;
+  /** Called after signature verification and before decrypt to allow sender policy checks (optional) */
+  authorizeSender?: (params: {
+    senderPubkey: string;
+    reply: (text: string) => Promise<void>;
+  }) => Promise<"allow" | "block" | "pairing">;
+  /** Override pre-crypto DM guardrails for tests or future channel tuning (optional) */
+  guardPolicy?: DirectDmPreCryptoGuardPolicyOverrides;
   /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
   /** Called on connection status changes (optional) */
@@ -73,6 +85,62 @@ export interface NostrBusOptions {
   maxSeenEntries?: number;
   /** Seen tracker TTL in ms (default: 1 hour) */
   seenTtlMs?: number;
+}
+
+type FixedWindowRateLimiter = {
+  isRateLimited: (key: string, nowMs?: number) => boolean;
+  size: () => number;
+  clear: () => void;
+};
+
+function createFixedWindowRateLimiter(params: {
+  windowMs: number;
+  maxRequests: number;
+  maxTrackedKeys: number;
+}): FixedWindowRateLimiter {
+  const windowMs = Math.max(1, Math.floor(params.windowMs));
+  const maxRequests = Math.max(1, Math.floor(params.maxRequests));
+  const maxTrackedKeys = Math.max(1, Math.floor(params.maxTrackedKeys));
+  const state = new Map<string, { count: number; windowStartMs: number }>();
+
+  const touch = (key: string, value: { count: number; windowStartMs: number }) => {
+    state.delete(key);
+    state.set(key, value);
+  };
+
+  const prune = (nowMs: number) => {
+    for (const [key, entry] of state) {
+      if (nowMs - entry.windowStartMs >= windowMs) {
+        state.delete(key);
+      }
+    }
+    while (state.size > maxTrackedKeys) {
+      const oldest = state.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      state.delete(oldest);
+    }
+  };
+
+  return {
+    isRateLimited: (key: string, nowMs = Date.now()) => {
+      if (!key) {
+        return false;
+      }
+      prune(nowMs);
+      const existing = state.get(key);
+      if (!existing || nowMs - existing.windowStartMs >= windowMs) {
+        touch(key, { count: 1, windowStartMs: nowMs });
+        return false;
+      }
+      const nextCount = existing.count + 1;
+      touch(key, { count: nextCount, windowStartMs: existing.windowStartMs });
+      return nextCount > maxRequests;
+    },
+    size: () => state.size,
+    clear: () => state.clear(),
+  };
 }
 
 export interface NostrBusHandle {
@@ -323,6 +391,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     privateKey,
     relays = DEFAULT_RELAYS,
     onMessage,
+    authorizeSender,
     onError,
     onEose,
     onMetric,
@@ -335,6 +404,14 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const pool = new SimplePool();
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
+  const guardPolicy = createDirectDmPreCryptoGuardPolicy({
+    ...DEFAULT_INBOUND_GUARD_POLICY,
+    ...options.guardPolicy,
+    rateLimit: {
+      ...DEFAULT_INBOUND_GUARD_POLICY.rateLimit,
+      ...options.guardPolicy?.rateLimit,
+    },
+  });
 
   // Initialize metrics
   const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
@@ -397,6 +474,23 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   }
 
   const inflight = new Set<string>();
+  const perSenderRateLimiter = createFixedWindowRateLimiter({
+    windowMs: guardPolicy.rateLimit.windowMs,
+    maxRequests: guardPolicy.rateLimit.maxPerSenderPerWindow,
+    maxTrackedKeys: guardPolicy.rateLimit.maxTrackedSenderKeys,
+  });
+  const globalRateLimiter = createFixedWindowRateLimiter({
+    windowMs: guardPolicy.rateLimit.windowMs,
+    maxRequests: guardPolicy.rateLimit.maxGlobalPerWindow,
+    maxTrackedKeys: 1,
+  });
+
+  const updateRateLimiterSizeMetric = () => {
+    metrics.emit(
+      "memory.rate_limiter_entries",
+      perSenderRateLimiter.size() + globalRateLimiter.size(),
+    );
+  };
 
   // Event handler
   async function handleEvent(event: Event): Promise<void> {
@@ -422,6 +516,16 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
+      if (event.created_at > Math.floor(Date.now() / 1000) + guardPolicy.maxFutureSkewSec) {
+        metrics.emit("event.rejected.future");
+        return;
+      }
+
+      if (!guardPolicy.allowedKinds.includes(event.kind)) {
+        metrics.emit("event.rejected.wrong_kind");
+        return;
+      }
+
       // Fast p-tag check BEFORE crypto (no allocation, cheaper)
       let targetsUs = false;
       for (const t of event.tags) {
@@ -435,30 +539,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         return;
       }
 
-      // Verify signature (must pass before we trust the event)
-      if (!verifyEvent(event)) {
-        metrics.emit("event.rejected.invalid_signature");
-        onError?.(new Error("Invalid signature"), `event ${event.id}`);
-        return;
-      }
-
-      // Mark seen AFTER verify (don't cache invalid IDs)
-      seen.add(event.id);
-      metrics.emit("memory.seen_tracker_size", seen.size());
-
-      // Decrypt the message
-      let plaintext: string;
-      try {
-        plaintext = decrypt(sk, event.pubkey, event.content);
-        metrics.emit("decrypt.success");
-      } catch (err) {
-        metrics.emit("decrypt.failure");
-        metrics.emit("event.rejected.decrypt_failed");
-        onError?.(err as Error, `decrypt from ${event.pubkey}`);
-        return;
-      }
-
-      // Create reply function (try relays by health score)
       const replyTo = async (text: string): Promise<void> => {
         await sendEncryptedDm(
           pool,
@@ -473,8 +553,94 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         );
       };
 
+      const rejectIfGlobalRateLimited = (): boolean => {
+        updateRateLimiterSizeMetric();
+        if (globalRateLimiter.isRateLimited("global")) {
+          metrics.emit("rate_limit.global");
+          metrics.emit("event.rejected.rate_limited");
+          updateRateLimiterSizeMetric();
+          return true;
+        }
+        updateRateLimiterSizeMetric();
+        return false;
+      };
+
+      const rejectIfVerifiedSenderRateLimited = (): boolean => {
+        updateRateLimiterSizeMetric();
+        if (perSenderRateLimiter.isRateLimited(event.pubkey)) {
+          metrics.emit("rate_limit.per_sender");
+          metrics.emit("event.rejected.rate_limited");
+          updateRateLimiterSizeMetric();
+          return true;
+        }
+        updateRateLimiterSizeMetric();
+        return false;
+      };
+
+      const markSeen = () => {
+        seen.add(event.id);
+        metrics.emit("memory.seen_tracker_size", seen.size());
+      };
+
+      if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
+        if (rejectIfGlobalRateLimited()) {
+          return;
+        }
+        metrics.emit("event.rejected.oversized_ciphertext");
+        return;
+      }
+
+      if (rejectIfGlobalRateLimited()) {
+        return;
+      }
+
+      // Verify signature (must pass before we trust the event)
+      if (!verifyEvent(event)) {
+        metrics.emit("event.rejected.invalid_signature");
+        onError?.(new Error("Invalid signature"), `event ${event.id}`);
+        return;
+      }
+
+      if (rejectIfVerifiedSenderRateLimited()) {
+        return;
+      }
+
+      if (authorizeSender) {
+        const decision = await authorizeSender({
+          senderPubkey: event.pubkey,
+          reply: replyTo,
+        });
+        if (decision !== "allow") {
+          markSeen();
+          return;
+        }
+      }
+
+      // Mark seen AFTER verify (don't cache invalid IDs)
+      markSeen();
+
+      // Decrypt the message
+      let plaintext: string;
+      try {
+        plaintext = decrypt(sk, event.pubkey, event.content);
+        metrics.emit("decrypt.success");
+      } catch (err) {
+        metrics.emit("decrypt.failure");
+        metrics.emit("event.rejected.decrypt_failed");
+        onError?.(err as Error, `decrypt from ${event.pubkey}`);
+        return;
+      }
+
+      if (Buffer.byteLength(plaintext, "utf8") > guardPolicy.maxPlaintextBytes) {
+        metrics.emit("event.rejected.oversized_plaintext");
+        return;
+      }
+
       // Call the message handler
-      await onMessage(event.pubkey, plaintext, replyTo);
+      await onMessage(event.pubkey, plaintext, replyTo, {
+        eventId: event.id,
+        createdAt: event.created_at,
+      });
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -569,6 +735,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     close: () => {
       sub.close();
       seen.stop();
+      perSenderRateLimiter.clear();
+      globalRateLimiter.clear();
       // Flush pending state write synchronously on close
       if (pendingWrite) {
         clearTimeout(pendingWrite);

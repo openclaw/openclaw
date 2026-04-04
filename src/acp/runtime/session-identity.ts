@@ -71,6 +71,15 @@ export function identityHasStableSessionId(identity: SessionAcpIdentity | undefi
   return Boolean(identity?.acpxSessionId || identity?.agentSessionId);
 }
 
+export function resolveRuntimeResumeSessionId(
+  identity: SessionAcpIdentity | undefined,
+): string | undefined {
+  if (!identity) {
+    return undefined;
+  }
+  return normalizeText(identity.acpxSessionId) ?? normalizeText(identity.agentSessionId);
+}
+
 export function isSessionIdentityPending(identity: SessionAcpIdentity | undefined): boolean {
   if (!identity) {
     return true;

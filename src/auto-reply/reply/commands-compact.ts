@@ -44,6 +44,38 @@ function extractCompactInstructions(params: {
   return rest.length ? rest : undefined;
 }
 
+function isCompactionSkipReason(reason?: string): boolean {
+  const text = reason?.trim().toLowerCase() ?? "";
+  return (
+    text.includes("nothing to compact") ||
+    text.includes("below threshold") ||
+    text.includes("already compacted") ||
+    text.includes("no real conversation messages")
+  );
+}
+
+function formatCompactionReason(reason?: string): string | undefined {
+  const text = reason?.trim();
+  if (!text) {
+    return undefined;
+  }
+
+  const lower = text.toLowerCase();
+  if (lower.includes("nothing to compact")) {
+    return "nothing compactable in this session yet";
+  }
+  if (lower.includes("below threshold")) {
+    return "context is below the compaction threshold";
+  }
+  if (lower.includes("already compacted")) {
+    return "session was already compacted recently";
+  }
+  if (lower.includes("no real conversation messages")) {
+    return "no real conversation messages yet";
+  }
+  return text;
+}
+
 export const handleCompactCommand: CommandHandler = async (params) => {
   const compactRequested =
     params.command.commandBodyNormalized === "/compact" ||
@@ -78,6 +110,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const result = await compactEmbeddedPiSession({
     sessionId,
     sessionKey: params.sessionKey,
+    allowGatewaySubagentBinding: true,
     messageChannel: params.command.channel,
     groupId: params.sessionEntry.groupId,
     groupChannel: params.sessionEntry.groupChannel,
@@ -109,17 +142,19 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
-  const compactLabel = result.ok
-    ? result.compacted
-      ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-        ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
-        : result.result?.tokensBefore
-          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
-          : "Compacted"
-      : "Compaction skipped"
-    : "Compaction failed";
+  const compactLabel =
+    result.ok || isCompactionSkipReason(result.reason)
+      ? result.compacted
+        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+          ? `Compacted (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+          : result.result?.tokensBefore
+            ? `Compacted (${formatTokenCount(result.result.tokensBefore)} before)`
+            : "Compacted"
+        : "Compaction skipped"
+      : "Compaction failed";
   if (result.ok && result.compacted) {
     await incrementCompactionCount({
+      cfg: params.cfg,
       sessionEntry: params.sessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
@@ -135,7 +170,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
     params.contextTokens ?? params.sessionEntry.contextTokens ?? null,
   );
-  const reason = result.reason?.trim();
+  const reason = formatCompactionReason(result.reason);
   const line = reason
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;

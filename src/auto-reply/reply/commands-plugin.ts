@@ -37,13 +37,20 @@ export const handlePluginCommand: CommandHandler = async (
     channel: command.channel,
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
+    gatewayClientScopes: params.ctx.GatewayClientScopes,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionEntry?.sessionId,
     commandBody: command.commandBodyNormalized,
     config: cfg,
     from: command.from,
     to: command.to,
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
-      typeof params.ctx.MessageThreadId === "number" ? params.ctx.MessageThreadId : undefined,
+      typeof params.ctx.MessageThreadId === "string" ||
+      typeof params.ctx.MessageThreadId === "number"
+        ? params.ctx.MessageThreadId
+        : undefined,
+    threadParentId: params.ctx.ThreadParentId?.trim() || undefined,
   });
 
   return {

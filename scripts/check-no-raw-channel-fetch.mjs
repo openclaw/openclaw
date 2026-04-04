@@ -1,132 +1,55 @@
 #!/usr/bin/env node
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { bundledPluginCallsite } from "./lib/bundled-plugin-paths.mjs";
+import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
+import {
+  collectCallExpressionLines,
+  runAsScript,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sourceRoots = [
-  path.join(repoRoot, "src", "telegram"),
-  path.join(repoRoot, "src", "discord"),
-  path.join(repoRoot, "src", "slack"),
-  path.join(repoRoot, "src", "signal"),
-  path.join(repoRoot, "src", "imessage"),
-  path.join(repoRoot, "src", "web"),
-  path.join(repoRoot, "src", "channels"),
-  path.join(repoRoot, "src", "routing"),
-  path.join(repoRoot, "src", "line"),
-  path.join(repoRoot, "extensions"),
-];
+const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  "extensions/bluebubbles/src/types.ts:131",
-  "extensions/feishu/src/streaming-card.ts:31",
-  "extensions/feishu/src/streaming-card.ts:101",
-  "extensions/feishu/src/streaming-card.ts:143",
-  "extensions/feishu/src/streaming-card.ts:199",
-  "extensions/google-gemini-cli-auth/oauth.ts:372",
-  "extensions/google-gemini-cli-auth/oauth.ts:408",
-  "extensions/google-gemini-cli-auth/oauth.ts:447",
-  "extensions/google-gemini-cli-auth/oauth.ts:507",
-  "extensions/google-gemini-cli-auth/oauth.ts:575",
-  "extensions/googlechat/src/api.ts:22",
-  "extensions/googlechat/src/api.ts:43",
-  "extensions/googlechat/src/api.ts:63",
-  "extensions/googlechat/src/api.ts:184",
-  "extensions/googlechat/src/auth.ts:82",
-  "extensions/matrix/src/directory-live.ts:41",
-  "extensions/matrix/src/matrix/client/config.ts:171",
-  "extensions/mattermost/src/mattermost/client.ts:211",
-  "extensions/mattermost/src/mattermost/monitor.ts:230",
-  "extensions/mattermost/src/mattermost/probe.ts:27",
-  "extensions/minimax-portal-auth/oauth.ts:71",
-  "extensions/minimax-portal-auth/oauth.ts:112",
-  "extensions/msteams/src/graph.ts:39",
-  "extensions/nextcloud-talk/src/room-info.ts:92",
-  "extensions/nextcloud-talk/src/send.ts:107",
-  "extensions/nextcloud-talk/src/send.ts:198",
-  "extensions/qwen-portal-auth/oauth.ts:46",
-  "extensions/qwen-portal-auth/oauth.ts:80",
-  "extensions/talk-voice/index.ts:27",
-  "extensions/thread-ownership/index.ts:105",
-  "extensions/voice-call/src/providers/plivo.ts:95",
-  "extensions/voice-call/src/providers/telnyx.ts:61",
-  "extensions/voice-call/src/providers/tts-openai.ts:111",
-  "extensions/voice-call/src/providers/twilio/api.ts:23",
-  "src/channels/telegram/api.ts:8",
-  "src/discord/send.outbound.ts:347",
-  "src/discord/voice-message.ts:267",
-  "src/slack/monitor/media.ts:64",
-  "src/slack/monitor/media.ts:68",
-  "src/slack/monitor/media.ts:82",
-  "src/slack/monitor/media.ts:108",
+  bundledPluginCallsite("bluebubbles", "src/types.ts", 133),
+  bundledPluginCallsite("feishu", "src/streaming-card.ts", 31),
+  bundledPluginCallsite("feishu", "src/streaming-card.ts", 101),
+  bundledPluginCallsite("feishu", "src/streaming-card.ts", 143),
+  bundledPluginCallsite("feishu", "src/streaming-card.ts", 199),
+  bundledPluginCallsite("googlechat", "src/api.ts", 22),
+  bundledPluginCallsite("googlechat", "src/api.ts", 43),
+  bundledPluginCallsite("googlechat", "src/api.ts", 63),
+  bundledPluginCallsite("googlechat", "src/api.ts", 188),
+  bundledPluginCallsite("googlechat", "src/auth.ts", 82),
+  bundledPluginCallsite("matrix", "src/directory-live.ts", 41),
+  bundledPluginCallsite("matrix", "src/matrix/client/config.ts", 171),
+  bundledPluginCallsite("mattermost", "src/mattermost/client.ts", 211),
+  bundledPluginCallsite("mattermost", "src/mattermost/monitor.ts", 230),
+  bundledPluginCallsite("mattermost", "src/mattermost/probe.ts", 27),
+  bundledPluginCallsite("minimax", "oauth.ts", 62),
+  bundledPluginCallsite("minimax", "oauth.ts", 93),
+  bundledPluginCallsite("msteams", "src/graph.ts", 39),
+  bundledPluginCallsite("nextcloud-talk", "src/room-info.ts", 92),
+  bundledPluginCallsite("nextcloud-talk", "src/send.ts", 107),
+  bundledPluginCallsite("nextcloud-talk", "src/send.ts", 198),
+  bundledPluginCallsite("talk-voice", "index.ts", 27),
+  bundledPluginCallsite("thread-ownership", "index.ts", 105),
+  bundledPluginCallsite("voice-call", "src/providers/plivo.ts", 95),
+  bundledPluginCallsite("voice-call", "src/providers/telnyx.ts", 61),
+  bundledPluginCallsite("voice-call", "src/providers/tts-openai.ts", 111),
+  bundledPluginCallsite("voice-call", "src/providers/twilio/api.ts", 23),
+  bundledPluginCallsite("telegram", "src/api-fetch.ts", 8),
+  bundledPluginCallsite("discord", "src/send.outbound.ts", 363),
+  bundledPluginCallsite("discord", "src/voice-message.ts", 268),
+  bundledPluginCallsite("discord", "src/voice-message.ts", 312),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 55),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 59),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 73),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 99),
 ]);
-
-function isTestLikeFile(filePath) {
-  return (
-    filePath.endsWith(".test.ts") ||
-    filePath.endsWith(".test-utils.ts") ||
-    filePath.endsWith(".test-harness.ts") ||
-    filePath.endsWith(".e2e-harness.ts") ||
-    filePath.endsWith(".browser.test.ts") ||
-    filePath.endsWith(".node.test.ts")
-  );
-}
-
-async function collectTypeScriptFiles(targetPath) {
-  const stat = await fs.stat(targetPath);
-  if (stat.isFile()) {
-    if (!targetPath.endsWith(".ts") || isTestLikeFile(targetPath)) {
-      return [];
-    }
-    return [targetPath];
-  }
-  const entries = await fs.readdir(targetPath, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    const entryPath = path.join(targetPath, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules") {
-        continue;
-      }
-      files.push(...(await collectTypeScriptFiles(entryPath)));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (!entryPath.endsWith(".ts")) {
-      continue;
-    }
-    if (isTestLikeFile(entryPath)) {
-      continue;
-    }
-    files.push(entryPath);
-  }
-  return files;
-}
-
-function unwrapExpression(expression) {
-  let current = expression;
-  while (true) {
-    if (ts.isParenthesizedExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isNonNullExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    return current;
-  }
-}
 
 function isRawFetchCall(expression) {
   const callee = unwrapExpression(expression);
@@ -145,70 +68,21 @@ function isRawFetchCall(expression) {
 
 export function findRawFetchCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const lines = [];
-  const visit = (node) => {
-    if (ts.isCallExpression(node) && isRawFetchCall(node.expression)) {
-      const line =
-        sourceFile.getLineAndCharacterOfPosition(node.expression.getStart(sourceFile)).line + 1;
-      lines.push(line);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return lines;
+  return collectCallExpressionLines(ts, sourceFile, (node) =>
+    isRawFetchCall(node.expression) ? node.expression : null,
+  );
 }
 
 export async function main() {
-  const files = (
-    await Promise.all(
-      sourceRoots.map(async (sourceRoot) => {
-        try {
-          return await collectTypeScriptFiles(sourceRoot);
-        } catch {
-          return [];
-        }
-      }),
-    )
-  ).flat();
-
-  const violations = [];
-  for (const filePath of files) {
-    const content = await fs.readFile(filePath, "utf8");
-    const relPath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
-    for (const line of findRawFetchCallLines(content, filePath)) {
-      const callsite = `${relPath}:${line}`;
-      if (allowedRawFetchCallsites.has(callsite)) {
-        continue;
-      }
-      violations.push(callsite);
-    }
-  }
-
-  if (violations.length === 0) {
-    return;
-  }
-
-  console.error("Found raw fetch() usage in channel/plugin runtime sources outside allowlist:");
-  for (const violation of violations.toSorted()) {
-    console.error(`- ${violation}`);
-  }
-  console.error(
-    "Use fetchWithSsrFGuard() or existing channel/plugin SDK wrappers for network calls.",
-  );
-  process.exit(1);
-}
-
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(import.meta.url);
-})();
-
-if (isDirectExecution) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
+  await runCallsiteGuard({
+    importMetaUrl: import.meta.url,
+    sourceRoots,
+    extraTestSuffixes: [".browser.test.ts", ".node.test.ts"],
+    findCallLines: findRawFetchCallLines,
+    allowCallsite: (callsite) => allowedRawFetchCallsites.has(callsite),
+    header: "Found raw fetch() usage in channel/plugin runtime sources outside allowlist:",
+    footer: "Use fetchWithSsrFGuard() or existing channel/plugin SDK wrappers for network calls.",
   });
 }
+
+runAsScript(import.meta.url, main);

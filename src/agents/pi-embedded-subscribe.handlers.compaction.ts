@@ -40,12 +40,27 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
 
 export function handleAutoCompactionEnd(
   ctx: EmbeddedPiSubscribeContext,
-  evt: AgentEvent & { willRetry?: unknown },
+  evt: AgentEvent & { willRetry?: unknown; result?: unknown; aborted?: unknown },
 ) {
   ctx.state.compactionInFlight = false;
   const willRetry = Boolean(evt.willRetry);
-  if (!willRetry) {
-    ctx.incrementCompactionCount?.();
+  // Increment counter whenever compaction actually produced a result,
+  // regardless of willRetry.  Overflow-triggered compaction sets willRetry=true
+  // (the framework retries the LLM request), but the compaction itself succeeded
+  // and context was trimmed — the counter must reflect that.  (#38905)
+  const hasResult = evt.result != null;
+  const wasAborted = Boolean(evt.aborted);
+  if (hasResult && !wasAborted) {
+    ctx.incrementCompactionCount();
+    const observedCompactionCount = ctx.getCompactionCount();
+    void reconcileSessionStoreCompactionCountAfterSuccess({
+      sessionKey: ctx.params.sessionKey,
+      agentId: ctx.params.agentId,
+      configStore: ctx.params.config?.session?.store,
+      observedCompactionCount,
+    }).catch((err) => {
+      ctx.log.warn(`late compaction count reconcile failed: ${String(err)}`);
+    });
   }
   if (willRetry) {
     ctx.noteCompactionRetry();
@@ -58,11 +73,11 @@ export function handleAutoCompactionEnd(
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "compaction",
-    data: { phase: "end", willRetry },
+    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
   });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
-    data: { phase: "end", willRetry },
+    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
   });
 
   // Run after_compaction plugin hook (fire-and-forget)
@@ -74,14 +89,27 @@ export function handleAutoCompactionEnd(
           {
             messageCount: ctx.params.session.messages?.length ?? 0,
             compactedCount: ctx.getCompactionCount(),
+            sessionFile: ctx.params.session.sessionFile,
           },
-          {},
+          { sessionKey: ctx.params.sessionKey },
         )
         .catch((err) => {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);
         });
     }
   }
+}
+
+export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+  sessionKey?: string;
+  agentId?: string;
+  configStore?: string;
+  observedCompactionCount: number;
+  now?: number;
+}): Promise<number | undefined> {
+  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
+    await import("./pi-embedded-subscribe.handlers.compaction.runtime.js");
+  return reconcile(params);
 }
 
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeContext): void {

@@ -1,41 +1,13 @@
-import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../onboard-provider-auth-flags.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { resolveManifestProviderOnboardAuthFlags } from "../../../plugins/provider-auth-choices.js";
+import { CORE_ONBOARD_AUTH_FLAGS } from "../../onboard-core-auth-flags.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
 type AuthChoiceFlag = {
-  optionKey: keyof AuthChoiceFlagOptions;
+  optionKey: string;
   authChoice: AuthChoice;
   label: string;
 };
-
-type AuthChoiceFlagOptions = Pick<
-  OnboardOptions,
-  | "anthropicApiKey"
-  | "geminiApiKey"
-  | "openaiApiKey"
-  | "mistralApiKey"
-  | "openrouterApiKey"
-  | "kilocodeApiKey"
-  | "aiGatewayApiKey"
-  | "cloudflareAiGatewayApiKey"
-  | "moonshotApiKey"
-  | "kimiCodeApiKey"
-  | "syntheticApiKey"
-  | "veniceApiKey"
-  | "togetherApiKey"
-  | "huggingfaceApiKey"
-  | "zaiApiKey"
-  | "xiaomiApiKey"
-  | "minimaxApiKey"
-  | "opencodeZenApiKey"
-  | "xaiApiKey"
-  | "litellmApiKey"
-  | "qianfanApiKey"
-  | "volcengineApiKey"
-  | "byteplusApiKey"
-  | "customBaseUrl"
-  | "customModelId"
-  | "customApiKey"
->;
 
 export type AuthChoiceInference = {
   choice?: AuthChoice;
@@ -47,14 +19,34 @@ function hasStringValue(value: unknown): boolean {
 }
 
 // Infer auth choice from explicit provider API key flags.
-export function inferAuthChoiceFromFlags(opts: OnboardOptions): AuthChoiceInference {
-  const matches: AuthChoiceFlag[] = ONBOARD_PROVIDER_AUTH_FLAGS.filter(({ optionKey }) =>
-    hasStringValue(opts[optionKey]),
-  ).map((flag) => ({
-    optionKey: flag.optionKey,
-    authChoice: flag.authChoice,
-    label: flag.cliFlag,
-  }));
+export function inferAuthChoiceFromFlags(
+  opts: OnboardOptions,
+  params?: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+): AuthChoiceInference {
+  const flags = [
+    ...CORE_ONBOARD_AUTH_FLAGS,
+    ...resolveManifestProviderOnboardAuthFlags({
+      config: params?.config,
+      workspaceDir: params?.workspaceDir,
+      env: params?.env,
+      includeUntrustedWorkspacePlugins: false,
+    }),
+  ] as ReadonlyArray<{
+    optionKey: string;
+    authChoice: string;
+    cliFlag: string;
+  }>;
+  const matches: AuthChoiceFlag[] = flags
+    .filter(({ optionKey }) => hasStringValue(opts[optionKey as keyof OnboardOptions]))
+    .map((flag) => ({
+      optionKey: flag.optionKey,
+      authChoice: flag.authChoice as AuthChoice,
+      label: flag.cliFlag,
+    }));
 
   if (
     hasStringValue(opts.customBaseUrl) ||

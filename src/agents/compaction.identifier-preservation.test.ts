@@ -2,10 +2,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as piCodingAgent from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCompactionSummarizationInstructions, summarizeInStages } from "./compaction.js";
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof piCodingAgent>("@mariozechner/pi-coding-agent");
   return {
     ...actual,
     generateSummary: vi.fn(),
@@ -13,6 +12,10 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
 });
 
 const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
+
+const { buildCompactionSummarizationInstructions, summarizeInStages } =
+  await import("./compaction.js");
 
 function makeMessage(index: number, size = 1200): AgentMessage {
   return {
@@ -28,89 +31,108 @@ describe("compaction identifier-preservation instructions", () => {
     model: "claude-3-opus",
     contextWindow: 200_000,
   } as unknown as NonNullable<ExtensionContext["model"]>;
+  const summarizeBase: Omit<SummarizeInStagesInput, "messages"> = {
+    model: testModel,
+    apiKey: "test-key", // pragma: allowlist secret
+    reserveTokens: 4000,
+    maxChunkTokens: 8000,
+    contextWindow: 200_000,
+    signal: new AbortController().signal,
+  };
 
   beforeEach(() => {
     mockGenerateSummary.mockReset();
     mockGenerateSummary.mockResolvedValue("summary");
   });
 
-  it("injects identifier-preservation guidance even without custom instructions", async () => {
+  async function runSummary(
+    messageCount: number,
+    overrides: Partial<Omit<SummarizeInStagesInput, "messages">> = {},
+  ) {
     await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2)],
-      model: testModel,
-      apiKey: "test-key",
+      ...summarizeBase,
+      ...overrides,
       signal: new AbortController().signal,
-      reserveTokens: 4000,
-      maxChunkTokens: 8000,
-      contextWindow: 200_000,
+      messages: Array.from({ length: messageCount }, (_unused, index) => makeMessage(index + 1)),
     });
+  }
+
+  function firstSummaryInstructions() {
+    return extractSummaryInstructions(mockGenerateSummary.mock.calls[0]);
+  }
+
+  it("injects identifier-preservation guidance even without custom instructions", async () => {
+    await runSummary(2);
 
     expect(mockGenerateSummary).toHaveBeenCalled();
-    const firstCall = mockGenerateSummary.mock.calls[0];
-    expect(firstCall?.[5]).toContain("Preserve all opaque identifiers exactly as written");
-    expect(firstCall?.[5]).toContain("UUIDs");
-    expect(firstCall?.[5]).toContain("IPs");
-    expect(firstCall?.[5]).toContain("ports");
+    expect(firstSummaryInstructions()).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
+    expect(firstSummaryInstructions()).toContain("UUIDs");
+    expect(firstSummaryInstructions()).toContain("IPs");
+    expect(firstSummaryInstructions()).toContain("ports");
   });
 
   it("keeps identifier-preservation guidance when custom instructions are provided", async () => {
-    await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2)],
-      model: testModel,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 4000,
-      maxChunkTokens: 8000,
-      contextWindow: 200_000,
+    await runSummary(2, {
       customInstructions: "Focus on release-impacting bugs.",
     });
 
-    const firstCall = mockGenerateSummary.mock.calls[0];
-    expect(firstCall?.[5]).toContain("Preserve all opaque identifiers exactly as written");
-    expect(firstCall?.[5]).toContain("Additional focus:");
-    expect(firstCall?.[5]).toContain("Focus on release-impacting bugs.");
+    expect(firstSummaryInstructions()).toContain(
+      "Preserve all opaque identifiers exactly as written",
+    );
+    expect(firstSummaryInstructions()).toContain("Additional focus:");
+    expect(firstSummaryInstructions()).toContain("Focus on release-impacting bugs.");
   });
 
   it("applies identifier-preservation guidance on staged split + merge summarization", async () => {
-    await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2), makeMessage(3), makeMessage(4)],
-      model: testModel,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 4000,
+    await runSummary(4, {
       maxChunkTokens: 1000,
-      contextWindow: 200_000,
       parts: 2,
       minMessagesForSplit: 4,
     });
 
     expect(mockGenerateSummary.mock.calls.length).toBeGreaterThan(1);
     for (const call of mockGenerateSummary.mock.calls) {
-      expect(call[5]).toContain("Preserve all opaque identifiers exactly as written");
+      expect(extractSummaryInstructions(call)).toContain(
+        "Preserve all opaque identifiers exactly as written",
+      );
     }
   });
 
   it("avoids duplicate additional-focus headers in split+merge path", async () => {
-    await summarizeInStages({
-      messages: [makeMessage(1), makeMessage(2), makeMessage(3), makeMessage(4)],
-      model: testModel,
-      apiKey: "test-key",
-      signal: new AbortController().signal,
-      reserveTokens: 4000,
+    await runSummary(4, {
       maxChunkTokens: 1000,
-      contextWindow: 200_000,
       parts: 2,
       minMessagesForSplit: 4,
       customInstructions: "Prioritize customer-visible regressions.",
     });
 
     const mergedCall = mockGenerateSummary.mock.calls.at(-1);
-    const instructions = mergedCall?.[5] ?? "";
+    const instructions = extractSummaryInstructions(mergedCall);
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
     expect(instructions).toContain("Prioritize customer-visible regressions.");
     expect((instructions.match(/Additional focus:/g) ?? []).length).toBe(1);
   });
 });
+
+function extractSummaryInstructions(call: unknown[] | undefined): string {
+  if (!call) {
+    return "";
+  }
+  for (let index = call.length - 1; index >= 4; index -= 1) {
+    const arg = call[index];
+    if (
+      typeof arg === "string" &&
+      (arg.includes("Preserve all opaque identifiers exactly as written") ||
+        arg.includes("Merge these partial summaries into a single cohesive summary.") ||
+        arg.includes("Additional focus:"))
+    ) {
+      return arg;
+    }
+  }
+  return "";
+}
 
 describe("buildCompactionSummarizationInstructions", () => {
   it("returns base instructions when no custom text is provided", () => {

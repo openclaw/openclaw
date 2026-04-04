@@ -1,6 +1,37 @@
+import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
+
+/**
+ * Keep queued message-id dedupe shared across bundled chunks so redeliveries
+ * are rejected no matter which chunk receives the enqueue call.
+ */
+const RECENT_QUEUE_MESSAGE_IDS_KEY = Symbol.for("openclaw.recentQueueMessageIds");
+
+const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_IDS_KEY, {
+  ttlMs: 5 * 60 * 1000,
+  maxSize: 10_000,
+});
+
+function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
+  const messageId = run.messageId?.trim();
+  if (!messageId) {
+    return undefined;
+  }
+  // Use JSON tuple serialization to avoid delimiter-collision edge cases when
+  // channel/to/account values contain "|" characters.
+  return JSON.stringify([
+    "queue",
+    queueKey,
+    run.originatingChannel ?? "",
+    run.originatingTo ?? "",
+    run.originatingAccountId ?? "",
+    run.originatingThreadId == null ? "" : String(run.originatingThreadId),
+    messageId,
+  ]);
+}
 
 function isRunAlreadyQueued(
   run: FollowupRun,
@@ -28,8 +59,15 @@ export function enqueueFollowupRun(
   run: FollowupRun,
   settings: QueueSettings,
   dedupeMode: QueueDedupeMode = "message-id",
+  runFollowup?: (run: FollowupRun) => Promise<void>,
+  restartIfIdle = true,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
+  const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
+  if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {
+    return false;
+  }
+
   const dedupe =
     dedupeMode === "none"
       ? undefined
@@ -53,6 +91,18 @@ export function enqueueFollowupRun(
   }
 
   queue.items.push(run);
+  if (recentMessageIdKey) {
+    RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
+  }
+  if (runFollowup) {
+    rememberFollowupDrainCallback(key, runFollowup);
+  }
+  // If drain finished and deleted the queue before this item arrived, a new queue
+  // object was created (draining: false) but nobody scheduled a drain for it.
+  // Use the cached callback to restart the drain now.
+  if (restartIfIdle && !queue.draining) {
+    kickFollowupDrainIfIdle(key);
+  }
   return true;
 }
 
@@ -62,4 +112,8 @@ export function getFollowupQueueDepth(key: string): number {
     return 0;
   }
   return queue.items.length;
+}
+
+export function resetRecentQueuedMessageIdDedupe(): void {
+  RECENT_QUEUE_MESSAGE_IDS.clear();
 }

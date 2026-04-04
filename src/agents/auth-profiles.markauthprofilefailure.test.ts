@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  clearRuntimeAuthProfileStoreSnapshots,
   calculateAuthProfileCooldownMs,
   ensureAuthProfileStore,
   markAuthProfileFailure,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "./auth-profiles.js";
 
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
@@ -48,6 +50,73 @@ function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number
 }
 
 describe("markAuthProfileFailure", () => {
+  it("does not overwrite fresher on-disk credentials with a stale runtime snapshot", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-expired-old",
+            },
+          },
+        }),
+      );
+
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: ensureAuthProfileStore(agentDir),
+        },
+      ]);
+
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-fresh-new",
+            },
+          },
+        }),
+      );
+
+      const staleRuntimeStore = ensureAuthProfileStore(agentDir);
+      const staleCredential = staleRuntimeStore.profiles["openai:default"];
+      expect(staleCredential?.type).toBe("api_key");
+      expect(staleCredential && "key" in staleCredential ? staleCredential.key : undefined).toBe(
+        "sk-expired-old",
+      );
+
+      await markAuthProfileFailure({
+        store: staleRuntimeStore,
+        profileId: "openai:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      clearRuntimeAuthProfileStoreSnapshots();
+      const reloaded = ensureAuthProfileStore(agentDir);
+      const reloadedCredential = reloaded.profiles["openai:default"];
+      expect(reloadedCredential?.type).toBe("api_key");
+      expect(
+        reloadedCredential && "key" in reloadedCredential ? reloadedCredential.key : undefined,
+      ).toBe("sk-fresh-new");
+      expect(typeof reloaded.usageStats?.["openai:default"]?.cooldownUntil).toBe("number");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("disables billing failures for ~5 hours by default", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       const startedAt = Date.now();
@@ -114,8 +183,25 @@ describe("markAuthProfileFailure", () => {
       expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(firstCooldownUntil);
     });
   });
-  it("disables auth_permanent failures via disabledUntil (like billing)", async () => {
+  it("records overloaded failures in the cooldown bucket", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "overloaded",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(typeof stats?.cooldownUntil).toBe("number");
+      expect(stats?.disabledUntil).toBeUndefined();
+      expect(stats?.disabledReason).toBeUndefined();
+      expect(stats?.failureCounts?.overloaded).toBe(1);
+    });
+  });
+  it("disables auth_permanent failures for ~10 minutes by default", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const startedAt = Date.now();
       await markAuthProfileFailure({
         store,
         profileId: "anthropic:default",
@@ -128,6 +214,33 @@ describe("markAuthProfileFailure", () => {
       expect(stats?.disabledReason).toBe("auth_permanent");
       // Should NOT set cooldownUntil (that's for transient errors)
       expect(stats?.cooldownUntil).toBeUndefined();
+      const remainingMs = (stats?.disabledUntil as number) - startedAt;
+      expectCooldownInRange(remainingMs, 9 * 60 * 1000, 11 * 60 * 1000);
+    });
+  });
+
+  it("honors auth_permanent backoff overrides", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      const startedAt = Date.now();
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "auth_permanent",
+        agentDir,
+        cfg: {
+          auth: {
+            cooldowns: {
+              authPermanentBackoffMinutes: 15,
+              authPermanentMaxMinutes: 45,
+            },
+          },
+        } as never,
+      });
+
+      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
+      expect(typeof disabledUntil).toBe("number");
+      const remainingMs = (disabledUntil as number) - startedAt;
+      expectCooldownInRange(remainingMs, 14 * 60 * 1000, 16 * 60 * 1000);
     });
   });
   it("resets backoff counters outside the failure window", async () => {
@@ -174,6 +287,58 @@ describe("markAuthProfileFailure", () => {
     }
   });
 
+  it("resets error count when previous cooldown has expired to prevent escalation", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const now = Date.now();
+      // Simulate state left on disk after 3 rapid failures within a 1-min cooldown
+      // window. The cooldown has since expired, but clearExpiredCooldowns() only
+      // ran in-memory and never persisted — so disk still carries errorCount: 3.
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-default",
+            },
+          },
+          usageStats: {
+            "anthropic:default": {
+              errorCount: 3,
+              failureCounts: { rate_limit: 3 },
+              lastFailureAt: now - 120_000, // 2 minutes ago
+              cooldownUntil: now - 60_000, // expired 1 minute ago
+            },
+          },
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      // Error count should reset to 1 (not escalate to 4) because the
+      // previous cooldown expired. Cooldown should be ~30s, not ~5 min.
+      expect(stats?.errorCount).toBe(1);
+      expect(stats?.failureCounts?.rate_limit).toBe(1);
+      const cooldownMs = (stats?.cooldownUntil ?? 0) - now;
+      // calculateAuthProfileCooldownMs(1) = 30_000 (stepped: 30s → 1m → 5m)
+      expect(cooldownMs).toBeLessThan(60_000);
+      expect(cooldownMs).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist cooldown windows for OpenRouter profiles", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       await markAuthProfileFailure({
@@ -199,11 +364,11 @@ describe("markAuthProfileFailure", () => {
 });
 
 describe("calculateAuthProfileCooldownMs", () => {
-  it("applies exponential backoff with a 1h cap", () => {
-    expect(calculateAuthProfileCooldownMs(1)).toBe(60_000);
-    expect(calculateAuthProfileCooldownMs(2)).toBe(5 * 60_000);
-    expect(calculateAuthProfileCooldownMs(3)).toBe(25 * 60_000);
-    expect(calculateAuthProfileCooldownMs(4)).toBe(60 * 60_000);
-    expect(calculateAuthProfileCooldownMs(5)).toBe(60 * 60_000);
+  it("applies stepped backoff with a 5-min cap", () => {
+    expect(calculateAuthProfileCooldownMs(1)).toBe(30_000); // 30 seconds
+    expect(calculateAuthProfileCooldownMs(2)).toBe(60_000); // 1 minute
+    expect(calculateAuthProfileCooldownMs(3)).toBe(5 * 60_000); // 5 minutes
+    expect(calculateAuthProfileCooldownMs(4)).toBe(5 * 60_000); // 5 minutes (cap)
+    expect(calculateAuthProfileCooldownMs(5)).toBe(5 * 60_000); // 5 minutes (cap)
   });
 });

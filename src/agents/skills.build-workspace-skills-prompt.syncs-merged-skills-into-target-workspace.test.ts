@@ -17,6 +17,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 let fixtureRoot = "";
 let fixtureCount = 0;
+let syncSourceTemplateDir = "";
 
 async function createCaseDir(prefix: string): Promise<string> {
   const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
@@ -24,8 +25,56 @@ async function createCaseDir(prefix: string): Promise<string> {
   return dir;
 }
 
+async function syncSourceSkillsToTarget(sourceWorkspace: string, targetWorkspace: string) {
+  await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+    syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+      managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+    }),
+  );
+}
+
+async function expectSyncedSkillConfinement(params: {
+  sourceWorkspace: string;
+  targetWorkspace: string;
+  safeSkillDirName: string;
+  escapedDest: string;
+}) {
+  expect(await pathExists(params.escapedDest)).toBe(false);
+  await syncSourceSkillsToTarget(params.sourceWorkspace, params.targetWorkspace);
+  expect(
+    await pathExists(
+      path.join(params.targetWorkspace, "skills", params.safeSkillDirName, "SKILL.md"),
+    ),
+  ).toBe(true);
+  expect(await pathExists(params.escapedDest)).toBe(false);
+}
+
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-sync-suite-"));
+  syncSourceTemplateDir = await createCaseDir("source-template");
+  await writeSkill({
+    dir: path.join(syncSourceTemplateDir, ".extra", "demo-skill"),
+    name: "demo-skill",
+    description: "Extra version",
+  });
+  await writeSkill({
+    dir: path.join(syncSourceTemplateDir, ".bundled", "demo-skill"),
+    name: "demo-skill",
+    description: "Bundled version",
+  });
+  await writeSkill({
+    dir: path.join(syncSourceTemplateDir, ".managed", "demo-skill"),
+    name: "demo-skill",
+    description: "Managed version",
+  });
+  await writeSkill({
+    dir: path.join(syncSourceTemplateDir, "skills", "demo-skill"),
+    name: "demo-skill",
+    description: "Workspace version",
+  });
 });
 
 afterAll(async () => {
@@ -39,33 +88,18 @@ describe("buildWorkspaceSkillsPrompt", () => {
   ) =>
     withEnv({ HOME: workspaceDir, PATH: "" }, () => buildWorkspaceSkillsPrompt(workspaceDir, opts));
 
-  it("syncs merged skills into a target workspace", async () => {
+  const cloneSourceTemplate = async () => {
     const sourceWorkspace = await createCaseDir("source");
+    await fs.cp(syncSourceTemplateDir, sourceWorkspace, { recursive: true });
+    return sourceWorkspace;
+  };
+
+  it("syncs merged skills into a target workspace", async () => {
+    const sourceWorkspace = await cloneSourceTemplate();
     const targetWorkspace = await createCaseDir("target");
     const extraDir = path.join(sourceWorkspace, ".extra");
     const bundledDir = path.join(sourceWorkspace, ".bundled");
     const managedDir = path.join(sourceWorkspace, ".managed");
-
-    await writeSkill({
-      dir: path.join(extraDir, "demo-skill"),
-      name: "demo-skill",
-      description: "Extra version",
-    });
-    await writeSkill({
-      dir: path.join(bundledDir, "demo-skill"),
-      name: "demo-skill",
-      description: "Bundled version",
-    });
-    await writeSkill({
-      dir: path.join(managedDir, "demo-skill"),
-      name: "demo-skill",
-      description: "Managed version",
-    });
-    await writeSkill({
-      dir: path.join(sourceWorkspace, "skills", "demo-skill"),
-      name: "demo-skill",
-      description: "Workspace version",
-    });
 
     await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
       syncSkillsToWorkspace({
@@ -88,6 +122,86 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Extra version");
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
   });
+
+  it("syncs the explicit agent skill subset instead of inherited defaults", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "foo_bar"),
+      name: "foo_bar",
+      description: "Underscore variant",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "foo.dot"),
+      name: "foo.dot",
+      description: "Dot variant",
+    });
+
+    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "alpha",
+        config: {
+          agents: {
+            defaults: {
+              skills: ["foo_bar", "foo.dot"],
+            },
+            list: [{ id: "alpha", skills: ["foo_bar"] }],
+          },
+        },
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+      }),
+    );
+
+    const prompt = buildPrompt(targetWorkspace, {
+      bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+      managedSkillsDir: path.join(targetWorkspace, ".managed"),
+    });
+
+    expect(prompt).toContain("Underscore variant");
+    expect(prompt).not.toContain("Dot variant");
+    expect(await pathExists(path.join(targetWorkspace, "skills", "foo_bar", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(await pathExists(path.join(targetWorkspace, "skills", "foo.dot", "SKILL.md"))).toBe(
+      false,
+    );
+  });
+  it.runIf(process.platform !== "win32")(
+    "does not sync workspace skills that resolve outside the source workspace root",
+    async () => {
+      const sourceWorkspace = await createCaseDir("source");
+      const targetWorkspace = await createCaseDir("target");
+      const outsideRoot = await createCaseDir("outside");
+      const outsideSkillDir = path.join(outsideRoot, "escaped-skill");
+
+      await writeSkill({
+        dir: outsideSkillDir,
+        name: "escaped-skill",
+        description: "Outside source workspace",
+      });
+      await fs.mkdir(path.join(sourceWorkspace, "skills"), { recursive: true });
+      await fs.symlink(
+        outsideSkillDir,
+        path.join(sourceWorkspace, "skills", "escaped-skill"),
+        "dir",
+      );
+
+      await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
+
+      const prompt = buildPrompt(targetWorkspace, {
+        bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+        managedSkillsDir: path.join(targetWorkspace, ".managed"),
+      });
+
+      expect(prompt).not.toContain("escaped-skill");
+      expect(
+        await pathExists(path.join(targetWorkspace, "skills", "escaped-skill", "SKILL.md")),
+      ).toBe(false);
+    },
+  );
   it("keeps synced skills confined under target workspace when frontmatter name uses traversal", async () => {
     const sourceWorkspace = await createCaseDir("source");
     const targetWorkspace = await createCaseDir("target");
@@ -104,21 +218,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(path.relative(path.join(targetWorkspace, "skills"), escapedDest).startsWith("..")).toBe(
       true,
     );
-    expect(await pathExists(escapedDest)).toBe(false);
-
-    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
-      syncSkillsToWorkspace({
-        sourceWorkspaceDir: sourceWorkspace,
-        targetWorkspaceDir: targetWorkspace,
-        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
-        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
-      }),
-    );
-
-    expect(
-      await pathExists(path.join(targetWorkspace, "skills", "safe-traversal-skill", "SKILL.md")),
-    ).toBe(true);
-    expect(await pathExists(escapedDest)).toBe(false);
+    await expectSyncedSkillConfinement({
+      sourceWorkspace,
+      targetWorkspace,
+      safeSkillDirName: "safe-traversal-skill",
+      escapedDest,
+    });
   });
   it("keeps synced skills confined under target workspace when frontmatter name is absolute", async () => {
     const sourceWorkspace = await createCaseDir("source");
@@ -133,48 +238,39 @@ describe("buildWorkspaceSkillsPrompt", () => {
       description: "Absolute skill",
     });
 
-    expect(await pathExists(absoluteDest)).toBe(false);
-
-    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
-      syncSkillsToWorkspace({
-        sourceWorkspaceDir: sourceWorkspace,
-        targetWorkspaceDir: targetWorkspace,
-        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
-        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
-      }),
-    );
-
-    expect(
-      await pathExists(path.join(targetWorkspace, "skills", "safe-absolute-skill", "SKILL.md")),
-    ).toBe(true);
-    expect(await pathExists(absoluteDest)).toBe(false);
+    await expectSyncedSkillConfinement({
+      sourceWorkspace,
+      targetWorkspace,
+      safeSkillDirName: "safe-absolute-skill",
+      escapedDest: absoluteDest,
+    });
   });
   it("filters skills based on env/config gates", async () => {
     const workspaceDir = await createCaseDir("workspace");
-    const skillDir = path.join(workspaceDir, "skills", "nano-banana-pro");
+    const skillDir = path.join(workspaceDir, "skills", "image-lab");
     await writeSkill({
       dir: skillDir,
-      name: "nano-banana-pro",
+      name: "image-lab",
       description: "Generates images",
       metadata:
         '{"openclaw":{"requires":{"env":["GEMINI_API_KEY"]},"primaryEnv":"GEMINI_API_KEY"}}',
-      body: "# Nano Banana\n",
+      body: "# Image Lab\n",
     });
 
     withEnv({ GEMINI_API_KEY: undefined }, () => {
       const missingPrompt = buildPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
-        config: { skills: { entries: { "nano-banana-pro": { apiKey: "" } } } },
+        config: { skills: { entries: { "image-lab": { apiKey: "" } } } },
       });
-      expect(missingPrompt).not.toContain("nano-banana-pro");
+      expect(missingPrompt).not.toContain("image-lab");
 
       const enabledPrompt = buildPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config: {
-          skills: { entries: { "nano-banana-pro": { apiKey: "test-key" } } },
+          skills: { entries: { "image-lab": { apiKey: "test-key" } } }, // pragma: allowlist secret
         },
       });
-      expect(enabledPrompt).toContain("nano-banana-pro");
+      expect(enabledPrompt).toContain("image-lab");
     });
   });
   it("applies skill filters, including empty lists", async () => {
@@ -202,5 +298,46 @@ describe("buildWorkspaceSkillsPrompt", () => {
       skillFilter: [],
     });
     expect(emptyPrompt).toBe("");
+  });
+
+  it("syncs remote-eligible filtered skills into the target workspace", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "remote-only"),
+      name: "remote-only",
+      description: "Sandbox-only bin",
+      metadata: '{"openclaw":{"requires":{"anyBins":["missingbin","sandboxbin"]}}}',
+    });
+
+    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        agentId: "alpha",
+        config: {
+          agents: {
+            defaults: {
+              skills: ["remote-only"],
+            },
+            list: [{ id: "alpha" }],
+          },
+        },
+        eligibility: {
+          remote: {
+            platforms: ["linux"],
+            hasBin: () => false,
+            hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
+            note: "sandbox",
+          },
+        },
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+      }),
+    );
+
+    expect(await pathExists(path.join(targetWorkspace, "skills", "remote-only", "SKILL.md"))).toBe(
+      true,
+    );
   });
 });

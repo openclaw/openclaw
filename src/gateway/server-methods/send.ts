@@ -1,7 +1,9 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -11,6 +13,7 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -74,7 +77,10 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const cfg = loadConfig();
+  const cfg = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  }).config;
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -87,7 +93,7 @@ async function resolveRequestedChannel(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  send: async ({ params, respond, context }) => {
+  send: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateSendParams(p)) {
       respond(
@@ -194,6 +200,13 @@ export const sendHandlers: GatewayRequestHandlers = {
             meta: { channel },
           };
         }
+        const idLikeTarget = await maybeResolveIdLikeTarget({
+          cfg,
+          channel,
+          input: resolved.to,
+          accountId,
+        });
+        const deliveryTarget = idLikeTarget?.to ?? resolved.to;
         const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
         const mirrorPayloads = normalizeReplyPayloadsForDelivery([
           { text: message, mediaUrl, mediaUrls },
@@ -203,7 +216,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           .filter(Boolean)
           .join("\n");
         const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+          (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
         );
         const providedSessionKey =
           typeof request.sessionKey === "string" && request.sessionKey.trim()
@@ -225,7 +238,8 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               agentId: effectiveAgentId,
               accountId,
-              target: resolved.to,
+              target: deliveryTarget,
+              resolvedTarget: idLikeTarget,
               threadId,
             })
           : null;
@@ -246,19 +260,21 @@ export const sendHandlers: GatewayRequestHandlers = {
         const results = await deliverOutboundPayloads({
           cfg,
           channel: outboundChannel,
-          to: resolved.to,
+          to: deliveryTarget,
           accountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
           session: outboundSession,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
+          gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,
                 agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                idempotencyKey: idem,
               }
             : derivedRoute
               ? {
@@ -266,6 +282,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   agentId: effectiveAgentId,
                   text: mirrorText || message,
                   mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
+                  idempotencyKey: idem,
                 }
               : undefined,
         });
@@ -320,7 +337,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       inflightMap.delete(dedupeKey);
     }
   },
-  poll: async ({ params, respond, context }) => {
+  poll: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validatePollParams(p)) {
       respond(
@@ -365,22 +382,27 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, channel } = resolvedChannel;
-    if (typeof request.durationSeconds === "number" && channel !== "telegram") {
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    const outbound = plugin?.outbound;
+    if (
+      typeof request.durationSeconds === "number" &&
+      outbound?.supportsPollDurationSeconds !== true
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "durationSeconds is only supported for Telegram polls",
+          `durationSeconds is not supported for ${channel} polls`,
         ),
       );
       return;
     }
-    if (typeof request.isAnonymous === "boolean" && channel !== "telegram") {
+    if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+        errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
       );
       return;
     }
@@ -400,8 +422,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
         respond(
           false,
@@ -432,6 +452,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         threadId,
         silent: request.silent,
         isAnonymous: request.isAnonymous,
+        gatewayClientScopes: client?.connect?.scopes ?? [],
       });
       const payload: Record<string, unknown> = {
         runId: idem,

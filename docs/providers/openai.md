@@ -10,6 +10,7 @@ title: "OpenAI"
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
+OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 
@@ -29,9 +30,18 @@ openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```json5
 {
   env: { OPENAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
+  agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
 }
 ```
+
+OpenAI's current API model docs list `gpt-5.4` and `gpt-5.4-pro` for direct
+OpenAI API usage. OpenClaw forwards both through the `openai/*` Responses path.
+OpenClaw intentionally suppresses the stale `openai/gpt-5.3-codex-spark` row,
+because direct OpenAI API calls reject it in live traffic.
+
+OpenClaw does **not** expose `openai/gpt-5.3-codex-spark` on the direct OpenAI
+API path. `pi-ai` still ships a built-in row for that model, but live OpenAI API
+requests currently reject it. Spark is treated as Codex-only in OpenClaw.
 
 ## Option B: OpenAI Code (Codex) subscription
 
@@ -52,27 +62,52 @@ openclaw models auth login --provider openai-codex
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
+  agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
 }
 ```
 
-### Codex transport default
+OpenAI's current Codex docs list `gpt-5.4` as the current Codex model. OpenClaw
+maps that to `openai-codex/gpt-5.4` for ChatGPT/Codex OAuth usage.
 
-OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can set
-`agents.defaults.models.<provider/model>.params.transport` to select transport:
+If your Codex account is entitled to Codex Spark, OpenClaw also supports:
 
-- Default is `"auto"` (WebSocket-first, then SSE fallback).
+- `openai-codex/gpt-5.3-codex-spark`
+
+OpenClaw treats Codex Spark as Codex-only. It does not expose a direct
+`openai/gpt-5.3-codex-spark` API-key path.
+
+OpenClaw also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
+discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
+separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
+ChatGPT account.
+
+### Transport default
+
+OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
+`openai-codex/*`, default transport is `"auto"` (WebSocket-first, then SSE
+fallback).
+
+You can set `agents.defaults.models.<provider/model>.params.transport`:
+
 - `"sse"`: force SSE
 - `"websocket"`: force WebSocket
 - `"auto"`: try WebSocket, then fall back to SSE
+
+For `openai/*` (Responses API), OpenClaw also enables WebSocket warm-up by
+default (`openaiWsWarmup: true`) when WebSocket transport is used.
+
+Related OpenAI docs:
+
+- [Realtime API with WebSocket](https://platform.openai.com/docs/guides/realtime-websocket)
+- [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "openai-codex/gpt-5.3-codex" },
+      model: { primary: "openai-codex/gpt-5.4" },
       models: {
-        "openai-codex/gpt-5.3-codex": {
+        "openai-codex/gpt-5.4": {
           params: {
             transport: "auto",
           },
@@ -82,6 +117,127 @@ OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can s
   },
 }
 ```
+
+### OpenAI WebSocket warm-up
+
+OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
+`openai/*` to reduce first-turn latency when using WebSocket transport.
+
+### Disable warm-up
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            openaiWsWarmup: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### Enable warm-up explicitly
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            openaiWsWarmup: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### OpenAI and Codex priority processing
+
+OpenAI's API exposes priority processing via `service_tier=priority`. In
+OpenClaw, set `agents.defaults.models["<provider>/<model>"].params.serviceTier`
+to pass that field through on native OpenAI/Codex Responses endpoints.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            serviceTier: "priority",
+          },
+        },
+        "openai-codex/gpt-5.4": {
+          params: {
+            serviceTier: "priority",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Supported values are `auto`, `default`, `flex`, and `priority`.
+
+OpenClaw forwards `params.serviceTier` to both direct `openai/*` Responses
+requests and `openai-codex/*` Codex Responses requests when those models point
+at the native OpenAI/Codex endpoints.
+
+Important behavior:
+
+- direct `openai/*` must target `api.openai.com`
+- `openai-codex/*` must target `chatgpt.com/backend-api`
+- if you route either provider through another base URL or proxy, OpenClaw leaves `service_tier` untouched
+
+### OpenAI fast mode
+
+OpenClaw exposes a shared fast-mode toggle for both `openai/*` and
+`openai-codex/*` sessions:
+
+- Chat/UI: `/fast status|on|off`
+- Config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+
+When fast mode is enabled, OpenClaw maps it to OpenAI priority processing:
+
+- direct `openai/*` Responses calls to `api.openai.com` send `service_tier = "priority"`
+- `openai-codex/*` Responses calls to `chatgpt.com/backend-api` also send `service_tier = "priority"`
+- existing payload `service_tier` values are preserved
+- fast mode does not rewrite `reasoning` or `text.verbosity`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+        "openai-codex/gpt-5.4": {
+          params: {
+            fastMode: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Session overrides win over config. Clearing the session override in the Sessions UI
+returns the session to the configured default.
 
 ### OpenAI Responses server-side compaction
 
@@ -105,7 +261,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "azure-openai-responses/gpt-4o": {
+        "azure-openai-responses/gpt-5.4": {
           params: {
             responsesServerCompaction: true,
           },
@@ -123,7 +279,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.4": {
           params: {
             responsesServerCompaction: true,
             responsesCompactThreshold: 120000,
@@ -142,7 +298,7 @@ Responses models (for example Azure OpenAI Responses):
   agents: {
     defaults: {
       models: {
-        "openai/gpt-5": {
+        "openai/gpt-5.4": {
           params: {
             responsesServerCompaction: false,
           },

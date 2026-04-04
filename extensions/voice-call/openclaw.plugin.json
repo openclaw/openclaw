@@ -101,36 +101,36 @@
     },
     "tts.provider": {
       "label": "TTS Provider Override",
-      "help": "Deep-merges with messages.tts (Edge is ignored for calls).",
+      "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       "advanced": true
     },
-    "tts.openai.model": {
+    "tts.providers.openai.model": {
       "label": "OpenAI TTS Model",
       "advanced": true
     },
-    "tts.openai.voice": {
+    "tts.providers.openai.voice": {
       "label": "OpenAI TTS Voice",
       "advanced": true
     },
-    "tts.openai.apiKey": {
+    "tts.providers.openai.apiKey": {
       "label": "OpenAI API Key",
       "sensitive": true,
       "advanced": true
     },
-    "tts.elevenlabs.modelId": {
+    "tts.providers.elevenlabs.modelId": {
       "label": "ElevenLabs Model ID",
       "advanced": true
     },
-    "tts.elevenlabs.voiceId": {
+    "tts.providers.elevenlabs.voiceId": {
       "label": "ElevenLabs Voice ID",
       "advanced": true
     },
-    "tts.elevenlabs.apiKey": {
+    "tts.providers.elevenlabs.apiKey": {
       "label": "ElevenLabs API Key",
       "sensitive": true,
       "advanced": true
     },
-    "tts.elevenlabs.baseUrl": {
+    "tts.providers.elevenlabs.baseUrl": {
       "label": "ElevenLabs Base URL",
       "advanced": true
     },
@@ -249,6 +249,10 @@
         "type": "integer",
         "minimum": 1
       },
+      "staleCallReaperSeconds": {
+        "type": "integer",
+        "minimum": 0
+      },
       "silenceTimeoutMs": {
         "type": "integer",
         "minimum": 1
@@ -313,6 +317,27 @@
           }
         }
       },
+      "webhookSecurity": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowedHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trustForwardingHeaders": {
+            "type": "boolean"
+          },
+          "trustedProxyIPs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "streaming": {
         "type": "object",
         "additionalProperties": false,
@@ -341,6 +366,22 @@
           },
           "streamPath": {
             "type": "string"
+          },
+          "preStartTimeoutMs": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnections": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxPendingConnectionsPerIp": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxConnections": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },
@@ -379,8 +420,7 @@
             "enum": ["final", "all"]
           },
           "provider": {
-            "type": "string",
-            "enum": ["openai", "elevenlabs", "edge"]
+            "type": "string"
           },
           "summaryModel": {
             "type": "string"
@@ -415,116 +455,179 @@
               }
             }
           },
-          "elevenlabs": {
+          "providers": {
             "type": "object",
-            "additionalProperties": false,
             "properties": {
-              "apiKey": {
-                "type": "string"
-              },
-              "baseUrl": {
-                "type": "string"
-              },
-              "voiceId": {
-                "type": "string"
-              },
-              "modelId": {
-                "type": "string"
-              },
-              "seed": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 4294967295
-              },
-              "applyTextNormalization": {
-                "type": "string",
-                "enum": ["auto", "on", "off"]
-              },
-              "languageCode": {
-                "type": "string"
-              },
-              "voiceSettings": {
+              "openai": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                  "stability": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 1
+                  "apiKey": {
+                    "type": "string"
                   },
-                  "similarityBoost": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 1
+                  "baseUrl": {
+                    "type": "string"
                   },
-                  "style": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 1
+                  "model": {
+                    "type": "string"
                   },
-                  "useSpeakerBoost": {
-                    "type": "boolean"
+                  "voice": {
+                    "type": "string"
                   },
                   "speed": {
                     "type": "number",
-                    "minimum": 0.5,
-                    "maximum": 2
+                    "minimum": 0.25,
+                    "maximum": 4.0
+                  },
+                  "instructions": {
+                    "type": "string"
+                  }
+                }
+              },
+              "elevenlabs": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "apiKey": {
+                    "type": "string"
+                  },
+                  "baseUrl": {
+                    "type": "string"
+                  },
+                  "voiceId": {
+                    "type": "string"
+                  },
+                  "modelId": {
+                    "type": "string"
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4294967295
+                  },
+                  "applyTextNormalization": {
+                    "type": "string",
+                    "enum": ["auto", "on", "off"]
+                  },
+                  "languageCode": {
+                    "type": "string"
+                  },
+                  "voiceSettings": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "stability": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "similarityBoost": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "style": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "useSpeakerBoost": {
+                        "type": "boolean"
+                      },
+                      "speed": {
+                        "type": "number",
+                        "minimum": 0.5,
+                        "maximum": 2
+                      }
+                    }
+                  }
+                }
+              },
+              "microsoft": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "voice": {
+                    "type": "string"
+                  },
+                  "lang": {
+                    "type": "string"
+                  },
+                  "outputFormat": {
+                    "type": "string"
+                  },
+                  "pitch": {
+                    "type": "string"
+                  },
+                  "rate": {
+                    "type": "string"
+                  },
+                  "volume": {
+                    "type": "string"
+                  },
+                  "saveSubtitles": {
+                    "type": "boolean"
+                  },
+                  "proxy": {
+                    "type": "string"
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 120000
+                  }
+                }
+              },
+              "edge": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "voice": {
+                    "type": "string"
+                  },
+                  "lang": {
+                    "type": "string"
+                  },
+                  "outputFormat": {
+                    "type": "string"
+                  },
+                  "pitch": {
+                    "type": "string"
+                  },
+                  "rate": {
+                    "type": "string"
+                  },
+                  "volume": {
+                    "type": "string"
+                  },
+                  "saveSubtitles": {
+                    "type": "boolean"
+                  },
+                  "proxy": {
+                    "type": "string"
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1000,
+                    "maximum": 120000
                   }
                 }
               }
-            }
-          },
-          "openai": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "apiKey": {
-                "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "apiKey": {
+                  "type": "string"
+                }
               },
-              "model": {
-                "type": "string"
-              },
-              "voice": {
-                "type": "string"
-              }
-            }
-          },
-          "edge": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "voice": {
-                "type": "string"
-              },
-              "lang": {
-                "type": "string"
-              },
-              "outputFormat": {
-                "type": "string"
-              },
-              "pitch": {
-                "type": "string"
-              },
-              "rate": {
-                "type": "string"
-              },
-              "volume": {
-                "type": "string"
-              },
-              "saveSubtitles": {
-                "type": "boolean"
-              },
-              "proxy": {
-                "type": "string"
-              },
-              "timeoutMs": {
-                "type": "integer",
-                "minimum": 1000,
-                "maximum": 120000
-              }
+              "additionalProperties": true
             }
           },
           "prefsPath": {

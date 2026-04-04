@@ -1,9 +1,16 @@
 import type { Command } from "commander";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
 import type { ProgramContext } from "./context.js";
+import {
+  type CoreCliCommandDescriptor,
+  getCoreCliCommandDescriptors,
+  getCoreCliCommandsWithSubcommands,
+} from "./core-command-descriptors.js";
+import { registerLazyCommand } from "./register-lazy-command.js";
 import { registerSubCliCommands } from "./register.subclis.js";
+
+export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
 
 type CommandRegisterParams = {
   program: Command;
@@ -14,12 +21,6 @@ type CommandRegisterParams = {
 export type CommandRegistration = {
   id: string;
   register: (params: CommandRegisterParams) => void;
-};
-
-type CoreCliCommandDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
 };
 
 type CoreCliEntry = {
@@ -55,7 +56,7 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "onboard",
-        description: "Interactive onboarding wizard for gateway, workspace, and skills",
+        description: "Interactive onboarding for gateway, workspace, and skills",
         hasSubcommands: false,
       },
     ],
@@ -69,7 +70,7 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "configure",
         description:
-          "Interactive setup wizard for credentials, channels, gateway, and agent defaults",
+          "Interactive configuration for credentials, channels, gateway, and agent defaults",
         hasSubcommands: false,
       },
     ],
@@ -83,13 +84,26 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "config",
         description:
-          "Non-interactive config helpers (get/set/unset). Default: starts setup wizard.",
+          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
         hasSubcommands: true,
       },
     ],
     register: async ({ program }) => {
       const mod = await import("../config-cli.js");
       mod.registerConfigCli(program);
+    },
+  },
+  {
+    commands: [
+      {
+        name: "backup",
+        description: "Create and verify local backup archives for OpenClaw state",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.backup.js");
+      mod.registerBackupCommand(program);
     },
   },
   {
@@ -136,14 +150,14 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
-        name: "memory",
-        description: "Search and reindex memory files",
+        name: "mcp",
+        description: "Manage OpenClaw MCP config and channel bridge",
         hasSubcommands: true,
       },
     ],
     register: async ({ program }) => {
-      const mod = await import("../memory-cli.js");
-      mod.registerMemoryCli(program);
+      const mod = await import("../mcp-cli.js");
+      mod.registerMcpCli(program);
     },
   },
   {
@@ -183,51 +197,21 @@ const coreEntries: CoreCliEntry[] = [
         description: "List stored conversation sessions",
         hasSubcommands: true,
       },
+      {
+        name: "tasks",
+        description: "Inspect durable background task state",
+        hasSubcommands: true,
+      },
     ],
     register: async ({ program }) => {
       const mod = await import("./register.status-health-sessions.js");
       mod.registerStatusHealthSessionsCommands(program);
     },
   },
-  {
-    commands: [
-      {
-        name: "browser",
-        description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../browser-cli.js");
-      mod.registerBrowserCli(program);
-    },
-  },
 ];
 
-function collectCoreCliCommandNames(predicate?: (command: CoreCliCommandDescriptor) => boolean) {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  for (const entry of coreEntries) {
-    for (const command of entry.commands) {
-      if (predicate && !predicate(command)) {
-        continue;
-      }
-      if (seen.has(command.name)) {
-        continue;
-      }
-      seen.add(command.name);
-      names.push(command.name);
-    }
-  }
-  return names;
-}
-
 export function getCoreCliCommandNames(): string[] {
-  return collectCoreCliCommandNames();
-}
-
-export function getCoreCliCommandsWithSubcommands(): string[] {
-  return collectCoreCliCommandNames((command) => command.hasSubcommands);
+  return getCoreCliCommandDescriptors().map((command) => command.name);
 }
 
 function removeEntryCommands(program: Command, entry: CoreCliEntry) {
@@ -244,13 +228,14 @@ function registerLazyCoreCommand(
   entry: CoreCliEntry,
   command: CoreCliCommandDescriptor,
 ) {
-  const placeholder = program.command(command.name).description(command.description);
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
-  placeholder.action(async (...actionArgs) => {
-    removeEntryCommands(program, entry);
-    await entry.register({ program, ctx, argv: process.argv });
-    await reparseProgramFromActionArgs(program, actionArgs);
+  registerLazyCommand({
+    program,
+    name: command.name,
+    description: command.description,
+    removeNames: entry.commands.map((cmd) => cmd.name),
+    register: async () => {
+      await entry.register({ program, ctx, argv: process.argv });
+    },
   });
 }
 

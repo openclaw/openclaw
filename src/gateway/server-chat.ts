@@ -5,6 +5,9 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
+import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -73,6 +76,62 @@ function normalizeHeartbeatChatFinalText(params: {
     return { suppress: true, text: "" };
   }
   return { suppress: false, text: stripped.text };
+}
+
+function isSilentReplyLeadFragment(text: string): boolean {
+  const normalized = text.trim().toUpperCase();
+  if (!normalized) {
+    return false;
+  }
+  if (!/^[A-Z_]+$/.test(normalized)) {
+    return false;
+  }
+  if (normalized === SILENT_REPLY_TOKEN) {
+    return false;
+  }
+  return SILENT_REPLY_TOKEN.startsWith(normalized);
+}
+
+function appendUniqueSuffix(base: string, suffix: string): string {
+  if (!suffix) {
+    return base;
+  }
+  if (!base) {
+    return suffix;
+  }
+  if (base.endsWith(suffix)) {
+    return base;
+  }
+  const maxOverlap = Math.min(base.length, suffix.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (base.slice(-overlap) === suffix.slice(0, overlap)) {
+      return base + suffix.slice(overlap);
+    }
+  }
+  return base + suffix;
+}
+
+function resolveMergedAssistantText(params: {
+  previousText: string;
+  nextText: string;
+  nextDelta: string;
+}) {
+  const { previousText, nextText, nextDelta } = params;
+  if (nextText && previousText) {
+    if (nextText.startsWith(previousText)) {
+      return nextText;
+    }
+    if (previousText.startsWith(nextText) && !nextDelta) {
+      return previousText;
+    }
+  }
+  if (nextDelta) {
+    return appendUniqueSuffix(previousText, nextDelta);
+  }
+  if (nextText) {
+    return nextText;
+  }
+  return previousText;
 }
 
 export type ChatRunEntry = {
@@ -144,6 +203,8 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
+  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
+  deltaLastBroadcastLen: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
 };
@@ -152,12 +213,14 @@ export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
+  const deltaLastBroadcastLen = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
+    deltaLastBroadcastLen.clear();
     abortedRuns.clear();
   };
 
@@ -165,6 +228,7 @@ export function createChatRunState(): ChatRunState {
     registry,
     buffers,
     deltaSentAt,
+    deltaLastBroadcastLen,
     abortedRuns,
     clear,
   };
@@ -176,6 +240,21 @@ export type ToolEventRecipientRegistry = {
   markFinal: (runId: string) => void;
 };
 
+export type SessionEventSubscriberRegistry = {
+  subscribe: (connId: string) => void;
+  unsubscribe: (connId: string) => void;
+  getAll: () => ReadonlySet<string>;
+  clear: () => void;
+};
+
+export type SessionMessageSubscriberRegistry = {
+  subscribe: (connId: string, sessionKey: string) => void;
+  unsubscribe: (connId: string, sessionKey: string) => void;
+  unsubscribeAll: (connId: string) => void;
+  get: (sessionKey: string) => ReadonlySet<string>;
+  clear: () => void;
+};
+
 type ToolRecipientEntry = {
   connIds: Set<string>;
   updatedAt: number;
@@ -184,6 +263,110 @@ type ToolRecipientEntry = {
 
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
+
+export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
+  const connIds = new Set<string>();
+  const empty = new Set<string>();
+
+  return {
+    subscribe: (connId: string) => {
+      const normalized = connId.trim();
+      if (!normalized) {
+        return;
+      }
+      connIds.add(normalized);
+    },
+    unsubscribe: (connId: string) => {
+      const normalized = connId.trim();
+      if (!normalized) {
+        return;
+      }
+      connIds.delete(normalized);
+    },
+    getAll: () => (connIds.size > 0 ? connIds : empty),
+    clear: () => {
+      connIds.clear();
+    },
+  };
+}
+
+export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
+  const sessionToConnIds = new Map<string, Set<string>>();
+  const connToSessionKeys = new Map<string, Set<string>>();
+  const empty = new Set<string>();
+
+  const normalize = (value: string): string => value.trim();
+
+  return {
+    subscribe: (connId: string, sessionKey: string) => {
+      const normalizedConnId = normalize(connId);
+      const normalizedSessionKey = normalize(sessionKey);
+      if (!normalizedConnId || !normalizedSessionKey) {
+        return;
+      }
+      const connIds = sessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
+      connIds.add(normalizedConnId);
+      sessionToConnIds.set(normalizedSessionKey, connIds);
+
+      const sessionKeys = connToSessionKeys.get(normalizedConnId) ?? new Set<string>();
+      sessionKeys.add(normalizedSessionKey);
+      connToSessionKeys.set(normalizedConnId, sessionKeys);
+    },
+    unsubscribe: (connId: string, sessionKey: string) => {
+      const normalizedConnId = normalize(connId);
+      const normalizedSessionKey = normalize(sessionKey);
+      if (!normalizedConnId || !normalizedSessionKey) {
+        return;
+      }
+      const connIds = sessionToConnIds.get(normalizedSessionKey);
+      if (connIds) {
+        connIds.delete(normalizedConnId);
+        if (connIds.size === 0) {
+          sessionToConnIds.delete(normalizedSessionKey);
+        }
+      }
+      const sessionKeys = connToSessionKeys.get(normalizedConnId);
+      if (sessionKeys) {
+        sessionKeys.delete(normalizedSessionKey);
+        if (sessionKeys.size === 0) {
+          connToSessionKeys.delete(normalizedConnId);
+        }
+      }
+    },
+    unsubscribeAll: (connId: string) => {
+      const normalizedConnId = normalize(connId);
+      if (!normalizedConnId) {
+        return;
+      }
+      const sessionKeys = connToSessionKeys.get(normalizedConnId);
+      if (!sessionKeys) {
+        return;
+      }
+      for (const sessionKey of sessionKeys) {
+        const connIds = sessionToConnIds.get(sessionKey);
+        if (!connIds) {
+          continue;
+        }
+        connIds.delete(normalizedConnId);
+        if (connIds.size === 0) {
+          sessionToConnIds.delete(sessionKey);
+        }
+      }
+      connToSessionKeys.delete(normalizedConnId);
+    },
+    get: (sessionKey: string) => {
+      const normalizedSessionKey = normalize(sessionKey);
+      if (!normalizedSessionKey) {
+        return empty;
+      }
+      return sessionToConnIds.get(normalizedSessionKey) ?? empty;
+    },
+    clear: () => {
+      sessionToConnIds.clear();
+      connToSessionKeys.clear();
+    },
+  };
+}
 
 export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   const recipients = new Map<string, ToolRecipientEntry>();
@@ -265,6 +448,7 @@ export type AgentEventHandlerOptions = {
   resolveSessionKeyForRun: (runId: string) => string | undefined;
   clearAgentRunContext: (runId: string) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
+  sessionEventSubscribers: SessionEventSubscriberRegistry;
 };
 
 export function createAgentEventHandler({
@@ -276,22 +460,104 @@ export function createAgentEventHandler({
   resolveSessionKeyForRun,
   clearAgentRunContext,
   toolEventRecipients,
+  sessionEventSubscribers,
 }: AgentEventHandlerOptions) {
+  const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
+    const row = loadGatewaySessionRow(sessionKey);
+    const lifecyclePatch = evt
+      ? deriveGatewaySessionLifecycleSnapshot({
+          session: row
+            ? {
+                updatedAt: row.updatedAt ?? undefined,
+                status: row.status,
+                startedAt: row.startedAt,
+                endedAt: row.endedAt,
+                runtimeMs: row.runtimeMs,
+                abortedLastRun: row.abortedLastRun,
+              }
+            : undefined,
+          event: evt,
+        })
+      : {};
+    const session = row ? { ...row, ...lifecyclePatch } : undefined;
+    const snapshotSource = session ?? lifecyclePatch;
+    return {
+      ...(session ? { session } : {}),
+      updatedAt: snapshotSource.updatedAt,
+      sessionId: row?.sessionId,
+      kind: row?.kind,
+      channel: row?.channel,
+      subject: row?.subject,
+      groupChannel: row?.groupChannel,
+      space: row?.space,
+      chatType: row?.chatType,
+      origin: row?.origin,
+      spawnedBy: row?.spawnedBy,
+      spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
+      forkedFromParent: row?.forkedFromParent,
+      spawnDepth: row?.spawnDepth,
+      subagentRole: row?.subagentRole,
+      subagentControlScope: row?.subagentControlScope,
+      label: row?.label,
+      displayName: row?.displayName,
+      deliveryContext: row?.deliveryContext,
+      parentSessionKey: row?.parentSessionKey,
+      childSessions: row?.childSessions,
+      thinkingLevel: row?.thinkingLevel,
+      fastMode: row?.fastMode,
+      verboseLevel: row?.verboseLevel,
+      reasoningLevel: row?.reasoningLevel,
+      elevatedLevel: row?.elevatedLevel,
+      sendPolicy: row?.sendPolicy,
+      systemSent: row?.systemSent,
+      inputTokens: row?.inputTokens,
+      outputTokens: row?.outputTokens,
+      lastChannel: row?.lastChannel,
+      lastTo: row?.lastTo,
+      lastAccountId: row?.lastAccountId,
+      lastThreadId: row?.lastThreadId,
+      totalTokens: row?.totalTokens,
+      totalTokensFresh: row?.totalTokensFresh,
+      contextTokens: row?.contextTokens,
+      estimatedCostUsd: row?.estimatedCostUsd,
+      responseUsage: row?.responseUsage,
+      modelProvider: row?.modelProvider,
+      model: row?.model,
+      status: snapshotSource.status,
+      startedAt: snapshotSource.startedAt,
+      endedAt: snapshotSource.endedAt,
+      runtimeMs: snapshotSource.runtimeMs,
+      abortedLastRun: snapshotSource.abortedLastRun,
+    };
+  };
+
   const emitChatDelta = (
     sessionKey: string,
     clientRunId: string,
     sourceRunId: string,
     seq: number,
     text: string,
+    delta?: unknown,
   ) => {
-    const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
-    if (!cleaned) {
+    const cleanedText = stripInlineDirectiveTagsForDisplay(text).text;
+    const cleanedDelta =
+      typeof delta === "string" ? stripInlineDirectiveTagsForDisplay(delta).text : "";
+    const previousText = chatRunState.buffers.get(clientRunId) ?? "";
+    const mergedText = resolveMergedAssistantText({
+      previousText,
+      nextText: cleanedText,
+      nextDelta: cleanedDelta,
+    });
+    if (!mergedText) {
       return;
     }
-    if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
+    chatRunState.buffers.set(clientRunId, mergedText);
+    if (isSilentReplyText(mergedText, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, cleaned);
+    if (isSilentReplyLeadFragment(mergedText)) {
+      return;
+    }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -301,6 +567,7 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
+    chatRunState.deltaLastBroadcastLen.set(clientRunId, mergedText.length);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -308,7 +575,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: cleaned }],
+        content: [{ type: "text", text: mergedText }],
         timestamp: now,
       },
     };
@@ -316,14 +583,7 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  const emitChatFinal = (
-    sessionKey: string,
-    clientRunId: string,
-    sourceRunId: string,
-    seq: number,
-    jobState: "done" | "error",
-    error?: unknown,
-  ) => {
+  const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
     const bufferedText = stripInlineDirectiveTagsForDisplay(
       chatRunState.buffers.get(clientRunId) ?? "",
     ).text.trim();
@@ -335,6 +595,69 @@ export function createAgentEventHandler({
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+    return { text, shouldSuppressSilent };
+  };
+
+  const flushBufferedChatDeltaIfNeeded = (
+    sessionKey: string,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+  ) => {
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
+    const shouldSuppressSilentLeadFragment = isSilentReplyLeadFragment(text);
+    const shouldSuppressHeartbeatStreaming = shouldHideHeartbeatChatOutput(
+      clientRunId,
+      sourceRunId,
+    );
+    if (
+      !text ||
+      shouldSuppressSilent ||
+      shouldSuppressSilentLeadFragment ||
+      shouldSuppressHeartbeatStreaming
+    ) {
+      return;
+    }
+
+    const lastBroadcastLen = chatRunState.deltaLastBroadcastLen.get(clientRunId) ?? 0;
+    if (text.length <= lastBroadcastLen) {
+      return;
+    }
+
+    const now = Date.now();
+    const flushPayload = {
+      runId: clientRunId,
+      sessionKey,
+      seq,
+      state: "delta" as const,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        timestamp: now,
+      },
+    };
+    broadcast("chat", flushPayload, { dropIfSlow: true });
+    nodeSendToSession(sessionKey, "chat", flushPayload);
+    chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
+    chatRunState.deltaSentAt.set(clientRunId, now);
+  };
+
+  const emitChatFinal = (
+    sessionKey: string,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    jobState: "done" | "error",
+    error?: unknown,
+    stopReason?: string,
+  ) => {
+    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId);
+    // Flush any throttled delta so streaming clients receive the complete text
+    // before the final event. The 150 ms throttle in emitChatDelta may have
+    // suppressed the most recent chunk, leaving the client with stale text.
+    // Only flush if the buffer has grown since the last broadcast to avoid duplicates.
+    flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, sourceRunId, seq);
+    chatRunState.deltaLastBroadcastLen.delete(clientRunId);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
@@ -343,6 +666,7 @@ export function createAgentEventHandler({
         sessionKey,
         seq,
         state: "final" as const,
+        ...(stopReason && { stopReason }),
         message:
           text && !shouldSuppressSilent
             ? {
@@ -393,6 +717,7 @@ export function createAgentEventHandler({
     const chatLink = chatRunState.registry.peek(evt.runId);
     const eventSessionKey =
       typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
+    const isControlUiVisible = getAgentRunContext(evt.runId)?.isControlUiVisible ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
@@ -417,7 +742,7 @@ export function createAgentEventHandler({
               : { ...eventForClients, data };
           })()
         : agentPayload;
-    if (evt.seq !== last + 1) {
+    if (last > 0 && evt.seq !== last + 1) {
       broadcast("agent", {
         runId: eventRunId,
         stream: "error",
@@ -432,13 +757,39 @@ export function createAgentEventHandler({
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
+      const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      // Flush pending assistant text before tool-start events so clients can
+      // render complete pre-tool text above tool cards (not truncated by delta throttle).
+      if (toolPhase === "start" && isControlUiVisible && sessionKey && !isAborted) {
+        flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, evt.runId, evt.seq);
+      }
       // Always broadcast tool events to registered WS recipients with
       // tool-events capability, regardless of verboseLevel. The verbose
       // setting only controls whether tool details are sent as channel
       // messages to messaging surfaces (Telegram, Discord, etc.).
       const recipients = toolEventRecipients.get(evt.runId);
       if (recipients && recipients.size > 0) {
-        broadcastToConnIds("agent", toolPayload, recipients);
+        broadcastToConnIds(
+          "agent",
+          sessionKey ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : toolPayload,
+          recipients,
+        );
+      }
+      // Session subscribers power operator UIs that attach to an existing
+      // in-flight session after the run has already started. Those clients do
+      // not know the runId in advance, so they cannot register as run-scoped
+      // tool recipients. Mirror tool lifecycle onto a session-scoped event so
+      // they can render live pending tool cards without polling history.
+      if (sessionKey) {
+        const sessionSubscribers = sessionEventSubscribers.getAll();
+        if (sessionSubscribers.size > 0) {
+          broadcastToConnIds(
+            "session.tool",
+            { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) },
+            sessionSubscribers,
+            { dropIfSlow: true },
+          );
+        }
       }
     } else {
       broadcast("agent", agentPayload);
@@ -447,15 +798,21 @@ export function createAgentEventHandler({
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
-    if (sessionKey) {
+    if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
       if (!isToolEvent || toolVerbose !== "off") {
-        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+        nodeSendToSession(
+          sessionKey,
+          "agent",
+          isToolEvent ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
+        );
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
+        const evtStopReason =
+          typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
@@ -469,6 +826,7 @@ export function createAgentEventHandler({
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
+            evtStopReason,
           );
         } else {
           emitChatFinal(
@@ -478,6 +836,7 @@ export function createAgentEventHandler({
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
+            evtStopReason,
           );
         }
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
@@ -496,6 +855,28 @@ export function createAgentEventHandler({
       clearAgentRunContext(evt.runId);
       agentRunSeq.delete(evt.runId);
       agentRunSeq.delete(clientRunId);
+    }
+
+    if (
+      sessionKey &&
+      (lifecyclePhase === "start" || lifecyclePhase === "end" || lifecyclePhase === "error")
+    ) {
+      void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
+      const sessionEventConnIds = sessionEventSubscribers.getAll();
+      if (sessionEventConnIds.size > 0) {
+        broadcastToConnIds(
+          "sessions.changed",
+          {
+            sessionKey,
+            phase: lifecyclePhase,
+            runId: evt.runId,
+            ts: evt.ts,
+            ...buildSessionEventSnapshot(sessionKey, evt),
+          },
+          sessionEventConnIds,
+          { dropIfSlow: true },
+        );
+      }
     }
   };
 }

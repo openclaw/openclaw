@@ -2,15 +2,19 @@ import type { Command } from "commander";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
-import { removeCommand, removeCommandByName } from "./command-tree.js";
+import { removeCommandByName } from "./command-tree.js";
+import { registerLazyCommand as registerLazyCommandPlaceholder } from "./register-lazy-command.js";
+import {
+  getSubCliCommandsWithSubcommands,
+  getSubCliEntries as getSubCliEntryDescriptors,
+  type SubCliDescriptor,
+} from "./subcli-descriptors.js";
+
+export { getSubCliCommandsWithSubcommands };
 
 type SubCliRegistrar = (program: Command) => Promise<void> | void;
 
-type SubCliEntry = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
+type SubCliEntry = SubCliDescriptor & {
   register: SubCliRegistrar;
 };
 
@@ -28,10 +32,15 @@ const shouldEagerRegisterSubcommands = (_argv: string[]) => {
   return isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
 };
 
-const loadConfig = async (): Promise<OpenClawConfig> => {
-  const mod = await import("../../config/config.js");
-  return mod.loadConfig();
-};
+export const loadValidatedConfigForPluginRegistration =
+  async (): Promise<OpenClawConfig | null> => {
+    const mod = await import("../../config/config.js");
+    const snapshot = await mod.readConfigFileSnapshot();
+    if (!snapshot.valid) {
+      return null;
+    }
+    return mod.loadConfig();
+  };
 
 // Note for humans and agents:
 // If you update the list of commands, also check whether they have subcommands
@@ -192,7 +201,7 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "qr",
-    description: "Generate iOS pairing QR/setup code",
+    description: "Generate mobile pairing QR/setup code",
     hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../qr-cli.js");
@@ -217,7 +226,10 @@ const entries: SubCliEntry[] = [
       // The pairing CLI calls listPairingChannels() at registration time,
       // which requires the plugin registry to be populated with channel plugins.
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      const config = await loadValidatedConfigForPluginRegistration();
+      if (config) {
+        await registerPluginCliCommands(program, config);
+      }
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
@@ -230,7 +242,10 @@ const entries: SubCliEntry[] = [
       const mod = await import("../plugins-cli.js");
       mod.registerPluginsCli(program);
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
-      registerPluginCliCommands(program, await loadConfig());
+      const config = await loadValidatedConfigForPluginRegistration();
+      if (config) {
+        await registerPluginCliCommands(program, config);
+      }
     },
   },
   {
@@ -298,12 +313,8 @@ const entries: SubCliEntry[] = [
   },
 ];
 
-export function getSubCliEntries(): SubCliEntry[] {
-  return entries;
-}
-
-export function getSubCliCommandsWithSubcommands(): string[] {
-  return entries.filter((entry) => entry.hasSubcommands).map((entry) => entry.name);
+export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
+  return getSubCliEntryDescriptors();
 }
 
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
@@ -317,13 +328,13 @@ export async function registerSubCliByName(program: Command, name: string): Prom
 }
 
 function registerLazyCommand(program: Command, entry: SubCliEntry) {
-  const placeholder = program.command(entry.name).description(entry.description);
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
-  placeholder.action(async (...actionArgs) => {
-    removeCommand(program, placeholder);
-    await entry.register(program);
-    await reparseProgramFromActionArgs(program, actionArgs);
+  registerLazyCommandPlaceholder({
+    program,
+    name: entry.name,
+    description: entry.description,
+    register: async () => {
+      await entry.register(program);
+    },
   });
 }
 

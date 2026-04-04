@@ -38,6 +38,8 @@ inside a sandbox workspace under `~/.openclaw/sandboxes`, not your host workspac
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` will create the
 workspace and seed the bootstrap files if they are missing.
+Sandbox seed copies only accept regular in-workspace files; symlink/hardlink
+aliases that resolve outside the source workspace are ignored.
 
 If you already manage the workspace files yourself, you can disable bootstrap
 file creation:
@@ -109,7 +111,8 @@ See [Memory](/concepts/memory) for the workflow and automatic memory flush.
 
 - `skills/` (optional)
   - Workspace-specific skills.
-  - Overrides managed/bundled skills when names collide.
+  - Highest-precedence skill location for that workspace.
+  - Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
 
 - `canvas/` (optional)
   - Canvas UI files for node displays (for example `canvas/index.html`).
@@ -232,3 +235,10 @@ Suggested `.gitignore` starter:
   [Channel routing](/channels/channel-routing) for routing configuration.
 - If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox
   workspaces under `agents.defaults.sandbox.workspaceRoot`.
+
+## Related
+
+- [Standing Orders](/automation/standing-orders) — persistent instructions in workspace files
+- [Heartbeat](/gateway/heartbeat) — HEARTBEAT.md workspace file
+- [Session](/concepts/session) — session storage paths
+- [Sandboxing](/gateway/sandboxing) — workspace access in sandboxed environments

@@ -1,19 +1,37 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { discordPlugin } from "./src/channel.js";
 import { setDiscordRuntime } from "./src/runtime.js";
-import { registerDiscordSubagentHooks } from "./src/subagent-hooks.js";
 
-const plugin = {
+export { discordPlugin } from "./src/channel.js";
+export { setDiscordRuntime } from "./src/runtime.js";
+
+type DiscordSubagentHooksModule = typeof import("./src/subagent-hooks.js");
+
+let discordSubagentHooksPromise: Promise<DiscordSubagentHooksModule> | null = null;
+
+function loadDiscordSubagentHooksModule() {
+  discordSubagentHooksPromise ??= import("./src/subagent-hooks.js");
+  return discordSubagentHooksPromise;
+}
+
+export default defineChannelPluginEntry({
   id: "discord",
   name: "Discord",
   description: "Discord channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setDiscordRuntime(api.runtime);
-    api.registerChannel({ plugin: discordPlugin });
-    registerDiscordSubagentHooks(api);
+  plugin: discordPlugin,
+  setRuntime: setDiscordRuntime,
+  registerFull(api) {
+    api.on("subagent_spawning", async (event) => {
+      const { handleDiscordSubagentSpawning } = await loadDiscordSubagentHooksModule();
+      return await handleDiscordSubagentSpawning(api, event);
+    });
+    api.on("subagent_ended", async (event) => {
+      const { handleDiscordSubagentEnded } = await loadDiscordSubagentHooksModule();
+      handleDiscordSubagentEnded(event);
+    });
+    api.on("subagent_delivery_target", async (event) => {
+      const { handleDiscordSubagentDeliveryTarget } = await loadDiscordSubagentHooksModule();
+      return handleDiscordSubagentDeliveryTarget(event);
+    });
   },
-};
-
-export default plugin;
+});

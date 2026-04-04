@@ -20,9 +20,18 @@ For Anthropic pricing details, see:
 
 ## Primary knobs
 
-### `cacheRetention` (model and per-agent)
+### `cacheRetention` (global default, model, and per-agent)
 
-Set cache retention on model params:
+Set cache retention as a global default for all models:
+
+```yaml
+agents:
+  defaults:
+    params:
+      cacheRetention: "long" # none | short | long
+```
+
+Override per-model:
 
 ```yaml
 agents:
@@ -45,8 +54,9 @@ agents:
 
 Config merge order:
 
-1. `agents.defaults.models["provider/model"].params`
-2. `agents.list[].params` (matching agent id; overrides by key)
+1. `agents.defaults.params` (global default — applies to all models)
+2. `agents.defaults.models["provider/model"].params` (per-model override)
+3. `agents.list[].params` (matching agent id; overrides by key)
 
 ### Legacy `cacheControlTtl`
 

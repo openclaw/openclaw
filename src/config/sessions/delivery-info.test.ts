@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
@@ -17,7 +19,8 @@ vi.mock("./store.js", () => ({
   loadSessionStore: () => storeState.store,
 }));
 
-import { extractDeliveryInfo, parseSessionThreadInfo } from "./delivery-info.js";
+let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
+let parseSessionThreadInfo: typeof import("./delivery-info.js").parseSessionThreadInfo;
 
 const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
   sessionId: "session-1",
@@ -25,7 +28,12 @@ const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEn
   deliveryContext,
 });
 
+beforeAll(async () => {
+  ({ extractDeliveryInfo, parseSessionThreadInfo } = await import("./delivery-info.js"));
+});
+
 beforeEach(() => {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
 });
 
@@ -38,6 +46,23 @@ describe("extractDeliveryInfo", () => {
     expect(parseSessionThreadInfo("agent:main:slack:channel:C1:thread:123.456")).toEqual({
       baseSessionKey: "agent:main:slack:channel:C1",
       threadId: "123.456",
+    });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:matrix:channel:!room:example.org:thread:$AbC123:example.org",
+      ),
+    ).toEqual({
+      baseSessionKey: "agent:main:matrix:channel:!room:example.org",
+      threadId: "$AbC123:example.org",
+    });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toEqual({
+      baseSessionKey:
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      threadId: undefined,
     });
     expect(parseSessionThreadInfo("agent:main:telegram:dm:user-1")).toEqual({
       baseSessionKey: "agent:main:telegram:dm:user-1",
@@ -98,6 +123,7 @@ describe("extractDeliveryInfo", () => {
       to: "group:98765",
       accountId: "main",
     });
+    storeState.store[baseKey].lastThreadId = "55";
 
     const result = extractDeliveryInfo(topicKey);
 
@@ -106,8 +132,33 @@ describe("extractDeliveryInfo", () => {
         channel: "telegram",
         to: "group:98765",
         accountId: "main",
+        threadId: "55",
       },
       threadId: "55",
+    });
+  });
+
+  it("falls back to session metadata thread ids when deliveryContext.threadId is missing", () => {
+    const sessionKey = "agent:main:telegram:group:98765";
+    storeState.store[sessionKey] = {
+      ...buildEntry({
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+      }),
+      origin: { threadId: 77 },
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+        threadId: "77",
+      },
+      threadId: undefined,
     });
   });
 });

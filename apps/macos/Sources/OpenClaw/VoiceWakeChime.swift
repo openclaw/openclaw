@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import OSLog
 
-enum VoiceWakeChime: Codable, Equatable, Sendable {
+enum VoiceWakeChime: Codable, Equatable {
     case none
     case system(name: String)
     case custom(displayName: String, bookmark: Data)

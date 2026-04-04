@@ -7,6 +7,7 @@ export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-ch
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+export type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */
@@ -31,10 +32,10 @@ export type BlockStreamingChunkConfig = {
   breakPreference?: "paragraph" | "newline" | "sentence";
 };
 
-export type MarkdownTableMode = "off" | "bullets" | "code";
+export type MarkdownTableMode = "off" | "bullets" | "code" | "block";
 
 export type MarkdownConfig = {
-  /** Table rendering mode (off|bullets|code). */
+  /** Table rendering mode (off|bullets|code|block). */
   tables?: MarkdownTableMode;
 };
 
@@ -205,6 +206,8 @@ export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
   flags?: string[];
+  /** Threshold in ms before a processing session logs "stuck session" diagnostics. */
+  stuckSessionWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

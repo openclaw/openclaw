@@ -37,8 +37,10 @@ case "$cmd" in
     unit="${args[1]:-}"
     unit_path="$HOME/.config/systemd/user/${unit}"
     if [ -f "$unit_path" ]; then
+      echo "enabled"
       exit 0
     fi
+    echo "disabled" >&2
     exit 1
     ;;
   show)
@@ -73,7 +75,7 @@ LOGINCTL
 
   # Install the npm-global variant from the local /app source.
   # `npm pack` can emit script output; keep only the tarball name.
-  pkg_tgz="$(npm pack --silent /app | tail -n 1 | tr -d '\r')"
+  pkg_tgz="$(npm pack --ignore-scripts --silent /app | tail -n 1 | tr -d '\r')"
   if [ ! -f "/app/$pkg_tgz" ]; then
     echo "npm pack failed (expected /app/$pkg_tgz)"
     exit 1

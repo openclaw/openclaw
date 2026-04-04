@@ -1,0 +1,47 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+const unrefMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  };
+});
+
+import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
+
+afterEach(() => {
+  spawnMock.mockReset();
+  unrefMock.mockReset();
+  spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+});
+
+describe("scheduleDetachedLaunchdRestartHandoff", () => {
+  it("waits for the caller pid before kickstarting launchd", () => {
+    const env = {
+      HOME: "/Users/test",
+      OPENCLAW_PROFILE: "default",
+    };
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    const result = scheduleDetachedLaunchdRestartHandoff({
+      env,
+      mode: "kickstart",
+      waitForPid: 9876,
+    });
+
+    expect(result).toEqual({ ok: true, pid: 4242 });
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [, args] = spawnMock.mock.calls[0] as [string, string[]];
+    expect(args[0]).toBe("-c");
+    expect(args[2]).toBe("openclaw-launchd-restart-handoff");
+    expect(args[6]).toBe("9876");
+    expect(args[1]).toContain('while kill -0 "$wait_pid" >/dev/null 2>&1; do');
+    expect(args[1]).toContain('launchctl kickstart -k "$service_target" >/dev/null 2>&1');
+    expect(args[1]).not.toContain("sleep 1");
+    expect(unrefMock).toHaveBeenCalledTimes(1);
+  });
+});

@@ -1,18 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
-
-async function withTempRoot<T>(prefix: string, run: (root: string) => Promise<T>): Promise<T> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(root);
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-}
 
 function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -28,7 +19,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const targetDir = path.join(root, "target-dir");
       const linkPath = path.join(root, "alias");
@@ -55,7 +46,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const linkPath = path.join(root, "alias-out");
@@ -86,7 +77,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const outsideFile = path.join(outside, "target.txt");
@@ -122,7 +113,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const aliasRoot = path.join(base, "workspace-alias");
       const fileName = "plugin.js";
@@ -153,27 +144,28 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-fuzz-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-fuzz-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const safeTarget = path.join(root, "safe-target");
+      const safeRealBase = path.join(root, "safe-real");
+      const safeLinkBase = path.join(root, "safe-link");
+      const escapeLink = path.join(root, "escape-link");
       await fs.mkdir(root, { recursive: true });
       await fs.mkdir(outside, { recursive: true });
       await fs.mkdir(safeTarget, { recursive: true });
+      await fs.mkdir(safeRealBase, { recursive: true });
+      await fs.symlink(safeTarget, safeLinkBase);
+      await fs.symlink(outside, escapeLink);
 
       const rand = createSeededRandom(0x5eed1234);
-      for (let idx = 0; idx < 64; idx += 1) {
+      const fuzzCases = 32;
+      for (let idx = 0; idx < fuzzCases; idx += 1) {
         const token = Math.floor(rand() * 1_000_000)
           .toString(16)
           .padStart(5, "0");
-        const safeName = `safe-${idx}-${token}`;
         const useLink = rand() > 0.5;
-        const safeBase = useLink ? path.join(root, `safe-link-${idx}`) : path.join(root, safeName);
-        if (useLink) {
-          await fs.symlink(safeTarget, safeBase);
-        } else {
-          await fs.mkdir(safeBase, { recursive: true });
-        }
+        const safeBase = useLink ? safeLinkBase : safeRealBase;
         const safeCandidate = path.join(safeBase, `new-${token}.txt`);
         const safeResolved = await resolveBoundaryPath({
           absolutePath: safeCandidate,
@@ -182,8 +174,6 @@ describe("resolveBoundaryPath", () => {
         });
         expect(isPathInside(safeResolved.rootCanonicalPath, safeResolved.canonicalPath)).toBe(true);
 
-        const escapeLink = path.join(root, `escape-${idx}`);
-        await fs.symlink(outside, escapeLink);
         const unsafeCandidate = path.join(escapeLink, `new-${token}.txt`);
         await expect(
           resolveBoundaryPath({

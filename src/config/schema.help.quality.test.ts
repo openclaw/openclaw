@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 
@@ -8,6 +9,7 @@ const ROOT_SECTIONS = [
   "wizard",
   "diagnostics",
   "logging",
+  "cli",
   "update",
   "browser",
   "ui",
@@ -40,6 +42,7 @@ const TARGET_KEYS = [
   "memory.citations",
   "memory.backend",
   "memory.qmd.searchMode",
+  "memory.qmd.searchTool",
   "memory.qmd.scope",
   "memory.qmd.includeDefaultMemory",
   "memory.qmd.mcporter.enabled",
@@ -70,6 +73,15 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.fallback",
   "agents.defaults.memorySearch.sources",
   "agents.defaults.memorySearch.extraPaths",
+  "agents.defaults.memorySearch.qmd",
+  "agents.defaults.memorySearch.qmd.extraCollections",
+  "agents.defaults.memorySearch.qmd.extraCollections.path",
+  "agents.defaults.memorySearch.qmd.extraCollections.name",
+  "agents.defaults.memorySearch.qmd.extraCollections.pattern",
+  "agents.defaults.memorySearch.multimodal",
+  "agents.defaults.memorySearch.multimodal.enabled",
+  "agents.defaults.memorySearch.multimodal.modalities",
+  "agents.defaults.memorySearch.multimodal.maxFileBytes",
   "agents.defaults.memorySearch.experimental.sessionMemory",
   "agents.defaults.memorySearch.remote.baseUrl",
   "agents.defaults.memorySearch.remote.apiKey",
@@ -81,6 +93,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
   "agents.defaults.memorySearch.store.path",
+  "agents.defaults.memorySearch.outputDimensionality",
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",
   "agents.defaults.memorySearch.query.hybrid.enabled",
@@ -100,6 +113,7 @@ const TARGET_KEYS = [
   "models.mode",
   "models.providers.*.auth",
   "models.providers.*.authHeader",
+  "models.providers.*.request",
   "gateway.reload.mode",
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
@@ -108,6 +122,10 @@ const TARGET_KEYS = [
   "cron.enabled",
   "cron.store",
   "cron.maxConcurrentRuns",
+  "cron.retry",
+  "cron.retry.maxAttempts",
+  "cron.retry.backoffMs",
+  "cron.retry.retryOn",
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
@@ -215,9 +233,6 @@ const TARGET_KEYS = [
   "hooks.gmail.tailscale.mode",
   "hooks.gmail.thinking",
   "hooks.internal",
-  "hooks.internal.handlers",
-  "hooks.internal.handlers[].event",
-  "hooks.internal.handlers[].module",
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
@@ -239,6 +254,7 @@ const TARGET_KEYS = [
   "channels",
   "channels.defaults",
   "channels.defaults.groupPolicy",
+  "channels.defaults.contextVisibility",
   "channels.defaults.heartbeat",
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
@@ -260,7 +276,9 @@ const TARGET_KEYS = [
   "browser.headless",
   "browser.noSandbox",
   "browser.profiles",
+  "browser.profiles.*.userDataDir",
   "browser.profiles.*.driver",
+  "browser.profiles.*.attachOnly",
   "tools",
   "tools.allow",
   "tools.deny",
@@ -284,6 +302,7 @@ const TARGET_KEYS = [
   "web.reconnect.jitter",
   "web.reconnect.maxAttempts",
   "discovery",
+  "discovery.wideArea.domain",
   "discovery.wideArea.enabled",
   "discovery.mdns",
   "discovery.mdns.mode",
@@ -293,11 +312,8 @@ const TARGET_KEYS = [
   "canvasHost.port",
   "canvasHost.liveReload",
   "talk",
-  "talk.voiceId",
-  "talk.voiceAliases",
-  "talk.modelId",
-  "talk.outputFormat",
   "talk.interruptOnSpeech",
+  "talk.silenceTimeoutMs",
   "meta",
   "env",
   "env.shellEnv",
@@ -332,6 +348,11 @@ const TARGET_KEYS = [
   "plugins.slots",
   "plugins.entries",
   "plugins.entries.*.enabled",
+  "plugins.entries.*.hooks",
+  "plugins.entries.*.hooks.allowPromptInjection",
+  "plugins.entries.*.subagent",
+  "plugins.entries.*.subagent.allowModelOverride",
+  "plugins.entries.*.subagent.allowedModels",
   "plugins.entries.*.apiKey",
   "plugins.entries.*.env",
   "plugins.entries.*.config",
@@ -363,6 +384,14 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.maxHistoryShare",
   "agents.defaults.compaction.identifierPolicy",
   "agents.defaults.compaction.identifierInstructions",
+  "agents.defaults.compaction.recentTurnsPreserve",
+  "agents.defaults.compaction.qualityGuard",
+  "agents.defaults.compaction.qualityGuard.enabled",
+  "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.postCompactionSections",
+  "agents.defaults.compaction.timeoutSeconds",
+  "agents.defaults.compaction.model",
+  "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -395,11 +424,12 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
+  "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
   "gateway.mode": ['"local"', '"remote"'],
   "gateway.bind": ['"auto"', '"lan"', '"loopback"', '"custom"', '"tailnet"'],
   "gateway.auth.mode": ['"none"', '"token"', '"password"', '"trusted-proxy"'],
   "gateway.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
-  "browser.profiles.*.driver": ['"clawd"', '"extension"'],
+  "browser.profiles.*.driver": ['"openclaw"', '"clawd"', '"existing-session"'],
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
@@ -415,6 +445,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   ],
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
+  "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
@@ -447,20 +478,13 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.alsoAllow",
   "tools.byProvider",
   "tools.exec.approvalRunningNoticeMs",
+  "tools.exec.strictInlineEval",
   "tools.links.enabled",
   "tools.links.maxLinks",
   "tools.links.models",
   "tools.links.scope",
   "tools.links.timeoutSeconds",
-  "tools.media.audio.attachments",
-  "tools.media.audio.enabled",
-  "tools.media.audio.language",
-  "tools.media.audio.maxBytes",
-  "tools.media.audio.maxChars",
-  "tools.media.audio.models",
-  "tools.media.audio.prompt",
-  "tools.media.audio.scope",
-  "tools.media.audio.timeoutSeconds",
+  ...MEDIA_AUDIO_FIELD_KEYS,
   "tools.media.concurrency",
   "tools.media.image.attachments",
   "tools.media.image.enabled",
@@ -495,25 +519,7 @@ const CHANNELS_AGENTS_TARGET_KEYS = [
   "agents.list[].tools.alsoAllow",
   "agents.list[].tools.byProvider",
   "agents.list[].tools.profile",
-  "channels.bluebubbles",
-  "channels.discord",
-  "channels.discord.token",
-  "channels.imessage",
-  "channels.imessage.cliPath",
-  "channels.irc",
   "channels.mattermost",
-  "channels.msteams",
-  "channels.signal",
-  "channels.signal.account",
-  "channels.slack",
-  "channels.slack.appToken",
-  "channels.slack.botToken",
-  "channels.slack.userToken",
-  "channels.slack.userTokenReadOnly",
-  "channels.telegram",
-  "channels.telegram.botToken",
-  "channels.telegram.capabilities.inlineButtons",
-  "channels.whatsapp",
 ] as const;
 
 const FINAL_BACKLOG_TARGET_KEYS = [
@@ -523,7 +529,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults",
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
-  "browser.ssrfPolicy.allowPrivateNetwork",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
@@ -541,7 +546,6 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "gateway.remote.token",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
-  "talk.apiKey",
   "ui.assistant.avatar",
   "ui.assistant.name",
   "ui.seamColor",
@@ -758,11 +762,19 @@ describe("config help copy quality", () => {
 
     const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
     expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
+
+    const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
+    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
+    expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
+    expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
     const providerKey = FIELD_HELP["models.providers.*.apiKey"];
     expect(/secret|env|credential/i.test(providerKey)).toBe(true);
+    const modelsMode = FIELD_HELP["models.mode"];
+    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
+    expect(modelsMode.includes("preserve")).toBe(true);
 
     const bedrockRefresh = FIELD_HELP["models.bedrockDiscovery.refreshInterval"];
     expect(/refresh|seconds|interval/i.test(bedrockRefresh)).toBe(true);
@@ -784,6 +796,18 @@ describe("config help copy quality", () => {
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
     expect(identifierPolicy.includes('"custom"')).toBe(true);
+
+    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
+    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
+    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+
+    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
+    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
+    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+
+    const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
+    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);

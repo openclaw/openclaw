@@ -4,9 +4,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  VERSION,
   readVersionFromBuildInfoForModuleUrl,
+  resolveCompatibilityHostVersion,
   readVersionFromPackageJsonForModuleUrl,
+  resolveBinaryVersion,
   resolveRuntimeServiceVersion,
+  resolveUsableRuntimeVersion,
   resolveVersionFromModuleUrl,
 } from "./version.js";
 
@@ -94,6 +98,42 @@ describe("version resolution", () => {
     expect(resolveVersionFromModuleUrl("not-a-valid-url")).toBeNull();
   });
 
+  it("resolves binary version with explicit precedence", async () => {
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          injectedVersion: "9.9.9",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("9.9.9");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl,
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("2.3.4");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "8.8.8",
+          fallback: "0.0.0",
+        }),
+      ).toBe("8.8.8");
+      expect(
+        resolveBinaryVersion({
+          moduleUrl: "not-a-valid-url",
+          bundledVersion: "   ",
+          fallback: "0.0.0",
+        }),
+      ).toBe("0.0.0");
+    });
+  });
+
   it("prefers OPENCLAW_VERSION over service and package versions", () => {
     expect(
       resolveRuntimeServiceVersion({
@@ -104,14 +144,50 @@ describe("version resolution", () => {
     ).toBe("9.9.9");
   });
 
-  it("uses service and package fallbacks and ignores blank env values", () => {
+  it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
+    const previous = process.env.OPENCLAW_VERSION;
+    const previousService = process.env.OPENCLAW_SERVICE_VERSION;
+    const previousPackage = process.env.npm_package_version;
+    try {
+      process.env.OPENCLAW_VERSION = "2026.3.25";
+      process.env.OPENCLAW_SERVICE_VERSION = "2026.3.25-service";
+      process.env.npm_package_version = "2026.3.25-package";
+      expect(resolveCompatibilityHostVersion()).toBe(VERSION);
+    } finally {
+      process.env.OPENCLAW_VERSION = previous;
+      process.env.OPENCLAW_SERVICE_VERSION = previousService;
+      process.env.npm_package_version = previousPackage;
+    }
+  });
+
+  it("keeps explicit env-object overrides for compatibility checks in tests", () => {
+    expect(
+      resolveCompatibilityHostVersion({
+        OPENCLAW_VERSION: "2026.3.99",
+        OPENCLAW_SERVICE_VERSION: "2026.3.98",
+        npm_package_version: "2026.3.97",
+      }),
+    ).toBe("2026.3.99");
+  });
+
+  it("normalizes runtime version candidate for fallback handling", () => {
+    expect(resolveUsableRuntimeVersion(undefined)).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" \t ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("0.0.0")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion(" 0.0.0 ")).toBeUndefined();
+    expect(resolveUsableRuntimeVersion("2026.3.2")).toBe("2026.3.2");
+    expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
+  });
+
+  it("prefers runtime VERSION over service/package markers and ignores blank env values", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "   ",
         OPENCLAW_SERVICE_VERSION: "  2.0.0  ",
         npm_package_version: "1.0.0",
       }),
-    ).toBe("2.0.0");
+    ).toBe(VERSION);
 
     expect(
       resolveRuntimeServiceVersion({
@@ -119,7 +195,7 @@ describe("version resolution", () => {
         OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: " 1.0.0-package ",
       }),
-    ).toBe("1.0.0-package");
+    ).toBe(VERSION);
 
     expect(
       resolveRuntimeServiceVersion(
@@ -130,6 +206,6 @@ describe("version resolution", () => {
         },
         "fallback",
       ),
-    ).toBe("fallback");
+    ).toBe(VERSION);
   });
 });

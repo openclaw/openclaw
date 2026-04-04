@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type {
+  GetCallStatusInput,
+  GetCallStatusResult,
   HangupCallInput,
   InitiateCallInput,
   InitiateCallResult,
@@ -441,6 +443,41 @@ export class PlivoProvider implements VoiceCallProvider {
     // GetInput ends automatically when speech ends.
   }
 
+  async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
+    const terminalStatuses = new Set([
+      "completed",
+      "busy",
+      "failed",
+      "timeout",
+      "no-answer",
+      "cancel",
+      "machine",
+      "hangup",
+    ]);
+    try {
+      const data = await guardedJsonApiRequest<{ call_status?: string }>({
+        url: `${this.baseUrl}/Call/${input.providerCallId}/`,
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
+        },
+        allowNotFound: true,
+        allowedHostnames: [this.apiHost],
+        auditContext: "plivo-get-call-status",
+        errorPrefix: "Plivo get call status error",
+      });
+
+      if (!data) {
+        return { status: "not-found", isTerminal: true };
+      }
+
+      const status = data.call_status ?? "unknown";
+      return { status, isTerminal: terminalStatuses.has(status) };
+    } catch {
+      return { status: "error", isTerminal: false, isUnknown: true };
+    }
+  }
+
   private static normalizeNumber(numberOrSip: string): string {
     const trimmed = numberOrSip.trim();
     if (trimmed.toLowerCase().startsWith("sip:")) {
@@ -507,6 +544,13 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private baseWebhookUrlFromCtx(ctx: WebhookContext): string | null {
     try {
+      if (this.options.publicUrl) {
+        const base = new URL(this.options.publicUrl);
+        const requestUrl = new URL(ctx.url);
+        base.pathname = requestUrl.pathname;
+        return `${base.origin}${base.pathname}`;
+      }
+
       const u = new URL(
         reconstructWebhookUrl(ctx, {
           allowedHosts: this.options.webhookSecurity?.allowedHosts,

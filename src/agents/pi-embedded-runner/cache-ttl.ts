@@ -1,3 +1,6 @@
+import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
+import { isAnthropicFamilyCacheTtlEligible } from "./anthropic-family-cache-semantics.js";
+
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 export const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
@@ -8,31 +11,29 @@ export type CacheTtlEntryData = {
   modelId?: string;
 };
 
-const CACHE_TTL_NATIVE_PROVIDERS = new Set(["anthropic", "moonshot", "zai"]);
-const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
-  "anthropic/",
-  "moonshot/",
-  "moonshotai/",
-  "zai/",
-] as const;
-
-function isOpenRouterCacheTtlModel(modelId: string): boolean {
-  return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
-}
-
-export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
+export function isCacheTtlEligibleProvider(
+  provider: string,
+  modelId: string,
+  modelApi?: string,
+): boolean {
   const normalizedProvider = provider.toLowerCase();
   const normalizedModelId = modelId.toLowerCase();
-  if (CACHE_TTL_NATIVE_PROVIDERS.has(normalizedProvider)) {
-    return true;
+  const pluginEligibility = resolveProviderCacheTtlEligibility({
+    provider: normalizedProvider,
+    context: {
+      provider: normalizedProvider,
+      modelId: normalizedModelId,
+      modelApi,
+    },
+  });
+  if (pluginEligibility !== undefined) {
+    return pluginEligibility;
   }
-  if (normalizedProvider === "openrouter" && isOpenRouterCacheTtlModel(normalizedModelId)) {
-    return true;
-  }
-  if (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) {
-    return true;
-  }
-  return false;
+  return isAnthropicFamilyCacheTtlEligible({
+    provider: normalizedProvider,
+    modelId: normalizedModelId,
+    modelApi,
+  });
 }
 
 export function readLastCacheTtlTimestamp(sessionManager: unknown): number | null {

@@ -1,18 +1,43 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createThrowingRuntime, readJsonFile } from "./onboard-non-interactive.test-helpers.js";
+import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const gatewayClientCalls: Array<{
   url?: string;
   token?: string;
   password?: string;
-  onHelloOk?: () => void;
+  onHelloOk?: (hello: { features?: { methods?: string[] } }) => void;
   onClose?: (code: number, reason: string) => void;
 }> = [];
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
+const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
+  vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
+);
+const gatewayServiceMock = vi.hoisted(() => ({
+  label: "LaunchAgent",
+  loadedText: "loaded",
+  isLoaded: vi.fn(async () => true),
+  readRuntime: vi.fn(async () => ({
+    status: "running",
+    state: "active",
+    pid: 4242,
+  })),
+}));
+const readLastGatewayErrorLineMock = vi.hoisted(() =>
+  vi.fn(async () => "Gateway failed to start: required secrets are unavailable."),
+);
+let waitForGatewayReachableMock:
+  | ((params: { url: string; token?: string; password?: string; deadlineMs?: number }) => Promise<{
+      ok: boolean;
+      detail?: string;
+    }>)
+  | undefined;
 
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {
@@ -20,13 +45,13 @@ vi.mock("../gateway/client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void;
     };
     constructor(params: {
       url?: string;
       token?: string;
       password?: string;
-      onHelloOk?: () => void;
+      onHelloOk?: (hello: { features?: { methods?: string[] } }) => void;
     }) {
       this.params = params;
       gatewayClientCalls.push(params);
@@ -35,30 +60,107 @@ vi.mock("../gateway/client.js", () => ({
       return { ok: true };
     }
     start() {
-      queueMicrotask(() => this.params.onHelloOk?.());
+      queueMicrotask(() => this.params.onHelloOk?.({ features: { methods: ["health"] } }));
     }
     stop() {}
   },
 }));
 
-vi.mock("./onboard-helpers.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
+vi.mock("./onboard-helpers.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./onboard-helpers.js")>("./onboard-helpers.js");
   return {
     ...actual,
     ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+    waitForGatewayReachable: (...args: Parameters<typeof actual.waitForGatewayReachable>) =>
+      waitForGatewayReachableMock
+        ? waitForGatewayReachableMock(args[0])
+        : actual.waitForGatewayReachable(...args),
   };
 });
 
-const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
-const { resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js");
-const { resolveConfigPath } = await import("../config/config.js");
-const { callGateway } = await import("../gateway/call.js");
+vi.mock("./onboard-non-interactive/local/daemon-install.js", () => ({
+  installGatewayDaemonNonInteractive: installGatewayDaemonNonInteractiveMock,
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => gatewayServiceMock,
+}));
+
+vi.mock("../daemon/diagnostics.js", () => ({
+  readLastGatewayErrorLine: readLastGatewayErrorLineMock,
+}));
+
+let runNonInteractiveSetup: typeof import("./onboard-non-interactive.js").runNonInteractiveSetup;
+let resolveStateConfigPath: typeof import("../config/paths.js").resolveConfigPath;
+let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
+let callGateway: typeof import("../gateway/call.js").callGateway;
+
+async function loadGatewayOnboardModules(): Promise<void> {
+  vi.resetModules();
+  ({ runNonInteractiveSetup } = await import("./onboard-non-interactive.js"));
+  ({ resolveConfigPath: resolveStateConfigPath } = await import("../config/paths.js"));
+  ({ resolveConfigPath } = await import("../config/config.js"));
+  ({ callGateway } = await import("../gateway/call.js"));
+}
 
 function getPseudoPort(base: number): number {
   return base + (process.pid % 1000);
 }
 
 const runtime = createThrowingRuntime();
+
+function createJsonCaptureRuntime() {
+  let capturedJson = "";
+  const runtimeWithCapture: RuntimeEnv = {
+    log: (...args: unknown[]) => {
+      const firstArg = args[0];
+      capturedJson =
+        typeof firstArg === "string"
+          ? firstArg
+          : firstArg instanceof Error
+            ? firstArg.message
+            : (JSON.stringify(firstArg) ?? "");
+    },
+    error: (...args: unknown[]) => {
+      const firstArg = args[0];
+      const capturedError =
+        typeof firstArg === "string"
+          ? firstArg
+          : firstArg instanceof Error
+            ? firstArg.message
+            : (JSON.stringify(firstArg) ?? "");
+      throw new Error(capturedError);
+    },
+    exit: (_code: number) => {
+      throw new Error("exit should not be reached after runtime.error");
+    },
+  };
+
+  return {
+    runtimeWithCapture,
+    readCapturedJson: () => capturedJson,
+  };
+}
+
+async function expectLocalJsonSetupFailure(stateDir: string, runtimeWithCapture: RuntimeEnv) {
+  await expect(
+    runNonInteractiveSetup(
+      {
+        nonInteractive: true,
+        mode: "local",
+        workspace: path.join(stateDir, "openclaw"),
+        authChoice: "skip",
+        skipSkills: true,
+        skipHealth: false,
+        installDaemon: true,
+        gatewayBind: "loopback",
+        json: true,
+      },
+      runtimeWithCapture,
+    ),
+  ).rejects.toThrow("exit should not be reached after runtime.error");
+}
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -107,6 +209,12 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
     tempHome = await makeTempWorkspace("openclaw-onboard-");
     process.env.HOME = tempHome;
+
+    await loadGatewayOnboardModules();
+  });
+
+  beforeEach(() => {
+    gatewayClientCalls.length = 0;
   });
 
   afterAll(async () => {
@@ -116,12 +224,21 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     envSnapshot.restore();
   });
 
+  afterEach(() => {
+    waitForGatewayReachableMock = undefined;
+    installGatewayDaemonNonInteractiveMock.mockClear();
+    gatewayServiceMock.isLoaded.mockClear();
+    gatewayServiceMock.readRuntime.mockClear();
+    readLastGatewayErrorLineMock.mockClear();
+    gatewayClientCalls.length = 0;
+  });
+
   it("writes gateway token auth into config", async () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
       const token = "tok_test_123";
       const workspace = path.join(stateDir, "openclaw");
 
-      await runNonInteractiveOnboarding(
+      await runNonInteractiveSetup(
         {
           nonInteractive: true,
           mode: "local",
@@ -139,13 +256,163 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       const configPath = resolveStateConfigPath(process.env, stateDir);
       const cfg = await readJsonFile<{
-        gateway?: { auth?: { mode?: string; token?: string } };
+        gateway?: { mode?: string; auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
+        tools?: { profile?: string };
       }>(configPath);
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
+      expect(cfg?.gateway?.mode).toBe("local");
+      expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+    });
+  }, 60_000);
+
+  it("keeps gateway.mode=local on the install-daemon onboarding path", async () => {
+    await withStateDir("state-install-daemon-local-mode-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: true,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      const configPath = resolveStateConfigPath(process.env, stateDir);
+      const cfg = await readJsonFile<{
+        gateway?: { mode?: string; bind?: string };
+      }>(configPath);
+
+      expect(cfg?.gateway?.mode).toBe("local");
+      expect(cfg?.gateway?.bind).toBe("loopback");
+      expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
+    });
+  }, 60_000);
+
+  it("uses OPENCLAW_GATEWAY_TOKEN when --gateway-token is omitted", async () => {
+    await withStateDir("state-env-token-", async (stateDir) => {
+      const envToken = "tok_env_fallback_123";
+      const workspace = path.join(stateDir, "openclaw");
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
+
+      try {
+        await runNonInteractiveSetup(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace,
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: true,
+            installDaemon: false,
+            gatewayBind: "loopback",
+            gatewayAuth: "token",
+          },
+          runtime,
+        );
+
+        const configPath = resolveStateConfigPath(process.env, stateDir);
+        const cfg = await readJsonFile<{
+          gateway?: { auth?: { mode?: string; token?: string } };
+        }>(configPath);
+
+        expect(cfg?.gateway?.auth?.mode).toBe("token");
+        expect(cfg?.gateway?.auth?.token).toBe(envToken);
+      } finally {
+        if (prevToken === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        } else {
+          process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+        }
+      }
+    });
+  }, 60_000);
+
+  it("writes gateway token SecretRef from --gateway-token-ref-env", async () => {
+    await withStateDir("state-env-token-ref-", async (stateDir) => {
+      const envToken = "tok_env_ref_123";
+      const workspace = path.join(stateDir, "openclaw");
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
+
+      try {
+        await runNonInteractiveSetup(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace,
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: true,
+            installDaemon: false,
+            gatewayBind: "loopback",
+            gatewayAuth: "token",
+            gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN",
+          },
+          runtime,
+        );
+
+        const configPath = resolveStateConfigPath(process.env, stateDir);
+        const cfg = await readJsonFile<{
+          gateway?: { auth?: { mode?: string; token?: unknown } };
+        }>(configPath);
+
+        expect(cfg?.gateway?.auth?.mode).toBe("token");
+        expect(cfg?.gateway?.auth?.token).toEqual({
+          source: "env",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_TOKEN",
+        });
+      } finally {
+        if (prevToken === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        } else {
+          process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+        }
+      }
+    });
+  }, 60_000);
+
+  it("fails when --gateway-token-ref-env points to a missing env var", async () => {
+    await withStateDir("state-env-token-ref-missing-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+      const previous = process.env.MISSING_GATEWAY_TOKEN_ENV;
+      delete process.env.MISSING_GATEWAY_TOKEN_ENV;
+      try {
+        await expect(
+          runNonInteractiveSetup(
+            {
+              nonInteractive: true,
+              mode: "local",
+              workspace,
+              authChoice: "skip",
+              skipSkills: true,
+              skipHealth: true,
+              installDaemon: false,
+              gatewayBind: "loopback",
+              gatewayAuth: "token",
+              gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV",
+            },
+            runtime,
+          ),
+        ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_ENV/);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.MISSING_GATEWAY_TOKEN_ENV;
+        } else {
+          process.env.MISSING_GATEWAY_TOKEN_ENV = previous;
+        }
+      }
     });
   }, 60_000);
 
@@ -153,7 +420,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     await withStateDir("state-remote-", async () => {
       const port = getPseudoPort(30_000);
       const token = "tok_remote_123";
-      await runNonInteractiveOnboarding(
+      await runNonInteractiveSetup(
         {
           nonInteractive: true,
           mode: "remote",
@@ -182,6 +449,148 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("explains local health failure when no daemon was requested", async () => {
+    await withStateDir("state-local-health-hint-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "socket closed: 1006 abnormal closure",
+      }));
+
+      await expect(
+        runNonInteractiveSetup(
+          {
+            nonInteractive: true,
+            mode: "local",
+            workspace: path.join(stateDir, "openclaw"),
+            authChoice: "skip",
+            skipSkills: true,
+            skipHealth: false,
+            installDaemon: false,
+            gatewayBind: "loopback",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(
+        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+      );
+    });
+  }, 60_000);
+
+  it("uses a longer health deadline when daemon install was requested", async () => {
+    await withStateDir("state-local-daemon-health-", async (stateDir) => {
+      let capturedDeadlineMs: number | undefined;
+      waitForGatewayReachableMock = vi.fn(async (params: { deadlineMs?: number }) => {
+        capturedDeadlineMs = params.deadlineMs;
+        return { ok: true };
+      });
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace: path.join(stateDir, "openclaw"),
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: false,
+          installDaemon: true,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      expect(installGatewayDaemonNonInteractiveMock).toHaveBeenCalledTimes(1);
+      expect(capturedDeadlineMs).toBe(45_000);
+    });
+  }, 60_000);
+
+  it("emits a daemon-install failure when Linux user systemd is unavailable", async () => {
+    await withStateDir("state-local-daemon-install-json-fail-", async (stateDir) => {
+      installGatewayDaemonNonInteractiveMock.mockResolvedValueOnce({
+        installed: false,
+        skippedReason: "systemd-user-unavailable",
+      });
+
+      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
+
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: "linux",
+      });
+
+      try {
+        await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+      } finally {
+        Object.defineProperty(process, "platform", {
+          configurable: true,
+          value: originalPlatform,
+        });
+      }
+
+      const parsed = JSON.parse(readCapturedJson()) as {
+        ok: boolean;
+        phase: string;
+        daemonInstall?: {
+          requested?: boolean;
+          installed?: boolean;
+          skippedReason?: string;
+        };
+        hints?: string[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("daemon-install");
+      expect(parsed.daemonInstall).toEqual({
+        requested: true,
+        installed: false,
+        skippedReason: "systemd-user-unavailable",
+      });
+      expect(parsed.hints).toContain(
+        "Fix: rerun without `--install-daemon` for one-shot setup, or enable a working user-systemd session and retry.",
+      );
+    });
+  }, 60_000);
+
+  it("emits structured JSON diagnostics when daemon health fails", async () => {
+    await withStateDir("state-local-daemon-health-json-fail-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+      }));
+
+      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
+      await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+
+      const parsed = JSON.parse(readCapturedJson()) as {
+        ok: boolean;
+        phase: string;
+        installDaemon: boolean;
+        detail?: string;
+        gateway?: { wsUrl?: string };
+        hints?: string[];
+        diagnostics?: {
+          service?: {
+            label?: string;
+            loaded?: boolean;
+            runtimeStatus?: string;
+            pid?: number;
+          };
+          lastGatewayError?: string;
+        };
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("gateway-health");
+      expect(parsed.installDaemon).toBe(true);
+      expect(parsed.detail).toContain("1006 abnormal closure");
+      expect(parsed.gateway?.wsUrl).toContain("ws://127.0.0.1:");
+      expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
+      expect(parsed.diagnostics?.service?.label).toBe("LaunchAgent");
+      expect(parsed.diagnostics?.service?.loaded).toBe(true);
+      expect(parsed.diagnostics?.service?.runtimeStatus).toBe("running");
+      expect(parsed.diagnostics?.service?.pid).toBe(4242);
+      expect(parsed.diagnostics?.lastGatewayError).toContain("required secrets are unavailable");
+    });
+  }, 60_000);
+
   it("auto-generates token auth when binding LAN and persists the token", async () => {
     if (process.platform === "win32") {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
@@ -194,7 +603,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       const port = getPseudoPort(40_000);
       const workspace = path.join(stateDir, "openclaw");
 
-      await runNonInteractiveOnboarding(
+      await runNonInteractiveSetup(
         {
           nonInteractive: true,
           mode: "local",

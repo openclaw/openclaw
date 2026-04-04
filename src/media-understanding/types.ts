@@ -1,3 +1,5 @@
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
+
 export type MediaUnderstandingKind =
   | "audio.transcription"
   | "video.description"
@@ -55,6 +57,7 @@ export type AudioTranscriptionRequest = {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   language?: string;
   prompt?: string;
@@ -75,6 +78,7 @@ export type VideoDescriptionRequest = {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   prompt?: string;
   timeoutMs: number;
@@ -90,6 +94,25 @@ export type ImageDescriptionRequest = {
   buffer: Buffer;
   fileName: string;
   mime?: string;
+  prompt?: string;
+  maxTokens?: number;
+  timeoutMs: number;
+  profile?: string;
+  preferredProfile?: string;
+  agentDir: string;
+  cfg: import("../config/config.js").OpenClawConfig;
+  model: string;
+  provider: string;
+};
+
+export type ImagesDescriptionInput = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+};
+
+export type ImagesDescriptionRequest = {
+  images: ImagesDescriptionInput[];
   model: string;
   provider: string;
   prompt?: string;
@@ -106,10 +129,16 @@ export type ImageDescriptionResult = {
   model?: string;
 };
 
+export type ImagesDescriptionResult = {
+  text: string;
+  model?: string;
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
+  describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
 };

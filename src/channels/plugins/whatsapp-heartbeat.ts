@@ -1,12 +1,25 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStoreSummary } from "../../config/sessions/store-summary.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { normalizeE164 } from "../../utils.js";
 import { normalizeChatChannelId } from "../registry.js";
 
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
-type HeartbeatRecipientsOpts = { to?: string; all?: boolean };
+type HeartbeatRecipientsOpts = { to?: string; all?: boolean; accountId?: string };
+
+function resolveConfiguredAllowFrom(cfg: OpenClawConfig, accountId: string): string[] {
+  const channelCfg = cfg.channels?.whatsapp;
+  if (!channelCfg) {
+    return [];
+  }
+  const allowFrom =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? channelCfg.allowFrom
+      : channelCfg.accounts?.[accountId]?.allowFrom ?? channelCfg.allowFrom;
+  return Array.isArray(allowFrom) ? allowFrom.filter((value) => value !== "*").map(normalizeE164) : [];
+}
 
 function getSessionRecipients(cfg: OpenClawConfig) {
   const sessionCfg = cfg.session;
@@ -15,7 +28,7 @@ function getSessionRecipients(cfg: OpenClawConfig) {
     return [];
   }
   const storePath = resolveStorePath(cfg.session?.store);
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStoreSummary(storePath);
   const isGroupKey = (key: string) =>
     key.includes(":group:") || key.includes(":channel:") || key.includes("@g.us");
   const isCronKey = (key: string) => key.startsWith("cron:");
@@ -53,14 +66,12 @@ export function resolveWhatsAppHeartbeatRecipients(
   }
 
   const sessionRecipients = getSessionRecipients(cfg);
-  const configuredAllowFrom =
-    Array.isArray(cfg.channels?.whatsapp?.allowFrom) && cfg.channels.whatsapp.allowFrom.length > 0
-      ? cfg.channels.whatsapp.allowFrom.filter((v) => v !== "*").map(normalizeE164)
-      : [];
+  const resolvedAccountId = opts.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const configuredAllowFrom = resolveConfiguredAllowFrom(cfg, resolvedAccountId);
   const storeAllowFrom = readChannelAllowFromStoreSync(
     "whatsapp",
     process.env,
-    DEFAULT_ACCOUNT_ID,
+    resolvedAccountId,
   ).map(normalizeE164);
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
