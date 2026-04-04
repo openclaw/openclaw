@@ -274,16 +274,26 @@ export async function cleanupArchivedSessionTranscripts(opts: {
  * so that chat.history returns archived content instead of an empty response
  * after a daily or manual session reset.
  *
- * Searches all provided directories in order, stopping at the first dir that
- * contains a matching archive. The caller should derive searchDirs from the
- * same candidate paths used to locate primary transcripts (including the legacy
- * `~/.openclaw/sessions` dir) so archive lookup stays consistent.
+ * Searches all provided directories in order. The caller should derive searchDirs
+ * from the same candidate paths used to locate primary transcripts (including the
+ * legacy `~/.openclaw/sessions` dir) so archive lookup stays consistent.
+ *
+ * @param candidateBasenames - basenames of the resolved candidate transcript paths
+ *   (e.g. `["<sessionId>.jsonl", "<sessionId>-<agentId>.jsonl"]`). Archives are
+ *   named `<transcriptBasename>.reset.<timestamp>`, so matching against all
+ *   candidate basenames avoids missing archives for non-canonical transcript names.
+ *   Falls back to `<sessionId>.jsonl.reset.*` when not provided.
  */
 export function findLatestResetArchive(
   sessionId: string,
   searchDirs: readonly string[],
+  candidateBasenames?: readonly string[],
 ): string | undefined {
-  const prefix = `${sessionId}.jsonl.reset.`;
+  // Build one prefix per candidate basename; fall back to the canonical name.
+  const prefixes =
+    candidateBasenames && candidateBasenames.length > 0
+      ? candidateBasenames.map((b) => `${b}.reset.`)
+      : [`${sessionId}.jsonl.reset.`];
 
   // Scan all dirs before deciding; pick the globally newest archive so that
   // a more-recent file in the legacy dir is not missed when the primary dir
@@ -295,7 +305,7 @@ export function findLatestResetArchive(
     try {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const d of entries) {
-        if (!d.isFile() || !d.name.startsWith(prefix)) {
+        if (!d.isFile() || !prefixes.some((p) => d.name.startsWith(p))) {
           continue;
         }
         const ts = parseSessionArchiveTimestamp(d.name, "reset");

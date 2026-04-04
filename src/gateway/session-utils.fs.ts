@@ -108,7 +108,8 @@ export function readSessionMessages(
   // primary transcript resolution (including legacy ~/.openclaw/sessions).
   if (!filePath && sessionId) {
     const searchDirs = Array.from(new Set(candidates.map((c) => path.dirname(c))));
-    filePath = findLatestResetArchive(sessionId, searchDirs);
+    const candidateBasenames = candidates.map((c) => path.basename(c));
+    filePath = findLatestResetArchive(sessionId, searchDirs, candidateBasenames);
   }
   if (!filePath) {
     return [];

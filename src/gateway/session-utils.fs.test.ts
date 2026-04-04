@@ -727,6 +727,40 @@ describe("readSessionMessages — reset archive fallback", () => {
       fs.rmSync(legacyDir, { recursive: true, force: true });
     }
   });
+
+  test("finds reset archive for non-canonical sessionFile transcript name", () => {
+    // When a session uses a topic-scoped sessionFile (e.g. <sessionId>-topic-<id>.jsonl),
+    // the reset archive is named after that file, not the plain <sessionId>.jsonl.
+    // findLatestResetArchive must match archives for all candidate basenames.
+    //
+    // Use fs.realpathSync to resolve /tmp → /private/tmp on macOS so that
+    // resolvePathWithinSessionsDir's symlink-aware relative-path check keeps the
+    // candidate instead of treating it as outside the sessions directory.
+    const sessionId = "aa000000-0000-4000-8000-000000000006";
+    const realTmpDir = fs.realpathSync(tmpDir);
+    const realStorePath = path.join(realTmpDir, "sessions.json");
+    const topicSessionFile = path.join(realTmpDir, `${sessionId}-topic-42.jsonl`);
+    const archivePath = `${topicSessionFile}.reset.2026-03-12T04-00-00.000Z`;
+    fs.writeFileSync(
+      archivePath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "topic-name archived message" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      // Primary file absent; sessionFile candidate has non-canonical basename.
+      const out = readSessionMessages(sessionId, realStorePath, topicSessionFile);
+      expect(out).toHaveLength(1);
+      expect((out[0] as { role: string; content: string }).content).toBe(
+        "topic-name archived message",
+      );
+    } finally {
+      fs.rmSync(archivePath, { force: true });
+    }
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
