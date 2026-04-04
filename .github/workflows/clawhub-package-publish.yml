@@ -22,6 +22,18 @@ on:
         required: false
         default: latest
         type: string
+      source_repo:
+        description: Optional source repo override shown in ClawHub verification
+        required: false
+        type: string
+      source_commit:
+        description: Optional source commit override shown in ClawHub verification
+        required: false
+        type: string
+      source_ref:
+        description: Optional source ref override shown in ClawHub verification
+        required: false
+        type: string
 
 jobs:
   publish:
@@ -34,8 +46,8 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
       version: ${{ inputs.version }}
       tags: ${{ inputs.tags }}
-      source_repo: ${{ github.repository }}
-      source_commit: ${{ github.sha }}
-      source_ref: ${{ github.ref }}
+      source_repo: ${{ inputs.source_repo || github.repository }}
+      source_commit: ${{ inputs.source_commit || github.sha }}
+      source_ref: ${{ inputs.source_ref || github.ref }}
     secrets:
       clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}

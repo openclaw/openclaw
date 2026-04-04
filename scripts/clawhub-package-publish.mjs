@@ -182,6 +182,9 @@ function parseArgs(argv) {
     publish: false,
     remote: "",
     owner: "",
+    sourceCommit: "",
+    sourceRef: "",
+    sourceRepo: "",
     tags: "",
     version: "",
     plugin: "",
@@ -202,6 +205,18 @@ function parseArgs(argv) {
         break;
       case "--owner":
         options.owner = argv[index + 1] ?? "";
+        index += 1;
+        break;
+      case "--source-commit":
+        options.sourceCommit = argv[index + 1] ?? "";
+        index += 1;
+        break;
+      case "--source-ref":
+        options.sourceRef = argv[index + 1] ?? "";
+        index += 1;
+        break;
+      case "--source-repo":
+        options.sourceRepo = argv[index + 1] ?? "";
         index += 1;
         break;
       case "--tags":
@@ -286,17 +301,24 @@ const remotes = runGit(repoRoot, ["remote"], false)
 const remoteName =
   options.remote ||
   (remotes.includes("fork") ? "fork" : remotes.includes("origin") ? "origin" : remotes[0] || "");
-if (!remoteName) {
+if (!remoteName && !options.sourceRepo) {
   fail("No git remote found. Add a GitHub remote or pass --remote.");
 }
 
-const sourceRepo = normalizeGitHubRepo(runGit(repoRoot, ["remote", "get-url", remoteName]));
+const sourceRepo = normalizeGitHubRepo(
+  options.sourceRepo || (remoteName ? runGit(repoRoot, ["remote", "get-url", remoteName]) : ""),
+);
 if (!sourceRepo) {
-  fail(`Remote "${remoteName}" is not a GitHub remote.`);
+  fail(
+    options.sourceRepo
+      ? `--source-repo must be a GitHub repo or URL: ${options.sourceRepo}`
+      : `Remote "${remoteName}" is not a GitHub remote.`,
+  );
 }
 
-const sourceCommit = runGit(repoRoot, ["rev-parse", "HEAD"]);
+const sourceCommit = options.sourceCommit || runGit(repoRoot, ["rev-parse", "HEAD"]);
 const sourceRef =
+  options.sourceRef ||
   runGit(repoRoot, ["describe", "--tags", "--exact-match"], false) ||
   runGit(repoRoot, ["branch", "--show-current"], false) ||
   sourceCommit;
