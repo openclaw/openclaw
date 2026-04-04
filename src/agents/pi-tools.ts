@@ -48,6 +48,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import { isKnownCoreToolId } from "./tool-catalog.js";
 import { createToolFsPolicy, resolveToolFsConfig } from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
@@ -57,6 +58,8 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
+  mergeForceAllowPolicy,
+  normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -321,6 +324,8 @@ export function createOpenClawCodingTools(options?: {
   senderIsOwner?: boolean;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /** Re-expose explicitly requested core tools through restrictive config allowlists. */
+  forceAllowTools?: string[];
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -366,11 +371,33 @@ export function createOpenClawCodingTools(options?: {
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+  const forceAllowCoreTools = Array.isArray(options?.forceAllowTools)
+    ? Array.from(
+        new Set(
+          options.forceAllowTools
+            .map((toolName) => normalizeToolName(toolName))
+            .filter((toolName) => isKnownCoreToolId(toolName)),
+        ),
+      )
+    : undefined;
 
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
+  const profilePolicyWithAlsoAllow = mergeForceAllowPolicy(
+    mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow),
+    forceAllowCoreTools,
+  );
+  const providerProfilePolicyWithAlsoAllow = mergeForceAllowPolicy(
+    mergeAlsoAllowPolicy(providerProfilePolicy, providerProfileAlsoAllow),
+    forceAllowCoreTools,
+  );
+  const globalPolicyWithForceAllow = mergeForceAllowPolicy(globalPolicy, forceAllowCoreTools);
+  const globalProviderPolicyWithForceAllow = mergeForceAllowPolicy(
+    globalProviderPolicy,
+    forceAllowCoreTools,
+  );
+  const agentPolicyWithForceAllow = mergeForceAllowPolicy(agentPolicy, forceAllowCoreTools);
+  const agentProviderPolicyWithForceAllow = mergeForceAllowPolicy(
+    agentProviderPolicy,
+    forceAllowCoreTools,
   );
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
@@ -383,10 +410,10 @@ export function createOpenClawCodingTools(options?: {
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
     providerProfilePolicyWithAlsoAllow,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
+    globalPolicyWithForceAllow,
+    globalProviderPolicyWithForceAllow,
+    agentPolicyWithForceAllow,
+    agentProviderPolicyWithForceAllow,
     groupPolicy,
     sandboxToolPolicy,
     subagentPolicy,
@@ -572,10 +599,10 @@ export function createOpenClawCodingTools(options?: {
       pluginToolAllowlist: collectExplicitAllowlist([
         profilePolicy,
         providerProfilePolicy,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
+        globalPolicyWithForceAllow,
+        globalProviderPolicyWithForceAllow,
+        agentPolicyWithForceAllow,
+        agentProviderPolicyWithForceAllow,
         groupPolicy,
         sandboxToolPolicy,
         subagentPolicy,
@@ -645,10 +672,10 @@ export function createOpenClawCodingTools(options?: {
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
         providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
-        globalPolicy,
-        globalProviderPolicy,
-        agentPolicy,
-        agentProviderPolicy,
+        globalPolicy: globalPolicyWithForceAllow,
+        globalProviderPolicy: globalProviderPolicyWithForceAllow,
+        agentPolicy: agentPolicyWithForceAllow,
+        agentProviderPolicy: agentProviderPolicyWithForceAllow,
         groupPolicy,
         agentId,
       }),
