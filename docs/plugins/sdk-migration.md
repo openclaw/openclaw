@@ -262,6 +262,20 @@ Current bundled provider examples:
   | `plugin-sdk/webhook-path` | Webhook path helpers | Webhook path normalization helpers |
   | `plugin-sdk/web-media` | Shared web media helpers | Remote/local media loading helpers |
   | `plugin-sdk/zod` | Zod re-export | Re-exported `zod` for plugin SDK consumers |
+  | `plugin-sdk/memory-core` | Bundled memory-core helpers | Memory manager/config/file/CLI helper surface |
+  | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
+  | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
+  | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine | Memory host embedding engine exports |
+  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports |
+  | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine | Memory host storage engine exports |
+  | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
+  | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |
+  | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers | Memory host secret helpers |
+  | `plugin-sdk/memory-core-host-status` | Memory host status helpers | Memory host status helpers |
+  | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime | Memory host CLI runtime helpers |
+  | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime | Memory host core runtime helpers |
+  | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers | Memory host file/runtime helpers |
+  | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helpers | Memory-lancedb helper surface |
   | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
 </Accordion>
 

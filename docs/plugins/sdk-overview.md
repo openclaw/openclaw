@@ -232,6 +232,25 @@ explicitly promotes one as public.
     | `plugin-sdk/zod` | Re-exported `zod` for plugin SDK consumers |
     | `plugin-sdk/testing` | `installCommonResolveTargetErrorCases`, `shouldAckReaction` |
   </Accordion>
+
+  <Accordion title="Memory subpaths">
+    | Subpath | Key exports |
+    | --- | --- |
+    | `plugin-sdk/memory-core` | Bundled memory-core helper surface for manager/config/file/CLI helpers |
+    | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
+    | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine exports |
+    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
+    | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
+    | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
+    | `plugin-sdk/memory-core-host-query` | Memory host query helpers |
+    | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
+    | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
+    | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
+    | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
+    | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
+    | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helper surface |
+  </Accordion>
 </AccordionGroup>
 
 ## Registration API
