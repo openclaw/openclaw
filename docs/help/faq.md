@@ -1467,7 +1467,10 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title='I set gateway.bind: "lan" (or "tailnet") and now nothing listens / the UI says unauthorized'>
-    Non-loopback binds **require auth**. Configure `gateway.auth.mode` + `gateway.auth.token` (or use `OPENCLAW_GATEWAY_TOKEN`).
+    Non-loopback binds **require a valid gateway auth path**. In practice that means:
+
+    - shared-secret auth: token or password
+    - `gateway.auth.mode: "trusted-proxy"` behind a correctly configured non-loopback identity-aware reverse proxy
 
     ```json5
     {
@@ -1485,8 +1488,10 @@ for usage/billing and raise limits as needed.
 
     - `gateway.remote.token` / `.password` do **not** enable local gateway auth by themselves.
     - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
+    - For password auth, set `gateway.auth.mode: "password"` plus `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`) instead.
     - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
     - Shared-secret Control UI setups authenticate via `connect.params.auth.token` or `connect.params.auth.password` (stored in app/UI settings). Identity-bearing modes such as Tailscale Serve or `trusted-proxy` use request headers instead. Avoid putting shared secrets in URLs.
+    - With `gateway.auth.mode: "trusted-proxy"`, same-host loopback reverse proxies still do **not** satisfy trusted-proxy auth. The trusted proxy must be a configured non-loopback source.
 
   </Accordion>
 
