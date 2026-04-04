@@ -159,6 +159,7 @@ export default function CafePage() {
         #hitbox-cup .hint-pulse { animation-delay: 0s; }
         #hitbox-journal .hint-pulse { animation-delay: 1.3s; }
         #hitbox-cruz .hint-pulse { animation-delay: 2.6s; }
+        #hitbox-laptop .hint-pulse { animation-delay: 3.9s; }
         @keyframes hitboxPulse {
           0%, 100% { border-color: rgba(212,163,115,0); box-shadow: none; }
           50% { border-color: rgba(212,163,115,0.25); box-shadow: 0 0 20px rgba(212,163,115,0.08); }
@@ -228,11 +229,119 @@ export default function CafePage() {
           color: #fff; border-color: rgba(212,163,115,0.6); background: rgba(212,163,115,0.05);
         }
 
+        /* ── TG Bulletin Board (電報牆) ── */
+        #tg-bulletin {
+          display: none;
+          position: absolute;
+          left: 3%; top: 30%;
+          width: 180px;
+          z-index: 12;
+          flex-direction: column;
+          gap: 6px;
+          padding: 14px 12px;
+          background: rgba(30,25,18,0.7);
+          border: 1px solid rgba(212,163,115,0.15);
+          border-radius: 6px;
+          backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+          pointer-events: none;
+          opacity: 0;
+          transition: opacity 2s ease 10s;
+        }
+        #base-layer.awake ~ #viewport #tg-bulletin,
+        #base-layer.awake ~ * #tg-bulletin { opacity: 1; }
+        .tg-header {
+          font-size: 9px; letter-spacing: 0.3em; text-transform: uppercase;
+          color: rgba(212,163,115,0.4); margin-bottom: 4px;
+        }
+        .tg-msg {
+          display: flex; gap: 6px; align-items: baseline;
+          font-size: 11px; line-height: 1.5; color: rgba(255,255,255,0.45);
+        }
+        .tg-time {
+          font-size: 9px; color: rgba(212,163,115,0.35);
+          font-family: 'Courier New', monospace; flex-shrink: 0;
+        }
+        .tg-text { word-break: break-all; }
+        @media (max-width: 767px) {
+          #tg-bulletin { display: none !important; }
+        }
+
+        /* ── Laptop Hitbox + Modal (虛擬桌面) ── */
+        #hitbox-laptop { left: 5%; top: 68%; width: 18%; height: 22%; }
+        #desktop-modal {
+          display: none;
+          position: fixed; inset: 0;
+          z-index: 60;
+          background: rgba(0,0,0,0.85);
+          justify-content: center; align-items: center;
+          flex-direction: column;
+        }
+        #desktop-modal.modal-open { display: flex; }
+        #desktop-preview {
+          width: 80vw; max-width: 700px;
+          height: 50vh;
+          background: #0a0c10;
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 8px;
+          display: flex; align-items: center; justify-content: center;
+          overflow: hidden;
+          font-family: 'Courier New', monospace;
+          font-size: 12px; color: rgba(255,255,255,0.6);
+          line-height: 1.6;
+          padding: 20px;
+          white-space: pre-wrap;
+          text-align: left;
+        }
+        #desktop-close {
+          margin-top: 16px;
+          font-size: 11px; letter-spacing: 0.2em;
+          color: rgba(255,255,255,0.3);
+          cursor: pointer; padding: 8px 24px;
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 4px;
+          transition: color 0.2s, border-color 0.2s;
+        }
+        #desktop-close:hover { color: #fff; border-color: rgba(212,163,115,0.4); }
+
+        /* ── Cafe Input Box (T-06/T-07) ── */
+        #cafe-input-container {
+          position: fixed;
+          bottom: 24px; left: 50%;
+          transform: translateX(-50%);
+          z-index: 25;
+          width: 90%; max-width: 500px;
+          opacity: 0;
+          transition: opacity 1s ease;
+        }
+        #cafe-input {
+          width: 100%;
+          background: rgba(10,12,16,0.6);
+          backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 8px;
+          padding: 12px 18px;
+          font-family: 'Noto Serif TC', serif;
+          font-size: 14px;
+          color: rgba(255,255,255,0.8);
+          letter-spacing: 0.05em;
+          outline: none;
+          box-sizing: border-box;
+          transition: border-color 0.3s;
+        }
+        #cafe-input::placeholder {
+          color: rgba(255,255,255,0.2);
+          letter-spacing: 0.08em;
+        }
+        #cafe-input:focus {
+          border-color: rgba(212,163,115,0.4);
+        }
+
         /* ── Mobile: disable custom cursor ── */
         @media (max-width: 767px) {
           body, html { cursor: auto; }
           #cursor-follower { display: none; }
           .hitbox { cursor: pointer; }
+          #cafe-input-container { bottom: 12px; }
         }
         @media (prefers-reduced-motion: reduce) {
           .dust-mote, #ambient-light { animation: none; }
@@ -555,6 +664,9 @@ export default function CafePage() {
           <div className="napkin-dismiss-hint">點擊 · 閱後即焚</div>
         </div>
 
+        {/* TG Bulletin Board */}
+        <div id="tg-bulletin" />
+
         {/* Hitboxes */}
         <div
           id="hitbox-cup"
@@ -611,6 +723,55 @@ export default function CafePage() {
         >
           <div className="hover-glow" /><div className="hint-pulse" />
         </div>
+        <div
+          id="hitbox-laptop"
+          className="hitbox"
+          onClick={() => {
+            const modal = document.getElementById('desktop-modal');
+            const preview = document.getElementById('desktop-preview');
+            if (!modal || !preview) return;
+            modal.classList.add('modal-open');
+            // Screenshot mode: show cmux state snapshot
+            preview.textContent = 'connecting to desktop...';
+            fetch('/cafe-game/data/ambient-state.json')
+              .then(r => r.ok ? r.json() : null)
+              .then(state => {
+                const mood = state?.mood || 'present';
+                const doing = state?.doing || '—';
+                preview.textContent = [
+                  '┌─────────────────────────────────────┐',
+                  '│  cmux — Cruz\'s Terminal              │',
+                  '├─────────────────────────────────────┤',
+                  `│  Status: ${mood.padEnd(27)}│`,
+                  `│  Doing:  ${doing.padEnd(27)}│`,
+                  '│                                     │',
+                  '│  Sessions:                          │',
+                  '│    [A] cafe-engine    ● active       │',
+                  '│    [G] g9-analytics   ○ idle         │',
+                  '│    [B] bg666-data     ○ idle         │',
+                  '│                                     │',
+                  '│  > _                                 │',
+                  '└─────────────────────────────────────┘',
+                ].join('\n');
+              })
+              .catch(() => {
+                preview.textContent = 'connection failed. desktop is offline.';
+              });
+          }}
+        >
+          <div className="hover-glow" /><div className="hint-pulse" />
+        </div>
+
+        {/* Desktop Modal */}
+        <div id="desktop-modal">
+          <div id="desktop-preview" />
+          <div
+            id="desktop-close"
+            onClick={() => document.getElementById('desktop-modal')?.classList.remove('modal-open')}
+          >
+            ESC · 關閉
+          </div>
+        </div>
 
         {/* Dialogue */}
         <div id="interaction-layer">
@@ -621,6 +782,17 @@ export default function CafePage() {
         </div>
 
         <div id="cursor-follower" />
+      </div>
+
+      {/* ── Cafe Input Box (Trojan CLI) ── */}
+      <div id="cafe-input-container">
+        <input
+          id="cafe-input"
+          type="text"
+          placeholder="說點什麼..."
+          autoComplete="off"
+          spellCheck={false}
+        />
       </div>
 
       {/* ── Notebook Trigger Button ── */}

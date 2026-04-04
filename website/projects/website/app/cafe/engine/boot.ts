@@ -6,6 +6,8 @@ import Narrative from './narrative';
 import Soulprint from './soulprint';
 import Napkin from './napkin';
 import Notebook from './notebook';
+import TgFeed from './tg-feed';
+import Commands from './commands';
 import type { SPData } from './types';
 
 // ── Engine (總指揮中心) ──────────────────────────────────────
@@ -20,6 +22,8 @@ const Engine = {
   narrative: Narrative,
   napkin: Napkin,
   notebook: Notebook,
+  tgFeed: TgFeed,
+  commands: Commands,
 
   boot() {
     if (this.isBooted) return;
@@ -54,6 +58,13 @@ const Engine = {
     });
 
     this.cinematographer.init(() => this.isBooted);
+
+    // ESC closes desktop modal
+    document.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        document.getElementById('desktop-modal')?.classList.remove('modal-open');
+      }
+    });
 
     // Soulprint-aware init: inject trust-ladder line before API resolves
     const _sp = this._spData;
@@ -105,11 +116,49 @@ const Engine = {
       setTimeout(() => this.cinematographer.startAmbientPoll(), 3000);
     }, 3000);
 
-    // 8s — napkin oracle + notebook init
+    // 8s — napkin oracle + notebook + tg feed + commands + input
     setTimeout(() => {
       this.napkin.show();
       this.notebook.init();
+      this.tgFeed.init();
+      this.commands.init();
+      this._initInputBox();
     }, 8000);
+  },
+
+  /** Wire up the cafe input box for T-06/T-07 (Trojan CLI + Slash Commands) */
+  _initInputBox() {
+    const input = document.getElementById('cafe-input') as HTMLInputElement | null;
+    if (!input) return;
+
+    // Show input box
+    const container = document.getElementById('cafe-input-container');
+    if (container) container.style.opacity = '1';
+
+    // Set initial placeholder
+    input.placeholder = this.narrative.getPlaceholder();
+
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key !== 'Enter') return;
+      const val = input.value.trim();
+      if (!val) return;
+      input.value = '';
+
+      // Try slash command first
+      if (this.commands.execute(val)) {
+        this.narrative.bumpPromptCount();
+        input.placeholder = this.narrative.getPlaceholder();
+        return;
+      }
+
+      // Regular input → treat as dialogue trigger
+      this.narrative.bumpPromptCount();
+      input.placeholder = this.narrative.getPlaceholder();
+
+      // After 5 prompts, occasionally trigger cli_leak pool
+      const pool = this.narrative._promptCount >= 5 ? 'cli_leak' : 'cruz';
+      this.narrative.trigger(pool);
+    });
   },
 };
 
