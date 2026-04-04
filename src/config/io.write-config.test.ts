@@ -67,6 +67,39 @@ describe("config io write", () => {
     error: () => {},
   };
 
+  function createBlueBubblesManifestRecord(): PluginManifestRecord {
+    return {
+      id: "bluebubbles",
+      origin: "bundled",
+      channels: ["bluebubbles"],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      rootDir: "/virtual/plugins/bluebubbles",
+      source: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      manifestPath: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      channelCatalogMeta: {
+        id: "bluebubbles",
+        label: "BlueBubbles",
+        blurb: "BlueBubbles channel",
+      },
+      channelConfigs: {
+        bluebubbles: {
+          schema: {
+            type: "object",
+            properties: {
+              enrichGroupParticipantsFromContacts: { type: "boolean", default: true },
+              serverUrl: { type: "string" },
+            },
+            additionalProperties: true,
+          },
+          uiHints: {},
+        },
+      },
+    };
+  }
+
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
     await fs.mkdir(home, { recursive: true });
@@ -460,6 +493,7 @@ describe("config io write", () => {
     // write-back leak.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
+<<<<<<< HEAD
       plugins: [
         createBundledChannelManifestRecord({
           id: "bluebubbles",
@@ -500,6 +534,42 @@ describe("config io write", () => {
         }),
       ],
     } satisfies PluginManifestRegistry);
+||||||| parent of 2d00c45c74 (perf: split infra, tooling, and provider test lanes)
+      plugins: [
+        {
+          id: "bluebubbles",
+          origin: "bundled",
+          channels: ["bluebubbles"],
+          channelCatalogMeta: {
+            id: "bluebubbles",
+            label: "BlueBubbles",
+            blurb: "BlueBubbles channel",
+          },
+          channelConfigs: {
+            bluebubbles: {
+              schema: {
+                type: "object",
+                properties: {
+                  enrichGroupParticipantsFromContacts: {
+                    type: "boolean",
+                    default: true,
+                  },
+                  serverUrl: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: true,
+              },
+              uiHints: {},
+            },
+          },
+        },
+      ],
+    });
+=======
+      plugins: [createBlueBubblesManifestRecord()],
+    });
+>>>>>>> 2d00c45c74 (perf: split infra, tooling, and provider test lanes)
 
     await withSuiteHome(async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({

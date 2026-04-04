@@ -8,9 +8,12 @@ import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
 import { createExtensionChannelsVitestConfig } from "../vitest.extension-channels.config.ts";
+import { createExtensionProvidersVitestConfig } from "../vitest.extension-providers.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
+import { createInfraVitestConfig } from "../vitest.infra.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
+import { createToolingVitestConfig } from "../vitest.tooling.config.ts";
 import { createUiVitestConfig } from "../vitest.ui.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
@@ -71,10 +74,13 @@ describe("scoped vitest configs", () => {
   const defaultAcpConfig = createAcpVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
+  const defaultExtensionProvidersConfig = createExtensionProvidersVitestConfig({});
   const defaultGatewayConfig = createGatewayVitestConfig({});
+  const defaultInfraConfig = createInfraVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
   const defaultAgentsConfig = createAgentsVitestConfig({});
+  const defaultToolingConfig = createToolingVitestConfig({});
   const defaultUiConfig = createUiVitestConfig({});
 
   it("defaults channel tests to non-isolated mode", () => {
@@ -138,6 +144,13 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
+  it("normalizes extension provider include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionProvidersConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionProvidersConfig.test?.include).toEqual(
+      expect.arrayContaining(["openai/**/*.test.ts", "xai/**/*.test.ts", "google/**/*.test.ts"]),
+    );
+  });
+
   it("keeps telegram plugin tests in extensions while excluding channel-surface plugin roots", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
     expect(
@@ -155,9 +168,33 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionsConfig.test?.setupFiles).toEqual(["test/setup.extensions.ts"]);
   });
 
+  it("keeps provider plugin tests out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) =>
+        path.matchesGlob("openai/openai-codex-provider.test.ts", pattern),
+      ),
+    ).toBe(true);
+  });
+
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("normalizes infra include patterns relative to the scoped dir", () => {
+    expect(defaultInfraConfig.test?.dir).toBe("src");
+    expect(defaultInfraConfig.test?.include).toEqual(["infra/**/*.test.ts"]);
+  });
+
+  it("keeps tooling tests in their own lane", () => {
+    expect(defaultToolingConfig.test?.include).toEqual(
+      expect.arrayContaining([
+        "test/**/*.test.ts",
+        "src/scripts/**/*.test.ts",
+        "src/config/doc-baseline.integration.test.ts",
+      ]),
+    );
   });
 
   it("normalizes acp include patterns relative to the scoped dir", () => {

@@ -40,6 +40,7 @@ export const bundledPluginDependentUnitTestFiles = [
 
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
+  "src/infra/**",
   `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
   "src/browser/**",
   "src/line/**",
@@ -48,6 +49,7 @@ export const unitTestAdditionalExcludePatterns = [
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
+  "src/scripts/**",
   "src/infra/boundary-path.test.ts",
   "src/infra/git-root.test.ts",
   "src/infra/home-dir.test.ts",

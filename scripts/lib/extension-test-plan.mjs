@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { channelTestRoots } from "../../vitest.channel-paths.mjs";
+import { isProviderExtensionRoot } from "../../vitest.extension-provider-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 
@@ -89,9 +90,12 @@ export function resolveExtensionTestPlan(params = {}) {
   }
 
   const usesChannelConfig = roots.some((root) => channelTestRoots.includes(root));
+  const usesProviderConfig = roots.some((root) => isProviderExtensionRoot(root));
   const config = usesChannelConfig
     ? "vitest.extension-channels.config.ts"
-    : "vitest.extensions.config.ts";
+    : usesProviderConfig
+      ? "vitest.extension-providers.config.ts"
+      : "vitest.extensions.config.ts";
   const testFileCount = roots.reduce(
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,

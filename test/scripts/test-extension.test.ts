@@ -43,7 +43,16 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("resolves provider extensions onto the extensions vitest config", () => {
+  it("resolves provider extensions onto the provider vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "openai", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("openai");
+    expect(plan.config).toBe("vitest.extension-providers.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("openai"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("keeps non-provider extensions on the shared extensions vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("firecrawl");
@@ -111,15 +120,21 @@ describe("scripts/test-extension.mjs", () => {
   it("batches extensions into config-specific vitest invocations", () => {
     const batch = resolveExtensionBatchPlan({
       cwd: process.cwd(),
-      extensionIds: ["slack", "firecrawl", "line"],
+      extensionIds: ["slack", "firecrawl", "line", "openai"],
     });
 
-    expect(batch.extensionIds).toEqual(["firecrawl", "line", "slack"]);
+    expect(batch.extensionIds).toEqual(["firecrawl", "line", "openai", "slack"]);
     expect(batch.planGroups).toEqual([
       {
         config: "vitest.channels.config.ts",
         extensionIds: ["line", "slack"],
         roots: [bundledPluginRoot("slack"), bundledPluginRoot("line")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-providers.config.ts",
+        extensionIds: ["openai"],
+        roots: [bundledPluginRoot("openai")],
         testFileCount: expect.any(Number),
       },
       {

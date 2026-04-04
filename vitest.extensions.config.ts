@@ -1,5 +1,6 @@
 import { BUNDLED_PLUGIN_TEST_GLOB } from "./vitest.bundled-plugin-paths.ts";
 import { extensionExcludedChannelTestGlobs } from "./vitest.channel-paths.mjs";
+import { providerExtensionTestRoots } from "./vitest.extension-provider-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -20,7 +21,10 @@ export function createExtensionsVitestConfig(
     setupFiles: ["test/setup.extensions.ts"],
     // Some bundled plugins still run on the channel surface; keep those roots
     // out of the shared extensions lane.
-    exclude: extensionExcludedChannelTestGlobs,
+    exclude: [
+      ...extensionExcludedChannelTestGlobs,
+      ...providerExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
+    ],
   });
 }
 
