@@ -25,7 +25,7 @@ describe("anthropic stream wrappers", () => {
     vi.restoreAllMocks();
   });
 
-  it("strips context-1m for subscription setup-token auth and warns", () => {
+  it("strips context-1m for Claude CLI or legacy token auth and warns", () => {
     const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-oat01-123");
     expect(headers?.["anthropic-beta"]).toBeDefined();
