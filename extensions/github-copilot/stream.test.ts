@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
 import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream";
+import { describe, expect, it, vi } from "vitest";
 import { wrapCopilotAnthropicStream } from "./stream.js";
 
 describe("wrapCopilotAnthropicStream", () => {
   it("adds Copilot headers and Anthropic cache markers for Claude payloads", async () => {
-    const payloads: Array<Record<string, unknown>> = [];
+    const payloads: Array<{
+      messages: Array<Record<string, unknown>>;
+    }> = [];
     const baseStreamFn = vi.fn((model, _context, options) => {
       const payload = {
         messages: [
@@ -16,26 +18,25 @@ describe("wrapCopilotAnthropicStream", () => {
         ],
       };
       options?.onPayload?.(payload, model);
-      payloads.push(payload as Record<string, unknown>);
+      payloads.push(payload);
       return {
         async *[Symbol.asyncIterator]() {},
       } as never;
     });
 
     const wrapped = wrapCopilotAnthropicStream(baseStreamFn);
-    const context = {
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "look" },
-            { type: "image", image: "data:image/png;base64,abc" },
-          ],
-        },
-      ],
-    } as never;
+    const messages = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "look" },
+          { type: "image", image: "data:image/png;base64,abc" },
+        ],
+      },
+    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    const context = { messages };
     const expectedCopilotHeaders = buildCopilotDynamicHeaders({
-      messages: context.messages as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"],
+      messages,
       hasImages: true,
     });
 
@@ -45,7 +46,7 @@ describe("wrapCopilotAnthropicStream", () => {
         api: "anthropic-messages",
         id: "claude-sonnet-4.6",
       } as never,
-      context,
+      context as never,
       {
         headers: { "X-Test": "1" },
       },
