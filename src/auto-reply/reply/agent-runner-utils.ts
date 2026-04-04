@@ -41,19 +41,18 @@ export function buildThreadingToolContext(params: {
       currentMessageId,
     };
   }
-  const rawProvider = originProvider?.trim().toLowerCase();
-  if (!rawProvider) {
+  if (!originProvider) {
     return {
       currentMessageId,
     };
   }
-  const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
+  const provider = normalizeChannelId(originProvider) ?? normalizeAnyChannelId(originProvider);
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
       currentChannelId: originTo?.trim() || undefined,
-      currentChannelProvider: provider ?? (rawProvider as ChannelId),
+      currentChannelProvider: provider ?? (originProvider as ChannelId),
       currentMessageId,
       hasRepliedRef,
     };

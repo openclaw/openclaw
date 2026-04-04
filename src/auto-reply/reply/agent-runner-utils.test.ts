@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
@@ -256,5 +257,81 @@ describe("agent-runner-utils", () => {
       currentChannelId: "channel:123456789012345678",
       currentMessageId: "msg-9",
     });
+  });
+
+  it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "heartbeat",
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:1",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      sessionEntry: {
+        lastChannel: "telegram",
+      } as SessionEntry,
+    });
+
+    expect(resolved.embeddedContext.messageProvider).toBe("telegram");
+  });
+
+  it("keeps internal-only webchat sessions stable across heartbeat turns", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "heartbeat",
+        OriginatingChannel: "webchat",
+        OriginatingTo: "session:1",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      sessionEntry: {
+        lastChannel: "webchat",
+      } as SessionEntry,
+    });
+
+    expect(resolved.embeddedContext.messageProvider).toBe("webchat");
+  });
+
+  it("keeps persisted external lastChannel for threading context on internal heartbeat turns", () => {
+    const result = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "heartbeat",
+        OriginatingChannel: "webchat",
+        To: "chat:99",
+      },
+      sessionEntry: {
+        lastChannel: "telegram",
+      } as SessionEntry,
+      config: {} as FollowupRun["run"]["config"],
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("chat:99");
+    expect(result.currentChannelProvider).toBe("telegram");
+  });
+
+  it("keeps webchat stable for internal-only heartbeat threading context", () => {
+    const result = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "heartbeat",
+        OriginatingChannel: "webchat",
+        To: "session:1",
+      },
+      sessionEntry: {
+        lastChannel: "webchat",
+      } as SessionEntry,
+      config: {} as FollowupRun["run"]["config"],
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("session:1");
+    expect(result.currentChannelProvider).toBe("webchat");
   });
 });

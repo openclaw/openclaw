@@ -1,8 +1,5 @@
+import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
-import {
-  isInternalMessageChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
 
 function normalizeProviderValue(value?: string): string | undefined {
   return (normalizeMessageChannel(value) ?? value?.trim().toLowerCase()) || undefined;
