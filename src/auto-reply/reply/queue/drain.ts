@@ -110,12 +110,14 @@ export function scheduleFollowupDrain(
           if (collectDrainResult === "empty") {
             const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
             const run = queue.lastRun;
+            const routing = resolveOriginRoutingMetadata(queue.items);
             if (summaryPrompt && run) {
               await effectiveRunFollowup({
                 execution: { visibility: "internal", agentPrompt: summaryPrompt },
                 display: { visibility: "user-visible", text: summaryPrompt },
                 run,
                 enqueuedAt: Date.now(),
+                ...routing,
               });
               clearQueueSummaryState(queue);
               continue;

@@ -1611,14 +1611,38 @@ describe("followup queue collect routing", () => {
       }
     };
 
-    enqueueFollowupRun(key, createRun({ prompt: "first hidden item" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "second hidden item" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first hidden item",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second hidden item",
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: "work",
+        originatingThreadId: "1739142736.000100",
+      }),
+      settings,
+    );
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
     expect(calls[0]?.execution.agentPrompt).toContain("[Queue overflow]");
     expect(calls[0]?.execution.agentPrompt).toContain("[Hidden message]");
+    expect(calls[0]?.originatingChannel).toBe("discord");
+    expect(calls[0]?.originatingTo).toBe("channel:C1");
+    expect(calls[0]?.originatingAccountId).toBe("work");
+    expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
     expect(calls[1]?.execution.agentPrompt).toBe("second hidden item");
   });
 
