@@ -25,6 +25,14 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Tasks are **records**, not schedulers — cron and heartbeat decide _when_ work runs, tasks track _what happened_.
 - ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
+- Cron tasks stay live while the cron runtime still owns the job; chat-backed CLI tasks stay live only while their owning run context is still active.
+- Completion is push-driven: detached work can notify directly or wake the
+  requester session/heartbeat when it finishes, so status polling loops are
+  usually the wrong shape.
+- Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
+- Isolated cron delivery suppresses stale interim parent replies while
+  descendant subagent work is still draining, and it prefers final descendant
+  output when that arrives before delivery.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
 - `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
 - Terminal records are kept for 7 days, then automatically pruned.
@@ -50,6 +58,15 @@ openclaw tasks notify <lookup> state_changes
 
 # Run a health audit
 openclaw tasks audit
+
+# Preview or apply maintenance
+openclaw tasks maintenance
+openclaw tasks maintenance --apply
+
+# Inspect TaskFlow state
+openclaw tasks flow list
+openclaw tasks flow show <lookup>
+openclaw tasks flow cancel <lookup>
 ```
 
 ## What creates a task
@@ -91,21 +108,32 @@ stateDiagram-v2
 | `failed`    | Completed with an error                                                    |
 | `timed_out` | Exceeded the configured timeout                                            |
 | `cancelled` | Stopped by the operator via `openclaw tasks cancel`                        |
-| `lost`      | Backing child session disappeared (detected after a 5-minute grace period) |
+| `lost`      | The runtime lost authoritative backing state after a 5-minute grace period |
 
 Transitions happen automatically — when the associated agent run ends, the task status updates to match.
+
+`lost` is runtime-aware:
+
+- ACP tasks: backing ACP child session metadata disappeared.
+- Subagent tasks: backing child session disappeared from the target agent store.
+- Cron tasks: the cron runtime no longer tracks the job as active.
+- CLI tasks: isolated child-session tasks use the child session; chat-backed CLI tasks use the live run context instead, so lingering channel/group/direct session rows do not keep them alive.
 
 ## Delivery and notifications
 
 When a task reaches a terminal state, OpenClaw notifies you. There are two delivery paths:
 
-**Direct delivery** — if the task has a channel target (the `requesterOrigin`), the completion message goes straight to that channel (Telegram, Discord, Slack, etc.).
+**Direct delivery** — if the task has a channel target (the `requesterOrigin`), the completion message goes straight to that channel (Telegram, Discord, Slack, etc.). For subagent completions, OpenClaw also preserves bound thread/topic routing when available and can fill a missing `to` / account from the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) before giving up on direct delivery.
 
 **Session-queued delivery** — if direct delivery fails or no origin is set, the update is queued as a system event in the requester's session and surfaces on the next heartbeat.
 
 <Tip>
 Task completion triggers an immediate heartbeat wake so you see the result quickly — you do not have to wait for the next scheduled heartbeat tick.
 </Tip>
+
+That means the usual workflow is push-based: start detached work once, then let
+the runtime wake or notify you on completion. Poll task state only when you
+need debugging, intervention, or an explicit audit.
 
 ### Notification policies
 
@@ -167,10 +195,46 @@ Surfaces operational issues. Findings also appear in `openclaw status` when issu
 | ------------------------- | -------- | ----------------------------------------------------- |
 | `stale_queued`            | warn     | Queued for more than 10 minutes                       |
 | `stale_running`           | error    | Running for more than 30 minutes                      |
-| `lost`                    | error    | Backing session is gone                               |
+| `lost`                    | error    | Runtime-backed task ownership disappeared             |
 | `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`     |
 | `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
 | `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
+
+### `tasks maintenance`
+
+```bash
+openclaw tasks maintenance [--json]
+openclaw tasks maintenance --apply [--json]
+```
+
+Use this to preview or apply reconciliation, cleanup stamping, and pruning for
+tasks and Task Flow state.
+
+Reconciliation is runtime-aware:
+
+- ACP/subagent tasks check their backing child session.
+- Cron tasks check whether the cron runtime still owns the job.
+- Chat-backed CLI tasks check the owning live run context, not just the chat session row.
+
+Completion cleanup is also runtime-aware:
+
+- Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
+- Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
+- Isolated cron delivery waits out descendant subagent follow-up when needed and
+  suppresses stale parent acknowledgement text instead of announcing it.
+- Subagent completion delivery prefers the latest visible assistant text; if that is empty it falls back to sanitized latest tool/toolResult text, and timeout-only tool-call runs can collapse to a short partial-progress summary.
+- Cleanup failures do not mask the real task outcome.
+
+### `tasks flow list|show|cancel`
+
+```bash
+openclaw tasks flow list [--status <status>] [--json]
+openclaw tasks flow show <lookup> [--json]
+openclaw tasks flow cancel <lookup>
+```
+
+Use these when the orchestrating Task Flow is the thing you care about rather
+than one individual background task record.
 
 ## Chat task board (`/tasks`)
 
@@ -216,7 +280,7 @@ The registry loads into memory at gateway start and syncs writes to SQLite for d
 
 A sweeper runs every **60 seconds** and handles three things:
 
-1. **Reconciliation** — checks if active tasks' backing sessions still exist. If a child session has been gone for more than 5 minutes, the task is marked `lost`.
+1. **Reconciliation** — checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
 2. **Cleanup stamping** — sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days).
 3. **Pruning** — deletes records past their `cleanupAfter` date.
 

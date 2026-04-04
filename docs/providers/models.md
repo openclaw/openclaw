@@ -24,8 +24,10 @@ model as `provider/model`.
 
 ## Supported providers (starter set)
 
-- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)
+- [BytePlus (International)](/concepts/model-providers#byteplus-international)
+- [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
@@ -35,12 +37,19 @@ model as `provider/model`.
 - [OpenCode (Zen + Go)](/providers/opencode)
 - [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)
+- [Qwen](/providers/qwen)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI)](/providers/venice)
 - [xAI](/providers/xai)
 - [Z.AI](/providers/zai)
+
+## Additional bundled provider variants
+
+- `anthropic-vertex` - implicit Anthropic on Google Vertex support when Vertex credentials are available; no separate onboarding auth choice
+- `copilot-proxy` - local VS Code Copilot Proxy bridge; use `openclaw onboard --auth-choice copilot-proxy`
+- `google-gemini-cli` - unofficial Gemini CLI OAuth flow; requires a local `gemini` install (`brew install gemini-cli` or `npm install -g @google/gemini-cli`); default model `google-gemini-cli/gemini-3.1-pro-preview`; use `openclaw onboard --auth-choice google-gemini-cli` or `openclaw models auth login --provider google-gemini-cli --set-default`
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).

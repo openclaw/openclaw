@@ -1063,6 +1063,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       eventQueueListenerTimeoutMs: eventQueueOpts.listenerTimeout,
     });
 
+    logDiscordStartupPhase({
+      runtime,
+      accountId: account.accountId,
+      phase: "client-start",
+      startAt: startupStartedAt,
+      gateway: lifecycleGateway,
+    });
+
     const botIdentity =
       botUserId && botUserName ? `${botUserId} (${botUserName})` : (botUserId ?? botUserName ?? "");
     runtime.log?.(

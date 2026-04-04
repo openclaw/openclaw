@@ -659,7 +659,8 @@
   flex-shrink: 0;
 }
 
-.btn.primary {
+.btn.primary,
+.btn.cron-refresh-btn--loading {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--primary-foreground);
@@ -920,6 +921,7 @@
 .cron-workspace-main {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .cron-workspace-form {
@@ -1305,7 +1307,8 @@
   color: var(--accent);
 }
 
-:root[data-theme-mode="light"] .btn.primary {
+:root[data-theme-mode="light"] .btn.primary,
+:root[data-theme-mode="light"] .btn.cron-refresh-btn--loading {
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -1660,6 +1663,7 @@
   font-weight: 600;
   font-size: 15px;
   letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
 }
 
 .cron-job {
@@ -1711,6 +1715,7 @@
 .cron-job-detail-value {
   font-size: 13px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .cron-job-state {
@@ -1737,6 +1742,9 @@
   color: var(--text);
   font-size: 12px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .cron-job-status-pill {

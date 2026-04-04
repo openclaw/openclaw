@@ -1,6 +1,10 @@
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "./config-state.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { hasKind } from "./slots.js";
 
@@ -11,6 +15,7 @@ function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
     plugin.contracts?.speechProviders?.length ||
     plugin.contracts?.mediaUnderstandingProviders?.length ||
     plugin.contracts?.imageGenerationProviders?.length ||
+    plugin.contracts?.videoGenerationProviders?.length ||
     plugin.contracts?.webFetchProviders?.length ||
     plugin.contracts?.webSearchProviders?.length ||
     hasKind(plugin.kind, "memory"),
@@ -75,6 +80,7 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
 
 export function resolveGatewayStartupPluginIds(params: {
   config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
@@ -82,6 +88,12 @@ export function resolveGatewayStartupPluginIds(params: {
     listPotentialConfiguredChannelIds(params.config, params.env).map((id) => id.trim()),
   );
   const pluginsConfig = normalizePluginsConfig(params.config.plugins);
+  // Startup must classify allowlist exceptions against the raw config snapshot,
+  // not the auto-enabled effective snapshot, or configured-only channels can be
+  // misclassified as explicit enablement.
+  const activationSource = createPluginActivationSource({
+    config: params.activationSourceConfig ?? params.config,
+  });
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -100,6 +112,7 @@ export function resolveGatewayStartupPluginIds(params: {
         config: pluginsConfig,
         rootConfig: params.config,
         enabledByDefault: plugin.enabledByDefault,
+        activationSource,
       });
       if (!activationState.enabled) {
         return false;

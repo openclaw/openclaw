@@ -1,3 +1,4 @@
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   createAllowlistSetupWizardProxy,
   createAccountScopedAllowFromSection,
@@ -6,18 +7,17 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   createEnvPatchedAccountSetupAdapter,
-  hasConfiguredSecretInput,
   type OpenClawConfig,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import {
   type ChannelSetupAdapter,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type ChannelSetupWizardAllowFromEntry,
-} from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { listSlackAccountIds, resolveSlackAccount, type ResolvedSlackAccount } from "./accounts.js";
@@ -166,11 +166,7 @@ export function createSlackSetupWizardBase(handlers: {
       unconfiguredHint: "needs tokens",
       configuredScore: 2,
       unconfiguredScore: 1,
-      resolveConfigured: ({ cfg }) =>
-        listSlackAccountIds(cfg).some((accountId) => {
-          const account = inspectSlackAccount({ cfg, accountId });
-          return account.configured;
-        }),
+      resolveConfigured: ({ cfg, accountId }) => inspectSlackAccount({ cfg, accountId }).configured,
     }),
     introNote: {
       title: "Slack socket mode tokens",
@@ -240,7 +236,7 @@ export function createSlackSetupWizardBase(handlers: {
         resolveSlackAccount({ cfg, accountId }).config.groupPolicy ?? "allowlist",
       currentEntries: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Object.entries(resolveSlackAccount({ cfg, accountId }).config.channels ?? {})
-          .filter(([, value]) => value?.allow !== false && value?.enabled !== false)
+          .filter(([, value]) => value?.enabled !== false)
           .map(([key]) => key),
       updatePrompt: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         Boolean(resolveSlackAccount({ cfg, accountId }).config.channels),

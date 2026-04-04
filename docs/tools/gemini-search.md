@@ -76,7 +76,12 @@ URLs.
 
 ## Supported parameters
 
-Gemini search supports the standard `query` and `count` parameters.
+Gemini search supports `query`.
+
+`count` is accepted for shared `web_search` compatibility, but Gemini grounding
+still returns one synthesized answer with citations rather than an N-result
+list.
+
 Provider-specific filters like `country`, `language`, `freshness`, and
 `domain_filter` are not supported.
 

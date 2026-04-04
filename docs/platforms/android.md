@@ -73,6 +73,15 @@ dns-sd -B _openclaw-gw._tcp local.
 
 More debugging notes: [Bonjour](/gateway/bonjour).
 
+If you also configured a wide-area discovery domain, compare against:
+
+```bash
+openclaw gateway discover --json
+```
+
+That shows `local.` plus the configured wide-area domain in one pass and uses the resolved
+service endpoint instead of TXT-only hints.
+
 #### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
 Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead.
@@ -128,7 +137,13 @@ Pairing details: [Pairing](/channels/pairing).
 
 The Android Chat tab supports session selection (default `main`, plus other existing sessions):
 
-- History: `chat.history`
+- History: `chat.history` (display-normalized; inline directive tags are
+  stripped from visible text, plain-text tool-call XML payloads (including
+  `<tool_call>...</tool_call>`, `<function_call>...</function_call>`,
+  `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and
+  truncated tool-call blocks) and leaked ASCII/full-width model control tokens
+  are stripped, pure silent-token assistant rows such as exact `NO_REPLY` /
+  `no_reply` are omitted, and oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 

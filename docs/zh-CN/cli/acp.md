@@ -6,7 +6,7 @@ summary: 运行用于 IDE 集成的 ACP 桥接器
 title: acp
 x-i18n:
   generated_at: "2026-02-03T07:44:38Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0c09844297da250bc1a558423e7e534d6b6be9045de12d797c07ecd64a0c63ed
   source_path: cli/acp.md

@@ -169,6 +169,7 @@ describe("mapSensitivePaths", () => {
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.request.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.request.proxy.tls.cert"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });
 
@@ -194,7 +195,7 @@ describe("collectMatchingSchemaPaths", () => {
 
     expect(paths.has("mcp.servers.*.url")).toBe(true);
     expect(paths.has("models.providers.*.baseUrl")).toBe(true);
-    expect(paths.has("models.providers.*.request.proxy.url")).toBe(false);
+    expect(paths.has("models.providers.*.request.proxy.url")).toBe(true);
     expect(paths.has("tools.media.audio.request.proxy.url")).toBe(true);
   });
 });

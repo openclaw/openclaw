@@ -63,3 +63,86 @@ describe("slackSetupWizard.finalize", () => {
     ).toBe(true);
   });
 });
+
+describe("slackSetupWizard.dmPolicy", () => {
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      slackSetupWizard.dmPolicy?.getCurrent(
+        {
+          channels: {
+            slack: {
+              dmPolicy: "disabled",
+              accounts: {
+                alerts: {
+                  dmPolicy: "allowlist",
+                  botToken: "xoxb-alerts",
+                  appToken: "xapp-alerts",
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "alerts",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(slackSetupWizard.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
+      policyKey: "channels.slack.accounts.alerts.dmPolicy",
+      allowFromKey: "channels.slack.accounts.alerts.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = slackSetupWizard.dmPolicy?.setPolicy(
+      {
+        channels: {
+          slack: {
+            allowFrom: ["U123"],
+            accounts: {
+              alerts: {
+                botToken: "xoxb-alerts",
+                appToken: "xapp-alerts",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "alerts",
+    );
+
+    expect(next?.channels?.slack?.dmPolicy).toBeUndefined();
+    expect(next?.channels?.slack?.accounts?.alerts?.dmPolicy).toBe("open");
+    expect(next?.channels?.slack?.accounts?.alerts?.allowFrom).toEqual(["U123", "*"]);
+  });
+});
+
+describe("slackSetupWizard.status", () => {
+  it("uses configured defaultAccount for omitted setup configured state", async () => {
+    const configured = await slackSetupWizard.status.resolveConfigured({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            botToken: "xoxb-root",
+            appToken: "xapp-root",
+            accounts: {
+              alerts: {
+                botToken: "xoxb-alerts",
+                appToken: "xapp-alerts",
+              },
+              work: {
+                botToken: "",
+                appToken: "",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(configured).toBe(false);
+  });
+});

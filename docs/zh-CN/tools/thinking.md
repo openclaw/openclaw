@@ -5,7 +5,7 @@ summary: "`/think` + `/verbose` 的指令语法及其对模型推理的影响"
 title: 思考级别
 x-i18n:
   generated_at: "2026-02-01T21:43:37Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 1a611474c2781c9a8e9dac0e084e7ee4ef58aebece181fdc877392fc27442746
   source_path: tools/thinking.md

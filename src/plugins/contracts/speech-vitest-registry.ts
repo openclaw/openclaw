@@ -5,7 +5,10 @@ import { createJiti } from "jiti";
 import {
   BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
   BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
+  BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS,
+  BUNDLED_REALTIME_VOICE_PLUGIN_IDS,
   BUNDLED_SPEECH_PLUGIN_IDS,
+  BUNDLED_VIDEO_GENERATION_PLUGIN_IDS,
 } from "../bundled-capability-metadata.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
@@ -13,7 +16,10 @@ import { buildPluginLoaderAliasMap, buildPluginLoaderJitiOptions } from "../sdk-
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  VideoGenerationProviderPlugin,
 } from "../types.js";
 
 export type SpeechProviderContractEntry = {
@@ -26,9 +32,24 @@ export type MediaUnderstandingProviderContractEntry = {
   provider: MediaUnderstandingProviderPlugin;
 };
 
+export type RealtimeVoiceProviderContractEntry = {
+  pluginId: string;
+  provider: RealtimeVoiceProviderPlugin;
+};
+
+export type RealtimeTranscriptionProviderContractEntry = {
+  pluginId: string;
+  provider: RealtimeTranscriptionProviderPlugin;
+};
+
 export type ImageGenerationProviderContractEntry = {
   pluginId: string;
   provider: ImageGenerationProviderPlugin;
+};
+
+export type VideoGenerationProviderContractEntry = {
+  pluginId: string;
+  provider: VideoGenerationProviderPlugin;
 };
 
 function buildVitestCapabilityAliasMap(modulePath: string): Record<string, string> {
@@ -190,6 +211,96 @@ export function loadVitestMediaUnderstandingProviderContractRegistry(): MediaUnd
   return registrations;
 }
 
+export function loadVitestRealtimeVoiceProviderContractRegistry(): RealtimeVoiceProviderContractEntry[] {
+  const registrations: RealtimeVoiceProviderContractEntry[] = [];
+  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
+    BUNDLED_REALTIME_VOICE_PLUGIN_IDS,
+  );
+
+  for (const plugin of manifests) {
+    if (!plugin.rootDir) {
+      continue;
+    }
+    const testApiPath = path.join(plugin.rootDir, "test-api.ts");
+    if (!fs.existsSync(testApiPath)) {
+      continue;
+    }
+    const builder = resolveNamedBuilder<RealtimeVoiceProviderPlugin>(
+      createVitestCapabilityLoader(testApiPath)(testApiPath),
+      /^build.+RealtimeVoiceProvider$/u,
+    );
+    if (!builder) {
+      continue;
+    }
+    registrations.push({
+      pluginId: plugin.id,
+      provider: builder(),
+    });
+    unresolvedPluginIds.delete(plugin.id);
+  }
+
+  if (unresolvedPluginIds.size === 0) {
+    return registrations;
+  }
+
+  const runtimeRegistry = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [...unresolvedPluginIds],
+    pluginSdkResolution: "dist",
+  });
+  registrations.push(
+    ...runtimeRegistry.realtimeVoiceProviders.map((entry) => ({
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+    })),
+  );
+  return registrations;
+}
+
+export function loadVitestRealtimeTranscriptionProviderContractRegistry(): RealtimeTranscriptionProviderContractEntry[] {
+  const registrations: RealtimeTranscriptionProviderContractEntry[] = [];
+  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
+    BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS,
+  );
+
+  for (const plugin of manifests) {
+    if (!plugin.rootDir) {
+      continue;
+    }
+    const testApiPath = path.join(plugin.rootDir, "test-api.ts");
+    if (!fs.existsSync(testApiPath)) {
+      continue;
+    }
+    const builder = resolveNamedBuilder<RealtimeTranscriptionProviderPlugin>(
+      createVitestCapabilityLoader(testApiPath)(testApiPath),
+      /^build.+RealtimeTranscriptionProvider$/u,
+    );
+    if (!builder) {
+      continue;
+    }
+    registrations.push({
+      pluginId: plugin.id,
+      provider: builder(),
+    });
+    unresolvedPluginIds.delete(plugin.id);
+  }
+
+  if (unresolvedPluginIds.size === 0) {
+    return registrations;
+  }
+
+  const runtimeRegistry = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [...unresolvedPluginIds],
+    pluginSdkResolution: "dist",
+  });
+  registrations.push(
+    ...runtimeRegistry.realtimeTranscriptionProviders.map((entry) => ({
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+    })),
+  );
+  return registrations;
+}
+
 export function loadVitestImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
   const registrations: ImageGenerationProviderContractEntry[] = [];
   const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
@@ -228,6 +339,51 @@ export function loadVitestImageGenerationProviderContractRegistry(): ImageGenera
   });
   registrations.push(
     ...runtimeRegistry.imageGenerationProviders.map((entry) => ({
+      pluginId: entry.pluginId,
+      provider: entry.provider,
+    })),
+  );
+  return registrations;
+}
+
+export function loadVitestVideoGenerationProviderContractRegistry(): VideoGenerationProviderContractEntry[] {
+  const registrations: VideoGenerationProviderContractEntry[] = [];
+  const { manifests, unresolvedPluginIds } = resolveTestApiModuleRecords(
+    BUNDLED_VIDEO_GENERATION_PLUGIN_IDS,
+  );
+
+  for (const plugin of manifests) {
+    if (!plugin.rootDir) {
+      continue;
+    }
+    const testApiPath = path.join(plugin.rootDir, "test-api.ts");
+    if (!fs.existsSync(testApiPath)) {
+      continue;
+    }
+    const builder = resolveNamedBuilder<VideoGenerationProviderPlugin>(
+      createVitestCapabilityLoader(testApiPath)(testApiPath),
+      /^build.+VideoGenerationProvider$/u,
+    );
+    if (!builder) {
+      continue;
+    }
+    registrations.push({
+      pluginId: plugin.id,
+      provider: builder(),
+    });
+    unresolvedPluginIds.delete(plugin.id);
+  }
+
+  if (unresolvedPluginIds.size === 0) {
+    return registrations;
+  }
+
+  const runtimeRegistry = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [...unresolvedPluginIds],
+    pluginSdkResolution: "dist",
+  });
+  registrations.push(
+    ...runtimeRegistry.videoGenerationProviders.map((entry) => ({
       pluginId: entry.pluginId,
       provider: entry.provider,
     })),

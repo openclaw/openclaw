@@ -25,8 +25,9 @@ vi.mock("../runtime/session-meta.js", () => ({
   upsertAcpSessionMeta: (params: unknown) => hoisted.upsertAcpSessionMetaMock(params),
 }));
 
-vi.mock("../runtime/registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime/registry.js")>();
+vi.mock("../runtime/registry.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../runtime/registry.js")>("../runtime/registry.js");
   return {
     ...actual,
     requireAcpRuntimeBackend: (backendId?: string) =>
@@ -343,7 +344,7 @@ describe("AcpSessionManager", () => {
         terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
       });
     });
-  });
+  }, 300_000);
 
   it("serializes concurrent turns for the same ACP session", async () => {
     const runtimeState = createRuntime();

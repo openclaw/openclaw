@@ -81,6 +81,19 @@ function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
 
+function throwIfAnthropicTokenSetupDisabled(provider: string): void {
+  if (normalizeProviderId(provider) !== "anthropic") {
+    return;
+  }
+  throw new Error(
+    [
+      "Anthropic setup-token auth is no longer available for new setup in OpenClaw.",
+      "Existing Anthropic token profiles still run if they are already configured.",
+      `Use ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")} or an Anthropic API key instead.`,
+    ].join("\n"),
+  );
+}
+
 type ResolvedModelsAuthContext = {
   config: OpenClawConfig;
   agentDir: string;
@@ -317,13 +330,11 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const provider =
-    resolveRequestedProviderOrThrow(tokenProviders, opts.provider ?? "anthropic") ??
-    tokenProviders.find((candidate) => normalizeProviderId(candidate.id) === "anthropic") ??
-    tokenProviders[0] ??
-    null;
+    resolveRequestedProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0] ?? null;
   if (!provider) {
     throw new Error("No token-capable provider is available.");
   }
+  throwIfAnthropicTokenSetupDisabled(provider.id);
 
   if (!opts.yes) {
     const proceed = await confirm({
@@ -366,6 +377,7 @@ export async function modelsAuthPasteTokenCommand(
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
+  throwIfAnthropicTokenSetupDisabled(provider);
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
   const tokenInput = await text({

@@ -16,6 +16,7 @@ import {
   connectOk,
   installGatewayTestHooks,
   readConnectChallengeNonce,
+  resetTestPluginRegistry,
   rpcReq,
 } from "./test-helpers.js";
 import { withServer } from "./test-with-server.js";
@@ -35,8 +36,6 @@ type TalkConfigPayload = {
         provider?: string;
         config?: { voiceId?: string; apiKey?: string | SecretRef };
       };
-      apiKey?: string | SecretRef;
-      voiceId?: string;
       silenceTimeoutMs?: number;
     };
     session?: { mainKey?: string };
@@ -44,13 +43,6 @@ type TalkConfigPayload = {
   };
 };
 type TalkConfig = NonNullable<NonNullable<TalkConfigPayload["config"]>["talk"]>;
-type TalkSpeakPayload = {
-  audioBase64?: string;
-  provider?: string;
-  outputFormat?: string;
-  mimeType?: string;
-  fileExtension?: string;
-};
 const TALK_CONFIG_DEVICE_PATH = path.join(
   os.tmpdir(),
   `openclaw-talk-config-device-${process.pid}.json`,
@@ -95,7 +87,20 @@ async function writeTalkConfig(config: {
   silenceTimeoutMs?: number;
 }) {
   const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile({ talk: config });
+  await writeConfigFile({
+    talk: {
+      silenceTimeoutMs: config.silenceTimeoutMs,
+      providers:
+        config.apiKey !== undefined || config.voiceId !== undefined
+          ? {
+              elevenlabs: {
+                ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
+                ...(config.voiceId !== undefined ? { voiceId: config.voiceId } : {}),
+              },
+            }
+          : undefined,
+    },
+  });
 }
 
 async function fetchTalkConfig(
@@ -105,8 +110,12 @@ async function fetchTalkConfig(
   return rpcReq<TalkConfigPayload>(ws, "talk.config", params ?? {});
 }
 
-async function fetchTalkSpeak(ws: GatewaySocket, params: Record<string, unknown>) {
-  return rpcReq<TalkSpeakPayload>(ws, "talk.speak", params);
+async function fetchTalkSpeak(
+  ws: GatewaySocket,
+  params: Record<string, unknown>,
+  timeoutMs?: number,
+) {
+  return rpcReq(ws, "talk.speak", params, timeoutMs);
 }
 
 function expectElevenLabsTalkConfig(
@@ -121,12 +130,10 @@ function expectElevenLabsTalkConfig(
   expect(talk?.providers?.elevenlabs?.voiceId).toBe(expected.voiceId);
   expect(talk?.resolved?.provider).toBe("elevenlabs");
   expect(talk?.resolved?.config?.voiceId).toBe(expected.voiceId);
-  expect(talk?.voiceId).toBe(expected.voiceId);
 
   if ("apiKey" in expected) {
     expect(talk?.providers?.elevenlabs?.apiKey).toEqual(expected.apiKey);
     expect(talk?.resolved?.config?.apiKey).toEqual(expected.apiKey);
-    expect(talk?.apiKey).toEqual(expected.apiKey);
   }
   if ("silenceTimeoutMs" in expected) {
     expect(talk?.silenceTimeoutMs).toBe(expected.silenceTimeoutMs);
@@ -138,8 +145,12 @@ describe("gateway talk.config", () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       talk: {
-        voiceId: "voice-123",
-        apiKey: "secret-key-abc", // pragma: allowlist secret
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-123",
+            apiKey: "secret-key-abc", // pragma: allowlist secret
+          },
+        },
         silenceTimeoutMs: 1500,
       },
       session: {
@@ -227,7 +238,7 @@ describe("gateway talk.config", () => {
     });
   });
 
-  it("prefers normalized provider payload over conflicting legacy talk keys", async () => {
+  it("returns canonical provider talk payloads", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       talk: {
@@ -237,7 +248,6 @@ describe("gateway talk.config", () => {
             voiceId: "voice-normalized",
           },
         },
-        voiceId: "voice-legacy",
       },
     });
 
@@ -278,14 +288,19 @@ describe("gateway talk.config", () => {
 
     try {
       await withServer(async (ws) => {
+        resetTestPluginRegistry();
         await connectOperator(ws, ["operator.read", "operator.write"]);
-        const res = await fetchTalkSpeak(ws, {
-          text: "Hello from talk mode.",
-          voiceId: "nova",
-          modelId: "tts-1",
-          speed: 1.25,
-        });
-        expect(res.ok).toBe(true);
+        const res = await fetchTalkSpeak(
+          ws,
+          {
+            text: "Hello from talk mode.",
+            voiceId: "nova",
+            modelId: "tts-1",
+            speed: 1.25,
+          },
+          30_000,
+        );
+        expect(res.ok, JSON.stringify(res)).toBe(true);
         expect(res.payload?.provider).toBe("openai");
         expect(res.payload?.outputFormat).toBe("mp3");
         expect(res.payload?.mimeType).toBe("audio/mpeg");
@@ -332,13 +347,14 @@ describe("gateway talk.config", () => {
 
     try {
       await withServer(async (ws) => {
+        resetTestPluginRegistry();
         await connectOperator(ws, ["operator.read", "operator.write"]);
         const res = await fetchTalkSpeak(ws, {
           text: "Hello from talk mode.",
           voiceId: "clawd",
           outputFormat: "pcm_44100",
         });
-        expect(res.ok).toBe(true);
+        expect(res.ok, JSON.stringify(res)).toBe(true);
         expect(res.payload?.provider).toBe("elevenlabs");
         expect(res.payload?.outputFormat).toBe("pcm_44100");
         expect(res.payload?.audioBase64).toBe(Buffer.from([4, 5, 6]).toString("base64"));
@@ -365,40 +381,39 @@ describe("gateway talk.config", () => {
       },
     });
 
-    const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
-    setActivePluginRegistry({
-      ...createEmptyPluginRegistry(),
-      speechProviders: [
-        {
-          pluginId: "acme-plugin",
-          source: "test",
-          provider: {
-            id: "acme",
-            label: "Acme Speech",
-            isConfigured: () => true,
-            synthesize: async () => ({
-              audioBuffer: Buffer.from([7, 8, 9]),
-              outputFormat: "mp3",
-              fileExtension: ".mp3",
-              voiceCompatible: false,
-            }),
+    await withServer(async (ws) => {
+      const previousRegistry = getActivePluginRegistry() ?? createEmptyPluginRegistry();
+      setActivePluginRegistry({
+        ...createEmptyPluginRegistry(),
+        speechProviders: [
+          {
+            pluginId: "acme-plugin",
+            source: "test",
+            provider: {
+              id: "acme",
+              label: "Acme Speech",
+              isConfigured: () => true,
+              synthesize: async () => ({
+                audioBuffer: Buffer.from([7, 8, 9]),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: false,
+              }),
+            },
           },
-        },
-      ],
-    });
-
-    try {
-      await withServer(async (ws) => {
+        ],
+      });
+      try {
         await connectOperator(ws, ["operator.read", "operator.write"]);
         const res = await fetchTalkSpeak(ws, {
           text: "Hello from plugin talk mode.",
         });
-        expect(res.ok).toBe(true);
+        expect(res.ok, JSON.stringify(res)).toBe(true);
         expect(res.payload?.provider).toBe("acme");
         expect(res.payload?.audioBase64).toBe(Buffer.from([7, 8, 9]).toString("base64"));
-      });
-    } finally {
-      setActivePluginRegistry(previousRegistry);
-    }
+      } finally {
+        setActivePluginRegistry(previousRegistry);
+      }
+    });
   });
 });

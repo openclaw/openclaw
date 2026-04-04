@@ -62,8 +62,10 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
   </Step>
 
   <Step title="Open the Control UI">
-    Open `http://127.0.0.1:18789/` in your browser and paste the token into
-    Settings.
+    Open `http://127.0.0.1:18789/` in your browser and paste the configured
+    shared secret into Settings. The setup script writes a token to `.env` by
+    default; if you switch the container config to password auth, use that
+    password instead.
 
     Need the URL again?
 
@@ -175,6 +177,12 @@ Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` /
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
 survive container replacement.
+
+That mounted config directory is where OpenClaw keeps:
+
+- `openclaw.json` for behavior config
+- `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
+- `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).

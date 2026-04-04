@@ -23,16 +23,18 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded-runner/run/attempt.js")>();
+vi.mock("./pi-embedded-runner/run/attempt.js", async () => {
+  const actual = await vi.importActual<typeof import("./pi-embedded-runner/run/attempt.js")>(
+    "./pi-embedded-runner/run/attempt.js",
+  );
   return {
     ...actual,
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   };
 });
 
-vi.mock("../infra/backoff.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+vi.mock("../infra/backoff.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/backoff.js")>("../infra/backoff.js");
   return {
     ...actual,
     computeBackoff: (
@@ -43,8 +45,8 @@ vi.mock("../infra/backoff.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./models-config.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("./models-config.js")>();
+vi.mock("./models-config.js", async () => {
+  const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
   return {
     ...mod,
     ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -68,8 +70,10 @@ const installRunEmbeddedMocks = () => {
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
     return {
       ...actual,
       prepareProviderRuntimeAuth: vi.fn(async () => undefined),

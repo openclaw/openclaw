@@ -82,7 +82,14 @@ function buildReplayEventCacheKey(
 ): string {
   const chatId = update.message?.chat?.id ?? "";
   const senderId = update.message?.from?.id ?? "";
-  return JSON.stringify([target.path, target.account.accountId, update.event_name, chatId, senderId, messageId]);
+  return JSON.stringify([
+    target.path,
+    target.account.accountId,
+    update.event_name,
+    chatId,
+    senderId,
+    messageId,
+  ]);
 }
 
 function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {

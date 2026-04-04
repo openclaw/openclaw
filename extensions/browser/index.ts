@@ -1,12 +1,14 @@
 import {
-  createBrowserPluginService,
-  createBrowserTool,
   definePluginEntry,
-  handleBrowserGatewayRequest,
-  registerBrowserCli,
   type OpenClawPluginToolContext,
   type OpenClawPluginToolFactory,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createBrowserPluginService,
+  createBrowserTool,
+  handleBrowserGatewayRequest,
+  registerBrowserCli,
+} from "./register.runtime.js";
 
 export default definePluginEntry({
   id: "browser",
