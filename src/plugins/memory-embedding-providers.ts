@@ -44,6 +44,10 @@ export type MemoryEmbeddingProviderCreateOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    gpu?: false | "auto" | "metal" | "cuda" | "vulkan";
+    gpuLayers?: "auto" | "max" | number;
+    contextSize?: number;
+    flashAttention?: boolean;
   };
   outputDimensionality?: number;
 };

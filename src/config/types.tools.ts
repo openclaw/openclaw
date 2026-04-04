@@ -133,6 +133,9 @@ export type LinkToolsConfig = {
   models?: LinkModelConfig[];
 };
 
+export type MemorySearchLocalGpuType = false | "auto" | "metal" | "cuda" | "vulkan";
+export type MemorySearchLocalGpuLayers = "auto" | "max" | number;
+
 export type MediaToolsConfig = {
   /** Shared model list applied across image/audio/video. */
   models?: MediaUnderstandingModelConfig[];
@@ -383,6 +386,14 @@ export type MemorySearchConfig = {
     modelPath?: string;
     /** Optional cache directory for local models. */
     modelCacheDir?: string;
+    /** Compute backend override for node-llama-cpp. */
+    gpu?: MemorySearchLocalGpuType;
+    /** Number of model layers to offload to VRAM. */
+    gpuLayers?: MemorySearchLocalGpuLayers;
+    /** Embedding context size override. */
+    contextSize?: number;
+    /** Enable flash attention for the embedding context. */
+    flashAttention?: boolean;
   };
   /** Index storage configuration. */
   store?: {

@@ -106,10 +106,14 @@ Changing model or `outputDimensionality` triggers an automatic full reindex.
 
 ## Local embedding config
 
-| Key                   | Type     | Default                | Description                     |
-| --------------------- | -------- | ---------------------- | ------------------------------- |
-| `local.modelPath`     | `string` | auto-downloaded        | Path to GGUF model file         |
-| `local.modelCacheDir` | `string` | node-llama-cpp default | Cache dir for downloaded models |
+| Key                    | Type                                               | Default                | Description                                 |
+| ---------------------- | -------------------------------------------------- | ---------------------- | ------------------------------------------- |
+| `local.modelPath`      | `string`                                           | auto-downloaded        | Path to GGUF model file                     |
+| `local.modelCacheDir`  | `string`                                           | node-llama-cpp default | Cache dir for downloaded models             |
+| `local.gpu`            | `"auto" \| "metal" \| "cuda" \| "vulkan" \| false` | auto-detected          | Override the node-llama-cpp compute backend |
+| `local.gpuLayers`      | `"auto" \| "max" \| number`                        | auto-detected          | Control how many model layers go to VRAM    |
+| `local.contextSize`    | `number`                                           | node-llama-cpp default | Embedding context size override             |
+| `local.flashAttention` | `boolean`                                          | `false`                | Enable flash attention when supported       |
 
 Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded).
 Requires native build: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.

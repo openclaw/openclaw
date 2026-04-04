@@ -903,6 +903,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets the maximum wait time for a full embedding batch operation in minutes (default: 60). Increase for very large corpora or slower providers, and lower it to fail fast in automation-heavy flows.",
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
+  "agents.defaults.memorySearch.local.modelCacheDir":
+    "Overrides where downloaded or resolved local embedding models are cached before node-llama-cpp loads them. Keep the default unless local disk layout or multi-volume storage requires a dedicated cache location.",
+  "agents.defaults.memorySearch.local.gpu":
+    'Overrides the node-llama-cpp compute backend for local embeddings: "auto", "metal", "cuda", "vulkan", or false. Leave unset to keep hardware auto-detection, or pin/disable GPU when VRAM stability matters more than raw speed.',
+  "agents.defaults.memorySearch.local.gpuLayers":
+    'Controls how many local embedding model layers are offloaded to VRAM: use a number, "auto", or "max". Tune this on constrained GPUs when full automatic offload is too aggressive or when you want to force maximum GPU usage.',
+  "agents.defaults.memorySearch.local.contextSize":
+    "Sets the node-llama-cpp embedding context size for local memory search. Lower this on low-VRAM machines to reduce memory pressure, or raise it carefully when your embedding workload benefits from a larger context window.",
+  "agents.defaults.memorySearch.local.flashAttention":
+    "Enables flash attention for local embedding contexts when supported by the model/runtime. This can improve speed and memory efficiency, but keep it optional because support is still hardware and model dependent.",
   "agents.defaults.memorySearch.fallback":
     'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":

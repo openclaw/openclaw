@@ -39,6 +39,10 @@ export type ResolvedMemorySearchConfig = {
   local: {
     modelPath?: string;
     modelCacheDir?: string;
+    gpu?: false | "auto" | "metal" | "cuda" | "vulkan";
+    gpuLayers?: "auto" | "max" | number;
+    contextSize?: number;
+    flashAttention?: boolean;
   };
   store: {
     driver: "sqlite";
@@ -193,6 +197,10 @@ function mergeConfig(
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
+    gpu: overrides?.local?.gpu ?? defaults?.local?.gpu,
+    gpuLayers: overrides?.local?.gpuLayers ?? defaults?.local?.gpuLayers,
+    contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
+    flashAttention: overrides?.local?.flashAttention ?? defaults?.local?.flashAttention,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]

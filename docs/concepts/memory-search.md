@@ -33,6 +33,29 @@ search works automatically. To set a provider explicitly:
 For local embeddings with no API key, use `provider: "local"` (requires
 node-llama-cpp).
 
+When local GGUF models need more predictable VRAM behavior, you can also tune
+`memorySearch.local.gpu`, `gpuLayers`, `contextSize`, and `flashAttention`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "local",
+        fallback: "none",
+        local: {
+          modelPath: "/models/Qwen3-Embedding-4B-Q4_K_M.gguf",
+          gpu: "vulkan",
+          gpuLayers: "max",
+          contextSize: 2048,
+          flashAttention: true,
+        },
+      },
+    },
+  },
+}
+```
+
 ## Supported providers
 
 | Provider | ID        | Needs API key | Notes                         |
