@@ -41,6 +41,17 @@ can affect bundled plugins and third-party plugins.
   `api.ts` or `runtime-api.ts` plus generic SDK capabilities. Do not add a
   provider-named `src/plugin-sdk/<id>.ts` seam just to make core aware of a
   bundled channel's private helpers.
+- For provider work, prefer family-level seams over provider-specific seams.
+  Shared helpers should describe a reusable behavior such as replay policy,
+  tool-schema compat, payload normalization, stream-wrapper composition, or
+  transport decoration. Avoid adding a new SDK export that only wraps one
+  provider's local implementation unless there is already a second consumer.
+- Prefer named helpers over raw options objects when the options encode a
+  stable contract. Example: export a helper for "OpenAI-style Anthropic tool
+  payload compat" instead of making every plugin pass the same mode flags.
+- Keep transport/runtime policy and plugin-facing helpers aligned. If the same
+  behavior is used in plugin registration and in core runtime paths, expose one
+  shared helper instead of letting the two paths drift.
 
 ## Verification
 
@@ -62,4 +73,8 @@ can affect bundled plugins and third-party plugins.
 - If a bundled channel/helper need crosses package boundaries, first ask
   whether the need is truly generic. If yes, add a narrow generic subpath. If
   not, keep it plugin-local through `api.ts` / `runtime-api.ts`.
+- When expanding provider-facing seams, update or add the matching narrow tests
+  that lock the contract: Plugin SDK baseline/export checks for public subpaths
+  and the most direct provider/plugin tests for the behavior you are
+  centralizing.
 - Breaking removals or renames are major-version work, not drive-by cleanup.
