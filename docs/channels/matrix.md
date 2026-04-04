@@ -19,6 +19,16 @@ packaged builds do not need a separate install.
 If you are on an older build or a custom install that excludes Matrix, install
 it manually:
 
+## Exec approvals
+
+When `channels.matrix.execApprovals.enabled` is on, Matrix approval prompts seed reaction shortcuts on the pending approval message:
+
+- `✅` = allow once
+- `❌` = deny
+- `♾️` = allow always when that decision is allowed by the effective exec policy
+
+The original `/approve ...` commands stay in the message as a fallback.
+
 Install from npm:
 
 ```bash

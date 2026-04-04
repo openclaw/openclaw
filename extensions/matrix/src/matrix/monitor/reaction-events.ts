@@ -1,4 +1,10 @@
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveMatrixApprovalReactionTarget } from "../../approval-reactions.js";
+import {
+  isApprovalNotFoundError,
+  resolveMatrixExecApproval,
+} from "../../exec-approval-resolver.js";
+import { isMatrixExecApprovalAuthorizedSender } from "../../exec-approvals.js";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
@@ -22,6 +28,79 @@ export function resolveMatrixReactionNotificationMode(params: {
   return accountConfig.reactionNotifications ?? matrixConfig?.reactionNotifications ?? "own";
 }
 
+function readTargetEventText(event: MatrixRawEvent | null): string {
+  if (!event?.content || typeof event.content !== "object") {
+    return "";
+  }
+  const content = event.content as {
+    body?: unknown;
+    "m.new_content"?: {
+      body?: unknown;
+    };
+  };
+  const body =
+    typeof content.body === "string"
+      ? content.body
+      : typeof content["m.new_content"]?.body === "string"
+        ? content["m.new_content"].body
+        : "";
+  return body.trim();
+}
+
+async function maybeResolveMatrixApprovalReaction(params: {
+  cfg: CoreConfig;
+  accountId: string;
+  senderId: string;
+  reactionKey: string;
+  targetEvent: MatrixRawEvent | null;
+  targetSender: string;
+  selfUserId: string;
+  logVerboseMessage: (message: string) => void;
+}): Promise<boolean> {
+  if (params.targetSender !== params.selfUserId) {
+    return false;
+  }
+  if (
+    !isMatrixExecApprovalAuthorizedSender({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      senderId: params.senderId,
+    })
+  ) {
+    return false;
+  }
+  const target = resolveMatrixApprovalReactionTarget(
+    readTargetEventText(params.targetEvent),
+    params.reactionKey,
+  );
+  if (!target) {
+    return false;
+  }
+  try {
+    await resolveMatrixExecApproval({
+      cfg: params.cfg,
+      approvalId: target.approvalId,
+      decision: target.decision,
+      senderId: params.senderId,
+    });
+    params.logVerboseMessage(
+      `matrix: approval reaction resolved id=${target.approvalId} sender=${params.senderId} decision=${target.decision}`,
+    );
+    return true;
+  } catch (err) {
+    if (isApprovalNotFoundError(err)) {
+      params.logVerboseMessage(
+        `matrix: approval reaction ignored for expired approval id=${target.approvalId} sender=${params.senderId}`,
+      );
+      return true;
+    }
+    params.logVerboseMessage(
+      `matrix: approval reaction failed id=${target.approvalId} sender=${params.senderId}: ${String(err)}`,
+    );
+    return true;
+  }
+}
+
 export async function handleInboundMatrixReaction(params: {
   client: MatrixClient;
   core: PluginRuntime;
@@ -35,16 +114,11 @@ export async function handleInboundMatrixReaction(params: {
   isDirectMessage: boolean;
   logVerboseMessage: (message: string) => void;
 }): Promise<void> {
-  const notificationMode = resolveMatrixReactionNotificationMode({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (notificationMode === "off") {
-    return;
-  }
-
   const reaction = extractMatrixReactionAnnotation(params.event.content);
   if (!reaction?.eventId) {
+    return;
+  }
+  if (params.senderId === params.selfUserId) {
     return;
   }
 
@@ -57,6 +131,27 @@ export async function handleInboundMatrixReaction(params: {
   const targetSender =
     targetEvent && typeof targetEvent.sender === "string" ? targetEvent.sender.trim() : "";
   if (!targetSender) {
+    return;
+  }
+  if (
+    await maybeResolveMatrixApprovalReaction({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      senderId: params.senderId,
+      reactionKey: reaction.key,
+      targetEvent: targetEvent as MatrixRawEvent | null,
+      targetSender,
+      selfUserId: params.selfUserId,
+      logVerboseMessage: params.logVerboseMessage,
+    })
+  ) {
+    return;
+  }
+  const notificationMode = resolveMatrixReactionNotificationMode({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  if (notificationMode === "off") {
     return;
   }
   if (notificationMode === "own" && targetSender !== params.selfUserId) {

@@ -1,6 +1,7 @@
 import {
   buildExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
+  resolveExecApprovalAllowedDecisions,
   resolveExecApprovalCommandDisplay,
 } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -12,6 +13,10 @@ import {
 } from "openclaw/plugin-sdk/infra-runtime";
 import { matrixNativeApprovalAdapter } from "./approval-native.js";
 import {
+  buildMatrixApprovalReactionHint,
+  listMatrixApprovalReactionBindings,
+} from "./approval-reactions.js";
+import {
   isMatrixExecApprovalClientEnabled,
   shouldHandleMatrixExecApprovalRequest,
 } from "./exec-approvals.js";
@@ -19,7 +24,7 @@ import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { deleteMatrixMessage, editMatrixMessage } from "./matrix/actions/messages.js";
 import { repairMatrixDirectRooms } from "./matrix/direct-management.js";
 import type { MatrixClient } from "./matrix/sdk.js";
-import { sendMessageMatrix } from "./matrix/send.js";
+import { reactMatrixMessage, sendMessageMatrix } from "./matrix/send.js";
 import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
 
@@ -35,6 +40,10 @@ type PreparedMatrixTarget = {
   roomId: string;
   threadId?: string;
 };
+type PendingApprovalContent = {
+  text: string;
+  allowedDecisions: readonly ("allow-once" | "allow-always" | "deny")[];
+};
 
 export type MatrixExecApprovalHandlerOpts = {
   client: MatrixClient;
@@ -46,6 +55,7 @@ export type MatrixExecApprovalHandlerOpts = {
 export type MatrixExecApprovalHandlerDeps = {
   nowMs?: () => number;
   sendMessage?: typeof sendMessageMatrix;
+  reactMessage?: typeof reactMatrixMessage;
   editMessage?: typeof editMatrixMessage;
   deleteMessage?: typeof deleteMatrixMessage;
   repairDirectRooms?: typeof repairMatrixDirectRooms;
@@ -60,14 +70,20 @@ function normalizeThreadId(value?: string | number | null): string | undefined {
   return trimmed || undefined;
 }
 
-function buildPendingApprovalText(params: { request: ApprovalRequest; nowMs: number }): string {
-  return buildExecApprovalPendingReplyPayload({
+function buildPendingApprovalContent(params: {
+  request: ApprovalRequest;
+  nowMs: number;
+}): PendingApprovalContent {
+  const allowedDecisions =
+    params.request.request.allowedDecisions ??
+    resolveExecApprovalAllowedDecisions({ ask: params.request.request.ask ?? undefined });
+  const payload = buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,
     ask: params.request.request.ask ?? undefined,
     agentId: params.request.request.agentId ?? undefined,
-    allowedDecisions: params.request.request.allowedDecisions,
+    allowedDecisions,
     command: resolveExecApprovalCommandDisplay((params.request as ExecApprovalRequest).request)
       .commandText,
     cwd: (params.request as ExecApprovalRequest).request.cwd ?? undefined,
@@ -76,7 +92,13 @@ function buildPendingApprovalText(params: { request: ApprovalRequest; nowMs: num
     sessionKey: params.request.request.sessionKey ?? undefined,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
-  }).text!;
+  });
+  const hint = buildMatrixApprovalReactionHint(allowedDecisions);
+  const text = payload.text ?? "";
+  return {
+    text: hint ? `${text}\n\n${hint}` : text,
+    allowedDecisions,
+  };
 }
 
 function buildResolvedApprovalText(params: {
@@ -97,6 +119,7 @@ export class MatrixExecApprovalHandler {
   private readonly runtime: ExecApprovalChannelRuntime<ApprovalRequest, ApprovalResolved>;
   private readonly nowMs: () => number;
   private readonly sendMessage: typeof sendMessageMatrix;
+  private readonly reactMessage: typeof reactMatrixMessage;
   private readonly editMessage: typeof editMatrixMessage;
   private readonly deleteMessage: typeof deleteMatrixMessage;
   private readonly repairDirectRooms: typeof repairMatrixDirectRooms;
@@ -107,13 +130,14 @@ export class MatrixExecApprovalHandler {
   ) {
     this.nowMs = deps.nowMs ?? Date.now;
     this.sendMessage = deps.sendMessage ?? sendMessageMatrix;
+    this.reactMessage = deps.reactMessage ?? reactMatrixMessage;
     this.editMessage = deps.editMessage ?? editMatrixMessage;
     this.deleteMessage = deps.deleteMessage ?? deleteMatrixMessage;
     this.repairDirectRooms = deps.repairDirectRooms ?? repairMatrixDirectRooms;
     this.runtime = createChannelNativeApprovalRuntime<
       PendingMessage,
       PreparedMatrixTarget,
-      string,
+      PendingApprovalContent,
       ApprovalRequest,
       ApprovalResolved
     >({
@@ -134,7 +158,7 @@ export class MatrixExecApprovalHandler {
           request,
         }),
       buildPendingContent: ({ request, nowMs }) =>
-        buildPendingApprovalText({
+        buildPendingApprovalContent({
           request,
           nowMs,
         }),
@@ -161,12 +185,23 @@ export class MatrixExecApprovalHandler {
         };
       },
       deliverTarget: async ({ preparedTarget, pendingContent }) => {
-        const result = await this.sendMessage(preparedTarget.to, pendingContent, {
+        const result = await this.sendMessage(preparedTarget.to, pendingContent.text, {
           cfg: this.opts.cfg as CoreConfig,
           accountId: this.opts.accountId,
           client: this.opts.client,
           threadId: preparedTarget.threadId,
         });
+        await Promise.allSettled(
+          listMatrixApprovalReactionBindings(pendingContent.allowedDecisions).map(
+            async ({ emoji }) => {
+              await this.reactMessage(result.roomId, result.messageId, emoji, {
+                cfg: this.opts.cfg as CoreConfig,
+                accountId: this.opts.accountId,
+                client: this.opts.client,
+              });
+            },
+          ),
+        );
         return {
           roomId: result.roomId,
           messageId: result.messageId,

@@ -23,6 +23,7 @@ function createHandler(cfg: OpenClawConfig, accountId = "default") {
     .fn()
     .mockResolvedValueOnce({ messageId: "$m1", roomId: "!ops:example.org" })
     .mockResolvedValue({ messageId: "$m2", roomId: "!dm-owner:example.org" });
+  const reactMessage = vi.fn().mockResolvedValue(undefined);
   const editMessage = vi.fn().mockResolvedValue({ eventId: "$edit1" });
   const deleteMessage = vi.fn().mockResolvedValue(undefined);
   const repairDirectRooms = vi.fn().mockResolvedValue({
@@ -37,12 +38,21 @@ function createHandler(cfg: OpenClawConfig, accountId = "default") {
     {
       nowMs: () => 1000,
       sendMessage,
+      reactMessage,
       editMessage,
       deleteMessage,
       repairDirectRooms,
     },
   );
-  return { client, handler, sendMessage, editMessage, deleteMessage, repairDirectRooms };
+  return {
+    client,
+    handler,
+    sendMessage,
+    reactMessage,
+    editMessage,
+    deleteMessage,
+    repairDirectRooms,
+  };
 }
 
 afterEach(() => {
@@ -76,6 +86,54 @@ describe("MatrixExecApprovalHandler", () => {
         accountId: "default",
         threadId: "$thread",
       }),
+    );
+  });
+
+  it("seeds emoji reactions for each allowed approval decision", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok",
+          execApprovals: {
+            enabled: true,
+            approvers: ["@owner:example.org"],
+            target: "channel",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const { handler, reactMessage, sendMessage } = createHandler(cfg);
+
+    await handler.handleRequested(baseRequest);
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "room:!ops:example.org",
+      expect.stringContaining("React here: ✅ Allow once, ♾️ Allow always, ❌ Deny"),
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenCalledTimes(3);
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      1,
+      "!ops:example.org",
+      "$m1",
+      "✅",
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      2,
+      "!ops:example.org",
+      "$m1",
+      "♾️",
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      3,
+      "!ops:example.org",
+      "$m1",
+      "❌",
+      expect.anything(),
     );
   });
 
@@ -291,7 +349,7 @@ describe("MatrixExecApprovalHandler", () => {
         },
       },
     } as OpenClawConfig;
-    const { handler, sendMessage } = createHandler(cfg);
+    const { handler, sendMessage, reactMessage } = createHandler(cfg);
 
     await handler.handleRequested({
       ...baseRequest,
@@ -305,6 +363,26 @@ describe("MatrixExecApprovalHandler", () => {
     expect(sendMessage).toHaveBeenCalledWith(
       "room:!ops:example.org",
       expect.not.stringContaining("allow-always"),
+      expect.anything(),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "room:!ops:example.org",
+      expect.stringContaining("React here: ✅ Allow once, ❌ Deny"),
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenCalledTimes(2);
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      1,
+      "!ops:example.org",
+      "$m1",
+      "✅",
+      expect.anything(),
+    );
+    expect(reactMessage).toHaveBeenNthCalledWith(
+      2,
+      "!ops:example.org",
+      "$m1",
+      "❌",
       expect.anything(),
     );
   });
