@@ -13,4 +13,24 @@ describe("bundled channel contract surfaces", () => {
     expect(surface).not.toBeNull();
     expect(surface?.normalizeTelegramCommandName?.("/Hello-World")).toBe("hello_world");
   });
+
+  it.each(["matrix", "mattermost", "bluebubbles", "nextcloud-talk", "tlon"])(
+    "exposes legacy migration hooks for %s from a source checkout",
+    (pluginId) => {
+      const surface = getBundledChannelContractSurfaceModule<{
+        normalizeCompatibilityConfig?: (params: { cfg: Record<string, unknown> }) => {
+          config: Record<string, unknown>;
+          changes: string[];
+        };
+        legacyConfigRules?: unknown[];
+      }>({
+        pluginId,
+        preferredBasename: "contract-surfaces.ts",
+      });
+
+      expect(surface).not.toBeNull();
+      expect(surface?.normalizeCompatibilityConfig).toBeTypeOf("function");
+      expect(Array.isArray(surface?.legacyConfigRules)).toBe(true);
+    },
+  );
 });

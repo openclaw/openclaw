@@ -151,6 +151,27 @@ describe("legacy private-network alias helpers", () => {
     });
     expect(changes[0]).toContain("(true)");
   });
+
+  it("preserves the effective opt-in when the new key is true and the legacy key is false", () => {
+    const changes: string[] = [];
+    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+      entry: {
+        allowPrivateNetwork: false,
+        network: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      },
+      pathPrefix: "channels.matrix.accounts.default",
+      changes,
+    });
+
+    expect(migrated.entry).toEqual({
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
+    expect(changes[0]).toContain("(true)");
+  });
 });
 
 describe("assertHttpUrlTargetsPrivateNetwork", () => {
