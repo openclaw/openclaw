@@ -16,6 +16,29 @@ export default function CafePage() {
     if (initialized.current) return;
     initialized.current = true;
     bootCafe();
+
+    // Dust mote spawner — 5s after boot
+    setTimeout(() => {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const container = document.getElementById('dust-container');
+      if (!container) return;
+
+      function spawnDust() {
+        container!.innerHTML = '';
+        for (let i = 0; i < 10; i++) {
+          const mote = document.createElement('div');
+          mote.className = 'dust-mote';
+          mote.style.left = `${20 + Math.random() * 60}%`;
+          mote.style.top = `${30 + Math.random() * 50}%`;
+          mote.style.width = mote.style.height = `${2 + Math.random() * 3}px`;
+          mote.style.animationDuration = `${8 + Math.random() * 12}s`;
+          mote.style.animationDelay = `${Math.random() * 5}s`;
+          container!.appendChild(mote);
+        }
+      }
+      spawnDust();
+      setInterval(spawnDust, 20000);
+    }, 5000);
   }, []);
 
   return (
