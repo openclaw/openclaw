@@ -925,18 +925,9 @@ export function discoverOpenClawPlugins(params: {
   const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
 
   if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
-    discoverInDirectory({
-      dir: workspaceRoot,
-      origin: "workspace",
-      ownershipUid: params.ownershipUid,
-      workspaceDir: workspaceRoot,
-      candidates,
-      diagnostics,
-      seen,
-      recurseDirectories: true,
-      skipDirectories: new Set([".openclaw"]),
-      visitedDirectories: new Set<string>(),
-    });
+    // Keep workspace auto-discovery constrained to the OpenClaw extensions root.
+    // Recursively scanning the full workspace treats arbitrary project folders as
+    // plugin candidates and causes noisy "plugin manifest not found" validation failures.
     discoverInDirectory({
       dir: roots.workspace,
       origin: "workspace",
