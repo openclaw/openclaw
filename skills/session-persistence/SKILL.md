@@ -34,7 +34,7 @@ L3 Raw Layer (.jsonl + daily memory)
 - `references/jsonl-recovery.md` - Selective delta recovery from .jsonl
 - `references/knowledge-sync.md` - Automatic L2→L1 knowledge sync
 - `references/workspace-watchdog.md` - Two-phase consistency detection
-- `references/integration-guide.md` - Step-by-step setup instructions
+- `references/state-schema.md` - state.json field definitions
 
 ## Quick Start
 
@@ -58,15 +58,15 @@ python3 $SP_DIR/scripts/jsonl_recovery.py recover >> ~/.openclaw/workspace/memor
 Add to your HEARTBEAT.md:
 
 ```bash
+# Session persistence skill directory
+SP_DIR=~/.openclaw/workspace/memory/projects/session-persistence
+
 # Workspace consistency check
-WD=~/.openclaw/workspace/memory/projects/workspace-watchdog
-python3 $WD/scripts/workspace_watchdog.py verify
-python3 $WD/scripts/workspace_watchdog.py snapshot "heartbeat-$(date +%Y-%m-%d-%H%M)"
+python3 $SP_DIR/scripts/workspace_watchdog.py status
 
 # Session checkpoint
-SP_DIR=~/.openclaw/workspace/memory/projects/session-persistence
 python3 $SP_DIR/scripts/checkpoint_manager.py check-full --heartbeat
-python3 $SP_DIR/scripts/knowledge_sync.py sync
+python3 $SP_DIR/scripts/knowledge_sync.py push
 ```
 
 ## Core Scripts
@@ -124,11 +124,14 @@ python3 {baseDir}/scripts/jsonl_recovery.py status
 Syncs Key Decisions from checkpoint to knowledge-graph.
 
 ```bash
-# Sync to knowledge-graph
-python3 {baseDir}/scripts/knowledge_sync.py sync
+# Push decisions to knowledge-graph
+python3 {baseDir}/scripts/knowledge_sync.py push
 
-# Preview changes
-python3 {baseDir}/scripts/knowledge_sync.py dry-run
+# Preview differences without writing
+python3 {baseDir}/scripts/knowledge_sync.py diff
+
+# Pull pending updates from knowledge-graph
+python3 {baseDir}/scripts/knowledge_sync.py pull
 
 # Check status
 python3 {baseDir}/scripts/knowledge_sync.py status
@@ -136,8 +139,8 @@ python3 {baseDir}/scripts/knowledge_sync.py status
 
 **Sync Flow:**
 1. Parse checkpoint's Key Decisions section
-2. Compare with knowledge-graph's pending-update
-3. Append new items to pending-update
+2. Compare with knowledge-graph entries
+3. Append new items to knowledge-graph (push)
 4. Human review required before archiving
 
 ### workspace_watchdog.py
@@ -145,20 +148,20 @@ python3 {baseDir}/scripts/knowledge_sync.py status
 Detects workspace file changes after compaction.
 
 ```bash
-# Verify changes since last snapshot
-python3 {baseDir}/scripts/workspace_watchdog.py verify
-
-# Create new snapshot
-python3 {baseDir}/scripts/workspace_watchdog.py snapshot "description"
-
-# Check status
+# Check watchdog status
 python3 {baseDir}/scripts/workspace_watchdog.py status
+
+# Start background monitoring
+python3 {baseDir}/scripts/workspace_watchdog.py start --watch {baseDir}
+
+# Stop background monitoring
+python3 {baseDir}/scripts/workspace_watchdog.py stop
 ```
 
 **Change Classification:**
-- `changed`: File modified (hash changed) → potential break
+- `modified`: File changed (hash changed) → potential break
 - `deleted`: File removed → break
-- `new`: File added → normal operation
+- `created`: New file appeared → normal operation
 
 ## Checkpoint Template
 
@@ -215,15 +218,7 @@ cat ~/.openclaw/workspace/memory/projects/session-persistence/state.json
 If `degraded: true`, reset:
 
 ```bash
-python3 -c "
-import json
-with open('state.json', 'r') as f:
-    state = json.load(f)
-state['degraded'] = False
-state['consecutiveFailures'] = 0
-with open('state.json', 'w') as f:
-    json.dump(state, f, indent=2)
-"
+python3 {baseDir}/scripts/checkpoint_manager.py reset
 ```
 
 ### Delta Recovery Empty
@@ -237,7 +232,7 @@ Ensure:
 
 Check:
 1. Checkpoint has Key Decisions section
-2. knowledge-graph.md has pending-update section
+2. knowledge-graph.md exists at `~/.openclaw/workspace/memory/knowledge-graph.md`
 3. No duplicate detection false positive (50-char prefix match)
 
 ## Related
