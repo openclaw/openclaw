@@ -21,7 +21,16 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   factor: 2,
   jitter: 0.1,
 };
+const NETWORK_CHANNEL_RESTART_POLICY: BackoffPolicy = {
+  initialMs: 30_000,
+  maxMs: 15 * 60_000,
+  factor: 2,
+  jitter: 0.1,
+};
 const MAX_RESTART_ATTEMPTS = 10;
+
+const NETWORK_RESTART_ERROR_PATTERN =
+  /(econnreset|econnrefused|etimedout|fetch failed|socket hang up|tls connection was not established|did not reach ready within|was not ready after|gateway metadata lookup failed)/i;
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
@@ -69,6 +78,13 @@ function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {
 
 function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAccountSnapshot {
   return { ...resolveDefaultRuntime(channelId), accountId };
+}
+
+function shouldUseNetworkRestartBackoff(message: string | null | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  return NETWORK_RESTART_ERROR_PATTERN.test(message);
 }
 
 type ChannelManagerOptions = {
@@ -323,11 +339,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           ...(resolvedChannelRuntime ? { channelRuntime: resolvedChannelRuntime } : {}),
         });
         const trackedPromise = Promise.resolve(task)
-          .catch((err) => {
-            const message = formatErrorMessage(err);
-            setRuntime(channelId, id, { accountId: id, lastError: message });
-            log.error?.(`[${id}] channel exited: ${message}`);
-          })
+          .then(
+            () => null,
+            (err) => {
+              const message = formatErrorMessage(err);
+              setRuntime(channelId, id, { accountId: id, lastError: message });
+              log.error?.(`[${id}] channel exited: ${message}`);
+              return message;
+            },
+          )
           .finally(() => {
             setRuntime(channelId, id, {
               accountId: id,
@@ -335,7 +355,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               lastStopAt: Date.now(),
             });
           })
-          .then(async () => {
+          .then(async (lastExitMessage) => {
             if (manuallyStopped.has(rKey)) {
               return;
             }
@@ -350,7 +370,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.error?.(`[${id}] giving up after ${MAX_RESTART_ATTEMPTS} restart attempts`);
               return;
             }
-            const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempt);
+            const restartPolicy = shouldUseNetworkRestartBackoff(lastExitMessage)
+              ? NETWORK_CHANNEL_RESTART_POLICY
+              : CHANNEL_RESTART_POLICY;
+            const delayMs = computeBackoff(restartPolicy, attempt);
             log.info?.(
               `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
             );

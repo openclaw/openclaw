@@ -163,6 +163,54 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("uses slower backoff for transient network startup failures", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new Error("discord gateway did not reach READY within 45000ms after restart");
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(hoisted.computeBackoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialMs: 30_000,
+        maxMs: 15 * 60_000,
+      }),
+      1,
+    );
+    expect(startAccount.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the default backoff for non-network channel exits", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new Error("bootstrap config missing");
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(20);
+
+    expect(hoisted.computeBackoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialMs: 5_000,
+        maxMs: 5 * 60_000,
+      }),
+      1,
+    );
+    expect(startAccount.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("marks enabled/configured when account descriptors omit them", () => {
     installTestRegistry(
       createTestPlugin({
