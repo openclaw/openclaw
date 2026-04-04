@@ -140,8 +140,15 @@ function shouldStripThreadFromAnnounceEntry(
   if (requesterChannel && requesterChannel !== "telegram") {
     return true;
   }
-  if (!requesterChannel && !normalizedRequester.to.startsWith("telegram:")) {
-    return true;
+  if (!requesterChannel) {
+    try {
+      const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
+      if (!requesterTarget.chatId) {
+        return true;
+      }
+    } catch {
+      return true;
+    }
   }
   try {
     const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
@@ -289,12 +296,12 @@ export async function resolveSubagentCompletionOrigin(params: {
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
       ? String(requesterOrigin.threadId).trim()
       : undefined;
-  const conversationId =
-    threadId ||
+  const baseConversationId =
     resolveConversationIdFromTargets({
       targets: [to],
-    }) ||
-    "";
+    }) || "";
+  const conversationId =
+    threadId && baseConversationId ? `${baseConversationId}::thread:${threadId}` : threadId || baseConversationId;
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
@@ -462,12 +469,12 @@ function resolveDeliveryConversationIdentity(origin?: DeliveryContext): {
   const to = origin?.to?.trim() ?? "";
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId).trim() : "";
-  const conversationId =
-    threadId ||
+  const baseConversationId =
     resolveConversationIdFromTargets({
       targets: [to],
-    }) ||
-    "";
+    }) || "";
+  const conversationId =
+    threadId && baseConversationId ? `${baseConversationId}::thread:${threadId}` : threadId || baseConversationId;
   if (!channel || !conversationId) {
     return null;
   }
