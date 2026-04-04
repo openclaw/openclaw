@@ -774,6 +774,18 @@ export async function validateReplayTurns(params: {
       env: params.env,
       model: params.model,
     });
+
+  // Canonicalize malformed assistant content (e.g. string instead of array) before
+  // any validation or provider plugin processing. Pi expects assistant.content to always
+  // be an array. Without this, malformed sessions cause the model to repeat content.
+  const canonicalized =
+    params.sessionId != null
+      ? canonicalizeAssistantHistoryMessages({
+          messages: params.messages,
+          sessionId: params.sessionId,
+        })
+      : params.messages;
+
   const provider = params.provider?.trim();
   if (provider) {
     const providerValidated = await validateProviderReplayTurnsWithPlugin({
@@ -790,7 +802,7 @@ export async function validateReplayTurns(params: {
         modelApi: params.modelApi,
         model: params.model,
         sessionId: params.sessionId,
-        messages: params.messages,
+        messages: canonicalized,
       },
     });
     if (providerValidated) {
@@ -799,7 +811,7 @@ export async function validateReplayTurns(params: {
   }
 
   const validatedGemini = policy.validateGeminiTurns
-    ? validateGeminiTurns(params.messages)
-    : params.messages;
+    ? validateGeminiTurns(canonicalized)
+    : canonicalized;
   return policy.validateAnthropicTurns ? validateAnthropicTurns(validatedGemini) : validatedGemini;
 }
