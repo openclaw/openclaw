@@ -197,9 +197,12 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-14T13:10:00.000Z"));
     try {
-      const { sendMessage, roomEventListener } = createHarness();
+      const { sendMessage, roomMessageListener } = createHarness();
+      if (!roomMessageListener) {
+        throw new Error("room.message listener was not registered");
+      }
 
-      roomEventListener("!room:example.org", {
+      roomMessageListener("!room:example.org", {
         event_id: "$done-fresh",
         sender: "@alice:example.org",
         type: "m.key.verification.done",
