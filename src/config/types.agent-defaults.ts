@@ -6,7 +6,7 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
-import type { MemorySearchConfig } from "./types.tools.js";
+import type { MemorySearchConfig } from "./tools/types.js";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -101,6 +101,8 @@ export type CliBackendConfig = {
         minMs?: number;
         /** Upper bound for computed watchdog timeout. */
         maxMs?: number;
+        /** Relative watchdog timeout for no output (default: 0.5). */
+        noOutputTimeoutFactor?: number;
       };
       /** Resume sessions. */
       resume?: {
@@ -112,6 +114,8 @@ export type CliBackendConfig = {
         minMs?: number;
         /** Upper bound for computed watchdog timeout. */
         maxMs?: number;
+        /** Relative watchdog timeout for no output (default: 0.5). */
+        noOutputTimeoutFactor?: number;
       };
     };
   };
@@ -142,6 +146,12 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
+  /**
+   * Workspace injection mode (default: first-message-only).
+   * - always: inject bootstrap files on every turn
+   * - first-message-only: inject bootstrap files only on the first turn of a session
+   */
+  workspaceInjection?: "always" | "first-message-only";
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
@@ -243,7 +253,7 @@ export type AgentDefaultsConfig = {
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */
-    target?: "last" | "none" | ChannelId;
+    target?: ChannelId;
     /** Direct/DM delivery policy. Default: "allow". */
     directPolicy?: "allow" | "block";
     /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
@@ -346,7 +356,7 @@ export type AgentCompactionConfig = {
    * Set to [] to disable post-compaction context injection entirely.
    */
   postCompactionSections?: string[];
-  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-5").
+  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
