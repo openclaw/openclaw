@@ -377,7 +377,9 @@ function authorizeTrustedProxy(params: {
     return { reason: "trusted_proxy_untrusted_source" };
   }
   if (isLoopbackAddress(remoteAddr)) {
-    return { reason: "trusted_proxy_loopback_source" };
+    // TODO: log a warning,
+    // TODO: or make this denial configurable
+    // return { reason: "trusted_proxy_loopback_source" };
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
