@@ -49,7 +49,10 @@ function resolveRootHelpBundleIdentity(
   distDirOverride: string = distDir,
 ): { bundleName: string; signature: string } | null {
   const bundleName = readdirSync(distDirOverride).find(
-    (entry) => entry.startsWith("root-help-") && entry.endsWith(".js"),
+    (entry) =>
+      entry.startsWith("root-help-") &&
+      !entry.startsWith("root-help-metadata-") &&
+      entry.endsWith(".js"),
   );
   if (!bundleName) {
     return null;
@@ -149,9 +152,37 @@ export async function renderBundledRootHelpText(
   return result.stdout ?? "";
 }
 
-async function renderSourceRootHelpText(): Promise<string> {
-  const module = await import("../src/cli/program/root-help.ts");
-  return module.renderRootHelpText({ pluginSdkResolution: "src" });
+function renderSourceRootHelpText(): string {
+  const moduleUrl = pathToFileURL(path.join(rootDir, "src/cli/program/root-help.ts")).href;
+  const inlineModule = [
+    `const mod = await import(${JSON.stringify(moduleUrl)});`,
+    "if (typeof mod.renderRootHelpText !== 'function') {",
+    `  throw new Error(${JSON.stringify("Source root-help module does not export renderRootHelpText.")});`,
+    "}",
+    "const output = await mod.renderRootHelpText({ pluginSdkResolution: 'src' });",
+    "process.stdout.write(output);",
+    "process.exit(0);",
+  ].join("\n");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", inlineModule],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      timeout: 30_000,
+    },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr?.trim();
+    throw new Error(
+      "Failed to render source root help" +
+        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
+    );
+  }
+  return result.stdout ?? "";
 }
 
 export async function writeCliStartupMetadata(options?: {
@@ -186,7 +217,7 @@ export async function writeCliStartupMetadata(options?: {
   try {
     rootHelpText = await renderBundledRootHelpText(resolvedDistDir);
   } catch {
-    rootHelpText = await renderSourceRootHelpText();
+    rootHelpText = renderSourceRootHelpText();
   }
 
   mkdirSync(resolvedDistDir, { recursive: true });
