@@ -81,6 +81,11 @@ export async function handleAbortChat(host: ChatHost) {
     return;
   }
   host.chatMessage = "";
+  // chatMessage is intentionally non-reactive (@state removed) to avoid full
+  // re-renders on every keystroke.  Explicitly request an update so the
+  // textarea reflects the cleared draft — abortChatRun may not mutate any
+  // other reactive property, leaving the DOM stale.
+  (host as unknown as OpenClawApp).requestUpdate();
   await abortChatRun(host as unknown as OpenClawApp);
 }
 
