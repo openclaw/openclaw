@@ -112,9 +112,8 @@ export async function materializeBundleMcpToolsForRun(params: {
     });
   }
 
-  // Sort tools deterministically by name so the tools block in API requests is
-  // stable across turns. MCP's listTools() does not guarantee order, and any
-  // change in the tools array busts the prompt cache at the tools block.
+  // Defensive sort for stable prompt-cache keys. Collision suffixes above are
+  // iteration-order-dependent, so this cannot fix name collisions.
   tools.sort((a, b) => a.name.localeCompare(b.name));
 
   return {

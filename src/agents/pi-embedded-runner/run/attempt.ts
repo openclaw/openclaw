@@ -1569,9 +1569,8 @@ export async function runEmbeddedAttempt(
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
-          // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Only mutates user turns older than a few assistant replies so recent
-          // history stays byte-identical for prompt-cache prefix matching.
+          // Legacy cleanup: prune old persisted image blocks. The delay
+          // also reduces prompt-cache churn.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.state.messages = activeSession.messages;
