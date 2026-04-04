@@ -295,6 +295,43 @@ function resolveLockPath(workspaceDir: string): string {
   return path.join(workspaceDir, SHORT_TERM_LOCK_RELATIVE_PATH);
 }
 
+function parseLockOwnerPid(raw: string): number | null {
+  const match = raw.trim().match(/^(\d+):/);
+  if (!match) {
+    return null;
+  }
+  const pid = Number.parseInt(match[1] ?? "", 10);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return null;
+  }
+  return pid;
+}
+
+function isProcessLikelyAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ESRCH") {
+      return false;
+    }
+    // EPERM and unknown errors are treated as alive to avoid stealing active locks.
+    return true;
+  }
+}
+
+async function canStealStaleLock(lockPath: string): Promise<boolean> {
+  const ownerPid = await fs
+    .readFile(lockPath, "utf-8")
+    .then((raw) => parseLockOwnerPid(raw))
+    .catch(() => null);
+  if (ownerPid === null) {
+    return true;
+  }
+  return !isProcessLikelyAlive(ownerPid);
+}
+
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -327,8 +364,10 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
         .then((stats) => Date.now() - stats.mtimeMs)
         .catch(() => 0);
       if (ageMs > SHORT_TERM_LOCK_STALE_MS) {
-        await fs.unlink(lockPath).catch(() => undefined);
-        continue;
+        if (await canStealStaleLock(lockPath)) {
+          await fs.unlink(lockPath).catch(() => undefined);
+          continue;
+        }
       }
 
       if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
@@ -648,3 +687,9 @@ export async function applyShortTermPromotions(
 export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
 }
+
+export const __testing = {
+  parseLockOwnerPid,
+  canStealStaleLock,
+  isProcessLikelyAlive,
+};

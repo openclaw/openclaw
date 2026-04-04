@@ -122,7 +122,7 @@ describe("short-term dreaming config", () => {
       pluginConfig: {
         dreaming: {
           mode: "deep",
-          frequency: "rem",
+          frequency: "15 2 * * *",
           timezone: "UTC",
           limit: 7,
           minScore: 0.4,
@@ -133,7 +133,7 @@ describe("short-term dreaming config", () => {
     });
     expect(resolved).toEqual({
       enabled: true,
-      cron: constants.DREAMING_PRESET_DEFAULTS.rem.cron,
+      cron: "15 2 * * *",
       timezone: "UTC",
       limit: 7,
       minScore: 0.4,

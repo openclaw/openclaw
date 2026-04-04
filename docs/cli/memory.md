@@ -118,4 +118,4 @@ Notes:
 - `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Dreaming cadence defaults to each mode's preset schedule. Override cadence with `plugins.entries.memory-core.config.dreaming.frequency` (`core|deep|rem`) and fine-tune with `timezone`, `limit`, `minScore`, `minRecallCount`, and `minUniqueQueries`.
+- Dreaming cadence defaults to each mode's preset schedule. Override cadence with `plugins.entries.memory-core.config.dreaming.frequency` as a cron expression (for example `0 3 * * *`) and fine-tune with `timezone`, `limit`, `minScore`, `minRecallCount`, and `minUniqueQueries`.

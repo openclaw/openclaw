@@ -136,14 +136,6 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeDreamingPreset(value: unknown): DreamingPreset | undefined {
-  const normalized = normalizeTrimmedString(value)?.toLowerCase();
-  if (normalized === "core" || normalized === "deep" || normalized === "rem") {
-    return normalized;
-  }
-  return undefined;
-}
-
 function normalizeDreamingMode(value: unknown): DreamingMode {
   const normalized = normalizeTrimmedString(value)?.toLowerCase();
   if (
@@ -326,11 +318,8 @@ export function resolveShortTermPromotionDreamingConfig(params: {
   const mode = normalizeDreamingMode(dreaming?.mode);
   const enabled = mode !== "off";
   const thresholdPreset: DreamingPreset = mode === "off" ? DEFAULT_DREAMING_PRESET : mode;
-  const frequencyPreset = normalizeDreamingPreset(dreaming?.frequency) ?? thresholdPreset;
   const thresholdDefaults = DREAMING_PRESET_DEFAULTS[thresholdPreset];
-  const frequencyDefaults = DREAMING_PRESET_DEFAULTS[frequencyPreset];
-
-  const cron = frequencyDefaults.cron;
+  const cron = normalizeTrimmedString(dreaming?.frequency) ?? thresholdDefaults.cron;
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ?? resolveTimezoneFallback(params.cfg);
   const limit = normalizeNonNegativeInt(dreaming?.limit, thresholdDefaults.limit);

@@ -760,7 +760,7 @@ export async function runMemorySearch(
         typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
           ? manager.status().workspaceDir
           : undefined;
-      await recordShortTermRecalls({
+      void recordShortTermRecalls({
         workspaceDir,
         query,
         results,
