@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -23,11 +24,49 @@ type GeneratedBundledChannelEntry = {
   };
 };
 
+type BundledChannelDiscoveryCandidate = {
+  rootDir: string;
+  packageManifest?: {
+    extensions?: string[];
+  };
+};
+
 const log = createSubsystemLogger("channels");
 
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
 ): GeneratedBundledChannelEntry["entry"] | null {
+  const resolveNamedFallback = (value: unknown): GeneratedBundledChannelEntry["entry"] | null => {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    const entries = Object.entries(value as Record<string, unknown>).filter(
+      ([key]) => key !== "default",
+    );
+    const pluginCandidates = entries.filter(
+      ([key, candidate]) =>
+        key.endsWith("Plugin") &&
+        !!candidate &&
+        typeof candidate === "object" &&
+        "id" in (candidate as Record<string, unknown>),
+    );
+    if (pluginCandidates.length !== 1) {
+      return null;
+    }
+    const runtimeCandidates = entries.filter(
+      ([key, candidate]) =>
+        key.startsWith("set") && key.endsWith("Runtime") && typeof candidate === "function",
+    );
+    return {
+      channelPlugin: pluginCandidates[0][1] as ChannelPlugin,
+      ...(runtimeCandidates.length === 1
+        ? {
+            setChannelRuntime: runtimeCandidates[0][1] as (runtime: PluginRuntime) => void,
+          }
+        : {}),
+    };
+  };
+
   const resolved =
     moduleExport &&
     typeof moduleExport === "object" &&
@@ -42,7 +81,7 @@ function resolveChannelPluginModuleEntry(
     setChannelRuntime?: unknown;
   };
   if (!record.channelPlugin || typeof record.channelPlugin !== "object") {
-    return null;
+    return resolveNamedFallback(resolved) ?? resolveNamedFallback(moduleExport);
   }
   return {
     channelPlugin: record.channelPlugin as ChannelPlugin,
@@ -79,7 +118,8 @@ function createModuleLoader() {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 
   return (modulePath: string) => {
-    const tryNative = shouldPreferNativeJiti(modulePath);
+    const tryNative =
+      shouldPreferNativeJiti(modulePath) || modulePath.includes(`${path.sep}dist${path.sep}`);
     const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
     const cacheKey = JSON.stringify({
       tryNative,
@@ -101,9 +141,10 @@ function createModuleLoader() {
 const loadModule = createModuleLoader();
 
 function loadBundledModule(modulePath: string, rootDir: string): unknown {
+  const boundaryRoot = resolveCompiledBundledModulePath(rootDir);
   const opened = openBoundaryFileSync({
     absolutePath: modulePath,
-    rootPath: rootDir,
+    rootPath: boundaryRoot,
     boundaryLabel: "plugin root",
     rejectHardlinks: false,
     skipLexicalRootCheck: true,
@@ -114,6 +155,29 @@ function loadBundledModule(modulePath: string, rootDir: string): unknown {
   const safePath = opened.path;
   fs.closeSync(opened.fd);
   return loadModule(safePath)(safePath);
+}
+
+function resolveCompiledBundledModulePath(modulePath: string): string {
+  const compiledDistModulePath = modulePath.replace(
+    `${path.sep}dist-runtime${path.sep}`,
+    `${path.sep}dist${path.sep}`,
+  );
+  return compiledDistModulePath !== modulePath && fs.existsSync(compiledDistModulePath)
+    ? compiledDistModulePath
+    : modulePath;
+}
+
+function resolvePreferredBundledChannelSource(
+  candidate: BundledChannelDiscoveryCandidate,
+  manifest: ReturnType<typeof loadPluginManifestRegistry>["plugins"][number],
+): string {
+  const declaredEntry = candidate.packageManifest?.extensions?.find(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
+  if (declaredEntry) {
+    return resolveCompiledBundledModulePath(path.resolve(candidate.rootDir, declaredEntry));
+  }
+  return resolveCompiledBundledModulePath(manifest.source);
 }
 
 function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelEntry[] {
@@ -141,17 +205,23 @@ function loadGeneratedBundledChannelEntries(): readonly GeneratedBundledChannelE
     seenIds.add(manifest.id);
 
     try {
+      const sourcePath = resolvePreferredBundledChannelSource(candidate, manifest);
       const entry = resolveChannelPluginModuleEntry(
-        loadBundledModule(candidate.source, candidate.rootDir),
+        loadBundledModule(sourcePath, candidate.rootDir),
       );
       if (!entry) {
         log.warn(
-          `[channels] bundled channel entry ${manifest.id} missing channelPlugin export; skipping`,
+          `[channels] bundled channel entry ${manifest.id} missing channelPlugin export from ${sourcePath}; skipping`,
         );
         continue;
       }
       const setupEntry = manifest.setupSource
-        ? resolveChannelSetupModuleEntry(loadBundledModule(manifest.setupSource, candidate.rootDir))
+        ? resolveChannelSetupModuleEntry(
+            loadBundledModule(
+              resolveCompiledBundledModulePath(manifest.setupSource),
+              candidate.rootDir,
+            ),
+          )
         : null;
       entries.push({
         id: manifest.id,

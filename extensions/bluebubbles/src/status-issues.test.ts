@@ -1,5 +1,5 @@
-import { collectBlueBubblesStatusIssues } from "openclaw/plugin-sdk/bluebubbles";
 import { describe, expect, it } from "vitest";
+import { collectBlueBubblesStatusIssues } from "./status-issues.js";
 
 describe("collectBlueBubblesStatusIssues", () => {
   it("reports unconfigured enabled accounts", () => {

@@ -1,4 +1,4 @@
-import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../channels/ids.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import {
   createScopedAccountReplyToModeResolver,
@@ -15,12 +15,15 @@ import type {
   ChannelPollResult,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
+import type { ChannelMeta } from "../channels/plugins/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+import type { PluginPackageChannel } from "../plugins/manifest.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";
 
@@ -155,7 +158,6 @@ export {
   formatPairingApproveHint,
   parseOptionalDelimitedEntries,
 } from "../channels/plugins/helpers.js";
-export { getChatChannelMeta } from "../channels/chat-meta.js";
 export {
   channelTargetSchema,
   channelTargetsSchema,
@@ -204,6 +206,105 @@ export { resolveThreadSessionKeys } from "../routing/session-key.js";
 export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
+
+var cachedSdkChatChannelMeta: ReturnType<typeof buildChatChannelMetaById> | undefined;
+var cachedSdkChatChannelIdSet: Set<string> | undefined;
+
+function getSdkChatChannelIdSet(): Set<string> {
+  cachedSdkChatChannelIdSet ??= new Set(CHAT_CHANNEL_ORDER);
+  return cachedSdkChatChannelIdSet;
+}
+
+function toSdkChatChannelMeta(params: {
+  id: ChatChannelId;
+  channel: PluginPackageChannel;
+}): ChannelMeta {
+  const label = params.channel.label?.trim();
+  if (!label) {
+    throw new Error(`Missing label for bundled chat channel "${params.id}"`);
+  }
+  return {
+    id: params.id,
+    label,
+    selectionLabel: params.channel.selectionLabel?.trim() || label,
+    docsPath: params.channel.docsPath?.trim() || `/channels/${params.id}`,
+    docsLabel: params.channel.docsLabel?.trim() || undefined,
+    blurb: params.channel.blurb?.trim() || "",
+    ...(params.channel.aliases?.length ? { aliases: params.channel.aliases } : {}),
+    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
+    ...(params.channel.selectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
+      : {}),
+    ...(params.channel.selectionDocsOmitLabel !== undefined
+      ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
+      : {}),
+    ...(params.channel.selectionExtras?.length
+      ? { selectionExtras: params.channel.selectionExtras }
+      : {}),
+    ...(params.channel.detailLabel?.trim()
+      ? { detailLabel: params.channel.detailLabel.trim() }
+      : {}),
+    ...(params.channel.systemImage?.trim()
+      ? { systemImage: params.channel.systemImage.trim() }
+      : {}),
+    ...(params.channel.markdownCapable !== undefined
+      ? { markdownCapable: params.channel.markdownCapable }
+      : {}),
+    ...(params.channel.showConfigured !== undefined
+      ? { showConfigured: params.channel.showConfigured }
+      : {}),
+    ...(params.channel.quickstartAllowFrom !== undefined
+      ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
+      : {}),
+    ...(params.channel.forceAccountBinding !== undefined
+      ? { forceAccountBinding: params.channel.forceAccountBinding }
+      : {}),
+    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
+      ? {
+          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
+        }
+      : {}),
+    ...(params.channel.preferOver?.length ? { preferOver: params.channel.preferOver } : {}),
+  };
+}
+
+function buildChatChannelMetaById(): Record<ChatChannelId, ChannelMeta> {
+  const entries = new Map<ChatChannelId, ChannelMeta>();
+  for (const entry of listBundledPluginMetadata({
+    includeChannelConfigs: true,
+    includeSyntheticChannelConfigs: false,
+  })) {
+    const channel =
+      entry.packageManifest && "channel" in entry.packageManifest
+        ? entry.packageManifest.channel
+        : undefined;
+    if (!channel) {
+      continue;
+    }
+    const rawId = channel.id?.trim();
+    if (!rawId || !getSdkChatChannelIdSet().has(rawId)) {
+      continue;
+    }
+    const id = rawId;
+    entries.set(
+      id,
+      toSdkChatChannelMeta({
+        id,
+        channel,
+      }),
+    );
+  }
+  return Object.freeze(Object.fromEntries(entries)) as Record<ChatChannelId, ChannelMeta>;
+}
+
+function resolveSdkChatChannelMeta(id: string) {
+  cachedSdkChatChannelMeta ??= buildChatChannelMetaById();
+  return cachedSdkChatChannelMeta[id];
+}
+
+export function getChatChannelMeta(id: ChatChannelId): ChannelMeta {
+  return resolveSdkChatChannelMeta(id);
+}
 
 /** Remove one of the known provider prefixes from a free-form target string. */
 export function stripChannelTargetPrefix(raw: string, ...providers: string[]): string {
@@ -604,7 +705,7 @@ export function createChannelPluginBase<TResolvedAccount>(
   return {
     id: params.id,
     meta: {
-      ...getChatChannelMeta(params.id as Parameters<typeof getChatChannelMeta>[0]),
+      ...resolveSdkChatChannelMeta(params.id),
       ...params.meta,
     },
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
