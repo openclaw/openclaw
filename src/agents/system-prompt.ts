@@ -20,6 +20,11 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 export type PromptMode = "full" | "minimal" | "none";
 type OwnerIdDisplay = "raw" | "hash";
 
+/** Escape a string for safe use inside an HTML comment attribute value. */
+function escapeProvenanceAttr(value: string): string {
+  return value.replace(/"/g, "&quot;").replace(/-->/g, "--&gt;");
+}
+
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
@@ -638,7 +643,27 @@ export function buildAgentSystemPrompt(params: {
       lines.push("");
     }
     for (const file of validContextFiles) {
+      const provenanceTag = file.provenance
+        ? `<!-- ctx:provenance source="${escapeProvenanceAttr(file.provenance.source)}" injected_at="${escapeProvenanceAttr(file.provenance.injectedAt)}" volatile="${file.provenance.volatile}" -->`
+        : "";
+      if (provenanceTag) {
+        lines.push(provenanceTag);
+      }
       lines.push(`## ${file.path}`, "", file.content, "");
+    }
+    const hasAnyProvenance = validContextFiles.some((f) => f.provenance);
+    if (hasAnyProvenance) {
+      lines.push(
+        "## Context Provenance",
+        "Each injected context segment above is tagged with provenance metadata in an HTML comment:",
+        '`<!-- ctx:provenance source="..." injected_at="..." volatile="..." -->`',
+        "- `source`: Origin file or system (e.g. SOUL.md, AGENTS.md, memory_search).",
+        '- `injected_at`: When it was injected ("session_start" or a turn identifier).',
+        "- `volatile`: Whether the underlying source may have changed since injection.",
+        'When relying on content marked `volatile="true"` and `injected_at="session_start"`,',
+        "prefer re-reading the source file to confirm it is still current before acting on it.",
+        "",
+      );
     }
   }
 

@@ -598,6 +598,65 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("renders provenance tags when context files have provenance metadata", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "SOUL.md",
+          content: "Be kind",
+          provenance: { source: "SOUL.md", injectedAt: "session_start", volatile: true },
+        },
+        { path: "TOOLS.md", content: "Use grep" },
+      ],
+    });
+
+    expect(prompt).toContain(
+      '<!-- ctx:provenance source="SOUL.md" injected_at="session_start" volatile="true" -->',
+    );
+    expect(prompt).toContain("## SOUL.md");
+    expect(prompt).toContain("Be kind");
+    // File without provenance should not have a tag
+    expect(prompt).not.toContain('source="TOOLS.md"');
+    expect(prompt).toContain("## TOOLS.md");
+    expect(prompt).toContain("Use grep");
+  });
+
+  it("includes context provenance guidance section only when provenance is present", () => {
+    const withProvenance = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "Hello",
+          provenance: { source: "AGENTS.md", injectedAt: "session_start", volatile: true },
+        },
+      ],
+    });
+    expect(withProvenance).toContain("## Context Provenance");
+
+    const withoutProvenance = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "AGENTS.md", content: "Hello" }],
+    });
+    expect(withoutProvenance).not.toContain("## Context Provenance");
+  });
+
+  it("escapes special characters in provenance attributes", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "test.md",
+          content: "data",
+          provenance: { source: 'file"name-->.md', injectedAt: "session_start", volatile: false },
+        },
+      ],
+    });
+    expect(prompt).toContain("file&quot;name--&gt;.md");
+    expect(prompt).not.toContain('file"name-->');
+  });
+
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
