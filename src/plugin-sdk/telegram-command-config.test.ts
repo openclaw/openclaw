@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { TELEGRAM_COMMAND_NAME_PATTERN as bundledTelegramCommandNamePattern } from "../../extensions/telegram/src/command-config.ts";
 
 const getBundledChannelContractSurfaceModule = vi.fn(() => null);
 
@@ -13,6 +14,14 @@ async function loadTelegramCommandConfig() {
 }
 
 describe("telegram command config fallback", () => {
+  it("keeps the fallback regex in parity with the bundled telegram contract", async () => {
+    const telegramCommandConfig = await loadTelegramCommandConfig();
+
+    expect(telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN.toString()).toBe(
+      bundledTelegramCommandNamePattern.toString(),
+    );
+  });
+
   it("keeps import-time regex access side-effect free", async () => {
     const telegramCommandConfig = await loadTelegramCommandConfig();
 
@@ -22,13 +31,36 @@ describe("telegram command config fallback", () => {
   });
 
   it("lazy-loads the contract pattern only when callers opt in", async () => {
+    const contractPattern = /^[a-z]+$/;
+    getBundledChannelContractSurfaceModule.mockReturnValueOnce({
+      TELEGRAM_COMMAND_NAME_PATTERN: contractPattern,
+      normalizeTelegramCommandName: (value: string) => `contract:${value.trim().toLowerCase()}`,
+      normalizeTelegramCommandDescription: (value: string) => `desc:${value.trim()}`,
+      resolveTelegramCustomCommands: () => ({
+        commands: [{ command: "from_contract", description: "from contract" }],
+        issues: [],
+      }),
+    });
     const telegramCommandConfig = await loadTelegramCommandConfig();
 
-    expect(telegramCommandConfig.getTelegramCommandNamePattern().test("hello_world")).toBe(true);
+    expect(getBundledChannelContractSurfaceModule).not.toHaveBeenCalled();
+    expect(telegramCommandConfig.TELEGRAM_COMMAND_NAME_PATTERN.test("hello_world")).toBe(true);
+    expect(getBundledChannelContractSurfaceModule).not.toHaveBeenCalled();
+    expect(telegramCommandConfig.getTelegramCommandNamePattern()).toBe(contractPattern);
     expect(getBundledChannelContractSurfaceModule).toHaveBeenCalledTimes(1);
     expect(telegramCommandConfig.getTelegramCommandNamePattern()).toBe(
       telegramCommandConfig.getTelegramCommandNamePattern(),
     );
+    expect(telegramCommandConfig.normalizeTelegramCommandName(" Hello ")).toBe("contract:hello");
+    expect(telegramCommandConfig.normalizeTelegramCommandDescription(" hi ")).toBe("desc:hi");
+    expect(
+      telegramCommandConfig.resolveTelegramCustomCommands({
+        commands: [{ command: "/ignored", description: "ignored" }],
+      }),
+    ).toEqual({
+      commands: [{ command: "from_contract", description: "from contract" }],
+      issues: [],
+    });
     expect(getBundledChannelContractSurfaceModule).toHaveBeenCalledTimes(1);
   });
 

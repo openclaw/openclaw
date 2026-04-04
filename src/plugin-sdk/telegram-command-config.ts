@@ -134,7 +134,10 @@ export function getTelegramCommandNamePattern(): RegExp {
   return loadTelegramCommandConfigContract().TELEGRAM_COMMAND_NAME_PATTERN;
 }
 
-// Backward-compatible pure export for import-time-safe callers.
+/**
+ * @deprecated Use `getTelegramCommandNamePattern()` when you need the live
+ * bundled contract value. This export remains an import-time-safe fallback.
+ */
 export const TELEGRAM_COMMAND_NAME_PATTERN = FALLBACK_TELEGRAM_COMMAND_NAME_PATTERN;
 
 export function normalizeTelegramCommandName(value: string): string {
