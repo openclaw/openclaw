@@ -46,9 +46,9 @@ layer for evidence-first correction cases, professional-role drift diagnosis,
 prescription and follow-up guidance, verification before closure, and per-bot
 casebook learning.
 
-This launch window is focused on the GitHub-first public story for OpenClaw
-plus VeriClaw. The Apple companion path continues in parallel, but GitHub is
-the current publish surface. Watch remains outside the current release gate.
+This launch window is focused on a unified OpenClaw plus VeriClaw story across
+GitHub and the Apple-native companion. Both surfaces should converge toward the
+same ship point, while Watch remains outside the current release gate.
 
 Launch materials: [GitHub launch kit](docs/launch/github-launch-kit.md) · [GitHub release announcement](docs/launch/github-release-announcement.md) · [Market differentiation](docs/launch/market-differentiation.md)
 

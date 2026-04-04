@@ -1,7 +1,8 @@
 ---
 summary: "Paste-ready GitHub release announcement draft for VeriClaw"
 read_when:
-  - Publishing the GitHub-first public release
+  - Publishing the public GitHub release surface
+  - Keeping GitHub and Apple-facing launch wording aligned
   - Writing the GitHub Releases page body
   - Preparing a launch post that mirrors the repository story
 title: "GitHub Release Announcement"
@@ -13,28 +14,31 @@ Use this file as the default draft for the GitHub Releases page.
 
 Current release posture:
 
-- GitHub is the first public launch surface
-- Apple companion release work continues in parallel
-- release wording should not imply the App Store path is already public
+- GitHub and App Store are being prepared toward the same ship point
+- public copy should support both the repository launch surface and the Apple-native companion story
+- release wording should not imply either side shipped earlier unless that is verified
 
 ## Release title options
 
-- `VeriClaw 爪印: Apple-native correction companion for OpenClaw`
-- `Introducing VeriClaw 爪印 for OpenClaw`
-- `VeriClaw 爪印: correction-first supervision for OpenClaw`
+- `OpenClaw + VeriClaw 爪印: self-hosted AI assistant, MCP gateway, and correction workspace`
+- `VeriClaw 爪印 for OpenClaw: evidence-first correction for multi-agent bot runtime`
+- `OpenClaw launch: self-hosted AI assistant with MCP gateway, bot runtime, and VeriClaw correction`
 
 ## Paste-ready GitHub release body
 
 ```md
-# VeriClaw 爪印
+# OpenClaw + VeriClaw 爪印
 
-VeriClaw 爪印 is the Apple-native correction companion for OpenClaw.
+OpenClaw is a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot runtime for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
 
-OpenClaw remains the runtime and gateway. VeriClaw adds the native supervision
-layer for the moments when a bot is drifting, hallucinating, overreaching, or
-failing its professional role contract.
+VeriClaw 爪印 is the Apple-native correction companion built for the moment when a bot drifts, hallucinates, fake-completes, overreaches, or fails its professional role contract.
 
-Instead of stopping at alerts, the core loop is:
+Together, the launch story is:
+
+- OpenClaw for runtime, channel orchestration, and tool-connected execution
+- VeriClaw for evidence-first correction, diagnosis, verification, and casebook learning
+
+Instead of stopping at alerts or dashboards, the correction loop is:
 
 - evidence
 - diagnosis
@@ -44,18 +48,40 @@ Instead of stopping at alerts, the core loop is:
 
 ## What this release adds
 
+- a self-hosted AI assistant and MCP-compatible gateway story that is easy to deploy, fork, and extend
+- a multi-channel runtime for Discord, Telegram, WhatsApp, Slack, and browser-driven workflows
 - a correction-first native workspace instead of monitoring-only surfaces
 - professional-role drift framing for named bots or seats
 - a desktop hover companion that keeps supervision pressure visible
 - case-based follow-up so every issue can move toward closure
 - verification and casebook updates before a loop is considered closed
 
+## Who this is for
+
+- builders who want a self-hosted AI assistant they actually control
+- teams running Discord bots, Telegram bots, WhatsApp bots, or Slack copilots
+- operators who need one gateway for MCP tools, browser automation, and multi-agent routing
+- developers who care about delivery integrity, anti-hallucination workflows, and runtime truth
+
+## Why developers will fork this
+
+- the runtime already spans channels, tools, and device surfaces
+- the correction workflow turns vague bot failures into concrete evidence and next actions
+- the repo is useful as both a production base and a reference implementation for AI gateway design
+- the OpenClaw + VeriClaw split makes it easier to extend runtime and supervision separately
+
 ## Why this is different
 
-The goal is not to replace OpenClaw or generic observability tooling.
+The goal is not to be a generic dashboard, a VirusTotal-style scanner, or another trace viewer.
 
-The goal is to give OpenClaw a native correction companion that answers three
-questions clearly:
+The goal is to combine:
+
+- runtime execution
+- channel delivery
+- evidence-first correction
+- verification before closure
+
+So teams can answer three questions clearly:
 
 1. What went wrong?
 2. What should happen next?
@@ -63,10 +89,10 @@ questions clearly:
 
 ## Current launch scope
 
-- GitHub-first public release path
+- GitHub repository launch plus App Store companion readiness converging toward the same ship point
 - OpenClaw runtime plus VeriClaw companion story
-- Apple companion submission path continues in parallel
 - watchOS remains outside the current release gate
+- release copy should stay aligned across GitHub, docs, and Apple-facing materials
 
 ## Legal and redistribution
 
@@ -88,18 +114,28 @@ See:
 Use this when a shorter GitHub post or pinned discussion is needed:
 
 ```md
-VeriClaw 爪印 is the Apple-native correction companion for OpenClaw.
+OpenClaw is a self-hosted AI assistant and MCP-compatible gateway for multi-channel bots, browser automation, and multi-agent workflows.
 
-It is built for the moment when a bot drifts. Instead of stopping at monitoring,
-it pushes the workflow toward evidence, diagnosis, prescription, verification,
-and casebook learning.
+VeriClaw 爪印 is the Apple-native correction companion for the moment a bot drifts. It pushes the workflow toward evidence, diagnosis, prescription, verification, and casebook learning.
 
 OpenClaw remains the runtime. VeriClaw adds the native supervision layer.
+```
+
+## Social-share version
+
+Use this when a repost or cross-post needs stronger fork intent:
+
+```md
+If you want a self-hosted AI assistant that can run Discord, Telegram, WhatsApp, Slack, MCP tools, browser automation, and multi-agent workflows from one gateway, that is the OpenClaw side.
+
+If you also want runtime truth, evidence-first correction, and verification before calling work done, that is the VeriClaw side.
 ```
 
 ## Maintainer notes
 
 - Keep the wording `companion, not clone`.
+- Keep `self-hosted AI assistant`, `MCP-compatible gateway`, `multi-channel bot runtime`, and `evidence-first correction` visible in most public launch copy.
 - Do not claim watchOS is in the current release scope.
 - Do not overstate market exclusivity.
+- Do not describe GitHub or App Store as shipping earlier than the other unless that is verified.
 - Keep the legal/IP pack linked anywhere the release body is substantially reused.

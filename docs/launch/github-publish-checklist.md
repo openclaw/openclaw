@@ -1,7 +1,8 @@
 ---
-summary: "Operator checklist for a GitHub-first public launch of OpenClaw + VeriClaw"
+summary: "Operator checklist for the synchronized GitHub + Apple launch of OpenClaw + VeriClaw"
 read_when:
-  - Preparing the public GitHub release first
+  - Preparing the public GitHub release surface
+  - Keeping GitHub and Apple-facing launch copy aligned
   - Verifying the repository-facing launch surface
   - Handing GitHub launch work between product, engineering, and ops
 title: "GitHub Publish Checklist"
@@ -9,14 +10,15 @@ title: "GitHub Publish Checklist"
 
 # GitHub publish checklist
 
-Use this checklist when GitHub is the first public launch surface.
+Use this checklist when the GitHub release surface is being prepared alongside
+the Apple-native companion story.
 
 Current positioning:
 
 - `OpenClaw` remains the runtime and gateway
 - `VeriClaw 爪印` is the Apple-native correction companion
-- GitHub is public first
-- Apple submission continues in parallel and should not be falsely presented as already live
+- GitHub and App Store should converge toward the same ship point
+- neither surface should be presented as live until that is verified
 
 ## Repository-facing checklist
 
@@ -51,7 +53,7 @@ Current positioning:
 3. Publish or draft the GitHub release body from
    [github-release-announcement.md](github-release-announcement.md).
 4. Recheck the top-level README after push on the live GitHub page.
-5. If Apple is still pending, explicitly state `GitHub-first` in any release note, discussion, or pinned update.
+5. Keep the release note, pinned discussion, and Apple-facing wording aligned to the same ship-point story.
 
 ## Current local caution
 

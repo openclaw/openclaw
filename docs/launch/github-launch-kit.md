@@ -22,9 +22,9 @@ Use it when writing:
 
 Current release posture:
 
-- GitHub is the current public launch surface
-- Apple companion hardening continues in parallel
-- do not imply the App Store path is already publicly live
+- GitHub and App Store should converge to the same outward ship point
+- public copy must support both repository discovery and Apple-native product positioning
+- do not imply either side is already live unless that is verified
 
 ## Positioning
 
@@ -40,27 +40,36 @@ VeriClaw adds the native supervision layer:
 - per-bot casebook learning
 - a desktop hover companion that keeps supervision pressure visible
 
+For search, share, and fork conversion, keep the OpenClaw side equally visible:
+
+- self-hosted AI assistant
+- MCP-compatible gateway
+- multi-channel bot runtime
+- browser automation control plane
+- multi-agent workflow substrate
+- evidence-first correction workspace
+
 ## Short copy
 
 Hero line:
 
-- `Apple-native correction companion for OpenClaw`
+- `Self-hosted AI assistant, MCP gateway, and correction workspace`
 
 Short subtitle:
 
-- `Turn drift evidence into diagnosis, intervention, verification, and casebook learning.`
+- `Run bots and agents across channels, then turn drift evidence into diagnosis, intervention, verification, and casebook learning.`
 
 One-sentence description:
 
-- `VeriClaw 爪印 is the Apple-native correction companion for OpenClaw, designed to supervise drifting bots through evidence, diagnosis, prescription, verification, and casebook learning.`
+- `OpenClaw is a self-hosted AI assistant and MCP-compatible gateway for multi-channel bots, browser automation, and multi-agent workflows; VeriClaw 爪印 adds the Apple-native correction workspace for evidence, diagnosis, prescription, verification, and casebook learning.`
 
 Medium description:
 
-- `VeriClaw 爪印 strengthens OpenClaw with a native correction workspace. Instead of stopping at alerts, it helps turn evidence of hallucination, fake completion, disobedience, or role drift into a concrete loop: diagnosis, recommended intervention, verification, and a per-bot casebook that improves future corrections.`
+- `OpenClaw gives teams a self-hosted AI runtime for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent routing. VeriClaw 爪印 strengthens that runtime with a native correction workspace. Instead of stopping at alerts, it turns evidence of hallucination, fake completion, disobedience, or role drift into a concrete loop: diagnosis, recommended intervention, verification, and a per-bot casebook that improves future corrections.`
 
 Long description:
 
-- `VeriClaw 爪印 is an Apple-native correction workspace and supervision companion for OpenClaw. It is built for the moment when a bot is drifting, overreaching, hallucinating, or failing its professional role contract. Rather than only showing telemetry, it organizes the problem into evidence, diagnosis, prescription, verification, and casebook updates. The result is a companion surface that helps teams understand what went wrong, what to do next, and whether the loop is actually closing.`
+- `OpenClaw is a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot runtime that connects channels, tools, browser automation, and multi-agent workflows. VeriClaw 爪印 is the Apple-native correction workspace and supervision companion layered on top. It is built for the moment when a bot is drifting, overreaching, hallucinating, fake-completing, or failing its professional role contract. Rather than only showing telemetry, it organizes the problem into evidence, diagnosis, prescription, verification, and casebook updates. The result is a ship story that is useful both to operators who need runtime coverage and to developers who want delivery integrity and runtime truth.`
 
 ## Launch pillars
 
@@ -75,37 +84,74 @@ Keep these four ideas together in most public GitHub-facing copy:
 4. `Apple-native supervision`
    - the macOS app, iPhone companion, and hover surfaces should feel like one native workflow.
 
-## GitHub-first framing
+Add these two supporting ideas when targeting GitHub discovery:
+
+5. `Self-hosted AI assistant + MCP gateway`
+   - make it obvious this is useful before the correction layer is even introduced.
+6. `Worth forking`
+   - the repo should read like a working runtime that teams can adapt, not a concept demo.
+
+## Synchronised launch framing
 
 When the public message needs to reflect the current rollout order, prefer:
 
-- `GitHub-first launch for the OpenClaw + VeriClaw story`
-- `public repository launch now, Apple submission path continuing in parallel`
-- `GitHub is live first; the Apple companion follows after final hardening`
+- `GitHub launch surface and App Store companion are being aligned to the same ship point`
+- `repository story and Apple-native companion are being shipped as one product narrative`
+- `public copy should stay consistent across GitHub, docs, and Apple materials`
 
 Avoid:
 
-- saying the App Store launch has already happened
-- implying GitHub and App Store shipped simultaneously when they did not
+- saying either side has already shipped unless that is verified
+- letting GitHub copy drift away from the Apple-native product story
 
 ## Product proof points
 
 Use these when a GitHub release needs concrete detail:
 
+- self-hosted AI assistant and MCP-compatible gateway for real deployments
+- Discord, Telegram, WhatsApp, Slack, and browser automation from one runtime
 - `evidence -> diagnosis -> prescription -> verification -> casebook`
 - professional-role contract and role-drift labeling for named bots or seats
 - desktop hover companion that exposes supervision pressure before opening the full workspace
 - case-based remediation instead of generic monitoring-only alerts
 - template validation before broader promotion
 
+## Why developers fork this
+
+Use these when writing README intros, release blurbs, or launch threads:
+
+- one repo spans runtime, channels, browser automation, and correction workflows
+- it is useful as both a self-hosted deployment base and a reference architecture
+- the correction model focuses on real output integrity instead of vague agent optimism
+- it is easier to demo, extend, and compare because the use cases are concrete
+
+## Search phrases to keep naturally visible
+
+Use these in headings, first paragraphs, release blurbs, or repo metadata when relevant:
+
+- `self-hosted AI assistant`
+- `MCP-compatible gateway`
+- `multi-channel bot runtime`
+- `Discord AI bot`
+- `Telegram AI bot`
+- `WhatsApp AI bot`
+- `browser automation`
+- `multi-agent workflows`
+- `evidence-first correction`
+- `runtime truth`
+- `delivery integrity`
+
 ## Launch-safe wording
 
 Preferred wording:
 
+- `self-hosted AI assistant and MCP-compatible gateway`
+- `multi-channel bot runtime for Discord, Telegram, WhatsApp, Slack, and browser automation`
 - `Apple-native correction workspace for supervising drifting bots`
 - `professional-role correction companion for OpenClaw`
 - `evidence-first intervention and casebook learning`
 - `correction-first supervision surface`
+- `runtime truth and delivery integrity`
 
 Avoid:
 
@@ -124,6 +170,10 @@ Avoid:
 
 - `It is a companion, not a replacement. OpenClaw remains the runtime and gateway. VeriClaw adds the Apple-native supervision and correction layer.`
 
+`What is OpenClaw in one sentence?`
+
+- `OpenClaw is a self-hosted AI assistant and MCP-compatible gateway that runs bots, tools, browser workflows, and multi-agent execution from one runtime.`
+
 `Is this just another AI monitor?`
 
 - `No. Monitoring is part of the workflow, but the product is designed around correction. The core loop is evidence, diagnosis, prescription, verification, and casebook learning.`
@@ -138,11 +188,15 @@ Avoid:
 
 `Is the App Store live right now?`
 
-- `Not yet. The current public launch surface is GitHub first while the Apple companion continues through final hardening and submission steps.`
+- `Only say yes when that is verified. Until then, keep public wording aligned around a shared ship point across GitHub and the Apple companion.`
 
 `Can people redistribute the repo?`
 
 - `Yes, but redistribution should preserve license, notices, attribution, and source reference expectations. Branding rights are separate and governed by the repository trademark policy.`
+
+`Why should someone fork this instead of just watching it?`
+
+- `Because the project already combines channel runtime, browser automation, MCP-compatible orchestration, and a correction workflow that is useful as both a deployment base and a reference implementation.`
 
 ## Screenshot caption direction
 
@@ -152,6 +206,8 @@ Suggested GitHub screenshot or media caption style:
 2. `Open a case, not just a log`
 3. `Diagnose role drift and choose the next intervention`
 4. `Verify the fix before calling the loop closed`
+5. `Run one gateway across channels, tools, and agents`
+6. `Fork the runtime, keep the correction workflow`
 
 ## Handy links
 

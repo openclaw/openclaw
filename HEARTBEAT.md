@@ -7,7 +7,7 @@
 
 ## Current Shared Context
 
-- Current launch priority is GitHub first. Apple App Store hardening continues in parallel, but GitHub is the present public release surface.
+- Current launch priority is synchronized GitHub plus App Store readiness. Public copy should converge to one ship point and should not present either side as live until verified.
 - Do not describe the Apple path as publicly live until the Apple gates actually close.
 - Current synchronized launch scope excludes the Watch companion. Ship the App +
   GitHub path without making watchOS materials a release blocker; keep Watch

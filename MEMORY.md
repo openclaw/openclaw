@@ -41,8 +41,8 @@
 
 ## Current Product Directive
 
-- The active release priority is GitHub first.
-- Current user instruction: ship the GitHub surface first, continue Apple hardening in parallel, and do not falsely present the App Store path as already public.
+- The active release priority is synchronized GitHub plus App Store launch readiness.
+- Current user instruction: keep GitHub and Apple-facing release work converged to one ship point, continue hardening in parallel, and do not falsely present either side as already public until verified.
 - Current launch-scope refinement:
   - do not ship the Watch companion in this window
   - ship the App + GitHub path together
