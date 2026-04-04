@@ -1072,6 +1072,15 @@ authoring plugins:
   `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
   `<plugin-package-root>/index.js` is the bundled plugin entry,
   and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
+- Current bundled provider examples:
+  - Anthropic uses `api.js` / `contract-api.js` for Claude stream helpers such
+    as `wrapAnthropicProviderStream`, beta-header helpers, and `service_tier`
+    parsing.
+  - OpenAI uses `api.js` for provider builders, default-model helpers, and
+    realtime provider builders.
+  - OpenRouter uses `api.js` for its provider builder plus onboarding/config
+    helpers, while `register.runtime.js` can still re-export generic
+    `plugin-sdk/provider-stream` helpers for repo-local use.
 - Facade-loaded public entry points prefer the active runtime config snapshot
   when one exists, then fall back to the resolved config file on disk when
   OpenClaw is not yet serving a runtime snapshot.

@@ -238,6 +238,13 @@ For the full subpath reference, see [SDK Overview](/plugins/sdk-overview).
 Within your plugin, use local barrel files (`api.ts`, `runtime-api.ts`) for
 internal imports — never import your own plugin through its SDK path.
 
+For provider plugins, keep provider-specific helpers in those package-root
+barrels unless the seam is truly generic. Current bundled examples:
+
+- Anthropic: Claude stream wrappers and `service_tier` / beta helpers
+- OpenAI: provider builders, default-model helpers, realtime providers
+- OpenRouter: provider builder plus onboarding/config helpers
+
 ## Pre-submission checklist
 
 <Check>**package.json** has correct `openclaw` metadata</Check>

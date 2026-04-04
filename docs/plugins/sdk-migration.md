@@ -54,6 +54,15 @@ stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
 `api.ts` or `runtime-api.ts`.
 
+Current bundled provider examples:
+
+- Anthropic keeps Claude-specific stream helpers in its own `api.ts` /
+  `contract-api.ts` seam
+- OpenAI keeps provider builders, default-model helpers, and realtime provider
+  builders in its own `api.ts`
+- OpenRouter keeps provider builder and onboarding/config helpers in its own
+  `api.ts`
+
 ## How to migrate
 
 <Steps>
