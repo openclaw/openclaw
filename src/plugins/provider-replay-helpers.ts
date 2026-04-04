@@ -128,6 +128,24 @@ export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   };
 }
 
+export function buildPassthroughGeminiSanitizingReplayPolicy(
+  modelId?: string,
+): ProviderReplayPolicy {
+  return {
+    applyAssistantFirstOrderingFix: false,
+    validateGeminiTurns: false,
+    validateAnthropicTurns: false,
+    ...((modelId?.toLowerCase() ?? "").includes("gemini")
+      ? {
+          sanitizeThoughtSignatures: {
+            allowBase64Only: true,
+            includeCamelCase: true,
+          },
+        }
+      : {}),
+  };
+}
+
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {

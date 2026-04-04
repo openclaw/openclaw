@@ -152,6 +152,16 @@ async function promptPluginFields(params: {
     const label = hint.label ?? key;
     const helpSuffix = hint.help ? ` — ${hint.help}` : "";
 
+    // Skip sensitive fields — WizardPrompter has no masked input;
+    // direct users to openclaw config set or the Web UI instead.
+    if (hint.sensitive) {
+      await prompter.note(
+        `"${label}" is sensitive. Set it via:\n  openclaw config set plugins.entries.${plugin.id}.config.${key} <value>\nor use the Web UI Settings page.`,
+        "Sensitive field",
+      );
+      continue;
+    }
+
     // Handle enum fields with select
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
       const options = schemaProp.enum.map((v) => ({
@@ -193,17 +203,21 @@ async function promptPluginFields(params: {
     if (schemaProp?.type === "array") {
       const currentStr = Array.isArray(currentValue) ? (currentValue as unknown[]).join(", ") : "";
       const input = await prompter.text({
-        message: `${label} (comma-separated)${helpSuffix}`,
+        message: `${label} (comma-separated, empty to clear)${helpSuffix}`,
         initialValue: currentStr,
         placeholder: hint.placeholder ?? "value1, value2",
       });
       const trimmed = input.trim();
-      if (trimmed) {
-        const values = trimmed
-          .split(",")
-          .map((v) => v.trim())
-          .filter(Boolean);
-        updatedConfig[key] = values;
+      if (trimmed !== currentStr) {
+        if (trimmed) {
+          const values = trimmed
+            .split(",")
+            .map((v) => v.trim())
+            .filter(Boolean);
+          updatedConfig[key] = values;
+        } else {
+          updatedConfig[key] = undefined;
+        }
         changed = true;
       }
       continue;
@@ -220,10 +234,15 @@ async function promptPluginFields(params: {
     if (trimmed !== currentStr) {
       // Try to parse as number if schema says number
       if (schemaProp?.type === "number") {
-        const parsed = Number(trimmed);
-        if (Number.isFinite(parsed)) {
-          updatedConfig[key] = parsed;
+        if (trimmed === "") {
+          updatedConfig[key] = undefined;
           changed = true;
+        } else {
+          const parsed = Number(trimmed);
+          if (Number.isFinite(parsed)) {
+            updatedConfig[key] = parsed;
+            changed = true;
+          }
         }
       } else {
         updatedConfig[key] = trimmed || undefined;

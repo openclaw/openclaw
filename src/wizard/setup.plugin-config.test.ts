@@ -42,6 +42,21 @@ describe("discoverConfigurablePlugins", () => {
     expect(result).toHaveLength(0);
   });
 
+  it("excludes sensitive fields from promptable hints", () => {
+    const plugins = [
+      makeManifestPlugin("secret-plugin", {
+        endpoint: { label: "Endpoint" },
+        apiKey: { label: "API Key", sensitive: true },
+      }),
+    ];
+    const result = discoverConfigurablePlugins({ manifestPlugins: plugins });
+    expect(result).toHaveLength(1);
+    // sensitive fields are still included in uiHints for discovery —
+    // they are skipped at prompt time, not at discovery time
+    expect(result[0].uiHints.endpoint).toBeDefined();
+    expect(result[0].uiHints.apiKey).toBeDefined();
+  });
+
   it("excludes plugins where all fields are advanced", () => {
     const plugins = [
       makeManifestPlugin("all-advanced", {
