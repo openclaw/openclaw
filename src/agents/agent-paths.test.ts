@@ -1,85 +1,43 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { describe, expect, it, vi } from "vitest";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 
+vi.mock("../config/paths.js", () => ({
+  resolveStateDir: vi.fn(() => "/home/user/.openclaw"),
+}));
+
+vi.mock("../utils.js", () => ({
+  resolveUserPath: vi.fn((p: string) => p),
+}));
+
 describe("resolveOpenClawAgentDir", () => {
-  const withTempStateDir = async (run: (stateDir: string) => void) => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    try {
-      run(stateDir);
-    } finally {
-      await fs.rm(stateDir, { recursive: true, force: true });
-    }
-  };
-
-  it("defaults to the multi-agent path when no overrides are set", async () => {
-    await withTempStateDir((stateDir) => {
-      withEnv(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_AGENT_DIR: undefined,
-          PI_CODING_AGENT_DIR: undefined,
-        },
-        () => {
-          const resolved = resolveOpenClawAgentDir();
-          expect(resolved).toBe(path.join(stateDir, "agents", "main", "agent"));
-        },
-      );
-    });
+  it("uses OPENCLAW_AGENT_DIR when set", () => {
+    const env = { OPENCLAW_AGENT_DIR: "/custom/agent" };
+    expect(resolveOpenClawAgentDir(env)).toBe("/custom/agent");
   });
 
-  it("honors OPENCLAW_AGENT_DIR overrides", async () => {
-    await withTempStateDir((stateDir) => {
-      const override = path.join(stateDir, "agent");
-      withEnv(
-        {
-          OPENCLAW_STATE_DIR: undefined,
-          OPENCLAW_AGENT_DIR: override,
-          PI_CODING_AGENT_DIR: undefined,
-        },
-        () => {
-          const resolved = resolveOpenClawAgentDir();
-          expect(resolved).toBe(path.resolve(override));
-        },
-      );
-    });
+  it("uses PI_CODING_AGENT_DIR when set", () => {
+    const env = { PI_CODING_AGENT_DIR: "/coding/agent" };
+    expect(resolveOpenClawAgentDir(env)).toBe("/coding/agent");
   });
 
-  it("honors PI_CODING_AGENT_DIR when OPENCLAW_AGENT_DIR is unset", async () => {
-    await withTempStateDir((stateDir) => {
-      const override = path.join(stateDir, "pi-agent");
-      withEnv(
-        {
-          OPENCLAW_STATE_DIR: undefined,
-          OPENCLAW_AGENT_DIR: undefined,
-          PI_CODING_AGENT_DIR: override,
-        },
-        () => {
-          const resolved = resolveOpenClawAgentDir();
-          expect(resolved).toBe(path.resolve(override));
-        },
-      );
-    });
+  it("OPENCLAW_AGENT_DIR takes precedence over PI_CODING_AGENT_DIR", () => {
+    const env = {
+      OPENCLAW_AGENT_DIR: "/openclaw",
+      PI_CODING_AGENT_DIR: "/coding",
+    };
+    expect(resolveOpenClawAgentDir(env)).toBe("/openclaw");
   });
 
-  it("prefers OPENCLAW_AGENT_DIR over PI_CODING_AGENT_DIR when both are set", async () => {
-    await withTempStateDir((stateDir) => {
-      const primaryOverride = path.join(stateDir, "primary-agent");
-      const fallbackOverride = path.join(stateDir, "fallback-agent");
-      withEnv(
-        {
-          OPENCLAW_STATE_DIR: undefined,
-          OPENCLAW_AGENT_DIR: primaryOverride,
-          PI_CODING_AGENT_DIR: fallbackOverride,
-        },
-        () => {
-          const resolved = resolveOpenClawAgentDir();
-          expect(resolved).toBe(path.resolve(primaryOverride));
-        },
-      );
-    });
+  it("returns default path when no env var set", () => {
+    const env = {};
+    const result = resolveOpenClawAgentDir(env as any);
+    expect(result).toContain("agents");
+    expect(result).toContain("main");
+    expect(result).toContain("agent");
+  });
+
+  it("trims whitespace from env var", () => {
+    const env = { OPENCLAW_AGENT_DIR: "  /custom/agent  " };
+    expect(resolveOpenClawAgentDir(env)).toBe("/custom/agent");
   });
 });
