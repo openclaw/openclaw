@@ -196,7 +196,7 @@ openclaw onboard --non-interactive \
 </AccordionGroup>
 
 Anthropic setup-token is no longer offered as a new onboarding/configure path.
-Existing legacy Anthropic token profiles still run if they are already
+Existing Anthropic OAuth/token profiles still run if they are already
 configured.
 
 ## Add another agent

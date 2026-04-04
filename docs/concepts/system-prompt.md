@@ -22,7 +22,9 @@ The prompt is intentionally compact and uses fixed sections:
 - **OpenClaw Self-Update**: how to inspect config safely with
   `config.schema.lookup`, patch config with `config.patch`, replace the full
   config with `config.apply`, and run `update.run` only on explicit user
-  request.
+  request. The owner-only `gateway` tool also refuses to rewrite
+  `tools.exec.ask` / `tools.exec.security`, including legacy `tools.bash.*`
+  aliases that normalize to those protected exec paths.
 - **Workspace**: working directory (`agents.defaults.workspace`).
 - **Documentation**: local path to OpenClaw docs (repo or npm package) and when to read them.
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
@@ -50,6 +52,11 @@ The Tooling section also includes runtime guidance for long-running work:
   completion
 
 Safety guardrails in the system prompt are advisory. They guide model behavior but do not enforce policy. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable these by design.
+
+On channels with native approval cards/buttons, the runtime prompt now tells the
+agent to rely on that native approval UI first. It should only include a manual
+`/approve` command when the tool result says chat approvals are unavailable or
+manual approval is the only path.
 
 ## Prompt modes
 

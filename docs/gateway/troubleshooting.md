@@ -50,7 +50,7 @@ Look for:
 Fix options:
 
 1. Disable `context1m` for that model to fall back to the normal context window.
-2. Use an Anthropic API key with billing, or enable Anthropic Extra Usage on the subscription account.
+2. Use an Anthropic API key with billing, or enable Anthropic Extra Usage on the Anthropic OAuth/subscription account.
 3. Configure fallback models so runs continue when Anthropic long-context requests are rejected.
 
 Related:

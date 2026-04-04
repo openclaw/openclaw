@@ -184,8 +184,8 @@ If explicit `auth.order.<provider>` omits a stored profile, probe reports
 model can be resolved for that provider, probe reports `status: no_model`.
 
 Auth choice is provider/account dependent. For always-on gateway hosts, API
-keys are usually the most predictable; Claude CLI reuse and existing legacy
-Anthropic token profiles are also supported.
+keys are usually the most predictable; Claude CLI reuse and existing Anthropic
+OAuth/token profiles are also supported.
 
 Example (Claude CLI):
 

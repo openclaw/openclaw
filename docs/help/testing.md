@@ -244,7 +244,7 @@ openclaw models list
 openclaw models list --json
 ```
 
-## Live: CLI backend smoke (Claude Code CLI or other local CLIs)
+## Live: CLI backend smoke (Claude CLI or other local CLIs)
 
 - Test: `src/gateway/gateway-cli-backend.live.test.ts`
 - Goal: validate the Gateway + agent pipeline using a local CLI backend, without touching your default config.
@@ -265,7 +265,7 @@ openclaw models list --json
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
-- `OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude Code CLI MCP config enabled (default injects a temporary strict empty `--mcp-config` so ambient/global MCP servers stay disabled during the smoke).
+- `OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude CLI MCP config enabled (default injects a temporary strict empty `--mcp-config` so ambient/global MCP servers stay disabled during the smoke).
 
 Example:
 

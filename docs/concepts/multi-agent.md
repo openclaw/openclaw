@@ -26,7 +26,8 @@ Auth profiles are **per-agent**. Each agent reads from its own:
 `sessions_history` is the safer cross-session recall path here too: it returns
 a bounded, sanitized view, not a raw transcript dump. Assistant recall strips
 thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML
-payloads, downgraded tool-call scaffolding, leaked model control tokens, and
+payloads (including `<tool_calls>` and truncated tool-call blocks), downgraded
+tool-call scaffolding, leaked ASCII/full-width model control tokens, and
 malformed MiniMax tool-call XML before redaction/truncation.
 
 Main agent credentials are **not** shared automatically. Never reuse `agentDir`

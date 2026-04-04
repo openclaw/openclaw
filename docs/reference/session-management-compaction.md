@@ -292,12 +292,15 @@ OpenClaw supports “silent” turns for background tasks where the user should 
 
 Convention:
 
-- The assistant starts its output with `NO_REPLY` to indicate “do not deliver a reply to the user”.
+- The assistant starts its output with the exact silent token `NO_REPLY` /
+  `no_reply` to indicate “do not deliver a reply to the user”.
 - OpenClaw strips/suppresses this in the delivery layer.
 - Exact silent-token suppression is case-insensitive, so `NO_REPLY` and
   `no_reply` both count when the whole payload is just the silent token.
 
-As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial output mid-turn.
+As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a
+partial chunk begins with `NO_REPLY`, so silent operations don’t leak partial
+output mid-turn.
 
 ---
 
@@ -312,7 +315,8 @@ OpenClaw uses the **pre-threshold flush** approach:
 1. Monitor session context usage.
 2. When it crosses a “soft threshold” (below Pi’s compaction threshold), run a silent
    “write memory now” directive to the agent.
-3. Use `NO_REPLY` so the user sees nothing.
+3. Use the exact silent token `NO_REPLY` / `no_reply` so the user sees
+   nothing.
 
 Config (`agents.defaults.compaction.memoryFlush`):
 
@@ -323,7 +327,8 @@ Config (`agents.defaults.compaction.memoryFlush`):
 
 Notes:
 
-- The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.
+- The default prompt/system prompt include a `NO_REPLY` hint to suppress
+  delivery.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).

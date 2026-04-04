@@ -419,6 +419,13 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
+- `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
+  strings or SecretRef objects.
+- Slack account snapshots expose per-credential source/status fields such as
+  `botTokenSource`, `botTokenStatus`, `appTokenStatus`, and, in HTTP mode,
+  `signingSecretStatus`. `configured_unavailable` means the account is
+  configured through SecretRef but the current command/runtime path could not
+  resolve the secret value.
 - `configWrites: false` blocks Slack-initiated config writes.
 - Optional `channels.slack.defaultAccount` overrides default account selection when it matches a configured account id.
 - `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
@@ -1113,7 +1120,7 @@ Periodic heartbeat runs.
           enabled: true,
           softThresholdTokens: 6000,
           systemPrompt: "Session nearing compaction. Store durable memories now.",
-          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with the exact silent token NO_REPLY if nothing to store.",
         },
       },
     },

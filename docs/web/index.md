@@ -71,7 +71,8 @@ Open:
 }
 ```
 
-Then start the gateway (token required for non-loopback binds):
+Then start the gateway (this non-loopback example uses shared-secret token
+auth):
 
 ```bash
 openclaw gateway

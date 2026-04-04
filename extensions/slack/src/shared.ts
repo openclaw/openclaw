@@ -4,7 +4,7 @@ import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { patchChannelConfigForAccount } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectSlackAccount } from "./account-inspect.js";

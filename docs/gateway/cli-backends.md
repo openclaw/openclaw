@@ -2,7 +2,7 @@
 summary: "CLI backends: text-only fallback via local AI CLIs"
 read_when:
   - You want a reliable fallback when API providers fail
-  - You are running Claude Code CLI or other local AI CLIs and want to reuse them
+  - You are running Claude CLI or other local AI CLIs and want to reuse them
   - You need a text-only, tool-free path that still supports sessions and images
 title: "CLI Backends"
 ---
@@ -26,7 +26,7 @@ thread/conversation binding, and persistent external coding sessions, use
 
 ## Beginner-friendly quick start
 
-You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
+You can use Claude CLI **without any config** (the bundled Anthropic plugin
 registers a default backend):
 
 ```bash
@@ -180,7 +180,7 @@ imageMode: "repeat"
 OpenClaw will write base64 images to temp files. If `imageArg` is set, those
 paths are passed as CLI args. If `imageArg` is missing, OpenClaw appends the
 file paths to the prompt (path injection), which is enough for CLIs that auto-
-load local files from plain paths (Claude Code CLI behavior).
+load local files from plain paths (Claude CLI behavior).
 
 ## Inputs / outputs
 

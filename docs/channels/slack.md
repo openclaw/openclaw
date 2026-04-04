@@ -218,10 +218,23 @@ openclaw gateway
 
 - `botToken` + `appToken` are required for Socket Mode.
 - HTTP mode requires `botToken` + `signingSecret`.
+- `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
+  strings or SecretRef objects.
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
 - `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
 - Optional: add `chat:write.customize` if you want outgoing messages to use the active agent identity (custom `username` and icon). `icon_emoji` uses `:emoji_name:` syntax.
+
+Status snapshot behavior:
+
+- Slack account inspection tracks per-credential `*Source` and `*Status`
+  fields (`botToken`, `appToken`, `signingSecret`, `userToken`).
+- Status is `available`, `configured_unavailable`, or `missing`.
+- `configured_unavailable` means the account is configured through SecretRef
+  or another non-inline secret source, but the current command/runtime path
+  could not resolve the actual value.
+- In HTTP mode, `signingSecretStatus` is included; in Socket Mode, the
+  required pair is `botTokenStatus` + `appTokenStatus`.
 
 <Tip>
 For actions/directory reads, user token can be preferred when configured. For writes, bot token remains preferred; user-token writes are only allowed when `userTokenReadOnly: false` and bot token is unavailable.
@@ -512,6 +525,9 @@ Slack can act as a native approval client with interactive buttons and interacti
 - Approver authorization is still enforced: only users identified as approvers can approve or deny requests through Slack.
 
 This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
+When those buttons are present, they are the primary approval UX; OpenClaw
+should only include a manual `/approve` command when the tool result says chat
+approvals are unavailable or manual approval is the only path.
 
 Config path:
 
@@ -621,6 +637,12 @@ openclaw pairing list slack
 
   <Accordion title="Socket mode not connecting">
     Validate bot + app tokens and Socket Mode enablement in Slack app settings.
+
+    If `openclaw channels status --probe --json` shows `botTokenStatus` or
+    `appTokenStatus: "configured_unavailable"`, the Slack account is
+    configured but the current runtime could not resolve the SecretRef-backed
+    value.
+
   </Accordion>
 
   <Accordion title="HTTP mode not receiving events">
@@ -630,6 +652,10 @@ openclaw pairing list slack
     - webhook path
     - Slack Request URLs (Events + Interactivity + Slash Commands)
     - unique `webhookPath` per HTTP account
+
+    If `signingSecretStatus: "configured_unavailable"` appears in account
+    snapshots, the HTTP account is configured but the current runtime could not
+    resolve the SecretRef-backed signing secret.
 
   </Accordion>
 

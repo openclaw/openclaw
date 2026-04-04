@@ -579,7 +579,7 @@ Subcommands:
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
-- `config schema`: print the generated JSON schema for `openclaw.json`, including field `title` / `description` metadata and best-effort live plugin/channel schema metadata.
+- `config schema`: print the generated JSON schema for `openclaw.json`, including propagated field `title` / `description` docs metadata across nested object, wildcard, array-item, and composition branches, plus best-effort live plugin/channel schema metadata.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -1473,6 +1473,7 @@ Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `bas
 `config.get` if a config already exists.
 Tip: for partial edits, inspect with `config.schema.lookup` first and prefer `config.patch`.
 Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
+Tip: the owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 ## Models
 
@@ -1494,7 +1495,7 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
 
-Existing legacy Anthropic token profiles still run if already configured, but
+Existing Anthropic OAuth/token profiles still run if already configured, but
 OpenClaw no longer offers Anthropic setup-token as a new auth path.
 
 Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.
@@ -1606,7 +1607,9 @@ Options:
 Notes:
 
 - `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
-- Anthropic legacy token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
+- `setup-token` requires an interactive TTY and runs the provider's token-auth method.
+- `paste-token` prompts for the token value and defaults to auth profile id `<provider>:manual` when `--profile-id` is omitted.
+- Anthropic OAuth/token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
 
 ### `models auth order get|set|clear`
 
