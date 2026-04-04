@@ -109,7 +109,16 @@ Screenshot:
 
 ```bash
 openclaw browser screenshot
+openclaw browser screenshot --full-page
+openclaw browser screenshot --ref e12
 ```
+
+Notes:
+
+- `--full-page` is for page captures only; it cannot be combined with `--ref`
+  or `--element`.
+- `existing-session` / `user` profiles support page screenshots and `--ref`
+  screenshots from snapshot output, but not CSS `--element` screenshots.
 
 Navigate/click/type (ref-based UI automation):
 
@@ -197,6 +206,7 @@ Current existing-session limits:
 - `type` does not support `slowly=true`
 - `press` does not support `delayMs`
 - `wait --load networkidle` is not supported
+- screenshots support page captures and `--ref`, but not CSS `--element`
 - `responsebody`, download interception, PDF export, and batch actions still
   require a managed browser or raw CDP profile
 
