@@ -198,7 +198,7 @@ Operational guidance:
   loops around `sessions_list`, `sessions_history`, `/subagents list`, or
   `exec` sleep commands.
 - If a child completion event arrives after you already sent the final answer,
-  the correct follow-up is `NO_REPLY`.
+  the correct follow-up is the exact silent token `NO_REPLY` / `no_reply`.
 
 ### Tool policy by depth
 

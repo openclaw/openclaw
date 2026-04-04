@@ -82,7 +82,8 @@ sparse token/cache counters from the latest transcript usage entry, and
 
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when
-you want completion results to arrive as the next message instead of polling.
+you want completion results to arrive as the next message instead of building
+poll loops.
 
 `subagents` is the control-plane helper for already spawned OpenClaw
 sub-agents. It supports:
