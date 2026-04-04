@@ -23,7 +23,6 @@ export default definePluginEntry({
     const {
       buildPassthroughGeminiSanitizingReplayPolicy,
       composeProviderStreamWrappers,
-      createOpenRouterSystemCacheWrapper,
       createOpenRouterWrapper,
       createProviderApiKeyAuthMethod,
       DEFAULT_CONTEXT_TOKENS,
@@ -146,7 +145,6 @@ export default definePluginEntry({
             ? (streamFn) => injectOpenRouterRouting(streamFn, providerRouting)
             : undefined,
           (streamFn) => createOpenRouterWrapper(streamFn, openRouterThinkingLevel),
-          (streamFn) => createOpenRouterSystemCacheWrapper(streamFn),
         );
       },
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),

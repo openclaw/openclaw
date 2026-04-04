@@ -172,6 +172,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/channels: decouple initiating-surface approval availability from native delivery enablement so Telegram, Slack, and Discord still expose approvals when approvers exist and native target routing is configured separately. (#59776) Thanks @joelnishanth.
 - Agents/logging: keep orphaned-user transcript repair warnings focused on interactive runs, and downgrade background-trigger repairs (`heartbeat`, `cron`, `memory`, `overflow`) to debug logs to reduce false-alarm gateway noise.
 - Gateway/node pairing: require `operator.pairing` for node approvals end-to-end, while still requiring `operator.write` or `operator.admin` when the pending node commands need those higher scopes. (#60461) Thanks @eleqtrizit.
+- Providers/OpenRouter: gate Anthropic prompt-cache `cache_control` markers to native/default OpenRouter routes and preserve them for native OpenRouter hosts behind custom provider ids. Thanks @vincentkoc.
 
 ## 2026.4.1
 
