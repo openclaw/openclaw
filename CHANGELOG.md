@@ -104,6 +104,7 @@ Docs: https://docs.openclaw.ai
 - Sandbox/security: block credential-path binds even when sandbox home paths resolve through canonical aliases, so agent containers cannot mount user secret stores through alternate home-directory paths. (#59157) Thanks @eleqtrizit.
 - Gateway/Windows scheduled tasks: preserve Task Scheduler settings on reinstall, fail loud when Scheduled Task `/Run` does not start, and report fast failed restarts with the actual elapsed time instead of a fake 60s timeout. (#59335) Thanks @tmimmanuel.
 - Control UI/model picker: preserve already-qualified `provider/model` refs from the server so models whose ids already contain slashes stop being double-prefixed and remapped to the wrong provider. (#49874) Thanks @ShionEria.
+- Models/selection: resolve bare model ids in session model switches against the configured allowlist before falling back to the current session provider, so Control UI model picks stop drifting into `google/k2p5` and similar wrong-provider refs. (#51580) Thanks @honwee.
 
 ## 2026.4.1-beta.1
 
