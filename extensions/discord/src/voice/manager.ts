@@ -418,21 +418,47 @@ export class DiscordVoiceManager {
                 pcmReadable.push(result);
                 pcmReadable.push(GREETING_SILENCE_PAD);
                 pcmReadable.push(null);
-                const ffmpeg = childProcess.spawn("ffmpeg", [
-                  "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
-                  "-c:a", "libopus", "-ar", "48000", "-ac", "2",
-                  "-f", "ogg", "pipe:1",
-                ], { stdio: ["pipe", "pipe", "pipe"] });
+                const ffmpeg = childProcess.spawn(
+                  "ffmpeg",
+                  [
+                    "-f",
+                    "s16le",
+                    "-ar",
+                    "24000",
+                    "-ac",
+                    "1",
+                    "-i",
+                    "pipe:0",
+                    "-c:a",
+                    "libopus",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-f",
+                    "ogg",
+                    "pipe:1",
+                  ],
+                  { stdio: ["pipe", "pipe", "pipe"] },
+                );
                 pcmReadable.pipe(ffmpeg.stdin);
                 const resource = voiceSdk.createAudioResource(ffmpeg.stdout, {
                   inputType: voiceSdk.StreamType.OggOpus,
                 });
                 voiceEntry.player.play(resource);
                 await voiceSdk
-                  .entersState(voiceEntry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+                  .entersState(
+                    voiceEntry.player,
+                    voiceSdk.AudioPlayerStatus.Playing,
+                    PLAYBACK_READY_TIMEOUT_MS,
+                  )
                   .catch(() => undefined);
                 await voiceSdk
-                  .entersState(voiceEntry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
+                  .entersState(
+                    voiceEntry.player,
+                    voiceSdk.AudioPlayerStatus.Idle,
+                    SPEAKING_READY_TIMEOUT_MS,
+                  )
                   .catch(() => undefined);
                 logger.warn("discord voice: greeting playback done");
               });
@@ -441,7 +467,11 @@ export class DiscordVoiceManager {
             logger.warn("discord voice: prewarm failed after retry — first response will be slow");
           }
         })
-        .catch((err) => logger.warn(`discord voice: prewarm error: ${err instanceof Error ? err.message : String(err)}`));
+        .catch((err) =>
+          logger.warn(
+            `discord voice: prewarm error: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
       // --- END FORK ---
     } catch (err) {
       connection.destroy();
@@ -572,9 +602,7 @@ export class DiscordVoiceManager {
     this.sessions.delete(guildId);
     logVoiceVerbose(`leave: disconnected from guild ${guildId} channel ${entry.channelId}`);
     // --- FORK: release Kyutai TTS model on VC leave (idle timeout also handles this) ---
-    import("./kyutai-streaming.js")
-      .then(({ kyutaiRelease }) => kyutaiRelease())
-      .catch(() => {}); // best-effort
+    import("./kyutai-streaming.js").then(({ kyutaiRelease }) => kyutaiRelease()).catch(() => {}); // best-effort
     // --- END FORK ---
     return {
       ok: true,
@@ -760,27 +788,50 @@ export class DiscordVoiceManager {
     }
 
     // --- FORK: streaming TTS for local Kyutai provider ---
+    // The entire streaming pipeline (sidecar call + FFmpeg + playback) is enqueued
+    // so that concurrent voice replies are serialized. Without this, two simultaneous
+    // streamKyutaiTts calls cause CUDA graph conflicts ("Offset increment outside
+    // graph capture encountered unexpectedly") and double chimes.
     if (ttsConfig.provider === "kyutai") {
-      const MAX_RETRIES = 2;
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        try {
-          const { streamKyutaiTts, kyutaiPrewarm } = await import("./kyutai-streaming.js");
-          if (attempt > 0) {
-            await kyutaiPrewarm();
-            await new Promise((r) => setTimeout(r, 2000));
-          }
-          const { readable: pcmStream } = await streamKyutaiTts(speakText);
-          logger.warn(`discord voice: kyutai streaming started (attempt ${attempt + 1})`);
-          this.enqueuePlayback(entry, async () => {
+      this.enqueuePlayback(entry, async () => {
+        const MAX_RETRIES = 2;
+        for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+          try {
+            const { streamKyutaiTts, kyutaiPrewarm } = await import("./kyutai-streaming.js");
+            if (attempt > 0) {
+              await kyutaiPrewarm();
+              await new Promise((r) => setTimeout(r, 2000));
+            }
+            const { readable: pcmStream } = await streamKyutaiTts(speakText);
+            logger.warn(`discord voice: kyutai streaming started (attempt ${attempt + 1})`);
+
             const voiceSdk = loadDiscordVoiceSdk();
             const childProcess = await import("node:child_process");
 
             // Spawn FFmpeg: read raw 24kHz mono s16le from stdin, output ogg/opus to stdout
-            const ffmpeg = childProcess.spawn("ffmpeg", [
-              "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
-              "-c:a", "libopus", "-ar", "48000", "-ac", "2",
-              "-f", "ogg", "pipe:1",
-            ], { stdio: ["pipe", "pipe", "pipe"] });
+            const ffmpeg = childProcess.spawn(
+              "ffmpeg",
+              [
+                "-f",
+                "s16le",
+                "-ar",
+                "24000",
+                "-ac",
+                "1",
+                "-i",
+                "pipe:0",
+                "-c:a",
+                "libopus",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-f",
+                "ogg",
+                "pipe:1",
+              ],
+              { stdio: ["pipe", "pipe", "pipe"] },
+            );
 
             ffmpeg.stderr.on("data", (d: Buffer) => {
               const msg = d.toString().trim();
@@ -840,26 +891,39 @@ export class DiscordVoiceManager {
               inputType: voiceSdk.StreamType.OggOpus,
             });
 
-            entry.player.on("error", (err: unknown) => logger.warn(`discord voice: player error: ${err instanceof Error ? err.message : String(err)}`));
+            entry.player.on("error", (err: unknown) =>
+              logger.warn(
+                `discord voice: player error: ${err instanceof Error ? err.message : String(err)}`,
+              ),
+            );
             entry.player.play(resource);
             await voiceSdk
-              .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
+              .entersState(
+                entry.player,
+                voiceSdk.AudioPlayerStatus.Playing,
+                PLAYBACK_READY_TIMEOUT_MS,
+              )
               .catch(() => undefined);
             await voiceSdk
               .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
               .catch(() => undefined);
-            logger.warn(`discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`);
-          });
-          return;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (attempt < MAX_RETRIES - 1 && msg.includes("fetch failed")) {
-            logger.warn(`discord voice: kyutai streaming attempt ${attempt + 1} failed (sidecar not ready), retrying...`);
-            continue;
+            logger.warn(
+              `discord voice: kyutai playback done: guild ${entry.guildId} channel ${entry.channelId}`,
+            );
+            return;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (attempt < MAX_RETRIES - 1 && msg.includes("fetch failed")) {
+              logger.warn(
+                `discord voice: kyutai streaming attempt ${attempt + 1} failed (sidecar not ready), retrying...`,
+              );
+              continue;
+            }
+            logger.warn(`discord voice: kyutai streaming failed, falling back to batch: ${msg}`);
           }
-          logger.warn(`discord voice: kyutai streaming failed, falling back to batch: ${msg}`);
         }
-      }
+      });
+      return;
     }
     // --- END FORK ---
 
