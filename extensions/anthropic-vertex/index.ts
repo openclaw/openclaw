@@ -1,4 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { buildAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitAnthropicVertexProvider,
   resolveAnthropicVertexConfigApiKey,
@@ -6,19 +7,6 @@ import {
 } from "./api.js";
 
 const PROVIDER_ID = "anthropic-vertex";
-
-function buildAnthropicVertexReplayPolicy(modelId?: string) {
-  return {
-    sanitizeMode: "full" as const,
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict" as const,
-    preserveSignatures: true,
-    repairToolUseResultPairing: true,
-    validateAnthropicTurns: true,
-    allowSyntheticToolResults: true,
-    ...((modelId?.toLowerCase() ?? "").includes("claude") ? { dropThinkingBlocks: true } : {}),
-  };
-}
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -48,7 +36,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      buildReplayPolicy: ({ modelId }) => buildAnthropicVertexReplayPolicy(modelId),
+      buildReplayPolicy: ({ modelId }) => buildAnthropicReplayPolicyForModel(modelId),
     });
   },
 });
