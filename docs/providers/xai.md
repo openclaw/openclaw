@@ -48,6 +48,17 @@ OpenClaw now includes these xAI model families out of the box:
 The plugin also forward-resolves newer `grok-4*` and `grok-code-fast*` ids when
 they follow the same API shape.
 
+Fast-model notes:
+
+- `grok-4-fast`, `grok-4-1-fast`, and the `grok-4.20-beta-*` variants are the
+  current image-capable Grok refs in the bundled catalog.
+- `/fast on` or `agents.defaults.models["xai/<model>"].params.fastMode: true`
+  rewrites native xAI requests as follows:
+  - `grok-3` -> `grok-3-fast`
+  - `grok-3-mini` -> `grok-3-mini-fast`
+  - `grok-4` -> `grok-4-fast`
+  - `grok-4-0709` -> `grok-4-fast`
+
 Legacy compatibility aliases still normalize to the canonical bundled ids. For
 example:
 
@@ -72,6 +83,11 @@ openclaw config set tools.web.search.provider grok
 ## Notes
 
 - OpenClaw applies xAI-specific tool-schema and tool-call compatibility fixes automatically on the shared runner path.
+- Native xAI requests default `tool_stream: true`. Set
+  `agents.defaults.models["xai/<model>"].params.tool_stream` to `false` to
+  disable it.
+- The bundled xAI wrapper strips unsupported strict tool-schema flags and
+  reasoning payload keys before sending native xAI requests.
 - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw tools. OpenClaw enables the specific xAI built-in it needs inside each tool request instead of attaching all native tools to every chat turn.
 - `x_search` and `code_execution` are owned by the bundled xAI plugin rather than hardcoded into the core model runtime.
 - `code_execution` is remote xAI sandbox execution, not local [`exec`](/tools/exec).

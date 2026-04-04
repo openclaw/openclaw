@@ -317,6 +317,13 @@ API key auth, and dynamic model resolution.
     `contract-api.ts` seam. Those helpers remain Anthropic-specific because
     they also encode Claude OAuth beta handling and `context1m` gating.
 
+    Other bundled providers also keep transport-specific wrappers local when
+    the behavior is not shared cleanly across families. Current example: the
+    bundled xAI plugin keeps native xAI Responses shaping in its own
+    `wrapStreamFn`, including `/fast` alias rewrites, default `tool_stream`,
+    unsupported strict-tool cleanup, and xAI-specific reasoning-payload
+    removal.
+
     The same package-root pattern also backs other bundled providers:
 
     - `@openclaw/openai-provider`: `api.ts` exports provider builders,

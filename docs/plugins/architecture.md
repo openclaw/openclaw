@@ -803,6 +803,13 @@ api.registerProvider({
   `tool_stream` defaults, binary thinking UX, modern-model matching, and both
   usage auth + quota fetching; the `tool-stream-default-on` stream family keeps
   the default-on `tool_stream` wrapper out of per-provider handwritten glue.
+- xAI uses `normalizeResolvedModel`, `normalizeTransport`,
+  `contributeResolvedModelCompat`, `prepareExtraParams`, `wrapStreamFn`,
+  `resolveSyntheticAuth`, `resolveDynamicModel`, and `isModernModelRef`
+  because it owns native xAI Responses transport normalization, Grok fast-mode
+  alias rewrites, default `tool_stream`, strict-tool / reasoning-payload
+  cleanup, fallback auth reuse for plugin-owned tools, forward-compat Grok
+  model resolution, and provider-owned compat patches.
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
