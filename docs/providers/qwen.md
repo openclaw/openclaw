@@ -80,13 +80,28 @@ Cloud surface, not just coding/text models.
 The `qwen` extension now also exposes:
 
 - Video understanding via `qwen-vl-max-latest`
-- Wan video generation via models such as `wan2.6-t2v`, `wan2.6-i2v`, and `wan2.6-r2v`
+- Wan video generation via:
+  - `wan2.6-t2v` (default)
+  - `wan2.6-i2v`
+  - `wan2.6-r2v`
+  - `wan2.6-r2v-flash`
+  - `wan2.7-r2v`
 
 These multimodal surfaces use the **Standard** DashScope endpoints, not the
 Coding Plan endpoints.
 
 - Global/Intl Standard base URL: `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
 - China Standard base URL: `https://dashscope.aliyuncs.com/compatible-mode/v1`
+
+For video generation, OpenClaw maps the configured Qwen region to the matching
+DashScope AIGC host before submitting the job:
+
+- Global/Intl: `https://dashscope-intl.aliyuncs.com`
+- China: `https://dashscope.aliyuncs.com`
+
+That means a normal `models.providers.qwen.baseUrl` pointing at either the
+Coding Plan or Standard Qwen hosts still keeps video generation on the correct
+regional DashScope video endpoint.
 
 For video generation, set a default model explicitly:
 
@@ -99,6 +114,14 @@ For video generation, set a default model explicitly:
   },
 }
 ```
+
+Current bundled Qwen video-generation limits:
+
+- Up to **1** output video per request
+- Up to **1** input image
+- Up to **4** input videos
+- Up to **10 seconds** duration
+- Supports `size`, `aspectRatio`, `resolution`, `audio`, and `watermark`
 
 See [Qwen / Model Studio](/providers/qwen_modelstudio) for endpoint-level detail
 and compatibility notes.

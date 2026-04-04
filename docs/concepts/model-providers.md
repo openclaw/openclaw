@@ -141,8 +141,10 @@ Current bundled examples:
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
   `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `qwen`: plugin-owned catalogs for text models plus shared media-understanding
-  and video-generation provider registrations for its multimodal surfaces
+- `qwen`: plugin-owned catalogs for text models plus shared
+  media-understanding and video-generation provider registrations for its
+  multimodal surfaces; Qwen video generation uses the Standard DashScope video
+  endpoints with bundled Wan models such as `wan2.6-t2v` and `wan2.7-r2v`
 - `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
 - `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
