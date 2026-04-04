@@ -13,6 +13,7 @@
 
 #include "../src/gateway_mutations.h"
 #include "../src/gateway_ws.h"
+#include "../src/test_seams.h"
 #include <json-glib/json-glib.h>
 #include <string.h>
 
@@ -1088,7 +1089,7 @@ static void test_cron_edit_patch_builder_helper(void) {
         "*/5 * * * *",
         "",
         "",
-        "new",
+        "isolated",
         "now",
         ""  /* empty prompt */
     );
@@ -1102,7 +1103,7 @@ static void test_cron_edit_patch_builder_helper(void) {
            "cron_builder_noprompt: payload absent when no prompt");
     
     /* but sessionTarget and wakeMode should still be present */
-    ASSERT(g_strcmp0(obj_get_string(patch2, "sessionTarget"), "new") == 0,
+    ASSERT(g_strcmp0(obj_get_string(patch2, "sessionTarget"), "isolated") == 0,
            "cron_builder_noprompt: sessionTarget present");
     ASSERT(g_strcmp0(obj_get_string(patch2, "wakeMode"), "now") == 0,
            "cron_builder_noprompt: wakeMode present");
@@ -1110,7 +1111,158 @@ static void test_cron_edit_patch_builder_helper(void) {
     json_node_unref(params2);
 }
 
-/* ── Main ────────────────────────────────────────────────────────── */
+/* ── Cron sessionTarget mapping regression test ─────────────────────
+ *
+ * This test verifies the fix for sessionTarget mapping in section_cron.c:
+ * - No request payload should emit sessionTarget="new" (unsupported value)
+ * - session_target_from_index() maps indices correctly to wire values
+ * - session_target_to_index() maps persisted values correctly to UI indices
+ * 
+ * These are the real helper functions used by on_edit_job_dialog_response()
+ * and on_create_job_dialog_response().
+ */
+
+static void test_cron_session_target_mapping(void) {
+    /* Forward mapping: index -> wire value */
+    
+    /* Test 1: Index 0 (New Session) must map to "isolated", NOT "new" */
+    const gchar *t0 = session_target_from_index(0);
+    ASSERT(g_strcmp0(t0, "isolated") == 0, "session_target_from_index(0) == isolated");
+    ASSERT(g_strcmp0(t0, "new") != 0, "session_target_from_index(0) != new (regression)");
+    
+    /* Test 2: Index 1 (Main Session) must map to "main" */
+    const gchar *t1 = session_target_from_index(1);
+    ASSERT(g_strcmp0(t1, "main") == 0, "session_target_from_index(1) == main");
+    
+    /* Test 3: Index 2 (Current Session) must map to "current" */
+    const gchar *t2 = session_target_from_index(2);
+    ASSERT(g_strcmp0(t2, "current") == 0, "session_target_from_index(2) == current");
+    
+    /* Test 4: Index 3 (Isolated Session) must map to "isolated" */
+    const gchar *t3 = session_target_from_index(3);
+    ASSERT(g_strcmp0(t3, "isolated") == 0, "session_target_from_index(3) == isolated");
+    
+    /* Test 5: Invalid/unknown indices should default to "isolated" */
+    const gchar *t99 = session_target_from_index(99);
+    ASSERT(g_strcmp0(t99, "isolated") == 0, "session_target_from_index(99) defaults to isolated");
+    
+    /* Reverse mapping: persisted value -> UI index */
+    
+    /* Test 6: "main" -> index 1 */
+    ASSERT(session_target_to_index("main") == 1, "session_target_to_index(main) == 1");
+    
+    /* Test 7: "current" -> index 2 */
+    ASSERT(session_target_to_index("current") == 2, "session_target_to_index(current) == 2");
+    
+    /* Test 8: "isolated" -> index 3 (Isolated Session, not New Session) */
+    ASSERT(session_target_to_index("isolated") == 3, "session_target_to_index(isolated) == 3");
+    
+    /* Test 9: NULL -> index 0 (default/New Session) */
+    ASSERT(session_target_to_index(NULL) == 0, "session_target_to_index(NULL) == 0");
+    
+    /* Test 10: Unknown values -> index 0 (default/New Session) */
+    ASSERT(session_target_to_index("unknown") == 0, "session_target_to_index(unknown) == 0");
+    ASSERT(session_target_to_index("session:custom") == 0, "session_target_to_index(custom) == 0");
+    
+    /* Round-trip verification: forward then reverse should be consistent */
+    
+    /* Test 11: Round-trip for index 1 (main) */
+    ASSERT(session_target_to_index(session_target_from_index(1)) == 1, 
+           "round-trip: index 1 -> main -> index 1");
+    
+    /* Test 12: Round-trip for index 2 (current) */
+    ASSERT(session_target_to_index(session_target_from_index(2)) == 2,
+           "round-trip: index 2 -> current -> index 2");
+    
+    /* Test 13: Round-trip for indices 0 and 3 (both map to isolated) */
+    /* Note: index 0 -> "isolated" -> index 3, so round-trip changes index for 0 */
+    /* This is intentional - both "New Session" and "Isolated Session" UI options 
+     * result in "isolated" on the wire, but when reading back "isolated" we pick
+     * the more explicit "Isolated Session" (index 3) for the UI */
+    ASSERT(session_target_to_index(session_target_from_index(3)) == 3,
+           "round-trip: index 3 -> isolated -> index 3");
+}
+
+/* ── QR login start without qrDataUrl regression test ───────────────
+ *
+ * This test verifies the fix for QR login start in section_channels.c:
+ * - web_login_start_payload_has_qr() correctly handles missing qrDataUrl
+ * - Response with message but no qrDataUrl returns FALSE (no QR to show)
+ * - The flow should proceed to wait/poll, not error
+ */
+
+static void test_qr_login_start_without_qrdataurl(void) {
+    /* Test 1: Payload with qrDataUrl present and non-empty -> TRUE */
+    JsonBuilder *b1 = json_builder_new();
+    json_builder_begin_object(b1);
+    json_builder_set_member_name(b1, "qrDataUrl");
+    json_builder_add_string_value(b1, "data:image/png;base64,abc123");
+    json_builder_end_object(b1);
+    JsonNode *node1 = json_builder_get_root(b1);
+    g_object_unref(b1);
+    
+    const gchar *qr1 = NULL;
+    gboolean has_qr1 = web_login_start_payload_has_qr(json_node_get_object(node1), &qr1);
+    ASSERT(has_qr1 == TRUE, "has_qr with valid qrDataUrl == TRUE");
+    ASSERT(qr1 != NULL, "out_qr_data_url set when present");
+    ASSERT(g_strcmp0(qr1, "data:image/png;base64,abc123") == 0, "qrDataUrl value correct");
+    json_node_unref(node1);
+    
+    /* Test 2: Payload WITHOUT qrDataUrl -> FALSE (the regression fix) */
+    JsonBuilder *b2 = json_builder_new();
+    json_builder_begin_object(b2);
+    json_builder_set_member_name(b2, "message");
+    json_builder_add_string_value(b2, "Login in progress, check your phone");
+    /* Note: NO qrDataUrl field */
+    json_builder_end_object(b2);
+    JsonNode *node2 = json_builder_get_root(b2);
+    g_object_unref(b2);
+    
+    const gchar *qr2 = "should-be-null"; /* init to non-null to verify it's cleared */
+    gboolean has_qr2 = web_login_start_payload_has_qr(json_node_get_object(node2), &qr2);
+    ASSERT(has_qr2 == FALSE, "has_qr without qrDataUrl == FALSE (regression)");
+    ASSERT(qr2 == NULL, "out_qr_data_url NULL when not present");
+    json_node_unref(node2);
+    
+    /* Test 3: Payload with empty qrDataUrl -> FALSE */
+    JsonBuilder *b3 = json_builder_new();
+    json_builder_begin_object(b3);
+    json_builder_set_member_name(b3, "qrDataUrl");
+    json_builder_add_string_value(b3, ""); /* empty string */
+    json_builder_end_object(b3);
+    JsonNode *node3 = json_builder_get_root(b3);
+    g_object_unref(b3);
+    
+    gboolean has_qr3 = web_login_start_payload_has_qr(json_node_get_object(node3), NULL);
+    ASSERT(has_qr3 == FALSE, "has_qr with empty qrDataUrl == FALSE");
+    json_node_unref(node3);
+    
+    /* Test 4: NULL payload -> FALSE (edge case) */
+    gboolean has_qr4 = web_login_start_payload_has_qr(NULL, NULL);
+    ASSERT(has_qr4 == FALSE, "has_qr with NULL payload == FALSE");
+    
+    /* Test 5: Payload with only status/message, no qrDataUrl (real-world regression case)
+     * This is the exact scenario that was failing before the fix.
+     */
+    JsonBuilder *b5 = json_builder_new();
+    json_builder_begin_object(b5);
+    json_builder_set_member_name(b5, "status");
+    json_builder_add_string_value(b5, "pending");
+    json_builder_set_member_name(b5, "message");
+    json_builder_add_string_value(b5, "Please approve the login on your device");
+    json_builder_set_member_name(b5, "timeoutMs");
+    json_builder_add_int_value(b5, 120000);
+    json_builder_end_object(b5);
+    JsonNode *node5 = json_builder_get_root(b5);
+    g_object_unref(b5);
+    
+    const gchar *qr5 = NULL;
+    gboolean has_qr5 = web_login_start_payload_has_qr(json_node_get_object(node5), &qr5);
+    ASSERT(has_qr5 == FALSE, 
+           "has_qr with status/message payload == FALSE (real-world regression)");
+    ASSERT(qr5 == NULL, "qr_data_url NULL for non-QR response");
+    json_node_unref(node5);
+}
 
 int main(void) {
     /* Skills */
@@ -1141,6 +1293,9 @@ int main(void) {
     test_cron_update_full_payload();
     test_cron_edit_patch_builder_helper();
 
+    /* Cron regression tests */
+    test_cron_session_target_mapping();
+
     /* Channels */
     test_channels_status_probe();
     test_channels_status_no_probe();
@@ -1166,6 +1321,7 @@ int main(void) {
     test_web_login_start();
     test_web_login_wait();
     test_web_login_wait_null_account();
+    test_qr_login_start_without_qrdataurl();
 
     stub_reset();
 

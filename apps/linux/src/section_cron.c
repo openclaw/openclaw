@@ -16,6 +16,7 @@
 #include "gateway_mutations.h"
 #include "gateway_config.h"
 #include "gateway_client.h"
+#include "test_seams.h"
 #include <adwaita.h>
 
 /* ── State ───────────────────────────────────────────────────────── */
@@ -229,10 +230,7 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
     if (!name || *name == '\0' || !schedule || *schedule == '\0') return;
 
     gint target_idx = target_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(target_combo)) : 0;
-    const gchar *target_str = "new";
-    if (target_idx == 1) target_str = "main";
-    else if (target_idx == 2) target_str = "current";
-    else if (target_idx == 3) target_str = "isolated";
+    const gchar *target_str = session_target_from_index(target_idx);
 
     gint wake_idx = wake_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(wake_combo)) : 0;
     const gchar *wake_str = wake_idx == 1 ? "now" : "next-heartbeat";
@@ -358,12 +356,7 @@ static void on_edit_job(GtkButton *btn, gpointer user_data) {
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(target_combo), "Target Session");
     adw_combo_row_set_model(ADW_COMBO_ROW(target_combo), G_LIST_MODEL(target_model));
     /* Select based on current value */
-    gint target_idx = 0; /* default "new" */
-    if (job_target) {
-        if (g_strcmp0(job_target, "main") == 0) target_idx = 1;
-        else if (g_strcmp0(job_target, "current") == 0) target_idx = 2;
-        else if (g_strcmp0(job_target, "isolated") == 0) target_idx = 3;
-    }
+    gint target_idx = session_target_to_index(job_target);
     adw_combo_row_set_selected(ADW_COMBO_ROW(target_combo), target_idx);
     gtk_box_append(GTK_BOX(vbox), target_combo);
 
@@ -421,10 +414,7 @@ static void on_create_job_dialog_response(GObject *source, GAsyncResult *result,
     if (!name || *name == '\0' || !schedule || *schedule == '\0' || !prompt || *prompt == '\0') return;
 
     gint target_idx = target_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(target_combo)) : 0;
-    const gchar *target_str = "new";
-    if (target_idx == 1) target_str = "main";
-    else if (target_idx == 2) target_str = "current";
-    else if (target_idx == 3) target_str = "isolated";
+    const gchar *target_str = session_target_from_index(target_idx);
 
     gint wake_idx = wake_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(wake_combo)) : 0;
     const gchar *wake_str = wake_idx == 1 ? "now" : "next-heartbeat";
@@ -684,7 +674,7 @@ static void build_cron_card(GatewayCronJob *job) {
     g_object_set_data_full(G_OBJECT(btn_edit), "job-name", g_strdup(job->name ? job->name : job->id), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-schedule", g_strdup(job->schedule_value ? job->schedule_value : ""), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-agent", g_strdup(job->agent_id ? job->agent_id : ""), g_free);
-    g_object_set_data_full(G_OBJECT(btn_edit), "job-target", g_strdup(job->session_target ? job->session_target : "new"), g_free);
+    g_object_set_data_full(G_OBJECT(btn_edit), "job-target", g_strdup(job->session_target ? job->session_target : "isolated"), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-wake", g_strdup(job->wake_mode ? job->wake_mode : "next-heartbeat"), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-prompt", g_strdup(job->payload_message ? job->payload_message : ""), g_free);
     g_signal_connect(btn_edit, "clicked", G_CALLBACK(on_edit_job), NULL);
