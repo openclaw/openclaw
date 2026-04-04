@@ -46,6 +46,19 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### Fish Audio Speech
+
+Fish Audio TTS speech provider for OpenClaw. High-quality voice cloning and
+text-to-speech with S2-Pro and S1 models, format-aware output (opus/mp3),
+inline directives, and dynamic voice listing.
+
+- **npm:** `@conan-scott/openclaw-fish-audio`
+- **repo:** [github.com/Conan-Scott/openclaw-fish-audio](https://github.com/Conan-Scott/openclaw-fish-audio)
+
+```bash
+openclaw plugins install @conan-scott/openclaw-fish-audio
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
