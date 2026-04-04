@@ -66,6 +66,8 @@ type AnnounceQueueState = {
   summaryOverflowOriginInitialized?: boolean;
   /** Origin key for summarized drops; null means mixed/ambiguous and unsafe to route. */
   summaryOverflowOriginKey?: string | null;
+  /** Stable synthetic identity for pending collect-empty overflow summary sends. */
+  summarySyntheticEnqueuedAt?: number;
   /** Consecutive drain failures — drives exponential backoff on errors. */
   consecutiveFailures: number;
 };
@@ -160,12 +162,14 @@ function clearAnnounceSummaryState(
     | "summaryOverflowOriginInitialized"
     | "summaryOverflowTarget"
     | "summaryOverflowOriginKey"
+    | "summarySyntheticEnqueuedAt"
   >,
 ): void {
   clearQueueSummaryState(queue);
   queue.summaryOverflowTarget = undefined;
   queue.summaryOverflowOriginInitialized = false;
   queue.summaryOverflowOriginKey = undefined;
+  queue.summarySyntheticEnqueuedAt = undefined;
 }
 
 export async function maybeSendAnnounceCollectEmptySummary(params: {
@@ -179,6 +183,7 @@ export async function maybeSendAnnounceCollectEmptySummary(params: {
     | "summaryOverflowOriginInitialized"
     | "summaryOverflowTarget"
     | "summaryOverflowOriginKey"
+    | "summarySyntheticEnqueuedAt"
   >;
   send: (item: AnnounceQueueItem) => Promise<void>;
 }): Promise<boolean> {
@@ -199,10 +204,13 @@ export async function maybeSendAnnounceCollectEmptySummary(params: {
     return false;
   }
   params.queue.lastSummaryTarget = summaryTarget;
+  if (!params.queue.summarySyntheticEnqueuedAt) {
+    params.queue.summarySyntheticEnqueuedAt = Date.now();
+  }
   await params.send({
     ...summaryTarget,
     announceId: undefined,
-    enqueuedAt: Date.now(),
+    enqueuedAt: params.queue.summarySyntheticEnqueuedAt,
     execution: { visibility: "internal", agentPrompt: summaryPrompt },
     display: { visibility: "user-visible", text: summaryPrompt },
     internalEvents: undefined,
