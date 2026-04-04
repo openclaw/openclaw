@@ -2585,7 +2585,7 @@ describe("/models command", () => {
 });
 
 describe("handleCommands plugin commands", () => {
-  it("dispatches registered plugin commands", async () => {
+  it("dispatches registered plugin commands with gateway scopes and session metadata", async () => {
     clearPluginCommands();
     let receivedCtx:
       | {
@@ -2616,6 +2616,9 @@ describe("handleCommands plugin commands", () => {
       sessionId: "session-plugin-command",
       updatedAt: Date.now(),
     };
+
+    // Keep the full scope-forwarding chain covered:
+    // chat.send -> MsgContext.GatewayClientScopes -> plugin ctx.gatewayClientScopes.
     const commandResult = await handleCommands(params);
 
     expect(commandResult.shouldContinue).toBe(false);

@@ -206,6 +206,29 @@ function extractFirstTextBlock(payload: unknown): string | undefined {
   return typeof firstText === "string" ? firstText : undefined;
 }
 
+function createScopedCliClient(
+  scopes: string[],
+  client: Partial<{
+    id: string;
+    mode: string;
+    displayName: string;
+    version: string;
+  }> = {},
+) {
+  const id = client.id ?? "openclaw-cli";
+  return {
+    connect: {
+      scopes,
+      client: {
+        id,
+        mode: client.mode ?? "cli",
+        displayName: client.displayName ?? id,
+        version: client.version ?? "1.0.0",
+      },
+    },
+  };
+}
+
 function createChatContext(): Pick<
   GatewayRequestContext,
   | "broadcast"
@@ -1211,17 +1234,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-synthetic-origin-admin",
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-          client: {
-            id: "openclaw-cli",
-            mode: "cli",
-            displayName: "openclaw-cli",
-            version: "1.0.0",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.admin"]),
       requestParams: {
         originatingChannel: "slack",
         originatingTo: "D123",
@@ -1253,17 +1266,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-synthetic-origin-reject",
-      client: {
-        connect: {
-          scopes: ["operator.write"],
-          client: {
-            id: "openclaw-cli",
-            mode: "cli",
-            displayName: "openclaw-cli",
-            version: "1.0.0",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.write"]),
       requestParams: {
         originatingChannel: "slack",
         originatingTo: "D123",
@@ -1316,17 +1319,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-system-provenance-spoof-reject",
-      client: {
-        connect: {
-          scopes: ["operator.write"],
-          client: {
-            id: "cli",
-            mode: "cli",
-            displayName: "ACP",
-            version: "acp",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.write"], {
+        id: "cli",
+        displayName: "ACP",
+        version: "acp",
+      }),
       requestParams: {
         systemInputProvenance: {
           kind: "external_user",
@@ -1360,17 +1357,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-system-provenance-admin",
       message: "ops update",
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-          client: {
-            id: "custom-operator",
-            mode: "cli",
-            displayName: "custom-operator",
-            version: "1.0.0",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.admin"], {
+        id: "custom-operator",
+      }),
       requestParams: {
         systemInputProvenance: {
           kind: "external_user",
@@ -1408,17 +1397,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-gateway-client-scopes",
       message: "/scopecheck",
-      client: {
-        connect: {
-          scopes: ["operator.write", "operator.pairing"],
-          client: {
-            id: "openclaw-cli",
-            mode: "cli",
-            displayName: "openclaw-cli",
-            version: "1.0.0",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.write", "operator.pairing"]),
       expectBroadcast: false,
     });
 
@@ -1440,17 +1419,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-system-provenance-acp",
       message: "bench update",
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-          client: {
-            id: "cli",
-            mode: "cli",
-            displayName: "ACP",
-            version: "acp",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.admin"], {
+        id: "cli",
+        displayName: "ACP",
+        version: "acp",
+      }),
       requestParams: {
         systemInputProvenance: {
           kind: "external_user",
