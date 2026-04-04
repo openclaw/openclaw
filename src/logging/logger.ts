@@ -261,7 +261,7 @@ export function getChildLogger(
   const name = bindings ? JSON.stringify(bindings) : undefined;
   return base.getSubLogger({
     name,
-    minLevel,
+    ...(minLevel !== undefined ? { minLevel } : {}),
     prefix: bindings ? [name ?? ""] : [],
   });
 }
