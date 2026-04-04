@@ -1,3 +1,5 @@
+// IHttpServerAdapter is re-exported via the public barrel (`export * from './http'`)
+// but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
 import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
@@ -345,7 +347,7 @@ async function deleteActivityViaRest(params: {
  * Build a CloudAdapter-compatible adapter using the Teams SDK REST client.
  *
  * This replaces the previous CloudAdapter from @microsoft/agents-hosting.
- * For incoming requests: the App's HttpPlugin handles JWT validation.
+ * For incoming requests: the App's HTTP server handles JWT validation.
  * For proactive sends: uses the Bot Framework REST API via
  * @microsoft/teams.api Client.
  */
