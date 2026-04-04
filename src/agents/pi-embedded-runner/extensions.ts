@@ -1,6 +1,6 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
@@ -17,12 +17,13 @@ function resolveContextWindowTokens(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
-  model: Model<Api> | undefined;
+  model: ProviderRuntimeModel | undefined;
 }): number {
   return resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
+    modelContextTokens: params.model?.contextTokens,
     modelContextWindow: params.model?.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   }).tokens;
@@ -33,7 +34,7 @@ function buildContextPruningFactory(params: {
   sessionManager: SessionManager;
   provider: string;
   modelId: string;
-  model: Model<Api> | undefined;
+  model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory | undefined {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
@@ -73,7 +74,7 @@ export function buildEmbeddedExtensionFactories(params: {
   sessionManager: SessionManager;
   provider: string;
   modelId: string;
-  model: Model<Api> | undefined;
+  model: ProviderRuntimeModel | undefined;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -83,6 +84,7 @@ export function buildEmbeddedExtensionFactories(params: {
       cfg: params.cfg,
       provider: params.provider,
       modelId: params.modelId,
+      modelContextTokens: params.model?.contextTokens,
       modelContextWindow: params.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });

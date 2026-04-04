@@ -18,6 +18,8 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
 - Fallback runtime rules, cooldown probes, and session-override persistence are
   documented in [/concepts/model-failover](/concepts/model-failover).
+- `models.providers.*.models[].contextWindow` is native model metadata;
+  `models.providers.*.models[].contextTokens` is the effective runtime cap.
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
@@ -187,11 +189,24 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - `params.serviceTier` is also forwarded on native Codex Responses requests (`chatgpt.com/backend-api`)
 - Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
 - `openai-codex/gpt-5.3-codex-spark` remains available when the Codex OAuth catalog exposes it; entitlement-dependent
+- `openai-codex/gpt-5.4` keeps native `contextWindow = 1050000` and a default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
 
 ```json5
 {
   agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+}
+```
+
+```json5
+{
+  models: {
+    providers: {
+      "openai-codex": {
+        models: [{ id: "gpt-5.4", contextTokens: 160000 }],
+      },
+    },
+  },
 }
 ```
 

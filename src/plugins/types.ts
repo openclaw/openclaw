@@ -313,7 +313,9 @@ export type ProviderPluginCatalog = {
  * Runtime hooks below operate on the final `pi-ai` model object after
  * discovery/override merging, just before inference runs.
  */
-export type ProviderRuntimeModel = Model<Api>;
+export type ProviderRuntimeModel = Model<Api> & {
+  contextTokens?: number;
+};
 
 export type ProviderRuntimeProviderConfig = {
   baseUrl?: string;

@@ -105,6 +105,7 @@ export function resolveEffectiveRuntimeModel(params: {
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
+    modelContextTokens: params.runtimeModel.contextTokens,
     modelContextWindow: params.runtimeModel.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });

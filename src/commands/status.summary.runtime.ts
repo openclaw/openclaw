@@ -99,7 +99,7 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
-function resolveConfiguredProviderContextWindow(
+function resolveConfiguredProviderContextTokens(
   cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
@@ -114,13 +114,19 @@ function resolveConfiguredProviderContextWindow(
       continue;
     }
     for (const entry of providerConfig.models) {
+      const contextTokens =
+        typeof entry?.contextTokens === "number"
+          ? entry.contextTokens
+          : typeof entry?.contextWindow === "number"
+            ? entry.contextWindow
+            : undefined;
       if (
         typeof entry?.id === "string" &&
         entry.id === model &&
-        typeof entry.contextWindow === "number" &&
-        entry.contextWindow > 0
+        typeof contextTokens === "number" &&
+        contextTokens > 0
       ) {
-        return entry.contextWindow;
+        return contextTokens;
       }
     }
   }
@@ -180,13 +186,13 @@ function resolveContextTokensForModel(params: {
     return params.contextTokensOverride;
   }
   if (params.provider && params.model) {
-    const configuredWindow = resolveConfiguredProviderContextWindow(
+    const configuredContextTokens = resolveConfiguredProviderContextTokens(
       params.cfg,
       params.provider,
       params.model,
     );
-    if (configuredWindow !== undefined) {
-      return configuredWindow;
+    if (configuredContextTokens !== undefined) {
+      return configuredContextTokens;
     }
   }
   return params.fallbackContextTokens ?? DEFAULT_CONTEXT_TOKENS;

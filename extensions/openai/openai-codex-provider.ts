@@ -33,7 +33,8 @@ import { wrapOpenAICodexProviderStream } from "./stream-hooks.js";
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
-const OPENAI_CODEX_GPT_54_CONTEXT_TOKENS = 400_000;
+const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
+const OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_COST = {
   input: 2.5,
@@ -100,7 +101,8 @@ function resolveCodexForwardCompatModel(
   if (lower === OPENAI_CODEX_GPT_54_MODEL_ID) {
     templateIds = OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS;
     patch = {
-      contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
+      contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
+      contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_COST,
     };
@@ -140,6 +142,7 @@ function resolveCodexForwardCompatModel(
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+      contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     } as ProviderRuntimeModel)
   );
@@ -217,6 +220,7 @@ function buildSyntheticCatalogEntry(
     reasoning: boolean;
     input: readonly ("text" | "image")[];
     contextWindow: number;
+    contextTokens?: number;
   },
 ) {
   if (!template) {
@@ -229,6 +233,7 @@ function buildSyntheticCatalogEntry(
     reasoning: entry.reasoning,
     input: [...entry.input],
     contextWindow: entry.contextWindow,
+    ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
   };
 }
 
@@ -312,7 +317,8 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           id: OPENAI_CODEX_GPT_54_MODEL_ID,
           reasoning: true,
           input: ["text", "image"],
-          contextWindow: OPENAI_CODEX_GPT_54_CONTEXT_TOKENS,
+          contextWindow: OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS,
+          contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
         }),
         buildSyntheticCatalogEntry(sparkTemplate, {
           id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
