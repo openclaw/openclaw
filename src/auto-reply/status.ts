@@ -241,6 +241,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
+      cacheRead: number;
+      cacheWrite: number;
       promptTokens: number;
       total: number;
       model?: string;
@@ -321,7 +323,15 @@ const readUsageFromSessionLog = (
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
-    return { input, output, promptTokens, total, model };
+    return {
+      input,
+      output,
+      cacheRead: lastUsage.cacheRead ?? 0,
+      cacheWrite: lastUsage.cacheWrite ?? 0,
+      promptTokens,
+      total,
+      model,
+    };
   } catch {
     return undefined;
   }
@@ -553,6 +563,12 @@ export function buildStatusMessage(args: StatusArgs): string {
       }
       if (!outputTokens || outputTokens === 0) {
         outputTokens = logUsage.output;
+      }
+      if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        cacheRead = logUsage.cacheRead;
+      }
+      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        cacheWrite = logUsage.cacheWrite;
       }
     }
   }
