@@ -371,6 +371,35 @@ describe("saveConfig", () => {
     expect(parsed.gateway.port).toBe("18789");
     expect(params.baseHash).toBe("hash-save-2");
   });
+
+  it("drops unresolved redacted placeholders before config.set", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configForm = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    state.configRawOriginal = '{\n  gateway: {\n    mode: "remote"\n  }\n}\n';
+    state.configSnapshot = { hash: "hash-save-3" };
+
+    await saveConfig(state);
+
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      gateway: { mode: string; remote?: { token?: string } };
+    };
+    expect(parsed.gateway.mode).toBe("remote");
+    expect(parsed.gateway.remote).toBeUndefined();
+    expect(params.baseHash).toBe("hash-save-3");
+  });
 });
 
 describe("runUpdate", () => {

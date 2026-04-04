@@ -6,6 +6,7 @@ import {
   removePathValue,
   serializeConfigForm,
   setPathValue,
+  stripUnrestorableRedactedValues,
 } from "./form-utils.ts";
 
 /**
@@ -131,6 +132,45 @@ describe("form-utils preserves numeric types", () => {
     expectNumericModelCore(first);
     expect(typeof first.cost).toBe("object");
     expect(typeof (first.cost as Record<string, unknown>).input).toBe("number");
+  });
+});
+
+describe("stripUnrestorableRedactedValues", () => {
+  it("drops redacted placeholders for paths missing from the original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+
+    expect(
+      stripUnrestorableRedactedValues(form, '{\n  gateway: {\n    mode: "remote"\n  }\n}\n'),
+    ).toEqual({
+      gateway: {
+        mode: "remote",
+      },
+    });
+  });
+
+  it("keeps redacted placeholders that already exist in the original raw config", () => {
+    const form = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+
+    expect(
+      stripUnrestorableRedactedValues(
+        form,
+        '{\n  gateway: {\n    mode: "remote",\n    remote: {\n      token: "__OPENCLAW_REDACTED__"\n    }\n  }\n}\n',
+      ),
+    ).toEqual(form);
   });
 });
 
