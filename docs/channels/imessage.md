@@ -417,8 +417,14 @@ If you don't want to maintain a Mac or BlueBubbles server, managed relay service
 
 | Service | Protocol | Mac required | Starting price | OpenClaw plugin |
 |---------|----------|-------------|---------------|-----------------|
-| [Claw Messenger](https://clawmessenger.com) | WebSocket | No | $5/mo | `@emotion-machine/claw-messenger` |
 | [Blooio](https://blooio.com) | REST API | No | $39/mo | Community |
+| [Claw Messenger](https://clawmessenger.com) | WebSocket | No | $5/mo | `@emotion-machine/claw-messenger` |
+
+### Blooio
+
+REST API service for iMessage, RCS, and SMS. Supports OAuth (Bearer token) authentication. No official OpenClaw plugin yet, but can be integrated via the REST API and a custom channel handler.
+
+See [blooio.com/integrations/api](https://blooio.com/integrations/api) for API docs.
 
 ### Claw Messenger
 
@@ -442,12 +448,6 @@ openclaw plugins install @emotion-machine/claw-messenger
 ```
 
 See [clawmessenger.com](https://clawmessenger.com) for pricing and docs.
-
-### Blooio
-
-REST API service using iPhone hardware bridges. Supports iMessage, RCS, and SMS with OAuth authentication. No official OpenClaw plugin, but can be integrated via the REST API and a custom channel handler.
-
-See [blooio.com/integrations/api](https://blooio.com/integrations/api) for API docs.
 
 ## Configuration reference pointers
 
