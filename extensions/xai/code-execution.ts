@@ -3,10 +3,8 @@ import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   jsonResult,
-  readConfiguredSecretString,
   readProviderEnvValue,
   readStringParam,
-  resolveProviderWebSearchPluginConfig,
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiCodeExecutionPayload,
@@ -14,6 +12,7 @@ import {
   resolveXaiCodeExecutionMaxTurns,
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
+import { resolveFallbackXaiApiKey } from "./src/tool-auth-shared.js";
 
 type XaiPluginConfig = NonNullable<
   NonNullable<OpenClawConfig["plugins"]>["entries"]
@@ -36,18 +35,6 @@ function readCodeExecutionConfigRecord(
   return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
 }
 
-function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredSecretString(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-    "tools.web.search.grok.apiKey",
-  );
-}
-
 function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfig | undefined {
   const entries = cfg?.plugins?.entries;
   if (!entries || typeof entries !== "object") {
@@ -66,16 +53,6 @@ function readPluginCodeExecutionConfig(cfg?: OpenClawConfig): CodeExecutionConfi
     return undefined;
   }
   return codeExecution as CodeExecutionConfig;
-}
-
-function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  return (
-    readConfiguredSecretString(
-      resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")
-        ?.apiKey,
-      "plugins.entries.xai.config.webSearch.apiKey",
-    ) ?? readLegacyGrokApiKey(cfg)
-  );
 }
 
 function resolveCodeExecutionEnabled(params: {

@@ -4,12 +4,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   jsonResult,
   readCache,
-  readConfiguredSecretString,
   readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
   resolveCacheTtlMs,
-  resolveProviderWebSearchPluginConfig,
   resolveTimeoutSeconds,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -17,6 +15,7 @@ import {
   resolveEffectiveXSearchConfig,
   resolveLegacyXSearchConfig,
 } from "./src/x-search-config.js";
+import { resolveFallbackXaiApiKey } from "./src/tool-auth-shared.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
@@ -53,29 +52,6 @@ function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
 }
 
 const X_SEARCH_CACHE = getSharedXSearchCache();
-
-function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredSecretString(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-    "tools.web.search.grok.apiKey",
-  );
-}
-
-function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | undefined {
-  return readConfiguredSecretString(
-    resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
-    "plugins.entries.xai.config.webSearch.apiKey",
-  );
-}
-
-function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
-  return readPluginXaiWebSearchApiKey(cfg) ?? readLegacyGrokApiKey(cfg);
-}
 
 function resolveXSearchConfig(cfg?: OpenClawConfig): Record<string, unknown> | undefined {
   return resolveEffectiveXSearchConfig(cfg);
