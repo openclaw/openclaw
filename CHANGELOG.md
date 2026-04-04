@@ -221,6 +221,7 @@ Docs: https://docs.openclaw.ai
 - Agents/scheduling: route delayed follow-up requests toward cron only when cron is actually available, while keeping background `exec`/`process` guidance scoped to work that starts now. (#60811) Thanks @vincentkoc.
 - Cron/security: reject unsafe custom `sessionTarget: "session:..."` IDs earlier during cron add, update, and execution so malformed custom session keys fail closed with clear errors.
 - Feishu/cards: replace the legacy `wide_screen_mode` schema 1.x config with schema 2.0 `width_mode: "fill"` in interactive approval, launcher, markdown, and structured card builders so Feishu card sends stop failing with parse-card errors while preserving wide-card rendering. (#53395) Thanks @drvoss
+- Core/approvals: share approval-not-found fallback classification through the narrow `plugin-sdk/error-runtime` seam so core `/approve` and Telegram stay aligned without widening `plugin-sdk/infra-runtime`. (#60932) Thanks @gumadeiras.
 
 ## 2026.4.1
 
