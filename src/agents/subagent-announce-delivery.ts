@@ -301,7 +301,9 @@ export async function resolveSubagentCompletionOrigin(params: {
       targets: [to],
     }) || "";
   const conversationId =
-    threadId && baseConversationId ? `${baseConversationId}::thread:${threadId}` : threadId || baseConversationId;
+    threadId && baseConversationId
+      ? `${baseConversationId}::thread:${threadId}`
+      : threadId || baseConversationId;
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
@@ -389,10 +391,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
     method: "agent",
     params: {
       sessionKey: item.sessionKey,
-      message:
-        requesterIsSubagent
-          ? item.execution.agentPrompt
-          : ((item.display.visibility === "user-visible" ? item.display.text ?? item.display.summaryLine : undefined) || ""),
+      message: requesterIsSubagent ? item.execution.agentPrompt : (userFacing?.text ?? ""),
       channel: requesterIsSubagent ? undefined : origin?.channel,
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
@@ -474,7 +473,9 @@ function resolveDeliveryConversationIdentity(origin?: DeliveryContext): {
       targets: [to],
     }) || "";
   const conversationId =
-    threadId && baseConversationId ? `${baseConversationId}::thread:${threadId}` : threadId || baseConversationId;
+    threadId && baseConversationId
+      ? `${baseConversationId}::thread:${threadId}`
+      : threadId || baseConversationId;
   if (!channel || !conversationId) {
     return null;
   }
