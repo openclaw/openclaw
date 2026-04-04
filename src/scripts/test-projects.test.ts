@@ -249,6 +249,28 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes browser extension targets to the extension channel config", () => {
+    expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
+      {
+        config: "vitest.extension-channels.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/browser/index.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes line extension targets to the extension channel config", () => {
+    expect(buildVitestRunPlans(["extensions/line/src/send.test.ts"])).toEqual([
+      {
+        config: "vitest.extension-channels.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/line/src/send.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes direct provider extension file targets to the extensions config", () => {
     expect(buildVitestRunPlans(["extensions/firecrawl/index.test.ts"])).toEqual([
       {
