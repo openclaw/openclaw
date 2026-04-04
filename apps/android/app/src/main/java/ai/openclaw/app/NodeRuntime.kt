@@ -373,11 +373,10 @@ class NodeRuntime(
         parseChatSendRunId(response) ?: idempotencyKey
       },
       speakAssistantReply = { text ->
-        // Skip if TalkModeManager is handling TTS (ttsOnAllResponses) to avoid
-        // double-speaking the same assistant reply from both pipelines.
-        if (!talkMode.ttsOnAllResponses) {
-          voiceReplySpeaker.speakAssistantReply(text)
-        }
+        // Voice-tab replies should speak through the dedicated reply speaker.
+        // Relying on talkMode.ttsOnAllResponses here can drop playback if the
+        // chat-event path misses the terminal event for this turn.
+        voiceReplySpeaker.speakAssistantReply(text)
       },
     )
   }
@@ -583,12 +582,11 @@ class NodeRuntime(
 
     scope.launch {
       prefs.talkEnabled.collect { enabled ->
-        // MicCaptureManager handles STT + send to gateway.
-        // TalkModeManager plays TTS on assistant responses.
+        // MicCaptureManager handles STT + send to gateway, while the dedicated
+        // reply speaker handles TTS for assistant replies in the voice tab.
         micCapture.setMicEnabled(enabled)
         if (enabled) {
-          // Mic on = user is on voice screen and wants TTS responses.
-          talkMode.ttsOnAllResponses = true
+          talkMode.ttsOnAllResponses = false
           scope.launch { talkMode.ensureChatSubscribed() }
         }
         externalAudioCaptureActive.value = enabled
@@ -750,7 +748,7 @@ class NodeRuntime(
     if (value) {
       // Tapping mic on interrupts any active TTS (barge-in)
       talkMode.stopTts()
-      talkMode.ttsOnAllResponses = true
+      talkMode.ttsOnAllResponses = false
       scope.launch { talkMode.ensureChatSubscribed() }
     }
     micCapture.setMicEnabled(value)
@@ -765,7 +763,7 @@ class NodeRuntime(
     if (voiceReplySpeakerLazy.isInitialized()) {
       voiceReplySpeaker.setPlaybackEnabled(value)
     }
-    // Keep TalkMode in sync so speaker mute works when ttsOnAllResponses is active.
+    // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
   }
 
