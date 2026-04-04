@@ -110,7 +110,7 @@ Docs: https://docs.openclaw.ai
 - Agents/exec: restore `host=node` routing for node-pinned and `host=auto` sessions, while still blocking sandboxed `auto` sessions from jumping to gateway. (#60788) Thanks @openperf.
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Outbound/sanitizer: strip leaked `<tool_call>`, `<function_calls>`, and model special tokens from shared user-visible assistant text, including truncated tool-call streams, so internal scaffolding no longer bleeds into replies across surfaces. (#60619) Thanks @oliviareid-svg.
-- Media: fix `sanitizeMimeType` regex to anchor at end (`$`), handle optional MIME parameters (`; charset=...`), and apply case-insensitive matching per RFC 2045, preventing potential MIME type bypass via malicious suffix. (#9795) Thanks @shamsulalam1114.
+- Media: fix `sanitizeMimeType` regex to anchor at end (`$`), enforce RFC 2045 `; attribute=value` parameter grammar, and apply case-insensitive matching per RFC 2045 §5.1, avoiding matches on trailing non-parameter suffixes while preserving valid parameterized MIME types. (#9795) Thanks @shamsulalam1114.
 
 ## 2026.4.2
 
