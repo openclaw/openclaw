@@ -3,6 +3,7 @@ import {
   applyModelStudioNativeStreamingUsageCompat,
   buildModelStudioProvider,
   MODELSTUDIO_BASE_URL,
+  MODELSTUDIO_DEFAULT_MODEL_ID,
 } from "./api.js";
 
 describe("modelstudio provider catalog", () => {
@@ -12,6 +13,10 @@ describe("modelstudio provider catalog", () => {
     expect(provider.baseUrl).toBe(MODELSTUDIO_BASE_URL);
     expect(provider.api).toBe("openai-completions");
     expect(provider.models?.length).toBeGreaterThan(0);
+    expect(
+      provider.models?.find((model) => model.id === MODELSTUDIO_DEFAULT_MODEL_ID),
+    ).toBeTruthy();
+    expect(provider.models?.find((model) => model.id === "qwen3.6-plus")).toBeTruthy();
   });
 
   it("opts native Model Studio baseUrls into streaming usage only inside the extension", () => {

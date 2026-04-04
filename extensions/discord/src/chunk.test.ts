@@ -1,5 +1,5 @@
+import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { countLines, hasBalancedFences } from "../../../test/helpers/plugins/chunk.js";
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 
 describe("chunkDiscordText", () => {

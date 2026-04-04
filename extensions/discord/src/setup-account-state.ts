@@ -5,6 +5,7 @@ import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { resolveDefaultDiscordAccountId } from "./accounts.js";
 import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accounts.js";
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
@@ -54,14 +55,16 @@ export function listDiscordSetupAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultDiscordSetupAccountId(cfg: OpenClawConfig): string {
-  return listDiscordSetupAccountIds(cfg)[0] ?? DEFAULT_ACCOUNT_ID;
+  return resolveDefaultDiscordAccountId(cfg);
 }
 
 export function resolveDiscordSetupAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): { accountId: string; config: DiscordAccountConfig } {
-  const accountId = normalizeAccountId(params.accountId ?? DEFAULT_ACCOUNT_ID);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordSetupAccountId(params.cfg),
+  );
   return {
     accountId,
     config: mergeDiscordAccountConfig(params.cfg, accountId),

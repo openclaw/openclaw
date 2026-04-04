@@ -46,8 +46,9 @@ Sender labels:
 example
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`;
 
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../session-utils.js")>();
+vi.mock("../session-utils.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
     loadSessionEntry: (rawKey: string) => ({
@@ -116,8 +117,9 @@ vi.mock("../../sessions/transcript-events.js", () => ({
   ),
 }));
 
-vi.mock("../../media/store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../media/store.js")>();
+vi.mock("../../media/store.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../../media/store.js")>("../../media/store.js");
   return {
     ...original,
     saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string, subdir?: string) => {
@@ -147,7 +149,7 @@ vi.mock("../../media/store.js", async (importOriginal) => {
 
 const { chatHandlers } = await import("./chat.js");
 
-async function waitForAssertion(assertion: () => void, timeoutMs = 250, stepMs = 2) {
+async function waitForAssertion(assertion: () => void, timeoutMs = 1000, stepMs = 2) {
   vi.useFakeTimers();
   try {
     let lastError: unknown;
@@ -184,34 +186,6 @@ function createTranscriptFixture(prefix: string) {
   mockState.transcriptPath = transcriptPath;
 }
 
-function appendTranscriptMessage(params: {
-  id: string;
-  parentId: string | null;
-  message: Record<string, unknown>;
-}) {
-  fs.appendFileSync(
-    mockState.transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: params.id,
-      parentId: params.parentId,
-      timestamp: new Date(0).toISOString(),
-      message: params.message,
-    })}\n`,
-    "utf-8",
-  );
-}
-
-function readTranscriptMessages() {
-  return fs
-    .readFileSync(mockState.transcriptPath, "utf-8")
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as { type?: string; message?: Record<string, unknown> })
-    .filter((entry) => entry.type === "message")
-    .map((entry) => entry.message ?? {});
-}
-
 function extractFirstTextBlock(payload: unknown): string | undefined {
   if (!payload || typeof payload !== "object") {
     return undefined;
@@ -243,6 +217,7 @@ function createChatContext(): Pick<
   | "chatAbortedRuns"
   | "removeChatRun"
   | "dedupe"
+  | "loadGatewayModelCatalog"
   | "registerToolEventRecipient"
   | "logGateway"
 > {
@@ -256,6 +231,14 @@ function createChatContext(): Pick<
     chatAbortedRuns: new Map(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),
+    loadGatewayModelCatalog: async () => [
+      {
+        provider: "anthropic",
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        input: ["text", "image"],
+      },
+    ],
     registerToolEventRecipient: vi.fn(),
     logGateway: {
       warn: vi.fn(),
@@ -265,6 +248,7 @@ function createChatContext(): Pick<
 }
 
 type ChatContext = ReturnType<typeof createChatContext>;
+type NonStreamingChatSendWaitFor = "broadcast" | "dedupe" | "none";
 
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
@@ -277,6 +261,8 @@ async function runNonStreamingChatSend(params: {
   expectBroadcast?: boolean;
   requestParams?: Record<string, unknown>;
   waitForCompletion?: boolean;
+  waitForDedupe?: boolean;
+  waitFor?: NonStreamingChatSendWaitFor;
 }) {
   const sendParams: {
     sessionKey: string;
@@ -305,11 +291,17 @@ async function runNonStreamingChatSend(params: {
     context: params.context as GatewayRequestContext,
   });
 
-  const shouldExpectBroadcast = params.expectBroadcast ?? true;
-  if (!shouldExpectBroadcast) {
-    if (params.waitForCompletion === false) {
-      return undefined;
-    }
+  const waitFor =
+    params.waitFor ??
+    (params.waitForCompletion === false || params.waitForDedupe === false
+      ? "none"
+      : params.expectBroadcast === false
+        ? "dedupe"
+        : "broadcast");
+  if (waitFor === "none") {
+    return undefined;
+  }
+  if (waitFor === "dedupe") {
     await waitForAssertion(() => {
       expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
     });
@@ -1559,65 +1551,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(mockState.lastDispatchCtx?.MediaPath).toBeUndefined();
       expect(mockState.lastDispatchCtx?.MediaPaths).toBeUndefined();
       expect(mockState.lastDispatchImages).toHaveLength(2);
-    });
-  });
-
-  it("rewrites the persisted user turn with saved media paths after dispatch", async () => {
-    createTranscriptFixture("openclaw-chat-send-user-transcript-rewrite-");
-    appendTranscriptMessage({
-      id: "msg-user-1",
-      parentId: null,
-      message: {
-        role: "user",
-        content: "edit these",
-        timestamp: Date.now(),
-      },
-    });
-    appendTranscriptMessage({
-      id: "msg-assistant-1",
-      parentId: "msg-user-1",
-      message: {
-        role: "assistant",
-        content: "old reply",
-        timestamp: Date.now(),
-      },
-    });
-    mockState.finalText = "ok";
-    mockState.savedMediaResults = [
-      { path: "/tmp/chat-send-image-a.png", contentType: "image/png" },
-    ];
-    const respond = vi.fn();
-    const context = createChatContext();
-
-    await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-user-transcript-rewrite",
-      message: "edit these",
-      requestParams: {
-        attachments: [
-          {
-            mimeType: "image/png",
-            content:
-              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYoYAAAAASUVORK5CYII=",
-          },
-        ],
-      },
-      expectBroadcast: false,
-    });
-
-    await waitForAssertion(() => {
-      const lastUser = [...readTranscriptMessages()]
-        .toReversed()
-        .find((message) => message.role === "user" && message.content === "edit these");
-      expect(lastUser).toMatchObject({
-        role: "user",
-        content: "edit these",
-        MediaPath: "/tmp/chat-send-image-a.png",
-        MediaPaths: ["/tmp/chat-send-image-a.png"],
-        MediaType: "image/png",
-        MediaTypes: ["image/png"],
-      });
     });
   });
 

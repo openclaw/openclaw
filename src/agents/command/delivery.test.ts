@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { slackOutbound } from "../../../test/channel-outbounds.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -10,6 +10,14 @@ import type { AgentCommandOpts } from "./types.js";
 type NormalizeParams = Parameters<typeof normalizeAgentCommandReplyPayloads>[0];
 type RunResult = NormalizeParams["result"];
 
+const slackOutboundForTest: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async ({ to, text }) => ({
+    channel: "slack",
+    messageId: `${to}:${text}`,
+  }),
+};
+
 const emptyRegistry = createTestRegistry([]);
 const slackRegistry = createTestRegistry([
   {
@@ -17,7 +25,7 @@ const slackRegistry = createTestRegistry([
     source: "test",
     plugin: createOutboundTestPlugin({
       id: "slack",
-      outbound: slackOutbound,
+      outbound: slackOutboundForTest,
       messaging: {
         enableInteractiveReplies: ({ cfg }) =>
           (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)

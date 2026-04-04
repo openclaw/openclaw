@@ -76,8 +76,12 @@ function resolveSenderToolsEntry(
 }
 
 function resolveDiscordPolicyContext(params: ChannelGroupContext) {
+  const guilds =
+    (params.accountId
+      ? params.cfg.channels?.discord?.accounts?.[params.accountId]?.guilds
+      : undefined) ?? params.cfg.channels?.discord?.guilds;
   const guildEntry = resolveDiscordGuildEntry(
-    params.cfg.channels?.discord?.guilds,
+    guilds,
     params.groupSpace,
   );
   const channelEntries = guildEntry?.channels;

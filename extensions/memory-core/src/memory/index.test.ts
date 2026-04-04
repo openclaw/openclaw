@@ -900,6 +900,11 @@ describe("memory index", () => {
         }) => Promise<void>;
         shouldFallbackOnError: (message: string) => boolean;
         activateFallbackProvider: (reason: string) => Promise<boolean>;
+        runSafeReindex: (params: {
+          reason?: string;
+          force?: boolean;
+          progress?: unknown;
+        }) => Promise<void>;
         runUnsafeReindex: (params: {
           reason?: string;
           force?: boolean;
@@ -909,6 +914,7 @@ describe("memory index", () => {
       const originalSyncSessionFiles = internal.syncSessionFiles.bind(manager);
       const originalShouldFallbackOnError = internal.shouldFallbackOnError.bind(manager);
       const originalActivateFallbackProvider = internal.activateFallbackProvider.bind(manager);
+      const originalRunSafeReindex = internal.runSafeReindex.bind(manager);
       const originalRunUnsafeReindex = internal.runUnsafeReindex.bind(manager);
 
       internal.syncSessionFiles = async (params) => {
@@ -920,6 +926,8 @@ describe("memory index", () => {
       internal.shouldFallbackOnError = () => true;
       const activateFallbackProvider = vi.fn(async () => true);
       internal.activateFallbackProvider = activateFallbackProvider;
+      const runSafeReindex = vi.fn(async () => {});
+      internal.runSafeReindex = runSafeReindex;
       const runUnsafeReindex = vi.fn(async () => {});
       internal.runUnsafeReindex = runUnsafeReindex;
 
@@ -929,15 +937,26 @@ describe("memory index", () => {
       });
 
       expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
-      expect(runUnsafeReindex).toHaveBeenCalledWith({
+      const expectedReindexParams = {
         reason: "post-compaction",
         force: true,
         progress: undefined,
-      });
+      };
+      const usesUnsafeReindex =
+        process.env.OPENCLAW_TEST_FAST === "1" &&
+        process.env.OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX === "1";
+      if (usesUnsafeReindex) {
+        expect(runUnsafeReindex).toHaveBeenCalledWith(expectedReindexParams);
+        expect(runSafeReindex).not.toHaveBeenCalled();
+      } else {
+        expect(runSafeReindex).toHaveBeenCalledWith(expectedReindexParams);
+        expect(runUnsafeReindex).not.toHaveBeenCalled();
+      }
 
       internal.syncSessionFiles = originalSyncSessionFiles;
       internal.shouldFallbackOnError = originalShouldFallbackOnError;
       internal.activateFallbackProvider = originalActivateFallbackProvider;
+      internal.runSafeReindex = originalRunSafeReindex;
       internal.runUnsafeReindex = originalRunUnsafeReindex;
       await manager.close?.();
     } finally {
@@ -1054,6 +1073,9 @@ describe("memory index", () => {
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     const manager = requireManager(result);
     managersForCleanup.add(manager);
+
+    await manager.sync({ reason: "test" });
+    (manager as unknown as { dirty: boolean }).dirty = true;
 
     const db = (
       manager as unknown as {

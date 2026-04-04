@@ -4,8 +4,10 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
+    "../infra/net/fetch-guard.js",
+  );
   return {
     ...actual,
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -13,6 +15,7 @@ vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
 });
 
 import {
+  postJsonRequest,
   fetchWithTimeoutGuarded,
   readErrorResponse,
   resolveProviderHttpRequestConfig,
@@ -189,6 +192,34 @@ describe("fetchWithTimeoutGuarded", () => {
       expect.objectContaining({
         auditContext: "provider-http fal image test",
         timeoutMs: 5000,
+      }),
+    );
+  });
+
+  it("passes configured explicit proxy policy through the SSRF guard", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await postJsonRequest({
+      url: "https://api.deepgram.com/v1/listen",
+      headers: new Headers({ authorization: "Token test-key" }),
+      body: { hello: "world" },
+      fetchFn: fetch,
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://169.254.169.254:8080",
+      },
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://169.254.169.254:8080",
+        },
       }),
     );
   });

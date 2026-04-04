@@ -23,7 +23,7 @@ export {
 export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 export { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 export { chunkText } from "openclaw/plugin-sdk/reply-runtime";
-export { detectBinary, installSignalCli } from "openclaw/plugin-sdk/setup-tools";
+export { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -43,6 +43,7 @@ export {
   resolveSignalAccount,
 } from "./accounts.js";
 export { monitorSignalProvider } from "./monitor.js";
+export { installSignalCli } from "./install-signal-cli.js";
 export { probeSignal } from "./probe.js";
 export { resolveSignalReactionLevel } from "./reaction-level.js";
 export { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
