@@ -89,4 +89,33 @@ describe("acp.stream legacy key migration (issue #35957)", () => {
       maxSessionUpdateChars: 300,
     });
   });
+
+  it("removes no-replacement legacy keys even when their values have wrong types", () => {
+    const result = migrateLegacyConfig({
+      acp: {
+        stream: {
+          maxOutputChars: 9000,
+          maxSessionUpdateChars: 300,
+          maxStatusChars: "400",
+          maxMetaEventsPerTurn: "6",
+          metaMode: 1,
+          showUsage: "true",
+        },
+      },
+    });
+
+    expect(result.config).not.toBeNull();
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Removed acp.stream.maxStatusChars (no replacement).",
+        "Removed acp.stream.maxMetaEventsPerTurn (no replacement).",
+        "Removed acp.stream.metaMode (no replacement).",
+        "Removed acp.stream.showUsage (no replacement).",
+      ]),
+    );
+    expect(result.config?.acp?.stream).toEqual({
+      maxOutputChars: 9000,
+      maxSessionUpdateChars: 300,
+    });
+  });
 });

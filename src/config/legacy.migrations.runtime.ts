@@ -445,34 +445,22 @@ function migrateLegacyAcpStream(stream: Record<string, unknown>, changes: string
     delete stream.maxToolSummaryChars;
   }
 
-  if (
-    Object.prototype.hasOwnProperty.call(stream, "maxStatusChars") &&
-    typeof stream.maxStatusChars === "number"
-  ) {
+  if (Object.prototype.hasOwnProperty.call(stream, "maxStatusChars")) {
     delete stream.maxStatusChars;
     changes.push("Removed acp.stream.maxStatusChars (no replacement).");
   }
 
-  if (
-    Object.prototype.hasOwnProperty.call(stream, "maxMetaEventsPerTurn") &&
-    typeof stream.maxMetaEventsPerTurn === "number"
-  ) {
+  if (Object.prototype.hasOwnProperty.call(stream, "maxMetaEventsPerTurn")) {
     delete stream.maxMetaEventsPerTurn;
     changes.push("Removed acp.stream.maxMetaEventsPerTurn (no replacement).");
   }
 
-  if (
-    Object.prototype.hasOwnProperty.call(stream, "metaMode") &&
-    typeof stream.metaMode === "string"
-  ) {
+  if (Object.prototype.hasOwnProperty.call(stream, "metaMode")) {
     delete stream.metaMode;
     changes.push("Removed acp.stream.metaMode (no replacement).");
   }
 
-  if (
-    Object.prototype.hasOwnProperty.call(stream, "showUsage") &&
-    typeof stream.showUsage === "boolean"
-  ) {
+  if (Object.prototype.hasOwnProperty.call(stream, "showUsage")) {
     delete stream.showUsage;
     changes.push("Removed acp.stream.showUsage (no replacement).");
   }
