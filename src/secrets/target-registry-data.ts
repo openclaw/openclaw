@@ -313,17 +313,6 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
-    id: "talk.apiKey",
-    targetType: "talk.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "talk.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
     id: "talk.providers.*.apiKey",
     targetType: "talk.providers.*.apiKey",
     configFile: "openclaw.json",

@@ -42,9 +42,10 @@ describe("exec SecretRef id parity", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
+          type: "talk.providers.*.apiKey",
+          path: "talk.providers.elevenlabs.apiKey",
+          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          providerId: "elevenlabs",
           ref: { source: "exec", provider: "vault", id },
         },
       ],

@@ -58,9 +58,10 @@ describe("secrets plan validation", () => {
       generatedBy: "manual",
       targets: [
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
+          type: "talk.providers.*.apiKey",
+          path: "talk.providers.elevenlabs.apiKey",
+          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          providerId: "elevenlabs",
           ref: { source: "env", provider: "default", id: "TALK_API_KEY" },
         },
       ],
@@ -112,9 +113,10 @@ describe("secrets plan validation", () => {
         generatedBy: "manual",
         targets: [
           {
-            type: "talk.apiKey",
-            path: "talk.apiKey",
-            pathSegments: ["talk", "apiKey"],
+            type: "talk.providers.*.apiKey",
+            path: "talk.providers.elevenlabs.apiKey",
+            pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+            providerId: "elevenlabs",
             ref: { source: "exec", provider: "vault", id },
           },
         ],
@@ -132,9 +134,10 @@ describe("secrets plan validation", () => {
         generatedBy: "manual",
         targets: [
           {
-            type: "talk.apiKey",
-            path: "talk.apiKey",
-            pathSegments: ["talk", "apiKey"],
+            type: "talk.providers.*.apiKey",
+            path: "talk.providers.elevenlabs.apiKey",
+            pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+            providerId: "elevenlabs",
             ref: { source: "exec", provider: "vault", id },
           },
         ],

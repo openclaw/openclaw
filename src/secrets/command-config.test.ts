@@ -6,12 +6,20 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
   it("returns assignments from the active runtime snapshot for configured refs", () => {
     const sourceConfig = {
       talk: {
-        apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+          },
+        },
       },
     } as unknown as OpenClawConfig;
     const resolvedConfig = {
       talk: {
-        apiKey: "talk-key", // pragma: allowlist secret
+        providers: {
+          elevenlabs: {
+            apiKey: "talk-key", // pragma: allowlist secret
+          },
+        },
       },
     } as unknown as OpenClawConfig;
 
@@ -19,13 +27,13 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
       sourceConfig,
       resolvedConfig,
       commandName: "memory status",
-      targetIds: new Set(["talk.apiKey"]),
+      targetIds: new Set(["talk.providers.*.apiKey"]),
     });
 
     expect(result.assignments).toEqual([
       {
-        path: "talk.apiKey",
-        pathSegments: ["talk", "apiKey"],
+        path: "talk.providers.elevenlabs.apiKey",
+        pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
         value: "talk-key",
       },
     ]);
@@ -34,11 +42,19 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
   it("throws when configured refs are unresolved in the snapshot", () => {
     const sourceConfig = {
       talk: {
-        apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+          },
+        },
       },
     } as unknown as OpenClawConfig;
     const resolvedConfig = {
-      talk: {},
+      talk: {
+        providers: {
+          elevenlabs: {},
+        },
+      },
     } as unknown as OpenClawConfig;
 
     expect(() =>
@@ -46,9 +62,11 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
         sourceConfig,
         resolvedConfig,
         commandName: "memory search",
-        targetIds: new Set(["talk.apiKey"]),
+        targetIds: new Set(["talk.providers.*.apiKey"]),
       }),
-    ).toThrow(/memory search: talk\.apiKey is unresolved in the active runtime snapshot/);
+    ).toThrow(
+      /memory search: talk\.providers\.elevenlabs\.apiKey is unresolved in the active runtime snapshot/,
+    );
   });
 
   it("skips unresolved refs that are marked inactive by runtime warnings", () => {

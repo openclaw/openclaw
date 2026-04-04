@@ -233,10 +233,14 @@ describe("gateway hot reload", () => {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
 
-  async function writeTalkApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
+  async function writeTalkProviderApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
     await writeConfigFile({
       talk: {
-        apiKey: { source: "env", provider: "default", id: refId },
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: refId },
+          },
+        },
       },
     });
   }
@@ -753,7 +757,7 @@ describe("gateway hot reload", () => {
     const refId = "RUNTIME_LKG_TALK_API_KEY";
     const previousRefValue = process.env[refId];
     process.env[refId] = "talk-key-before-reload-failure"; // pragma: allowlist secret
-    await writeTalkApiKeyEnvRefConfig(refId);
+    await writeTalkProviderApiKeyEnvRefConfig(refId);
 
     const { server, ws } = await startServerWithClient();
     try {
@@ -762,10 +766,10 @@ describe("gateway hot reload", () => {
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
       }>(ws, "secrets.resolve", {
         commandName: "runtime-lkg-test",
-        targetIds: ["talk.apiKey"],
+        targetIds: ["talk.providers.*.apiKey"],
       });
       expect(preResolve.ok).toBe(true);
-      expect(preResolve.payload?.assignments?.[0]?.path).toBe("talk.apiKey");
+      expect(preResolve.payload?.assignments?.[0]?.path).toBe("talk.providers.elevenlabs.apiKey");
       expect(preResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
 
       delete process.env[refId];
@@ -778,10 +782,12 @@ describe("gateway hot reload", () => {
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
       }>(ws, "secrets.resolve", {
         commandName: "runtime-lkg-test",
-        targetIds: ["talk.apiKey"],
+        targetIds: ["talk.providers.*.apiKey"],
       });
       expect(postResolve.ok).toBe(true);
-      expect(postResolve.payload?.assignments?.[0]?.path).toBe("talk.apiKey");
+      expect(postResolve.payload?.assignments?.[0]?.path).toBe(
+        "talk.providers.elevenlabs.apiKey",
+      );
       expect(postResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
     } finally {
       if (previousRefValue === undefined) {
