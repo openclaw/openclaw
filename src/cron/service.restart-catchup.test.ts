@@ -362,4 +362,91 @@ describe("CronService restart catch-up", () => {
 
     await store.cleanup();
   });
+
+  // Regression tests for https://github.com/openclaw/openclaw/issues/61028
+  // A cron job with a non-UTC tz must use the stored nextRunAtMs (which reflects
+  // the tz-correct scheduled slot) to decide whether to fire on restart.  Before
+  // the fix, patching a job's expr without re-supplying tz caused nextRunAtMs to
+  // be recomputed in the server's local timezone (UTC), producing a UTC-naive value
+  // that would trigger spurious catch-up runs on the next restart.
+
+  it("does not spuriously fire a non-UTC job whose tz-correct nextRunAtMs is still in the future (#61028)", async () => {
+    // nowMs = 2025-12-13T17:00:00Z (UTC).
+    // Job schedule: "0 21 * * *" America/Sao_Paulo (BRT = UTC-3).
+    //   → 21:00 BRT = 00:00 UTC next day.
+    // Last ran at 00:00 UTC Dec 13 (= 21:00 BRT Dec 12).
+    // Tz-correct nextRunAtMs = 00:00 UTC Dec 14 — still 7 hours away.
+    // A UTC-naive nextRunAtMs would be 21:00 UTC Dec 13, which has also not
+    // yet passed at nowMs=17:00 UTC, so this test specifically confirms the
+    // job stays quiet when the tz-correct value is stored.
+    const nextRunAtMs = Date.parse("2025-12-14T00:00:00.000Z"); // 21:00 BRT Dec 13
+    const lastRunAtMs = Date.parse("2025-12-13T00:00:00.000Z"); // 21:00 BRT Dec 12
+
+    await withRestartedCron(
+      [
+        {
+          id: "brt-future-job",
+          name: "BRT daily at 21:00",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T00:01:00.000Z"),
+          schedule: { kind: "cron", expr: "0 21 * * *", tz: "America/Sao_Paulo" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "BRT tick" },
+          state: {
+            nextRunAtMs,
+            lastRunAtMs,
+            lastStatus: "ok",
+          },
+        },
+      ],
+      async ({ enqueueSystemEvent, requestHeartbeatNow }) => {
+        // The next BRT slot is 7 hours away — must NOT fire on restart.
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeatNow).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("fires a non-UTC job whose tz-correct nextRunAtMs is overdue on restart (#61028)", async () => {
+    // nowMs = 2025-12-13T17:00:00Z (UTC).
+    // Job schedule: "0 19 * * *" America/Sao_Paulo (BRT = UTC-3).
+    //   → 19:00 BRT = 22:00 UTC.
+    // But store has nextRunAtMs = yesterday's 22:00 UTC = 2025-12-12T22:00:00Z,
+    // and lastRunAtMs = the run before that.
+    // At nowMs=17:00 UTC Dec 13, the previous BRT slot (19:00 BRT Dec 12 = 22:00 UTC Dec 12)
+    // was genuinely missed — the job should fire on restart.
+    const nextRunAtMs = Date.parse("2025-12-12T22:00:00.000Z"); // 19:00 BRT Dec 12 (missed)
+    const lastRunAtMs = Date.parse("2025-12-11T22:00:00.000Z"); // 19:00 BRT Dec 11
+
+    await withRestartedCron(
+      [
+        {
+          id: "brt-overdue-job",
+          name: "BRT daily at 19:00",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-12T22:01:00.000Z"),
+          schedule: { kind: "cron", expr: "0 19 * * *", tz: "America/Sao_Paulo" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "BRT overdue tick" },
+          state: {
+            nextRunAtMs,
+            lastRunAtMs,
+            lastStatus: "ok",
+          },
+        },
+      ],
+      async ({ enqueueSystemEvent, requestHeartbeatNow }) => {
+        // The 19:00 BRT Dec 12 slot was missed — must fire on restart.
+        expect(enqueueSystemEvent).toHaveBeenCalledWith(
+          "BRT overdue tick",
+          expect.objectContaining({ agentId: undefined }),
+        );
+        expect(requestHeartbeatNow).toHaveBeenCalled();
+      },
+    );
+  });
 });

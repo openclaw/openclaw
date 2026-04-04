@@ -587,16 +587,26 @@ export function applyJobPatch(
   if (patch.schedule) {
     if (patch.schedule.kind === "cron") {
       const explicitStaggerMs = normalizeCronStaggerMs(patch.schedule.staggerMs);
+      // Preserve the existing tz when the patch omits it.  A partial schedule
+      // update (e.g. changing only the expr or stagger) should never silently
+      // drop a previously-configured timezone, which would cause nextRunAtMs
+      // to be recomputed in the server's local timezone and fire incorrectly
+      // on the next gateway restart.  The caller must explicitly pass tz to
+      // change or clear it.  See: https://github.com/openclaw/openclaw/issues/61028
+      const existingTz = job.schedule.kind === "cron" ? job.schedule.tz : undefined;
+      const resolvedTz = "tz" in patch.schedule ? patch.schedule.tz : existingTz;
+      const patchSchedule =
+        resolvedTz !== undefined ? { ...patch.schedule, tz: resolvedTz } : patch.schedule;
       if (explicitStaggerMs !== undefined) {
-        job.schedule = { ...patch.schedule, staggerMs: explicitStaggerMs };
+        job.schedule = { ...patchSchedule, staggerMs: explicitStaggerMs };
       } else if (job.schedule.kind === "cron") {
-        job.schedule = { ...patch.schedule, staggerMs: job.schedule.staggerMs };
+        job.schedule = { ...patchSchedule, staggerMs: job.schedule.staggerMs };
       } else {
         const defaultStaggerMs = resolveDefaultCronStaggerMs(patch.schedule.expr);
         job.schedule =
           defaultStaggerMs !== undefined
-            ? { ...patch.schedule, staggerMs: defaultStaggerMs }
-            : patch.schedule;
+            ? { ...patchSchedule, staggerMs: defaultStaggerMs }
+            : patchSchedule;
       }
     } else {
       job.schedule = patch.schedule;
