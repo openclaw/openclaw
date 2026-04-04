@@ -241,7 +241,7 @@ describe("test-projects args", () => {
       buildVitestRunPlans(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]),
     ).toEqual([
       {
-        config: "vitest.channels.config.ts",
+        config: "vitest.extension-channels.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,

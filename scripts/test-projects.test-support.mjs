@@ -14,6 +14,7 @@ const CHANNEL_VITEST_CONFIG = "vitest.channels.config.ts";
 const COMMANDS_VITEST_CONFIG = "vitest.commands.config.ts";
 const CONTRACTS_VITEST_CONFIG = "vitest.contracts.config.ts";
 const E2E_VITEST_CONFIG = "vitest.e2e.config.ts";
+const EXTENSION_CHANNELS_VITEST_CONFIG = "vitest.extension-channels.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "vitest.extensions.config.ts";
 const GATEWAY_VITEST_CONFIG = "vitest.gateway.config.ts";
 const UI_VITEST_CONFIG = "vitest.ui.config.ts";
@@ -76,7 +77,7 @@ function classifyTarget(arg, cwd) {
     return "e2e";
   }
   if (relative.startsWith("extensions/")) {
-    return isChannelSurfaceTestFile(relative) ? "channel" : "extension";
+    return isChannelSurfaceTestFile(relative) ? "extensionChannel" : "extension";
   }
   if (isChannelSurfaceTestFile(relative)) {
     return "channel";
@@ -191,6 +192,7 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     "agent",
     "ui",
     "e2e",
+    "extensionChannel",
     "channel",
     "extension",
   ];
@@ -221,11 +223,13 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
                         ? UI_VITEST_CONFIG
                         : kind === "e2e"
                           ? E2E_VITEST_CONFIG
-                          : kind === "channel"
-                            ? CHANNEL_VITEST_CONFIG
-                            : kind === "extension"
-                              ? EXTENSIONS_VITEST_CONFIG
-                              : DEFAULT_VITEST_CONFIG;
+                          : kind === "extensionChannel"
+                            ? EXTENSION_CHANNELS_VITEST_CONFIG
+                            : kind === "channel"
+                              ? CHANNEL_VITEST_CONFIG
+                              : kind === "extension"
+                                ? EXTENSIONS_VITEST_CONFIG
+                                : DEFAULT_VITEST_CONFIG;
     const includePatterns =
       kind === "default" || kind === "e2e"
         ? null

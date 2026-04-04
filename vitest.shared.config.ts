@@ -101,6 +101,7 @@ export const sharedVitestConfig = {
       "vitest.config.ts",
       "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",
+      "vitest.extension-channels.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
       "vitest.live.config.ts",
