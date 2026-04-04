@@ -162,8 +162,11 @@ Current behavior:
 
 - File content is decoded and added to the **system prompt**, not the user message,
   so it stays ephemeral (not persisted in session history).
-- PDFs are parsed for text. If little text is found, the first pages are rasterized
-  into images and passed to the model.
+- Decoded file text is wrapped as **untrusted external content** before it is added,
+  so file bytes are treated as data, not trusted instructions.
+- PDFs are parsed for text first. If little text is found, the first pages are
+  rasterized into images and passed to the model, and the injected file block uses
+  the placeholder `[PDF content rendered to images]`.
 
 PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
 PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.

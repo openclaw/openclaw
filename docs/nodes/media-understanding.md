@@ -245,6 +245,15 @@ Per‑capability `attachments` controls which attachments are processed:
 
 When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
+File-attachment extraction behavior:
+
+- Extracted file text is wrapped as **untrusted external content** before it is
+  appended to the media prompt.
+- If a file has no extractable text, OpenClaw injects `[No extractable text]`.
+- If a PDF falls back to rendered page images in this path, the media prompt keeps
+  the placeholder `[PDF content rendered to images; images not forwarded to model]`
+  because this attachment-extraction step forwards text blocks, not the rendered PDF images.
+
 ## Config examples
 
 ### 1) Shared models list + overrides
