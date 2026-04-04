@@ -5,7 +5,7 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
-export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-plugin-common";
+export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 export {
   DEFAULT_ACCOUNT_ID,
