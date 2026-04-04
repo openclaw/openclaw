@@ -344,6 +344,7 @@ export const __testing = {
     ACTIVE_EMBEDDED_RUNS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
+    embeddedRunState.sessionKeyToId.clear();
   },
 };
 
