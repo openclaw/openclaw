@@ -421,7 +421,7 @@ Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 Vector search over `MEMORY.md` + `memory/*.md`:
 
-- `openclaw memory status` — show index stats; use `--deep` for provider probes or `--fix` to repair stale recall/promotion artifacts.
+- `openclaw memory status` — show index stats; use `--deep` for vector + embedding readiness checks or `--fix` to repair stale recall/promotion artifacts.
 - `openclaw memory index` — reindex memory files.
 - `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
 - `openclaw memory promote` — rank short-term recalls and optionally append top entries into `MEMORY.md`.
