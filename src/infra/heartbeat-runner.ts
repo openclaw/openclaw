@@ -36,6 +36,7 @@ import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { startHeartbeatFlowTrace, finalizeSessionFlowTrace } from "../meta-harness/hooks.js";
+import { generateDailySummary } from "../meta-harness/index.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -968,6 +969,9 @@ export async function runHeartbeatOnce(opts: {
   } finally {
     // Finalize meta-harness flow trace (fire-and-forget)
     finalizeSessionFlowTrace(runSessionKey, workspaceDir, "completed").catch(() => {});
+    // Generate daily summary after heartbeat run (fire-and-forget, idempotent)
+    const today = new Date().toISOString().slice(0, 10);
+    generateDailySummary(workspaceDir, today).catch(() => {});
   }
 }
 

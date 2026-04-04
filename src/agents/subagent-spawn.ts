@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import { recordDelegation } from "../meta-harness/hooks.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import {
   isValidAgentId,
@@ -832,6 +833,17 @@ export async function spawnSubagentDirect(
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
     });
+    // Record delegation in meta-harness (fire-and-forget, workspace-gated)
+    if (spawnedMetadata.workspaceDir) {
+      recordDelegation({
+        sessionKey: requesterInternalKey,
+        workspaceDir: spawnedMetadata.workspaceDir,
+        childSessionId: childSessionKey,
+        agentType: targetAgentId,
+        taskBrief: task,
+        status: "completed",
+      }).catch(() => {});
+    }
   } catch (err) {
     if (attachmentAbsDir) {
       try {
