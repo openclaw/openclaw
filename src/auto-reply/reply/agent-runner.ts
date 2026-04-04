@@ -398,7 +398,15 @@ export async function runReplyAgent(params: {
     const payloadArray = runResult.payloads ?? [];
 
     if (blockReplyPipeline) {
-      await blockReplyPipeline.flush({ force: true });
+      // When the run ends with an error, discard held text blocks instead of
+      // flushing them to the channel.  Intermediate reasoning text (e.g.
+      // "Now let me execute Tasks 1-3") is not user-facing; flushing on error
+      // leaks it as a burst of separate messages.
+      const runHasError =
+        payloadArray.some((p) => p.isError) || runResult.meta?.error != null;
+      if (!runHasError) {
+        await blockReplyPipeline.flush({ force: true });
+      }
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
