@@ -136,7 +136,12 @@ flowchart TD
     Common log signatures:
 
     - `device identity required` → HTTP/non-secure context cannot complete device auth.
+    - `origin not allowed` → browser `Origin` is not allowed for the Control UI
+      gateway target.
     - `AUTH_TOKEN_MISMATCH` with retry hints (`canRetryWithDeviceToken=true`) → one trusted device-token retry may occur automatically.
+    - `too many failed authentication attempts (retry later)` from a localhost
+      browser origin → repeated failures from that same `Origin` are temporarily
+      locked out; another localhost origin uses a separate bucket.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
     - `gateway connect failed:` → UI is targeting the wrong URL/port or unreachable gateway.
 
