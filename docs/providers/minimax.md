@@ -22,6 +22,8 @@ The MiniMax plugin registers the `image-01` model for the `image_generate` tool.
 
 - **Text-to-image generation** with aspect ratio control.
 - **Image-to-image editing** (subject reference) with aspect ratio control.
+- Up to **9 output images** per request.
+- Up to **1 reference image** per edit request.
 - Supported aspect ratios: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`.
 
 To use MiniMax for image generation, set it as the image generation provider:
