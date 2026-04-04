@@ -16,6 +16,10 @@ import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
+import {
+  areOAuthCredentialsEquivalent,
+  readManagedExternalCliCredential,
+} from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -178,6 +182,31 @@ async function refreshOAuthTokenWithLock(params: {
         apiKey: await buildOAuthApiKey(cred.provider, cred),
         newCredentials: cred,
       };
+    }
+
+    const externallyManaged = readManagedExternalCliCredential({
+      profileId: params.profileId,
+      credential: cred,
+    });
+    if (externallyManaged) {
+      if (!areOAuthCredentialsEquivalent(cred, externallyManaged)) {
+        store.profiles[params.profileId] = externallyManaged;
+        saveAuthProfileStore(store, params.agentDir);
+      }
+      if (Date.now() < externallyManaged.expires) {
+        return {
+          apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
+          newCredentials: externallyManaged,
+        };
+      }
+      throw new Error(
+        `${externallyManaged.managedBy} credential is expired; refresh it in the external CLI and retry.`,
+      );
+    }
+    if (cred.managedBy) {
+      throw new Error(
+        `${cred.managedBy} credential is unavailable; re-authenticate in the external CLI and retry.`,
+      );
     }
 
     const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({

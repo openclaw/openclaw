@@ -140,6 +140,7 @@ describe("syncExternalCliCredentials", () => {
         refresh: `${current.provider}-refresh-token`,
         expires,
         accountId: "acct_123",
+        managedBy: current.provider === "openai-codex" ? "codex-cli" : ("minimax-cli" as const),
       });
       if (current.legacyProfileId) {
         expect(store.profiles[current.legacyProfileId]).toBeUndefined();
@@ -178,6 +179,7 @@ describe("syncExternalCliCredentials", () => {
       access: "new-access-token",
       refresh: "new-refresh-token",
       expires: freshExpiry,
+      managedBy: "codex-cli",
     });
   });
 
@@ -220,4 +222,36 @@ describe("syncExternalCliCredentials", () => {
       });
     },
   );
+
+  it("upgrades matching Codex CLI credentials with external ownership metadata", () => {
+    const expires = Date.now() + 60_000;
+    mocks.readCodexCliCredentialsCached.mockReturnValue(
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "same-access-token",
+        refresh: "same-refresh-token",
+        expires,
+      }),
+    );
+
+    const store = makeStore(
+      OPENAI_CODEX_DEFAULT_PROFILE_ID,
+      makeOAuthCredential({
+        provider: "openai-codex",
+        access: "same-access-token",
+        refresh: "same-refresh-token",
+        expires,
+      }),
+    );
+
+    const mutated = syncExternalCliCredentials(store);
+
+    expect(mutated).toBe(true);
+    expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+      access: "same-access-token",
+      refresh: "same-refresh-token",
+      expires,
+      managedBy: "codex-cli",
+    });
+  });
 });
