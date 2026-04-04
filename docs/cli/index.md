@@ -1609,7 +1609,7 @@ Notes:
 - `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth method.
 - `paste-token` prompts for the token value and defaults to auth profile id `<provider>:manual` when `--profile-id` is omitted.
-- Anthropic legacy token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
+- Anthropic OAuth/token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
 
 ### `models auth order get|set|clear`
 

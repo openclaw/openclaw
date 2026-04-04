@@ -26,7 +26,7 @@ OpenClaw features that can generate provider usage or paid API calls.
 **Per-message cost footer**
 
 - `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
-- `/usage tokens` shows tokens only; subscription-style OAuth, legacy token, and CLI flows hide dollar cost.
+- `/usage tokens` shows tokens only; subscription-style OAuth/token and CLI flows hide dollar cost.
 - Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
   `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
   from `stats.input_tokens - stats.cached` when needed.

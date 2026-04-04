@@ -10,7 +10,7 @@ title: "Anthropic"
 
 Anthropic builds the **Claude** model family and provides access via an API.
 In OpenClaw, new Anthropic setup should use an API key or the local Claude CLI
-backend. Existing legacy Anthropic token profiles are still honored at runtime
+backend. Existing Anthropic OAuth/token profiles are still honored at runtime
 if they are already configured.
 
 <Warning>
@@ -273,7 +273,7 @@ If the `claude` binary is not on the gateway host PATH:
 
 ### Migrate from Anthropic auth to Claude CLI
 
-If you currently use `anthropic/...` with a legacy token profile or API key and want to
+If you currently use `anthropic/...` with an Anthropic OAuth/token profile or API key and want to
 switch the same gateway host to Claude CLI, OpenClaw supports that as a normal
 provider-auth migration path.
 
@@ -337,7 +337,7 @@ More details: [/gateway/cli-backends](/gateway/cli-backends)
   OpenClaw usage with Claude CLI or Anthropic OAuth/subscription token auth
   requires **Extra Usage** (pay-as-you-go billed separately from the
   subscription).
-- Existing legacy Anthropic token profiles are still honored at runtime, but
+- Existing Anthropic OAuth/token profiles are still honored at runtime, but
   OpenClaw no longer offers setup-token onboarding or auth commands for new
   setups.
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).

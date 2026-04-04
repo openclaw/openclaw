@@ -613,7 +613,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="Do you support Claude subscription auth (Claude Pro or Max)?">
     Yes. Reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`.
 
-    Existing legacy Anthropic token profiles still run if they are already configured, but OpenClaw no longer offers Anthropic setup-token as a new setup path. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Existing Anthropic OAuth/token profiles still run if they are already configured, but OpenClaw no longer offers Anthropic setup-token as a new setup path. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
     Other providers can still use the generic token helpers with
     `openclaw models auth setup-token --provider <id>` or
     `openclaw models auth paste-token --provider <id>`.

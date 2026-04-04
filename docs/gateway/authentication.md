@@ -59,7 +59,7 @@ API keys for daemon use: `openclaw onboard`.
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.openclaw/.env`, systemd/launchd).
 
-## Anthropic: legacy token compatibility
+## Anthropic: OAuth/token compatibility
 
 Existing Anthropic OAuth/token profiles are still honored at runtime if they
 are already configured, but OpenClaw no longer offers Anthropic setup-token

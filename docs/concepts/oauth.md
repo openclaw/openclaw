@@ -64,12 +64,12 @@ All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full r
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
-## Anthropic legacy token compatibility
+## Anthropic OAuth/token compatibility
 
 <Warning>
 Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
 PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
-OpenClaw or other third-party harnesses. Existing Anthropic token profiles
+OpenClaw or other third-party harnesses. Existing Anthropic OAuth/token profiles
 remain technically usable in OpenClaw, but Anthropic now requires **Extra
 Usage** (pay-as-you-go billed separately from the subscription) for that
 traffic.
