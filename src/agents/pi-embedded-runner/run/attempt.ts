@@ -119,6 +119,7 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
+import { SessionParseError } from "../session-parse-error.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
@@ -749,7 +750,19 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
-      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
+      let openedSession: ReturnType<typeof SessionManager.open>;
+      try {
+        openedSession = SessionManager.open(params.sessionFile);
+      } catch (err) {
+        if (err instanceof SyntaxError) {
+          throw new SessionParseError(`Failed to parse session transcript: ${err.message}`, {
+            sessionFile: params.sessionFile,
+            cause: err,
+          });
+        }
+        throw err;
+      }
+      sessionManager = guardSessionManager(openedSession, {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         inputProvenance: params.inputProvenance,
