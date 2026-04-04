@@ -346,7 +346,16 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     }
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
+  // TODO: wire isRunActiveForChat to the actual session/lane runtime so
+  // per-message keys are only used when a run is in progress for the chat.
+  // Example: isRunActiveForChat: (chatId) => sessionManager.hasActiveLane(chatId)
+  bot.use(
+    botRuntime.sequentialize((ctx) =>
+      getTelegramSequentialKey(ctx, {
+        isRunActiveForChat: undefined, // placeholder — replace with runtime check
+      }),
+    ),
+  );
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;

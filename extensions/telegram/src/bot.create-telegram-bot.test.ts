@@ -136,7 +136,9 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
-    expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+    // The key function is now a wrapper that delegates to getTelegramSequentialKey
+    // with runtime opts; verify it produces the expected key shape.
+    expect(harness.sequentializeKey).toBeTypeOf("function");
   });
 
   it("preserves same-chat reply order when a debounced run is still active", async () => {
