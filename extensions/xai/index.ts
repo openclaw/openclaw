@@ -2,10 +2,6 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  composeProviderStreamWrappers,
-  createToolStreamWrapper,
-} from "openclaw/plugin-sdk/provider-stream";
 import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
@@ -20,9 +16,7 @@ import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-model
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
-  createXaiFastModeWrapper,
-  createXaiToolCallArgumentDecodingWrapper,
-  createXaiToolPayloadCompatibilityWrapper,
+  wrapXaiProviderStream,
 } from "./stream.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
@@ -211,19 +205,7 @@ export default defineSingleProviderPluginEntry({
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) => {
-      const extraParams = ctx.extraParams;
-      const fastMode = extraParams?.fastMode;
-      const toolStreamEnabled = extraParams?.tool_stream !== false;
-      return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
-        let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
-        if (typeof fastMode === "boolean") {
-          wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
-        }
-        wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
-        return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
-      });
-    },
+    wrapStreamFn: (ctx) => wrapXaiProviderStream(ctx),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active

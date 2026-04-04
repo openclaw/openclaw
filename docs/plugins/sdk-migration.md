@@ -54,6 +54,15 @@ stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
 `api.ts` or `runtime-api.ts`.
 
+Current bundled provider examples:
+
+- Anthropic keeps Claude-specific stream helpers in its own `api.ts` /
+  `contract-api.ts` seam
+- OpenAI keeps provider builders, default-model helpers, and realtime provider
+  builders in its own `api.ts`
+- OpenRouter keeps provider builder and onboarding/config helpers in its own
+  `api.ts`
+
 ## How to migrate
 
 <Steps>
@@ -143,12 +152,21 @@ bundled plugin workspace, keep provider-owned helpers in that plugin's own
 
 ## Import path reference
 
-<Accordion title="Full import path table">
+<Accordion title="Common import path table">
   | Import path | Purpose | Key exports |
   | --- | --- | --- |
   | `plugin-sdk/plugin-entry` | Canonical plugin entry helper | `definePluginEntry` |
   | `plugin-sdk/core` | Legacy umbrella re-export for channel entry definitions/builders | `defineChannelPluginEntry`, `createChatChannelPlugin` |
+  | `plugin-sdk/provider-entry` | Single-provider entry helper | `defineSingleProviderPluginEntry` |
   | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
+  | `plugin-sdk/setup` | Shared setup wizard helpers | Allowlist prompts, setup status builders |
+  | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | Account-scoped setup runtime helpers, delegated setup proxies |
+  | `plugin-sdk/setup-adapter-runtime` | Setup adapter helpers | `createEnvPatchedAccountSetupAdapter` |
+  | `plugin-sdk/setup-tools` | Setup tooling helpers | CLI/archive/docs helpers for setup/install flows |
+  | `plugin-sdk/account-core` | Multi-account helpers | Account list/config/action-gate helpers |
+  | `plugin-sdk/account-id` | Account-id helpers | `DEFAULT_ACCOUNT_ID`, account-id normalization |
+  | `plugin-sdk/account-resolution` | Account lookup helpers | Account lookup + default-fallback helpers |
+  | `plugin-sdk/account-helpers` | Narrow account helpers | Account list/account-action helpers |
   | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface` |
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
@@ -156,10 +174,22 @@ bundled plugin workspace, keep provider-owned helpers in that plugin's own
   | `plugin-sdk/channel-config-schema` | Config schema builders | Channel config schema types |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
   | `plugin-sdk/channel-lifecycle` | Account status tracking | `createAccountStatusSink` |
+  | `plugin-sdk/inbound-envelope` | Inbound envelope helpers | Shared route + envelope builder helpers |
+  | `plugin-sdk/inbound-reply-dispatch` | Inbound reply helpers | Shared record-and-dispatch helpers |
+  | `plugin-sdk/messaging-targets` | Messaging target parsing | Target parsing/matching helpers |
+  | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
+  | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound identity/send delegate helpers |
+  | `plugin-sdk/thread-bindings-runtime` | Thread-binding helpers | Thread-binding lifecycle and adapter helpers |
+  | `plugin-sdk/agent-media-payload` | Legacy media payload helpers | Agent media payload builder for legacy field layouts |
   | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
   | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |
+  | `plugin-sdk/approval-auth-runtime` | Approval auth helpers | Approver resolution, same-chat action auth |
+  | `plugin-sdk/approval-client-runtime` | Approval client helpers | Native exec approval profile/filter helpers |
+  | `plugin-sdk/approval-delivery-runtime` | Approval delivery helpers | Native approval capability/delivery adapters |
+  | `plugin-sdk/approval-native-runtime` | Approval target helpers | Native approval target/account binding helpers |
+  | `plugin-sdk/approval-reply-runtime` | Approval reply helpers | Exec/plugin approval reply payload helpers |
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, error graph helpers |
@@ -172,11 +202,28 @@ bundled plugin workspace, keep provider-owned helpers in that plugin's own
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
   | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
   | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
+  | `plugin-sdk/reply-runtime` | Shared reply runtime | Inbound dispatch, heartbeat, reply planner, chunking |
+  | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch helpers | Finalize + provider dispatch helpers |
+  | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
+  | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
   | `plugin-sdk/reply-payload` | Message reply types | Reply payload types |
+  | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers | Self-hosted provider discovery/config helpers |
+  | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers | Same self-hosted provider discovery/config helpers |
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
   | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
 </Accordion>
+
+This table is intentionally the common migration subset, not the full SDK
+surface. The generated full list of 200+ entrypoints lives in
+`scripts/lib/plugin-sdk-entrypoints.json`.
+
+That generated list still includes some bundled-plugin helper seams such as
+`plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
+`plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those remain exported for
+bundled-plugin maintenance and compatibility, but they are intentionally
+omitted from the common migration table and are not the recommended target for
+new plugin code.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.

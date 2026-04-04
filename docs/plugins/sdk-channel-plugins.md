@@ -69,6 +69,43 @@ Most channel plugins do not need approval-specific code.
 - Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
 - `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
 
+For hot channel entrypoints, prefer the narrower runtime subpaths when you only
+need one part of that family:
+
+- `openclaw/plugin-sdk/approval-auth-runtime`
+- `openclaw/plugin-sdk/approval-client-runtime`
+- `openclaw/plugin-sdk/approval-delivery-runtime`
+- `openclaw/plugin-sdk/approval-native-runtime`
+- `openclaw/plugin-sdk/approval-reply-runtime`
+
+Likewise, prefer `openclaw/plugin-sdk/setup-runtime`,
+`openclaw/plugin-sdk/setup-adapter-runtime`,
+`openclaw/plugin-sdk/reply-runtime`,
+`openclaw/plugin-sdk/reply-dispatch-runtime`,
+`openclaw/plugin-sdk/reply-reference`, and
+`openclaw/plugin-sdk/reply-chunking` when you do not need the broader umbrella
+surface.
+
+For other hot channel paths, prefer the narrow helpers over broader legacy
+surfaces:
+
+- `openclaw/plugin-sdk/account-core`,
+  `openclaw/plugin-sdk/account-id`,
+  `openclaw/plugin-sdk/account-resolution`, and
+  `openclaw/plugin-sdk/account-helpers` for multi-account config and
+  default-account fallback
+- `openclaw/plugin-sdk/inbound-envelope` and
+  `openclaw/plugin-sdk/inbound-reply-dispatch` for inbound route/envelope and
+  record-and-dispatch wiring
+- `openclaw/plugin-sdk/messaging-targets` for target parsing/matching
+- `openclaw/plugin-sdk/outbound-media` and
+  `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
+  identity/send delegates
+- `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
+  and adapter registration
+- `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
+  payload field layout is still required
+
 Auth-only channels can usually stop at the default path: core handles approvals and the plugin just exposes outbound/auth capabilities. Native approval channels such as Matrix, Slack, Telegram, and custom chat transports should use the shared native helpers instead of rolling their own approval lifecycle.
 
 ## Walkthrough

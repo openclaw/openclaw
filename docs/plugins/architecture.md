@@ -473,6 +473,13 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
+Some bundled-plugin helper subpaths still remain in the generated SDK export
+map for compatibility and bundled-plugin maintenance. Current examples include
+`plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
+`plugin-sdk/zalo-setup`, and several `plugin-sdk/matrix*` seams. Treat those as
+reserved implementation-detail exports, not as the recommended SDK pattern for
+new third-party plugins.
+
 ## Load pipeline
 
 At startup, OpenClaw does roughly this:
@@ -1072,6 +1079,15 @@ authoring plugins:
   `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
   `<plugin-package-root>/index.js` is the bundled plugin entry,
   and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
+- Current bundled provider examples:
+  - Anthropic uses `api.js` / `contract-api.js` for Claude stream helpers such
+    as `wrapAnthropicProviderStream`, beta-header helpers, and `service_tier`
+    parsing.
+  - OpenAI uses `api.js` for provider builders, default-model helpers, and
+    realtime provider builders.
+  - OpenRouter uses `api.js` for its provider builder plus onboarding/config
+    helpers, while `register.runtime.js` can still re-export generic
+    `plugin-sdk/provider-stream` helpers for repo-local use.
 - Facade-loaded public entry points prefer the active runtime config snapshot
   when one exists, then fall back to the resolved config file on disk when
   OpenClaw is not yet serving a runtime snapshot.

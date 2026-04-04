@@ -42,17 +42,29 @@ subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
 either use those plugin-local barrels or add a narrow generic SDK contract when
 the need is truly cross-channel.
 
+The generated export map still contains a small set of bundled-plugin helper
+seams such as `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`,
+`plugin-sdk/zalo`, `plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those
+subpaths exist for bundled-plugin maintenance and compatibility only; they are
+intentionally omitted from the common table below and are not the recommended
+import path for new third-party plugins.
+
 ## Subpath reference
 
-The most commonly used subpaths, grouped by purpose. The full list of 100+
-subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
+The most commonly used subpaths, grouped by purpose. The generated full list of
+200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
+
+Reserved bundled-plugin helper subpaths still appear in that generated list.
+Treat those as implementation detail/compatibility surfaces unless a doc page
+explicitly promotes one as public.
 
 ### Plugin entry
 
-| Subpath                   | Key exports                                                                                                                            |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry` | `definePluginEntry`                                                                                                                    |
-| `plugin-sdk/core`         | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema` |
+| Subpath                     | Key exports                                                                                                                            |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/plugin-entry`   | `definePluginEntry`                                                                                                                    |
+| `plugin-sdk/core`           | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema` |
+| `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry`                                                                                                      |
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -60,12 +72,27 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | --- | --- |
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
+    | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
+    | `plugin-sdk/setup-runtime` | Account-scoped setup runtime helpers, delegated setup proxies, setup status builders |
+    | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
+    | `plugin-sdk/setup-tools` | Setup CLI/archive/docs helpers |
+    | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
+    | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
+    | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
+    | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
     | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
     | `plugin-sdk/channel-config-schema` | Channel config schema types |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
     | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
+    | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
+    | `plugin-sdk/inbound-reply-dispatch` | Shared inbound record-and-dispatch helpers |
+    | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
+    | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
+    | `plugin-sdk/outbound-runtime` | Outbound identity/send delegate helpers |
+    | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
+    | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
     | `plugin-sdk/channel-inbound` | Debounce, mention matching, envelope helpers |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
@@ -77,6 +104,9 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
   <Accordion title="Provider subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` |
+    | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
+    | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
     | `plugin-sdk/provider-model-shared` | `normalizeModelCompat`, `buildProviderReplayFamilyHooks`, `sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode` |
@@ -92,6 +122,11 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
+    | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
+    | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
+    | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
+    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
+    | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
@@ -104,6 +139,10 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
+    | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
+    | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
+    | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
+    | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
@@ -300,6 +339,13 @@ subpath yet. Current bundled example: the Anthropic provider keeps its Claude
 stream helpers in its own public `api.ts` / `contract-api.ts` seam instead of
 promoting Anthropic beta-header and `service_tier` logic into a generic
 `plugin-sdk/*` contract.
+
+Other current bundled examples:
+
+- `@openclaw/openai-provider`: `api.ts` exports provider builders,
+  default-model helpers, and realtime provider builders
+- `@openclaw/openrouter-provider`: `api.ts` exports the provider builder plus
+  onboarding/config helpers
 
 <Warning>
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
