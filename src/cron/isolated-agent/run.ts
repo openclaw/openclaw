@@ -37,7 +37,7 @@ import {
   registerAgentRunContext,
   resolveAgentConfig,
   resolveAgentDir,
-  resolveAgentModelFallbacksOverride,
+  resolveEffectiveModelFallbacks,
   resolveAgentTimeoutMs,
   resolveAgentWorkspaceDir,
   resolveBootstrapWarningSignaturesSeen,
@@ -488,6 +488,21 @@ export async function runCronIsolatedAgentTurn(params: {
       params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
         ? params.job.payload.fallbacks
         : undefined;
+    // Keep cron fallback semantics aligned with the shared agent path:
+    // explicit model overrides inherit configured fallback chains, but they
+    // must not silently append the agent primary as a last-resort candidate.
+    // See: https://github.com/openclaw/openclaw/issues/58065
+    const hasCronPayloadModelOverride =
+      params.job.payload.kind === "agentTurn" &&
+      typeof params.job.payload.model === "string" &&
+      params.job.payload.model.trim().length > 0;
+    const cronFallbacksOverride =
+      payloadFallbacks ??
+      resolveEffectiveModelFallbacks({
+        cfg: params.cfg,
+        agentId,
+        hasSessionModelOverride: hasCronPayloadModelOverride,
+      });
     let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
       cronSession.sessionEntry.systemPromptReport,
     );
@@ -499,8 +514,7 @@ export async function runCronIsolatedAgentTurn(params: {
         model: liveSelection.model,
         runId: cronSession.sessionEntry.sessionId,
         agentDir,
-        fallbacksOverride:
-          payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
+        fallbacksOverride: cronFallbacksOverride,
         run: async (providerOverride, modelOverride, runOptions) => {
           if (abortSignal?.aborted) {
             throw new Error(abortReason());

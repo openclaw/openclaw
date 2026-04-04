@@ -1,6 +1,7 @@
 export {
   resolveAgentConfig,
   resolveAgentDir,
+  resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,

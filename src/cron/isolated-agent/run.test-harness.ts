@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 
@@ -39,6 +40,7 @@ function normalizeModelSelectionForTest(value: unknown): string | undefined {
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
 export const resolveAgentConfigMock = createMock();
+export const resolveEffectiveModelFallbacksMock = createMock();
 export const resolveAgentModelFallbacksOverrideMock = createMock();
 export const resolveAgentSkillsFilterMock = createMock();
 export const getModelRefStatusMock = createMock();
@@ -88,6 +90,7 @@ const getRemoteSkillEligibilityMock = createMock();
 vi.mock("./run.runtime.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
+  resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
   resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
   resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
@@ -224,6 +227,19 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     version: 42,
   });
   resolveAgentConfigMock.mockReturnValue(undefined);
+  resolveEffectiveModelFallbacksMock.mockReset();
+  resolveEffectiveModelFallbacksMock.mockImplementation(
+    ({ cfg, agentId, hasSessionModelOverride }) => {
+      const agentFallbacksOverride = resolveAgentModelFallbacksOverrideMock(cfg, agentId) as
+        | string[]
+        | undefined;
+      if (!hasSessionModelOverride) {
+        return agentFallbacksOverride;
+      }
+      const defaultFallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.model);
+      return agentFallbacksOverride ?? defaultFallbacks;
+    },
+  );
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
 
