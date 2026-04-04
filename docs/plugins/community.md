@@ -59,6 +59,19 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### Memory LanceDB Pro
+
+Enhanced LanceDB memory plugin for OpenClaw with hybrid retrieval (vector +
+BM25), cross-encoder reranking, multi-scope isolation, automatic long-context
+chunking, and a management CLI. 486 tests, 39 npm releases, actively maintained.
+
+- **npm:** `memory-lancedb-pro`
+- **repo:** [github.com/CortexReach/memory-lancedb-pro](https://github.com/CortexReach/memory-lancedb-pro)
+
+```bash
+openclaw plugins install memory-lancedb-pro
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
