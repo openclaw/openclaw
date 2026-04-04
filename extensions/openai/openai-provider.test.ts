@@ -163,6 +163,39 @@ describe("buildOpenAIProvider", () => {
     );
   });
 
+  it("keeps GPT-5.4 family metadata aligned with native OpenAI docs", () => {
+    const provider = buildOpenAIProvider();
+    const codexProvider = buildOpenAICodexProviderPlugin();
+
+    const openaiModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelRegistry: { find: () => null },
+    } as never);
+    const codexModel = codexProvider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(openaiModel).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+    });
+    expect(codexModel).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
   it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
@@ -289,11 +322,11 @@ describe("buildOpenAIProvider", () => {
 
     expect(extraParams).toMatchObject({
       transport: "auto",
-      openaiWsWarmup: false,
+      openaiWsWarmup: true,
     });
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });
-    expect(result.payload).not.toHaveProperty("reasoning");
+    expect(result.payload.reasoning).toEqual({ effort: "none" });
   });
 
   it("owns Azure OpenAI reasoning compatibility without forcing OpenAI transport defaults", () => {
@@ -315,7 +348,7 @@ describe("buildOpenAIProvider", () => {
 
     expect(result.options?.transport).toBeUndefined();
     expect(result.options?.openaiWsWarmup).toBeUndefined();
-    expect(result.payload).not.toHaveProperty("reasoning");
+    expect(result.payload.reasoning).toEqual({ effort: "none" });
   });
 
   it("owns Codex wrapper composition for responses payloads", () => {

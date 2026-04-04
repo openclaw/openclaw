@@ -707,7 +707,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]).not.toHaveProperty("reasoning_effort");
   });
 
-  it("strips disabled reasoning payloads for native OpenAI responses routes", () => {
+  it("keeps disabled reasoning payloads for native OpenAI responses routes", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -731,7 +731,9 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[0]).toEqual({
+      reasoning: { effort: "none", summary: "auto" },
+    });
   });
 
   it("keeps disabled reasoning payloads for proxied OpenAI responses routes", () => {
@@ -1572,7 +1574,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto without websocket warm-up", () => {
+  it("defaults OpenAI transport to auto with websocket warm-up", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1587,7 +1589,7 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(false);
+    expect(calls[0]?.openaiWsWarmup).toBe(true);
   });
 
   it("injects native Codex web_search for direct openai-codex Responses models", () => {
@@ -2165,7 +2167,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(true);
   });
 
-  it("strips disabled OpenAI reasoning payloads instead of sending effort:none", () => {
+  it("keeps disabled OpenAI reasoning payloads on native Responses routes", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5-mini",
@@ -2180,10 +2182,10 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
-  it("strips disabled Azure OpenAI Responses reasoning payloads", () => {
+  it("keeps disabled Azure OpenAI Responses reasoning payloads", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "azure-openai-responses",
       applyModelId: "gpt-5-mini",
@@ -2198,7 +2200,7 @@ describe("applyExtraParamsToAgent", () => {
         reasoning: { effort: "none" },
       },
     });
-    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.reasoning).toEqual({ effort: "none" });
   });
 
   it("injects configured OpenAI service_tier into Responses payloads", () => {

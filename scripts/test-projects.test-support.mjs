@@ -2,10 +2,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isChannelSurfaceTestFile } from "../vitest.channel-paths.mjs";
+import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vitest.unit-paths.mjs";
 
-const DEFAULT_VITEST_CONFIG = "vitest.config.ts";
+const DEFAULT_VITEST_CONFIG = "vitest.unit.config.ts";
+const AGENTS_VITEST_CONFIG = "vitest.agents.config.ts";
+const ACP_VITEST_CONFIG = "vitest.acp.config.ts";
+const AUTO_REPLY_VITEST_CONFIG = "vitest.auto-reply.config.ts";
+const BOUNDARY_VITEST_CONFIG = "vitest.boundary.config.ts";
+const BUNDLED_VITEST_CONFIG = "vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "vitest.channels.config.ts";
+const COMMANDS_VITEST_CONFIG = "vitest.commands.config.ts";
+const CONTRACTS_VITEST_CONFIG = "vitest.contracts.config.ts";
+const E2E_VITEST_CONFIG = "vitest.e2e.config.ts";
+const EXTENSION_CHANNELS_VITEST_CONFIG = "vitest.extension-channels.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "vitest.extensions.config.ts";
+const GATEWAY_VITEST_CONFIG = "vitest.gateway.config.ts";
+const UI_VITEST_CONFIG = "vitest.ui.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
 
 function normalizePathPattern(value) {
@@ -14,6 +26,14 @@ function normalizePathPattern(value) {
 
 function isExistingPathTarget(arg, cwd) {
   return fs.existsSync(path.resolve(cwd, arg));
+}
+
+function isExistingFileTarget(arg, cwd) {
+  try {
+    return fs.statSync(path.resolve(cwd, arg)).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function isGlobTarget(arg) {
@@ -44,16 +64,57 @@ function toScopedIncludePattern(arg, cwd) {
   if (isGlobTarget(relative) || isFileLikeTarget(relative)) {
     return relative;
   }
+  if (isExistingFileTarget(arg, cwd)) {
+    const directory = normalizePathPattern(path.posix.dirname(relative));
+    return directory === "." ? "**/*.test.ts" : `${directory}/**/*.test.ts`;
+  }
   return `${relative.replace(/\/+$/u, "")}/**/*.test.ts`;
 }
 
 function classifyTarget(arg, cwd) {
   const relative = toRepoRelativeTarget(arg, cwd);
+  if (relative.endsWith(".e2e.test.ts")) {
+    return "e2e";
+  }
   if (relative.startsWith("extensions/")) {
-    return isChannelSurfaceTestFile(relative) ? "channel" : "extension";
+    return isChannelSurfaceTestFile(relative) ? "extensionChannel" : "extension";
   }
   if (isChannelSurfaceTestFile(relative)) {
     return "channel";
+  }
+  if (isBoundaryTestFile(relative)) {
+    return "boundary";
+  }
+  if (
+    relative.startsWith("test/") ||
+    relative.startsWith("src/plugins/contracts/") ||
+    relative.startsWith("src/channels/plugins/contracts/") ||
+    relative === "src/config/doc-baseline.integration.test.ts" ||
+    relative === "src/config/schema.base.generated.test.ts" ||
+    relative === "src/config/schema.help.quality.test.ts"
+  ) {
+    return "contracts";
+  }
+  if (isBundledPluginDependentUnitTestFile(relative)) {
+    return "bundled";
+  }
+  if (relative.startsWith("src/gateway/")) {
+    return "gateway";
+  }
+  if (relative.startsWith("src/acp/")) {
+    return "acp";
+  }
+  if (relative.startsWith("src/commands/")) {
+    return "command";
+  }
+  if (relative.startsWith("src/auto-reply/")) {
+    return "autoReply";
+  }
+  if (relative.startsWith("src/agents/")) {
+    return "agent";
+  }
+  if (relative.startsWith("ui/src/ui/")) {
+    return "ui";
   }
   return "default";
 }
@@ -119,7 +180,22 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
   }
 
   const nonTargetArgs = forwardedArgs.filter((arg) => !targetArgs.includes(arg));
-  const orderedKinds = ["default", "channel", "extension"];
+  const orderedKinds = [
+    "default",
+    "boundary",
+    "contracts",
+    "bundled",
+    "gateway",
+    "acp",
+    "command",
+    "autoReply",
+    "agent",
+    "ui",
+    "e2e",
+    "extensionChannel",
+    "channel",
+    "extension",
+  ];
   const plans = [];
   for (const kind of orderedKinds) {
     const grouped = groupedTargets.get(kind);
@@ -127,16 +203,38 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
       continue;
     }
     const config =
-      kind === "channel"
-        ? CHANNEL_VITEST_CONFIG
-        : kind === "extension"
-          ? EXTENSIONS_VITEST_CONFIG
-          : DEFAULT_VITEST_CONFIG;
+      kind === "boundary"
+        ? BOUNDARY_VITEST_CONFIG
+        : kind === "contracts"
+          ? CONTRACTS_VITEST_CONFIG
+          : kind === "bundled"
+            ? BUNDLED_VITEST_CONFIG
+            : kind === "gateway"
+              ? GATEWAY_VITEST_CONFIG
+              : kind === "acp"
+                ? ACP_VITEST_CONFIG
+                : kind === "command"
+                  ? COMMANDS_VITEST_CONFIG
+                  : kind === "autoReply"
+                    ? AUTO_REPLY_VITEST_CONFIG
+                    : kind === "agent"
+                      ? AGENTS_VITEST_CONFIG
+                      : kind === "ui"
+                        ? UI_VITEST_CONFIG
+                        : kind === "e2e"
+                          ? E2E_VITEST_CONFIG
+                          : kind === "extensionChannel"
+                            ? EXTENSION_CHANNELS_VITEST_CONFIG
+                            : kind === "channel"
+                              ? CHANNEL_VITEST_CONFIG
+                              : kind === "extension"
+                                ? EXTENSIONS_VITEST_CONFIG
+                                : DEFAULT_VITEST_CONFIG;
     const includePatterns =
-      kind === "default"
+      kind === "default" || kind === "e2e"
         ? null
         : grouped.map((targetArg) => toScopedIncludePattern(targetArg, cwd));
-    const scopedTargetArgs = kind === "default" ? grouped : [];
+    const scopedTargetArgs = kind === "default" || kind === "e2e" ? grouped : [];
     plans.push({
       config,
       forwardedArgs: [...nonTargetArgs, ...scopedTargetArgs],
