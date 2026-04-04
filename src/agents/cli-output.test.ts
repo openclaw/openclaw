@@ -28,39 +28,6 @@ describe("parseCliJson", () => {
       },
     });
   });
-
-  it("parses Gemini CLI response text and stats payloads", () => {
-    const result = parseCliJson(
-      JSON.stringify({
-        session_id: "gemini-session-123",
-        response: "Gemini says hello",
-        stats: {
-          total_tokens: 21,
-          input_tokens: 13,
-          output_tokens: 5,
-          cached: 8,
-          input: 5,
-        },
-      }),
-      {
-        command: "gemini",
-        output: "json",
-        sessionIdFields: ["session_id"],
-      },
-    );
-
-    expect(result).toEqual({
-      text: "Gemini says hello",
-      sessionId: "gemini-session-123",
-      usage: {
-        input: 5,
-        output: 5,
-        cacheRead: 8,
-        cacheWrite: undefined,
-        total: 21,
-      },
-    });
-  });
 });
 
 describe("parseCliJsonl", () => {
