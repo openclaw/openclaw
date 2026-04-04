@@ -13,11 +13,11 @@ export function splitTrailingAuthProfile(raw: string): {
     return { model: trimmed };
   }
 
-  const versionSuffix = trimmed.slice(profileDelimiter + 1);
+  const suffixAfterDelimiter = () => trimmed.slice(profileDelimiter + 1);
 
   // Keep well-known "version" suffixes (ex: @20251001) as part of the model id,
   // but allow an auth profile suffix *after* them (ex: ...@20251001@work).
-  if (/^\d{8}(?:@|$)/.test(versionSuffix)) {
+  if (/^\d{8}(?:@|$)/.test(suffixAfterDelimiter())) {
     const nextDelimiter = trimmed.indexOf("@", profileDelimiter + 9);
     if (nextDelimiter < 0) {
       return { model: trimmed };
@@ -31,7 +31,7 @@ export function splitTrailingAuthProfile(raw: string): {
   //
   // If an auth profile is needed, it can still be specified as a second suffix:
   //   lmstudio/foo@q8_0@work
-  if (/^(?:q\d+(?:_[a-z0-9]+)*|\d+bit)(?:@|$)/i.test(versionSuffix)) {
+  if (/^(?:q\d+(?:_[a-z0-9]+)*|\d+bit)(?:@|$)/i.test(suffixAfterDelimiter())) {
     const nextDelimiter = trimmed.indexOf("@", profileDelimiter + 1);
     if (nextDelimiter < 0) {
       return { model: trimmed };

@@ -84,5 +84,8 @@ describe("splitTrailingAuthProfile", () => {
     expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b@4bit")).toEqual({
       model: "lmstudio-mb-pro/gemma-4-31b@4bit",
     });
+    expect(splitTrailingAuthProfile("lmstudio-mb-pro/gemma-4-31b@8bit")).toEqual({
+      model: "lmstudio-mb-pro/gemma-4-31b@8bit",
+    });
   });
 });
