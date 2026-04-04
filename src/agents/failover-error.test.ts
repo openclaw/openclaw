@@ -196,21 +196,22 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
-  it("classifies Anthropic bare 'unknown error' as timeout for failover (#49706)", () => {
+  it("classifies provider-scoped generic upstream errors for failover", () => {
     expect(
       resolveFailoverReasonFromError({
         provider: "anthropic",
         message: "An unknown error occurred",
       }),
     ).toBe("timeout");
-  });
-
-  it("does not classify generic internal unknown-error text as failover timeout", () => {
     expect(
       resolveFailoverReasonFromError({
-        message: "LLM request failed with an unknown error.",
+        provider: "openrouter",
+        message: "Provider returned error",
       }),
-    ).toBeNull();
+    ).toBe("timeout");
+  });
+
+  it("does not classify provider-scoped upstream errors without the matching provider", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "An unknown error occurred",
@@ -227,7 +228,14 @@ describe("failover-error", () => {
         message: "Provider returned error",
       }),
     ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "anthropic",
+        message: "Provider returned error",
+      }),
+    ).toBeNull();
   });
+
   it("treats 400 insufficient_quota payloads as billing instead of format", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -548,11 +556,16 @@ describe("failover-error", () => {
     // GitHub: openclaw/openclaw#53849 — OpenRouter returns 403 with "Key limit exceeded"
     // when the monthly key spending limit is reached. This must trigger billing failover
     // (model fallback), not generic auth.
-    expect(resolveFailoverReasonFromError({ status: 403, message: "Key limit exceeded" })).toBe(
-      "billing",
-    );
     expect(
       resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 403,
+        message: "Key limit exceeded",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
         status: 403,
         message: "403 Key limit exceeded (monthly limit)",
       }),
@@ -562,10 +575,21 @@ describe("failover-error", () => {
   it("401 billing-style message returns billing instead of generic auth", () => {
     expect(
       resolveFailoverReasonFromError({
+        provider: "openrouter",
         status: 401,
         message: "401 Key limit exceeded (monthly limit)",
       }),
     ).toBe("billing");
+  });
+
+  it("does not treat OpenRouter key-limit text as billing without provider context", () => {
+    expect(resolveFailoverReasonFromError({ message: "Key limit exceeded" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 403,
+        message: "403 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("auth");
   });
 
   it("resolveFailoverStatus maps auth_permanent to 403", () => {

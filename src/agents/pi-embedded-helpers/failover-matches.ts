@@ -119,7 +119,6 @@ const ERROR_PATTERNS = {
     "insufficient balance",
     "insufficient usd or diem balance",
     /requires?\s+more\s+credits/i,
-    /\bkey\s+limit\s*(?:exceeded|reached|hit)\b/i,
   ],
   authPermanent: HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS,
   auth: [...AMBIGUOUS_AUTH_ERROR_PATTERNS, ...COMMON_AUTH_ERROR_PATTERNS],
