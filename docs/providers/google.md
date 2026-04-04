@@ -83,6 +83,36 @@ retry.
 | Web search (Grounding) | Yes               |
 | Thinking/reasoning     | Yes (Gemini 3.1+) |
 
+## Direct Gemini cache reuse
+
+For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw now
+passes a configured `cachedContent` handle through to Gemini requests.
+
+- Configure per-model or global params with either
+  `cachedContent` or legacy `cached_content`
+- If both are present, `cachedContent` wins
+- Example value: `cachedContents/prebuilt-context`
+- Gemini cache-hit usage is normalized into OpenClaw `cacheRead` from
+  upstream `cachedContentTokenCount`
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "google/gemini-2.5-pro": {
+          params: {
+            cachedContent: "cachedContents/prebuilt-context",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
