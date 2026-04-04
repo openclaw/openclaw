@@ -17,6 +17,7 @@ import {
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
+  resolveTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
@@ -142,11 +143,11 @@ function countTelegramExecApprovalEligibleAccounts(params: {
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): number {
   return listTelegramAccountIds(params.cfg).filter((accountId) => {
-    const account = resolveTelegramApprovalAccountConfig({
+    const resolvedAccount = resolveTelegramAccount({
       cfg: params.cfg,
       accountId,
     });
-    if (account.enabled === false) {
+    if (!resolvedAccount.enabled || resolvedAccount.tokenSource === "none") {
       return false;
     }
     const config = resolveTelegramExecApprovalConfig({
