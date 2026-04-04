@@ -21,5 +21,5 @@ export function stripModelSpecialTokens(text: string): string {
     return text;
   }
   MODEL_SPECIAL_TOKEN_RE.lastIndex = 0;
-  return text.replace(MODEL_SPECIAL_TOKEN_RE, " ").replace(/  +/g, " ").trim();
+  return text.replace(MODEL_SPECIAL_TOKEN_RE, " ");
 }
