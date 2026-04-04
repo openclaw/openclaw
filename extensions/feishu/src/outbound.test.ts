@@ -207,6 +207,48 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
       }),
     );
   });
+
+  it("passes replyInThread for plain text when threadId is used as reply target", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "hello",
+      replyToId: " ",
+      threadId: "om_thread_2",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "hello",
+        replyToMessageId: "om_thread_2",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("passes replyInThread for structured cards when threadId is used as reply target", async () => {
+    await sendText({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text: "plain text final answer",
+      replyToId: " ",
+      threadId: "om_thread_3",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "plain text final answer",
+        replyToMessageId: "om_thread_3",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+  });
 });
 
 describe("feishuOutbound comment-thread routing", () => {
