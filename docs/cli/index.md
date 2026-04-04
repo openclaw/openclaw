@@ -453,6 +453,22 @@ Highlights:
 
 ## Setup + onboarding
 
+### `completion`
+
+Generate shell-completion scripts and optionally install them into your shell profile.
+
+Options:
+
+- `-s, --shell <zsh|bash|powershell|fish>`
+- `-i, --install`
+- `--write-state`
+- `-y, --yes`
+
+Notes:
+
+- Without `--install` or `--write-state`, `completion` prints the script to stdout.
+- `--install` writes an `OpenClaw Completion` block into your shell profile and points it at the cached script under the OpenClaw state directory.
+
 ### `setup`
 
 Initialize config + workspace.
@@ -730,6 +746,23 @@ openclaw channels status --probe
 openclaw status --deep
 ```
 
+### `directory`
+
+Look up self, peer, and group IDs for channels that expose a directory surface. See [`openclaw directory`](/cli/directory).
+
+Common options:
+
+- `--channel <name>`
+- `--account <id>`
+- `--json`
+
+Subcommands:
+
+- `directory self`
+- `directory peers list [--query <text>] [--limit <n>]`
+- `directory groups list [--query <text>] [--limit <n>]`
+- `directory groups members --group-id <id> [--limit <n>]`
+
 ### `skills`
 
 List and inspect available skills plus readiness info.
@@ -786,6 +819,31 @@ Notes:
 - `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
 - `devices rotate` and `devices revoke` return JSON payloads.
 
+### `qr`
+
+Generate a mobile pairing QR and setup code from the current Gateway config. See [`openclaw qr`](/cli/qr).
+
+Options:
+
+- `--remote`
+- `--url <url>`
+- `--public-url <url>`
+- `--token <token>`
+- `--password <password>`
+- `--setup-code-only`
+- `--no-ascii`
+- `--json`
+
+Notes:
+
+- `--token` and `--password` are mutually exclusive.
+- The setup code carries a short-lived bootstrap token, not the shared gateway token/password.
+- After scanning, approve the request with `openclaw devices list` / `openclaw devices approve <requestId>`.
+
+### `clawbot`
+
+Legacy alias namespace. Currently supports `openclaw clawbot qr`, which maps to [`openclaw qr`](/cli/qr).
+
 ### `hooks`
 
 Manage internal agent hooks.
@@ -811,6 +869,13 @@ Notes:
 - Plugin-managed hooks cannot be enabled or disabled through `openclaw hooks`; enable or disable the owning plugin instead.
 - `hooks install` and `hooks update` still work as compatibility aliases, but they print deprecation warnings and forward to the plugin commands.
 
+### `webhooks`
+
+Webhook helpers. Current built-in surface is Gmail Pub/Sub setup + runner:
+
+- `webhooks gmail setup`
+- `webhooks gmail run`
+
 ### `webhooks gmail`
 
 Gmail Pub/Sub hook setup + runner. See [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration).
@@ -824,6 +889,12 @@ Notes:
 
 - `setup` configures the Gmail watch plus the OpenClaw-facing push path.
 - `run` starts the local Gmail watcher/renew loop with optional runtime overrides.
+
+### `dns`
+
+Wide-area discovery DNS helpers (CoreDNS + Tailscale). Current built-in surface:
+
+- `dns setup [--domain <domain>] [--apply]`
 
 ### `dns setup`
 
@@ -1652,6 +1723,24 @@ Actions:
 - `browser evaluate --fn <code> [--ref <ref>] [--target-id <id>]`
 - `browser console [--level <error|warn|info>] [--target-id <id>]`
 - `browser pdf [--target-id <id>]`
+
+## Voice call
+
+### `voicecall`
+
+Plugin-provided voice-call utilities. Only appears when the voice-call plugin is installed and enabled. See [`openclaw voicecall`](/cli/voicecall).
+
+Common commands:
+
+- `voicecall call --to <phone> --message <text> [--mode notify|conversation]`
+- `voicecall start --to <phone> [--message <text>] [--mode notify|conversation]`
+- `voicecall continue --call-id <id> --message <text>`
+- `voicecall speak --call-id <id> --message <text>`
+- `voicecall end --call-id <id>`
+- `voicecall status --call-id <id>`
+- `voicecall tail [--file <path>] [--since <n>] [--poll <ms>]`
+- `voicecall latency [--file <path>] [--last <n>]`
+- `voicecall expose [--mode off|serve|funnel] [--path <path>] [--port <port>] [--serve-path <path>]`
 
 ## Docs search
 
