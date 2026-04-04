@@ -1776,6 +1776,19 @@ export const registerTelegramHandlers = ({
         }
       }
 
+      // Populate the chatId → sessionKey cache so the sequential key
+      // middleware can detect active runs on the normal inbound path.
+      if (chatSessionCache) {
+        resolveTelegramSessionState({
+          chatId: event.chatId,
+          isGroup: event.isGroup,
+          isForum: !!event.isForum,
+          messageThreadId: event.msg.message_thread_id,
+          resolvedThreadId,
+          senderId: event.msg.from?.id,
+        });
+      }
+
       await processInboundMessage({
         ctx: event.ctx,
         msg: event.msg,
