@@ -296,6 +296,8 @@ API key auth, and dynamic model resolution.
     | `google-thinking` | Gemini thinking payload normalization on the shared stream path |
     | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level |
     | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path |
+    | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management |
+    | `openrouter-thinking` | OpenRouter reasoning wrapper for proxy routes, with unsupported-model/`auto` skips handled centrally |
     | `tool-stream-default-on` | Default-on `tool_stream` wrapper for providers like Z.AI that want tool streaming unless explicitly disabled |
 
     Real bundled examples:
@@ -303,6 +305,8 @@ API key auth, and dynamic model resolution.
     - `google` and `google-gemini-cli`: `google-thinking`
     - `moonshot`: `moonshot-thinking`
     - `minimax` and `minimax-portal`: `minimax-fast-mode`
+    - `openai` and `openai-codex`: `openai-responses-defaults`
+    - `openrouter`: `openrouter-thinking`
     - `zai`: `tool-stream-default-on`
 
     <Tabs>

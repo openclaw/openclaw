@@ -104,7 +104,8 @@ Current bundled examples:
 - `anthropic-vertex`: Claude-only replay-policy guards on Anthropic-message
   traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
-  hints, Gemini thought-signature sanitation on proxy Gemini traffic, and
+  hints, Gemini thought-signature sanitation on proxy Gemini traffic, proxy
+  reasoning injection through the `openrouter-thinking` stream family, and
   cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
   Claude-thinking transcript hints, runtime token exchange, and usage endpoint
@@ -112,8 +113,9 @@ Current bundled examples:
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
   normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
   OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
-  normalization (`input` / `output` and `prompt` / `completion` families), and
-  provider-family metadata
+  normalization (`input` / `output` and `prompt` / `completion` families), the
+  shared `openai-responses-defaults` stream family for native OpenAI/Codex
+  wrappers, and provider-family metadata
 - `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
   native Gemini replay validation, bootstrap replay sanitation, tagged
   reasoning-output mode, and modern-model matching; Gemini CLI OAuth also owns

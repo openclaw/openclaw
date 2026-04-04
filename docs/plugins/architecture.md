@@ -721,13 +721,18 @@ api.registerProvider({
   because it owns GPT-5.4 forward-compat, the direct OpenAI
   `openai-completions` -> `openai-responses` normalization, Codex-aware auth
   hints, Spark suppression, synthetic OpenAI list rows, and GPT-5 thinking /
-  live-model policy.
+  live-model policy; the `openai-responses-defaults` stream family owns the
+  shared native OpenAI Responses wrappers for attribution headers,
+  `/fast`/`serviceTier`, text verbosity, native Codex web search,
+  reasoning-compat payload shaping, and Responses context management.
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates; it also uses
   `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible` to keep
   provider-specific request headers, routing metadata, reasoning patches, and
-  prompt-cache policy out of core.
+  prompt-cache policy out of core. Its replay policy comes from the
+  `passthrough-gemini` family, while the `openrouter-thinking` stream family
+  owns proxy reasoning injection and the unsupported-model / `auto` skips.
 - GitHub Copilot uses `catalog`, `auth`, `resolveDynamicModel`, and
   `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
   needs provider-owned device login, model fallback behavior, Claude transcript
@@ -738,7 +743,8 @@ api.registerProvider({
   `prepareExtraParams`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
   still runs on core OpenAI transports but owns its transport/base URL
   normalization, OAuth refresh fallback policy, default transport choice,
-  synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
+  synthetic Codex catalog rows, and ChatGPT usage endpoint integration; it
+  shares the same `openai-responses-defaults` stream family as direct OpenAI.
 - Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel`,
   `buildReplayPolicy`, `sanitizeReplayHistory`,
   `resolveReasoningOutputMode`, `wrapStreamFn`, and `isModernModelRef` because the
