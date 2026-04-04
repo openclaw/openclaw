@@ -186,7 +186,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
-    denylist: agentExec?.denylist ?? globalExec?.denylist,
+    denylist: [...(globalExec?.denylist ?? []), ...(agentExec?.denylist ?? [])],
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
     safeBinProfiles: resolveMergedSafeBinProfileFixtures({

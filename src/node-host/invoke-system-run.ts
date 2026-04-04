@@ -360,6 +360,7 @@ async function evaluateSystemRunPolicyPhase(
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
   if (denylistDenied) {
+    logWarn(`exec denylist blocked command matching pattern: ${denylistPattern ?? "<unknown>"}`);
     await sendSystemRunDenied(opts, parsed.execution, {
       reason: "allowlist-miss",
       message: `SYSTEM_RUN_DENIED: denylist pattern matched (${denylistPattern ?? "<unknown>"})`,

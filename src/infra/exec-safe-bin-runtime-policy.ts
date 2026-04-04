@@ -115,7 +115,9 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   writableTrustedSafeBinDirs: ReadonlyArray<WritableTrustedSafeBinDir>;
 } {
   const safeBins = resolveSafeBins(params.local?.safeBins ?? params.global?.safeBins);
-  const denylist = resolveExecDenylist(params.local?.denylist ?? params.global?.denylist);
+  // Merge global + local denylists (deny is additive, not override)
+  const mergedDenyEntries = [...(params.global?.denylist ?? []), ...(params.local?.denylist ?? [])];
+  const denylist = resolveExecDenylist(mergedDenyEntries.length > 0 ? mergedDenyEntries : null);
   const safeBinProfiles = resolveSafeBinProfiles(
     resolveMergedSafeBinProfileFixtures({
       global: params.global,
