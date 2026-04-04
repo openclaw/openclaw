@@ -145,8 +145,13 @@ curl "http://localhost:4000/spend/logs" \
 ## Notes
 
 - LiteLLM runs on `http://localhost:4000` by default
-- OpenClaw connects via the OpenAI-compatible `/v1/chat/completions` endpoint
-- All OpenClaw features work through LiteLLM — no limitations
+- OpenClaw connects through LiteLLM's proxy-style OpenAI-compatible `/v1`
+  endpoint
+- Native OpenAI-only request shaping does not apply through LiteLLM:
+  no `service_tier`, no Responses `store`, no prompt-cache hints, and no
+  OpenAI reasoning-compat payload shaping
+- Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+  are not injected on custom LiteLLM base URLs
 
 ## See also
 

@@ -628,6 +628,10 @@ Notes:
   - `maxTokens: 8192`
 - Recommended: set explicit values that match your proxy/model limits.
 - For `api: "openai-completions"` on non-native endpoints (any non-empty `baseUrl` whose host is not `api.openai.com`), OpenClaw forces `compat.supportsDeveloperRole: false` to avoid provider 400 errors for unsupported `developer` roles.
+- Proxy-style OpenAI-compatible routes also skip native OpenAI-only request
+  shaping: no `service_tier`, no Responses `store`, no prompt-cache hints, no
+  OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution
+  headers.
 - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
 - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
 

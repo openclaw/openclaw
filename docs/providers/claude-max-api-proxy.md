@@ -94,6 +94,15 @@ You can point OpenClaw at the proxy as a custom OpenAI-compatible endpoint:
 }
 ```
 
+This path uses the same proxy-style OpenAI-compatible route as other custom
+`/v1` backends:
+
+- native OpenAI-only request shaping does not apply
+- no `service_tier`, no Responses `store`, no prompt-cache hints, and no
+  OpenAI reasoning-compat payload shaping
+- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+  are not injected on the proxy URL
+
 ## Available Models
 
 | Model ID          | Maps To         |
