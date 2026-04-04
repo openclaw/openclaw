@@ -181,6 +181,10 @@ Hook guard semantics to keep in mind:
 
 The `/approve` command handles both exec and plugin approvals with bounded fallback: when an exec approval id is not found, OpenClaw retries the same id through plugin approvals. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
 
+If custom approval plumbing needs to detect that same bounded fallback case,
+prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
+instead of matching approval-expiry strings manually.
+
 See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
 
 ## Registering agent tools
