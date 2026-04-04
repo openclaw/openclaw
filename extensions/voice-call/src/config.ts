@@ -605,12 +605,6 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
   resolved.streaming = mergeLegacyStreamingOpenAICompat(resolved.streaming);
 
   resolved.realtime = mergeLegacyRealtimeOpenAICompat(resolved.realtime);
-  if (
-    typeof resolved.realtime.instructions !== "string" &&
-    typeof process.env.REALTIME_VOICE_INSTRUCTIONS === "string"
-  ) {
-    resolved.realtime.instructions = process.env.REALTIME_VOICE_INSTRUCTIONS;
-  }
 
   return normalizeVoiceCallConfig(resolved);
 }
