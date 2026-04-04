@@ -2911,6 +2911,10 @@ td.data-table-key-col {
 
 .exec-approval-card {
   width: min(540px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -2955,6 +2959,8 @@ td.data-table-key-col {
   white-space: pre-wrap;
   font-family: var(--mono);
   font-size: 13px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .exec-approval-meta {
@@ -2987,6 +2993,7 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ===========================================
@@ -4288,6 +4295,7 @@ details[open] > .ov-expandable-toggle::after {
 
   .exec-approval-card {
     padding: 16px;
+    max-height: calc(100vh - 24px);
   }
 
   .exec-approval-actions {
