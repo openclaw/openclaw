@@ -218,6 +218,19 @@ For actions/directory reads, user token can be preferred when configured. For wr
   - if encoded option values exceed Slack limits, the flow falls back to buttons
 - For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
 
+Default slash command settings:
+
+- `enabled: false`
+- `name: "openclaw"`
+- `sessionPrefix: "slack:slash"`
+- `ephemeral: true`
+
+Slash sessions use isolated keys:
+
+- `agent:<agentId>:slack:slash:<userId>`
+
+and still route command execution against the target conversation session (`CommandTargetSessionKey`).
+
 ## Interactive replies
 
 Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
@@ -266,19 +279,6 @@ Notes:
 - This is Slack-specific UI. Other channels do not translate Slack Block Kit directives into their own button systems.
 - The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
 - If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
-
-Default slash command settings:
-
-- `enabled: false`
-- `name: "openclaw"`
-- `sessionPrefix: "slack:slash"`
-- `ephemeral: true`
-
-Slash sessions use isolated keys:
-
-- `agent:<agentId>:slack:slash:<userId>`
-
-and still route command execution against the target conversation session (`CommandTargetSessionKey`).
 
 ## Threading, sessions, and reply tags
 
