@@ -30,6 +30,7 @@ const SessionsSendToolSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  async: Type.Optional(Type.Boolean()),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -98,7 +99,7 @@ export function createSessionsSendTool(opts?: {
     label: "Session Send",
     name: "sessions_send",
     description:
-      "Send a message into another session. Use sessionKey or label to identify the target.",
+      "Send a message into another session. Use sessionKey or label to identify the target. Set async=true for fire-and-forget (no wait), or timeoutSeconds=0 for the same effect.",
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -241,10 +242,24 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutSeconds =
+      
+      // Handle async parameter as sugar for timeoutSeconds=0
+      const asyncParam = typeof params.async === "boolean" ? params.async : false;
+      const rawTimeoutSeconds =
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
+          : undefined;
+      
+      // Reject contradictory usage: async=true with a non-zero explicit timeout
+      if (asyncParam && rawTimeoutSeconds !== undefined && rawTimeoutSeconds !== 0) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "Cannot use async=true with a non-zero timeoutSeconds. Use one or the other.",
+        });
+      }
+      
+      const timeoutSeconds = asyncParam ? 0 : (rawTimeoutSeconds ?? 30);
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
