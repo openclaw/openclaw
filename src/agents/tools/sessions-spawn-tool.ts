@@ -7,7 +7,10 @@ import { spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
-import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import {
+  SUBAGENT_SPAWN_MODES,
+  spawnSubagentDirect,
+} from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 import {
@@ -110,7 +113,9 @@ const SessionsSpawnToolSchema = Type.Object({
       Type.Object({
         name: Type.String(),
         content: Type.String(),
-        encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
+        encoding: Type.Optional(
+          optionalStringEnum(["utf8", "base64"] as const),
+        ),
         mimeType: Type.Optional(Type.String()),
       }),
       { maxItems: 50 },
@@ -145,8 +150,8 @@ export function createSessionsSpawnTool(
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
-        Object.hasOwn(params, key),
+      const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find(
+        (key) => Object.hasOwn(params, key),
       );
       if (unsupportedParam) {
         throw new ToolInputError(
@@ -161,9 +166,14 @@ export function createSessionsSpawnTool(
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
-      const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
+      const mode =
+        params.mode === "run" || params.mode === "session"
+          ? params.mode
+          : undefined;
       const cleanup =
-        params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+        params.cleanup === "keep" || params.cleanup === "delete"
+          ? params.cleanup
+          : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
@@ -174,7 +184,8 @@ export function createSessionsSpawnTool(
             ? params.timeoutSeconds
             : undefined;
       const runTimeoutSeconds =
-        typeof timeoutSecondsCandidate === "number" && Number.isFinite(timeoutSecondsCandidate)
+        typeof timeoutSecondsCandidate === "number" &&
+        Number.isFinite(timeoutSecondsCandidate)
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
@@ -246,63 +257,65 @@ export function createSessionsSpawnTool(
             sandboxed: opts?.sandboxed,
           },
         );
-        const childSessionKey = result.childSessionKey?.trim();
-        const childRunId = result.runId?.trim();
-        const shouldTrackViaRegistry =
-          result.status === "accepted" &&
-          Boolean(childSessionKey) &&
-          Boolean(childRunId) &&
-          streamTo !== "parent";
-        if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const cfg = loadConfig();
-          const trackedSpawnMode = resolveTrackedSpawnMode({
-            requestedMode: result.mode,
-            threadRequested: thread,
-          });
-          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
-          const { mainKey, alias } = resolveMainSessionAlias(cfg);
-          const requesterInternalKey = opts?.agentSessionKey
-            ? resolveInternalSessionKey({
-                key: opts.agentSessionKey,
-                alias,
-                mainKey,
-              })
-            : alias;
-          const requesterDisplayKey = resolveDisplaySessionKey({
-            key: requesterInternalKey,
-            alias,
-            mainKey,
-          });
-          const requesterOrigin = normalizeDeliveryContext({
-            channel: opts?.agentChannel,
-            accountId: opts?.agentAccountId,
-            to: opts?.agentTo,
-            threadId: opts?.agentThreadId,
-          });
-          try {
-            registerSubagentRun({
-              runId: childRunId,
-              childSessionKey,
-              requesterSessionKey: requesterInternalKey,
-              requesterOrigin,
-              requesterDisplayKey,
-              task,
-              cleanup: trackedCleanup,
-              label: label || undefined,
-              runTimeoutSeconds,
-              expectsCompletionMessage: true,
-              spawnMode: trackedSpawnMode,
+        if (result.status === "accepted") {
+          const childSessionKey = result.childSessionKey?.trim();
+          const childRunId = result.runId?.trim();
+          const shouldTrackViaRegistry =
+            Boolean(childSessionKey) &&
+            Boolean(childRunId) &&
+            streamTo !== "parent";
+          if (shouldTrackViaRegistry && childSessionKey && childRunId) {
+            const cfg = loadConfig();
+            const trackedSpawnMode = resolveTrackedSpawnMode({
+              requestedMode: result.mode,
+              threadRequested: thread,
             });
-          } catch (err) {
-            // Best-effort only: the ACP turn was already started above, so deleting the
-            // child session record here does not guarantee the in-flight run was aborted.
-            await cleanupUntrackedAcpSession(childSessionKey);
-            return jsonResult({
-              status: "error",
-              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
-              childSessionKey,
-              runId: childRunId,
+            const trackedCleanup =
+              trackedSpawnMode === "session" ? "keep" : cleanup;
+            const { mainKey, alias } = resolveMainSessionAlias(cfg);
+            const requesterInternalKey = opts?.agentSessionKey
+              ? resolveInternalSessionKey({
+                  key: opts.agentSessionKey,
+                  alias,
+                  mainKey,
+                })
+              : alias;
+            const requesterDisplayKey = resolveDisplaySessionKey({
+              key: requesterInternalKey,
+              alias,
+              mainKey,
             });
+            const requesterOrigin = normalizeDeliveryContext({
+              channel: opts?.agentChannel,
+              accountId: opts?.agentAccountId,
+              to: opts?.agentTo,
+              threadId: opts?.agentThreadId,
+            });
+            try {
+              registerSubagentRun({
+                runId: childRunId,
+                childSessionKey,
+                requesterSessionKey: requesterInternalKey,
+                requesterOrigin,
+                requesterDisplayKey,
+                task,
+                cleanup: trackedCleanup,
+                label: label || undefined,
+                runTimeoutSeconds,
+                expectsCompletionMessage: true,
+                spawnMode: trackedSpawnMode,
+              });
+            } catch (err) {
+              // Best-effort only: the ACP turn was already started above, so deleting the
+              // child session record here does not guarantee the in-flight run was aborted.
+              await cleanupUntrackedAcpSession(childSessionKey);
+              return jsonResult({
+                status: "error",
+                error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
+                childSessionKey,
+                runId: childRunId,
+              });
+            }
           }
         }
         return jsonResult(result);
@@ -324,7 +337,10 @@ export function createSessionsSpawnTool(
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
-              ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
+              ? readStringParam(
+                  params.attachAs as Record<string, unknown>,
+                  "mountPath",
+                )
               : undefined,
           fsPolicy,
         },
