@@ -937,6 +937,47 @@ describe("statusCommand", () => {
     });
   });
 
+  it("uses live gateway memory provider when local status cannot materialize the plugin", async () => {
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      plugins: {
+        slots: { memory: "openclaw-honcho" },
+      },
+    });
+    const memoryRuntime = await import("../plugins/memory-runtime.js");
+    vi.mocked(memoryRuntime.getActiveMemorySearchManager).mockResolvedValueOnce({
+      manager: null,
+      error: "memory plugin unavailable",
+    } as never);
+    mockProbeGatewayResult({
+      ok: true,
+      connectLatencyMs: 10,
+      error: null,
+      health: {},
+      status: {},
+      presence: [],
+    });
+    mocks.callGateway.mockImplementation(async ({ method }: { method: string }) => {
+      if (method === "last-heartbeat") {
+        return null;
+      }
+      if (method === "doctor.memory.status") {
+        return {
+          agentId: "main",
+          provider: "openclaw-honcho",
+          embedding: { ok: false, error: "irrelevant for external plugin" },
+        };
+      }
+      return {};
+    });
+
+    const joined = await runStatusAndGetJoinedLogs({ deep: true });
+
+    expect(joined).toContain("gateway active");
+    expect(joined).toContain("provider openclaw-honcho");
+    expect(joined).not.toContain("enabled (plugin openclaw-honcho) · unavailable");
+  });
+
   it("warns instead of crashing when gateway auth SecretRef is unresolved for probe auth", async () => {
     mocks.loadConfig.mockReturnValue({
       session: {},
