@@ -1064,7 +1064,7 @@ authoring plugins:
   envelope formatting, and inbound envelope context helpers.
   `channel-setup` is the narrow optional-install setup seam.
   `setup-runtime` is the runtime-safe setup surface used by `setupEntry` /
-  deferred startup.
+  deferred startup, including the import-safe setup patch adapters.
   `setup-adapter-runtime` is the env-aware account-setup adapter seam.
   `setup-tools` is the small CLI/archive/docs helper seam (`formatCliCommand`,
   `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`,
@@ -1334,6 +1334,10 @@ Matrix is the current bundled example: it moves only auth/bootstrap keys into a
 named promoted account when named accounts already exist, and it can preserve a
 configured non-canonical default-account key instead of always creating
 `accounts.default`.
+
+Those setup patch adapters keep bundled contract-surface discovery lazy. Import
+time stays light; the promotion surface is loaded only on first use instead of
+re-entering bundled channel startup on module import.
 
 When those startup surfaces include gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,

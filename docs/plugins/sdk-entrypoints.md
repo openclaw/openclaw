@@ -137,8 +137,8 @@ In practice, pair `defineSetupPluginEntry(...)` with the narrow setup helper
 families:
 
 - `openclaw/plugin-sdk/setup-runtime` for runtime-safe setup helpers such as
-  lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, and
-  delegated setup proxies
+  import-safe setup patch adapters, lookup-note output,
+  `promptResolvedAllowFrom`, `splitSetupEntries`, and delegated setup proxies
 - `openclaw/plugin-sdk/channel-setup` for optional-install setup surfaces
 - `openclaw/plugin-sdk/setup-tools` for setup/install CLI/archive/docs helpers
 
