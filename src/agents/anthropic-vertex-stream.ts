@@ -48,12 +48,20 @@ function createAnthropicVertexOnPayload(params: {
     enableCacheControl: true,
   });
 
-  return async (payload, model) => {
+  function applyPolicy(payload: unknown): unknown {
     if (payload && typeof payload === "object" && !Array.isArray(payload)) {
       applyAnthropicPayloadPolicyToParams(payload as Record<string, unknown>, policy);
     }
-    const nextPayload = await params.onPayload?.(payload, model);
-    return nextPayload ?? payload;
+    return payload;
+  }
+
+  return async (payload, model) => {
+    const shapedPayload = applyPolicy(payload);
+    const nextPayload = await params.onPayload?.(shapedPayload, model);
+    if (nextPayload === undefined || nextPayload === shapedPayload) {
+      return shapedPayload;
+    }
+    return applyPolicy(nextPayload);
   };
 }
 
