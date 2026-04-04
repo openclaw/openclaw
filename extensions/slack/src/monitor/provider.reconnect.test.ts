@@ -104,4 +104,18 @@ describe("slack socket reconnect helpers", () => {
       error: err,
     });
   });
+
+  it("marks the socket client as shutting down before stop runs", async () => {
+    const app = {
+      receiver: { client: { shuttingDown: false } },
+      stop: vi.fn().mockImplementation(async () => {
+        expect(app.receiver.client.shuttingDown).toBe(true);
+      }),
+    };
+
+    await __testing.gracefulStopSlackApp(app);
+
+    expect(app.stop).toHaveBeenCalledTimes(1);
+    expect(app.receiver.client.shuttingDown).toBe(true);
+  });
 });
