@@ -1532,9 +1532,15 @@ Options:
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
+- `--agent <id>`
 
 Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 `--probe` runs live requests (may consume tokens and trigger rate limits).
+Probe rows can come from auth profiles, env credentials, or `models.json`.
+Expect probe statuses like `ok`, `auth`, `rate_limit`, `billing`, `timeout`,
+`format`, `unknown`, and `no_model`.
+When an explicit `auth.order.<provider>` omits a stored profile, probe reports
+`excluded_by_auth_order` instead of silently trying that profile.
 
 ### `models set <model>`
 

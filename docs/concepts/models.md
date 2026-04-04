@@ -177,6 +177,11 @@ provider has no credentials, `models status` prints a **Missing auth** section.
 JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
 (effective auth per provider).
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
+Use `--probe` for live auth checks; probe rows can come from auth profiles, env
+credentials, or `models.json`.
+If explicit `auth.order.<provider>` omits a stored profile, probe reports
+`excluded_by_auth_order` instead of trying it. If auth exists but no probeable
+model can be resolved for that provider, probe reports `status: no_model`.
 
 Auth choice is provider/account dependent. For always-on gateway hosts, API
 keys are usually the most predictable; Claude CLI reuse and existing legacy

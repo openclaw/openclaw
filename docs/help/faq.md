@@ -2612,6 +2612,15 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     openclaw models auth order set --provider anthropic --agent main anthropic:default
     ```
 
+    To verify what will actually be tried, use:
+
+    ```bash
+    openclaw models status --probe
+    ```
+
+    If a stored profile is omitted from the explicit order, probe reports
+    `excluded_by_auth_order` for that profile instead of trying it silently.
+
   </Accordion>
 
   <Accordion title="OAuth vs API key - what is the difference?">
