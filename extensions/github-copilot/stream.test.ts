@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream";
 import { wrapCopilotAnthropicStream } from "./stream.js";
 
 describe("wrapCopilotAnthropicStream", () => {
@@ -33,6 +34,10 @@ describe("wrapCopilotAnthropicStream", () => {
         },
       ],
     } as never;
+    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
+      messages: context.messages as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"],
+      hasImages: true,
+    });
 
     wrapped(
       {
@@ -49,11 +54,7 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
     expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
       headers: {
-        "Editor-Version": "vscode/1.96.2",
-        "User-Agent": "GitHubCopilotChat/0.26.7",
-        "X-Initiator": "user",
-        "Openai-Intent": "conversation-edits",
-        "Copilot-Vision-Request": "true",
+        ...expectedCopilotHeaders,
         "X-Test": "1",
       },
     });

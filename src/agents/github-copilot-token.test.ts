@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import {
   deriveCopilotApiBaseUrlFromToken,
   resolveCopilotApiToken,
@@ -70,9 +71,7 @@ describe("resolveCopilotApiToken", () => {
         headers: expect.objectContaining({
           Accept: "application/json",
           Authorization: "Bearer github-token",
-          "Editor-Version": "vscode/1.96.2",
-          "User-Agent": "GitHubCopilotChat/0.26.7",
-          "X-Github-Api-Version": "2025-04-01",
+          ...buildCopilotIdeHeaders({ includeApiVersion: true }),
         }),
       }),
     );
