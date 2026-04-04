@@ -70,14 +70,29 @@ fields are required. The canonical publish snippets live in
 
 ### `openclaw` fields
 
-| Field        | Type       | Description                                                                                |
-| ------------ | ---------- | ------------------------------------------------------------------------------------------ |
-| `extensions` | `string[]` | Entry point files (relative to package root)                                               |
-| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                    |
-| `channel`    | `object`   | Channel metadata: `id`, `label`, `blurb`, `selectionLabel`, `docsPath`, `order`, `aliases` |
-| `providers`  | `string[]` | Provider ids registered by this plugin                                                     |
-| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`                                     |
-| `startup`    | `object`   | Startup behavior flags                                                                     |
+| Field        | Type       | Description                                                                                              |
+| ------------ | ---------- | -------------------------------------------------------------------------------------------------------- |
+| `extensions` | `string[]` | Entry point files (relative to package root)                                                             |
+| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                                  |
+| `channel`    | `object`   | Channel metadata: `id`, `label`, `blurb`, `selectionLabel`, `docsPath`, `order`, `aliases`, `preferOver` |
+| `providers`  | `string[]` | Provider ids registered by this plugin                                                                   |
+| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`, `minHostVersion`, `allowInvalidConfigRecovery`   |
+| `startup`    | `object`   | Startup behavior flags                                                                                   |
+
+### `openclaw.install`
+
+`openclaw.install` is package metadata, not manifest metadata.
+
+| Field                        | Type                 | What it means                                                                  |
+| ---------------------------- | -------------------- | ------------------------------------------------------------------------------ |
+| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                   |
+| `localPath`                  | `string`             | Local development or bundled install path.                                     |
+| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                              |
+| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z`.                      |
+| `allowInvalidConfigRecovery` | `boolean`            | Lets setup/install flows offer guarded recovery when plugin config is invalid. |
+
+If `minHostVersion` is set, install and manifest-registry loading both enforce
+it. Older hosts skip the plugin; invalid version strings are rejected.
 
 ### Deferred full load
 
