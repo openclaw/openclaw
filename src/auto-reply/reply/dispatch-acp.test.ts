@@ -478,6 +478,8 @@ describe("tryDispatchAcpReply", () => {
           },
         }),
         ctxOverrides: {
+          Provider: "imessage",
+          Surface: "imessage",
           MediaPath: imagePath,
           MediaType: "image/png",
         },
