@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.app.PermissionRequester
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -111,6 +112,7 @@ class SmsManager(private val context: Context) {
     companion object {
         private const val DEFAULT_SMS_LIMIT = 25
         internal const val MAX_MIXED_BY_PHONE_CANDIDATE_WINDOW = 500
+        private const val MAX_MMS_HYDRATION_BATCH = 50
         private const val MMS_SMS_BY_PHONE_BASE = "content://mms-sms/messages/byphone"
         private const val MMS_CONTENT_BASE = "content://mms"
         private const val MMS_PART_URI = "content://mms/part"
@@ -824,7 +826,7 @@ class SmsManager(private val context: Context) {
         return phoneNumbers
     }
 
-    private fun querySmsMessages(params: QueryParams, phoneNumbers: List<String>): List<SmsMessage> {
+    private suspend fun querySmsMessages(params: QueryParams, phoneNumbers: List<String>): List<SmsMessage> {
         val messages = mutableListOf<SmsMessage>()
 
         val selections = mutableListOf<String>()
@@ -945,10 +947,11 @@ class SmsManager(private val context: Context) {
         return messages
     }
 
-    private fun querySmsMmsMessagesByPhone(phoneNumber: String, params: QueryParams): List<SmsMessage> {
+    private suspend fun querySmsMmsMessagesByPhone(phoneNumber: String, params: QueryParams): List<SmsMessage> =
+        withTimeout(25_000L) {
         val lookupNumber = toByPhoneLookupNumber(phoneNumber)
         if (lookupNumber.isBlank()) {
-            return emptyList()
+            return@withTimeout emptyList()
         }
 
         val uri = Uri.parse("$MMS_SMS_BY_PHONE_BASE/${Uri.encode(lookupNumber)}")
@@ -956,12 +959,32 @@ class SmsManager(private val context: Context) {
 
         val maxCandidates = params.offset + params.limit
         if (maxCandidates <= 0) {
-            return emptyList()
+            return@withTimeout emptyList()
         }
 
         val reviewMode = shouldUseConversationReviewByPhoneMode(params)
         val topCandidates = mutableListOf<Pair<String, SmsMessage>>()
         val materializedCandidates = linkedMapOf<String, SmsMessage>()
+
+        // Intermediate holder for MMS rows that need batch hydration.
+        data class MmsCandidate(
+            val id: Long,
+            val threadId: Long,
+            val transportType: String?,
+            val providerAddress: String?,
+            val dateMs: Long,
+            val dateSentMs: Long,
+            val readFromCursor: Boolean,
+            val readIndexValid: Boolean,
+            val type: Int,
+            val body: String?,
+            val smsStatus: Int?,
+        )
+
+        val smsRows = mutableListOf<SmsMessage>()
+        val mmsCandidates = mutableListOf<MmsCandidate>()
+
+        // Phase 1: fast cursor pass — collect SMS rows immediately, defer MMS hydration.
         val cursor = context.contentResolver.query(uri, projection, null, null, "date DESC")
         cursor?.use {
             val idIndex = it.getColumnIndex("_id")
@@ -986,51 +1009,146 @@ class SmsManager(private val context: Context) {
                 val threadId = if (threadIdIndex >= 0 && !it.isNull(threadIdIndex)) it.getLong(threadIdIndex) else 0L
                 val transportType = if (transportTypeIndex >= 0 && !it.isNull(transportTypeIndex)) it.getString(transportTypeIndex) else null
                 val providerAddress = if (addressIndex >= 0 && !it.isNull(addressIndex)) it.getString(addressIndex) else null
-                val mmsAddress = if (transportType.equals("mms", ignoreCase = true)) getMmsAddress(id, phoneNumber) else null
-                val address = resolveMixedByPhoneRowAddress(providerAddress, phoneNumber, mmsAddress)
-                var read = if (readIndex >= 0 && !it.isNull(readIndex)) it.getInt(readIndex) == 1 else true
-                var type = if (typeIndex >= 0 && !it.isNull(typeIndex)) it.getInt(typeIndex) else 0
-                var body = if (bodyIndex >= 0 && !it.isNull(bodyIndex)) it.getString(bodyIndex) else null
+                val readIndexValid = readIndex >= 0 && !it.isNull(readIndex)
+                val read = if (readIndexValid) it.getInt(readIndex) == 1 else true
+                val type = if (typeIndex >= 0 && !it.isNull(typeIndex)) it.getInt(typeIndex) else 0
+                val body = if (bodyIndex >= 0 && !it.isNull(bodyIndex)) it.getString(bodyIndex) else null
                 val smsStatus = if (statusIndex >= 0 && !it.isNull(statusIndex)) it.getInt(statusIndex) else null
-
-                // Only MMS transport rows are allowed to hydrate from MMS storage.
-                if (shouldHydrateMmsByPhoneRow(transportType, body, type)) {
-                    body = body?.takeIf { msg -> msg.isNotBlank() } ?: getMmsTextBody(id)
-                    val mmsMeta = getMmsMeta(id)
-                    if (type == 0) {
-                        type = mmsMeta.first ?: type
-                    }
-                    if (readIndex < 0 || it.isNull(readIndex)) {
-                        read = mmsMeta.second ?: read
-                    }
-                }
-
                 val dateSentRaw = if (dateSentIndex >= 0 && !it.isNull(dateSentIndex)) it.getLong(dateSentIndex) else 0L
                 val dateSentMs = normalizeProviderDateMillis(dateSentRaw)
 
+                val isMms = transportType.equals("mms", ignoreCase = true)
+                if (isMms && shouldHydrateMmsByPhoneRow(transportType, body, type)) {
+                    // Defer hydration — record candidate for batch processing.
+                    mmsCandidates.add(
+                        MmsCandidate(
+                            id = id,
+                            threadId = threadId,
+                            transportType = transportType,
+                            providerAddress = providerAddress,
+                            dateMs = dateMs,
+                            dateSentMs = dateSentMs,
+                            readFromCursor = read,
+                            readIndexValid = readIndexValid,
+                            type = type,
+                            body = body,
+                            smsStatus = smsStatus,
+                        )
+                    )
+                } else {
+                    // SMS row or MMS row that doesn't need hydration — resolve address inline.
+                    val address = resolveMixedByPhoneRowAddress(providerAddress, phoneNumber, null)
+                    val message = SmsMessage(
+                        id = id,
+                        threadId = threadId,
+                        address = address,
+                        person = null,
+                        date = dateMs,
+                        dateSent = dateSentMs,
+                        read = read,
+                        type = type,
+                        body = body,
+                        status = resolveMixedByPhoneRowStatus(transportType, smsStatus),
+                        transportType = transportType,
+                    )
+                    smsRows.add(message)
+                }
+            }
+        }
+
+        // Phase 2: batch hydrate MMS candidates (capped at MAX_MMS_HYDRATION_BATCH most recent).
+        val hydratedMmsCandidates = if (mmsCandidates.size > MAX_MMS_HYDRATION_BATCH) {
+            mmsCandidates.take(MAX_MMS_HYDRATION_BATCH)
+        } else {
+            mmsCandidates
+        }
+
+        if (hydratedMmsCandidates.isNotEmpty()) {
+            val mmsIds = hydratedMmsCandidates.map { it.id }
+
+            // Batch query text bodies from content://mms/part with mid IN (...)
+            val midPlaceholders = mmsIds.joinToString(",") { "?" }
+            val partBodyMap = mutableMapOf<Long, String?>()
+            val partCursor = context.contentResolver.query(
+                Uri.parse(MMS_PART_URI),
+                arrayOf("mid", "text", "ct"),
+                "mid IN ($midPlaceholders)",
+                mmsIds.map { it.toString() }.toTypedArray(),
+                null,
+            )
+            partCursor?.use {
+                val midIndex = it.getColumnIndex("mid")
+                val textIndex = it.getColumnIndex("text")
+                val ctIndex = it.getColumnIndex("ct")
+                while (it.moveToNext()) {
+                    val mid = if (midIndex >= 0 && !it.isNull(midIndex)) it.getLong(midIndex) else continue
+                    val contentType = if (ctIndex >= 0 && !it.isNull(ctIndex)) it.getString(ctIndex) else null
+                    if (contentType != null && contentType != "text/plain") continue
+                    val text = if (textIndex >= 0 && !it.isNull(textIndex)) it.getString(textIndex) else null
+                    if (!text.isNullOrBlank() && !partBodyMap.containsKey(mid)) {
+                        partBodyMap[mid] = text
+                    }
+                }
+            }
+
+            // Batch query MMS meta (msg_box, read) from content://mms with _id IN (...)
+            val idPlaceholders = mmsIds.joinToString(",") { "?" }
+            val metaMap = mutableMapOf<Long, Pair<Int?, Boolean?>>()
+            val metaCursor = context.contentResolver.query(
+                Uri.parse(MMS_CONTENT_BASE),
+                arrayOf("_id", "msg_box", "read"),
+                "_id IN ($idPlaceholders)",
+                mmsIds.map { it.toString() }.toTypedArray(),
+                null,
+            )
+            metaCursor?.use {
+                val idIndex = it.getColumnIndex("_id")
+                val msgBoxIndex = it.getColumnIndex("msg_box")
+                val readIndex = it.getColumnIndex("read")
+                while (it.moveToNext()) {
+                    val id = if (idIndex >= 0 && !it.isNull(idIndex)) it.getLong(idIndex) else continue
+                    val msgBox = if (msgBoxIndex >= 0 && !it.isNull(msgBoxIndex)) it.getInt(msgBoxIndex) else null
+                    val mappedType = mapMmsMsgBoxToSearchType(msgBox)
+                    val read = if (readIndex >= 0 && !it.isNull(readIndex)) it.getInt(readIndex) == 1 else null
+                    metaMap[id] = mappedType to read
+                }
+            }
+
+            // Per-MMS address queries (can't be batched due to per-id URI scheme).
+            for (candidate in hydratedMmsCandidates) {
+                val batchedBody = candidate.body?.takeIf { it.isNotBlank() } ?: partBodyMap[candidate.id]
+                val mmsMeta = metaMap[candidate.id]
+                val resolvedType = if (candidate.type == 0) mmsMeta?.first ?: candidate.type else candidate.type
+                val resolvedRead = if (!candidate.readIndexValid) mmsMeta?.second ?: candidate.readFromCursor else candidate.readFromCursor
+                val mmsAddress = getMmsAddress(candidate.id, phoneNumber)
+                val address = resolveMixedByPhoneRowAddress(candidate.providerAddress, phoneNumber, mmsAddress)
+
+                val body = batchedBody
+                val type = resolvedType
+                val read = resolvedRead
+
+                // Apply filters on hydrated data.
                 if (!params.keyword.isNullOrEmpty()) {
                     val keyword = params.keyword
-                    if (body.isNullOrEmpty() || !body.contains(keyword, ignoreCase = true)) {
-                        continue
-                    }
+                    if (body.isNullOrEmpty() || !body.contains(keyword, ignoreCase = true)) continue
                 }
                 if (params.type != null && type != params.type) continue
                 if (params.isRead != null && read != params.isRead) continue
 
                 val message = SmsMessage(
-                    id = id,
-                    threadId = threadId,
+                    id = candidate.id,
+                    threadId = candidate.threadId,
                     address = address,
                     person = null,
-                    date = dateMs,
-                    dateSent = dateSentMs,
+                    date = candidate.dateMs,
+                    dateSent = candidate.dateSentMs,
                     read = read,
                     type = type,
                     body = body,
-                    status = resolveMixedByPhoneRowStatus(transportType, smsStatus),
-                    transportType = transportType,
+                    status = resolveMixedByPhoneRowStatus(candidate.transportType, candidate.smsStatus),
+                    transportType = candidate.transportType,
                 )
-                val identityKey = buildMixedRowIdentity(id, transportType)
+                val identityKey = buildMixedRowIdentity(candidate.id, candidate.transportType)
                 collectMixedByPhoneCandidate(
                     topCandidates = topCandidates,
                     materializedCandidates = materializedCandidates,
@@ -1042,7 +1160,27 @@ class SmsManager(private val context: Context) {
             }
         }
 
-        return pageMixedByPhoneCandidates(
+        // Add SMS rows (and non-hydrated MMS rows) into candidate set.
+        for (message in smsRows) {
+            if (!params.keyword.isNullOrEmpty()) {
+                val keyword = params.keyword
+                if (message.body.isNullOrEmpty() || !message.body.contains(keyword, ignoreCase = true)) continue
+            }
+            if (params.type != null && message.type != params.type) continue
+            if (params.isRead != null && message.read != params.isRead) continue
+
+            val identityKey = buildMixedRowIdentity(message.id, message.transportType)
+            collectMixedByPhoneCandidate(
+                topCandidates = topCandidates,
+                materializedCandidates = materializedCandidates,
+                identityKey = identityKey,
+                message = message,
+                maxCandidates = maxCandidates,
+                reviewMode = reviewMode,
+            )
+        }
+
+        pageMixedByPhoneCandidates(
             topCandidates = topCandidates,
             materializedCandidates = materializedCandidates,
             params = params,
