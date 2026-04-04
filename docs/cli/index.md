@@ -1095,11 +1095,16 @@ Options:
 
 Options:
 
-- `add`: interactive auth helper
+- `add`: interactive token-auth helper
 - `login`: `--provider <name>`, `--method <method>`, `--set-default`
 - `login-github-copilot`: GitHub Copilot OAuth login flow
 - `setup-token`: `--provider <name>`, `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
+
+Notes:
+
+- `setup-token` and `paste-token` are generic token commands for providers that expose token auth methods.
+- Anthropic legacy token profiles still run if already configured, but Anthropic no longer supports `setup-token` or `paste-token` as a new OpenClaw auth path.
 
 ### `models auth order get|set|clear`
 

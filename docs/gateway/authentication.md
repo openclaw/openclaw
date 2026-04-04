@@ -185,6 +185,8 @@ Run `openclaw models status` to confirm which profile is expiring. If a legacy
 Anthropic token profile is missing or expired, migrate that setup to Claude CLI
 or an API key.
 
-## Requirements
+## Claude CLI requirements
+
+Only needed for the Anthropic Claude CLI reuse path:
 
 - Claude Code CLI installed (`claude` command available)
