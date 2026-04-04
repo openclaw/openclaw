@@ -201,16 +201,23 @@ Some categories are exclusive (only one active at a time):
 ## CLI reference
 
 ```bash
-openclaw plugins list                    # compact inventory
-openclaw plugins inspect <id>            # deep detail
-openclaw plugins inspect <id> --json     # machine-readable
-openclaw plugins doctor                  # diagnostics
+openclaw plugins list                       # compact inventory
+openclaw plugins list --enabled            # only loaded plugins
+openclaw plugins list --verbose            # per-plugin detail lines
+openclaw plugins list --json               # machine-readable inventory
+openclaw plugins inspect <id>              # deep detail
+openclaw plugins inspect <id> --json       # machine-readable
+openclaw plugins inspect --all             # fleet-wide table
+openclaw plugins info <id>                 # inspect alias
+openclaw plugins doctor                    # diagnostics
 
-openclaw plugins install <package>        # install (ClawHub first, then npm)
-openclaw plugins install clawhub:<pkg>   # install from ClawHub only
-openclaw plugins install <spec> --force  # overwrite existing install
-openclaw plugins install <path>          # install from local path
-openclaw plugins install -l <path>       # link (no copy) for dev
+openclaw plugins install <package>         # install (ClawHub first, then npm)
+openclaw plugins install clawhub:<pkg>     # install from ClawHub only
+openclaw plugins install <spec> --force    # overwrite existing install
+openclaw plugins install <path>            # install from local path
+openclaw plugins install -l <path>         # link (no copy) for dev
+openclaw plugins install <plugin> --marketplace <source>
+openclaw plugins install <spec> --pin      # record exact resolved npm spec
 openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id>             # update one plugin
 openclaw plugins update <id> --dangerously-force-unsafe-install
@@ -218,6 +225,7 @@ openclaw plugins update --all            # update all
 openclaw plugins uninstall <id>          # remove config/install records
 openclaw plugins uninstall <id> --keep-files
 openclaw plugins marketplace list <source>
+openclaw plugins marketplace list <source> --json
 
 openclaw plugins enable <id>
 openclaw plugins disable <id>
@@ -240,6 +248,15 @@ This CLI flag applies to plugin install/update flows only. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request
 override instead, while `openclaw skills install` remains the separate ClawHub
 skill download/install flow.
+
+Compatible bundles participate in the same plugin list/inspect/enable/disable
+flow. Current runtime support includes bundle skills, Claude command-skills,
+Claude `settings.json` defaults, Claude `.lsp.json` and manifest-declared
+`lspServers` defaults, Cursor command-skills, and compatible Codex hook
+directories.
+
+`openclaw plugins inspect <id>` also reports detected bundle capabilities plus
+supported or unsupported MCP and LSP server entries for bundle-backed plugins.
 
 See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 

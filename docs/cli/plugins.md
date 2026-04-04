@@ -21,8 +21,14 @@ Related:
 
 ```bash
 openclaw plugins list
+openclaw plugins list --enabled
+openclaw plugins list --verbose
+openclaw plugins list --json
 openclaw plugins install <path-or-spec>
 openclaw plugins inspect <id>
+openclaw plugins inspect <id> --json
+openclaw plugins inspect --all
+openclaw plugins info <id>
 openclaw plugins enable <id>
 openclaw plugins disable <id>
 openclaw plugins uninstall <id>
@@ -30,6 +36,7 @@ openclaw plugins doctor
 openclaw plugins update <id>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
+openclaw plugins marketplace list <marketplace> --json
 ```
 
 Bundled plugins ship with OpenClaw. Some are enabled by default (for example
@@ -153,9 +160,24 @@ For local paths and archives, OpenClaw auto-detects:
 
 Compatible bundles install into the normal extensions root and participate in
 the same list/info/enable/disable flow. Today, bundle skills, Claude
-command-skills, Claude `settings.json` defaults, Cursor command-skills, and compatible Codex hook
-directories are supported; other detected bundle capabilities are shown in
-diagnostics/info but are not yet wired into runtime execution.
+command-skills, Claude `settings.json` defaults, Claude `.lsp.json` /
+manifest-declared `lspServers` defaults, Cursor command-skills, and compatible
+Codex hook directories are supported; other detected bundle capabilities are
+shown in diagnostics/info but are not yet wired into runtime execution.
+
+### List
+
+```bash
+openclaw plugins list
+openclaw plugins list --enabled
+openclaw plugins list --verbose
+openclaw plugins list --json
+```
+
+Use `--enabled` to show only loaded plugins. Use `--verbose` to switch from the
+table view to per-plugin detail lines with source/origin/version/activation
+metadata. Use `--json` for machine-readable inventory plus registry
+diagnostics.
 
 Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 
@@ -228,7 +250,8 @@ openclaw plugins inspect <id> --json
 
 Deep introspection for a single plugin. Shows identity, load status, source,
 registered capabilities, hooks, tools, commands, services, gateway methods,
-HTTP routes, policy flags, diagnostics, and install metadata.
+HTTP routes, policy flags, diagnostics, install metadata, bundle capabilities,
+and any detected MCP or LSP server support.
 
 Each plugin is classified by what it actually registers at runtime:
 
@@ -242,4 +265,28 @@ See [Plugin shapes](/plugins/architecture#plugin-shapes) for more on the capabil
 The `--json` flag outputs a machine-readable report suitable for scripting and
 auditing.
 
+`inspect --all` renders a fleet-wide table with shape, capability kinds,
+compatibility notices, bundle capabilities, and hook summary columns.
+
 `info` is an alias for `inspect`.
+
+### Doctor
+
+```bash
+openclaw plugins doctor
+```
+
+`doctor` reports plugin load errors, manifest/discovery diagnostics, and
+compatibility notices. When everything is clean it prints `No plugin issues
+detected.`
+
+### Marketplace
+
+```bash
+openclaw plugins marketplace list <source>
+openclaw plugins marketplace list <source> --json
+```
+
+Marketplace list accepts a local marketplace path, a `marketplace.json` path, a
+GitHub shorthand like `owner/repo`, or a git URL. `--json` prints the resolved
+source label plus the parsed marketplace manifest and plugin entries.

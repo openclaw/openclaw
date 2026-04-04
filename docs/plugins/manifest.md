@@ -23,8 +23,9 @@ OpenClaw auto-detects those bundle layouts too, but they are not validated
 against the `openclaw.plugin.json` schema described here.
 
 For compatible bundles, OpenClaw currently reads bundle metadata plus declared
-skill roots, Claude command roots, Claude bundle `settings.json` defaults, and
-supported hook packs when the layout matches OpenClaw runtime expectations.
+skill roots, Claude command roots, Claude bundle `settings.json` defaults,
+Claude bundle LSP defaults, and supported hook packs when the layout matches
+OpenClaw runtime expectations.
 
 Every native OpenClaw plugin **must** ship a `openclaw.plugin.json` file in the
 **plugin root**. OpenClaw uses this manifest to validate configuration
