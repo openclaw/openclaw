@@ -160,6 +160,10 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /** Max chars per bootstrap file on continuation turns (default: 5000). */
+  bootstrapContinuationMaxChars?: number;
+  /** Max total chars across all bootstrap files on continuation turns (default: 40000). */
+  bootstrapContinuationTotalMaxChars?: number;
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text

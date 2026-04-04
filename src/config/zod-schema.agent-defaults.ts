@@ -47,6 +47,8 @@ export const AgentDefaultsSchema = z
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    bootstrapContinuationMaxChars: z.number().int().positive().optional(),
+    bootstrapContinuationTotalMaxChars: z.number().int().positive().optional(),
     bootstrapPromptTruncationWarning: z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),

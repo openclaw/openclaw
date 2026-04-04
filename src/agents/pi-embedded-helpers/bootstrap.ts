@@ -84,6 +84,10 @@ export function stripThoughtSignatures<T>(
 
 export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 150_000;
+// Continuation defaults: ~75% reduction — keeps the most important content
+// from each file (head/tail trimming) while freeing context window space.
+export const DEFAULT_BOOTSTRAP_CONTINUATION_MAX_CHARS = 5_000;
+export const DEFAULT_BOOTSTRAP_CONTINUATION_TOTAL_MAX_CHARS = 40_000;
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 const BOOTSTRAP_HEAD_RATIO = 0.7;
@@ -110,6 +114,22 @@ export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+}
+
+export function resolveBootstrapContinuationMaxChars(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.bootstrapContinuationMaxChars;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_BOOTSTRAP_CONTINUATION_MAX_CHARS;
+}
+
+export function resolveBootstrapContinuationTotalMaxChars(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.bootstrapContinuationTotalMaxChars;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_BOOTSTRAP_CONTINUATION_TOTAL_MAX_CHARS;
 }
 
 export function resolveBootstrapPromptTruncationWarningMode(

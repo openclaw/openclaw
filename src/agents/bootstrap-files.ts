@@ -185,14 +185,18 @@ export async function resolveBootstrapContextForRun(params: {
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  /** Optional per-file char budget override (defaults to resolveBootstrapMaxChars). */
+  maxChars?: number;
+  /** Optional total char budget override (defaults to resolveBootstrapTotalMaxChars). */
+  totalMaxChars?: number;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
-    maxChars: resolveBootstrapMaxChars(params.config),
-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+    maxChars: params.maxChars ?? resolveBootstrapMaxChars(params.config),
+    totalMaxChars: params.totalMaxChars ?? resolveBootstrapTotalMaxChars(params.config),
     warn: params.warn,
   });
   return { bootstrapFiles, contextFiles };

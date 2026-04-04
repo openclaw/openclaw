@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildBootstrapContextFiles,
+  DEFAULT_BOOTSTRAP_CONTINUATION_MAX_CHARS,
+  DEFAULT_BOOTSTRAP_CONTINUATION_TOTAL_MAX_CHARS,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
   DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE,
   DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  resolveBootstrapContinuationMaxChars,
+  resolveBootstrapContinuationTotalMaxChars,
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
@@ -153,7 +157,11 @@ describe("buildBootstrapContextFiles", () => {
 });
 
 type BootstrapLimitResolverCase = {
-  name: "bootstrapMaxChars" | "bootstrapTotalMaxChars";
+  name:
+    | "bootstrapMaxChars"
+    | "bootstrapTotalMaxChars"
+    | "bootstrapContinuationMaxChars"
+    | "bootstrapContinuationTotalMaxChars";
   resolve: (cfg?: OpenClawConfig) => number;
   defaultValue: number;
 };
@@ -168,6 +176,16 @@ const BOOTSTRAP_LIMIT_RESOLVERS: BootstrapLimitResolverCase[] = [
     name: "bootstrapTotalMaxChars",
     resolve: resolveBootstrapTotalMaxChars,
     defaultValue: DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS,
+  },
+  {
+    name: "bootstrapContinuationMaxChars",
+    resolve: resolveBootstrapContinuationMaxChars,
+    defaultValue: DEFAULT_BOOTSTRAP_CONTINUATION_MAX_CHARS,
+  },
+  {
+    name: "bootstrapContinuationTotalMaxChars",
+    resolve: resolveBootstrapContinuationTotalMaxChars,
+    defaultValue: DEFAULT_BOOTSTRAP_CONTINUATION_TOTAL_MAX_CHARS,
   },
 ];
 

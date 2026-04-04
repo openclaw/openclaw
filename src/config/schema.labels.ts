@@ -331,6 +331,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.contextInjection": "Context Injection",
   "agents.defaults.bootstrapMaxChars": "Bootstrap Max Chars",
   "agents.defaults.bootstrapTotalMaxChars": "Bootstrap Total Max Chars",
+  "agents.defaults.bootstrapContinuationMaxChars": "Bootstrap Continuation Max Chars",
+  "agents.defaults.bootstrapContinuationTotalMaxChars": "Bootstrap Continuation Total Max Chars",
   "agents.defaults.bootstrapPromptTruncationWarning": "Bootstrap Prompt Truncation Warning",
   "agents.defaults.envelopeTimezone": "Envelope Timezone",
   "agents.defaults.envelopeTimestamp": "Envelope Timestamp",

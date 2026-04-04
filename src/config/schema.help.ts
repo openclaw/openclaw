@@ -832,6 +832,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 150000).",
+  "agents.defaults.bootstrapContinuationMaxChars":
+    "Max characters per bootstrap file on continuation turns when session already exists (default: 5000). Reduces token usage on subsequent messages.",
+  "agents.defaults.bootstrapContinuationTotalMaxChars":
+    "Max total characters across all bootstrap files on continuation turns (default: 40000). Reduces token usage on subsequent messages.",
   "agents.defaults.bootstrapPromptTruncationWarning":
     'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
   "agents.defaults.repoRoot":

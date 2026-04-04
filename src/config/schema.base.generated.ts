@@ -3203,6 +3203,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Max total characters across all injected workspace bootstrap files (default: 150000).",
               },
+              bootstrapContinuationMaxChars: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              bootstrapContinuationTotalMaxChars: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
               bootstrapPromptTruncationWarning: {
                 anyOf: [
                   {
@@ -24166,6 +24176,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.bootstrapTotalMaxChars": {
       label: "Bootstrap Total Max Chars",
       help: "Max total characters across all injected workspace bootstrap files (default: 150000).",
+      tags: ["performance"],
+    },
+    "agents.defaults.bootstrapContinuationMaxChars": {
+      label: "Bootstrap Continuation Max Chars",
+      help: "Max characters per bootstrap file on continuation turns when session already exists (default: 5000). Reduces token usage on subsequent messages.",
+      tags: ["performance"],
+    },
+    "agents.defaults.bootstrapContinuationTotalMaxChars": {
+      label: "Bootstrap Continuation Total Max Chars",
+      help: "Max total characters across all bootstrap files on continuation turns (default: 40000). Reduces token usage on subsequent messages.",
       tags: ["performance"],
     },
     "agents.defaults.bootstrapPromptTruncationWarning": {
