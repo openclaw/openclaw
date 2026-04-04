@@ -66,7 +66,7 @@ Pin versions or add dependencies in your project's `islo.yaml`:
 ```yaml
 tools:
   openclaw: "latest"
-  node: "22"
+  node: "22.14"
 ```
 
 OpenClaw requires Node 22.14+. islo installs it automatically as a dependency.
