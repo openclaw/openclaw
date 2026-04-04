@@ -19,9 +19,13 @@ vi.mock("../../gateway/probe.js", () => ({
   probeGateway: (opts: unknown) => probeGateway(opts),
 }));
 
-vi.mock("../../utils.js", () => ({
-  sleep: (ms: number) => sleep(ms),
-}));
+vi.mock("../../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
+  return {
+    ...actual,
+    sleep: (ms: number) => sleep(ms),
+  };
+});
 
 const originalPlatform = process.platform;
 

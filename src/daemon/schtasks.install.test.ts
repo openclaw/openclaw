@@ -181,6 +181,56 @@ describe("installScheduledTask", () => {
     });
   });
 
+  it("throws when /Run fails after updating an existing task", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
+      );
+
+      await expect(
+        installScheduledTask({
+          env,
+          stdout: new PassThrough(),
+          programArguments: ["node", "gateway.js"],
+          environment: {},
+        }),
+      ).rejects.toThrow("schtasks run failed: ERROR: Access is denied.");
+
+      expect(schtasksCalls[0]).toEqual(["/Query"]);
+      expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[2]?.[0]).toBe("/Change");
+      expect(schtasksCalls[3]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
+  it("throws when /Run fails after creating a new task", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "ERROR: The system cannot find the file specified." },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "ERROR: Access is denied." },
+      );
+
+      await expect(
+        installScheduledTask({
+          env,
+          stdout: new PassThrough(),
+          programArguments: ["node", "gateway.js"],
+          environment: {},
+        }),
+      ).rejects.toThrow("schtasks run failed: ERROR: Access is denied.");
+
+      expect(schtasksCalls[0]).toEqual(["/Query"]);
+      expect(schtasksCalls[1]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[2]?.[0]).toBe("/Create");
+      expect(schtasksCalls[3]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+    });
+  });
+
   it("does not persist a frozen PATH snapshot into the generated task script", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       const { scriptPath } = await installScheduledTask({

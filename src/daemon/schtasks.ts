@@ -601,7 +601,7 @@ async function updateExistingScheduledTask(params: {
   if (change.code !== 0) {
     return false;
   }
-  await execSchtasks(["/Run", "/TN", params.taskName]);
+  await runScheduledTaskOrThrow(params.taskName);
   writeFormattedLines(
     params.stdout,
     [
@@ -611,6 +611,13 @@ async function updateExistingScheduledTask(params: {
     { leadingBlankLine: true },
   );
   return true;
+}
+
+async function runScheduledTaskOrThrow(taskName: string): Promise<void> {
+  const run = await execSchtasks(["/Run", "/TN", taskName]);
+  if (run.code !== 0) {
+    throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
+  }
 }
 
 async function activateScheduledTask(params: {
@@ -671,7 +678,7 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await execSchtasks(["/Run", "/TN", taskName]);
+  await runScheduledTaskOrThrow(taskName);
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
@@ -798,10 +805,7 @@ export async function restartScheduledTask({
       }
     }
   }
-  const res = await execSchtasks(["/Run", "/TN", taskName]);
-  if (res.code !== 0) {
-    throw new Error(`schtasks run failed: ${res.stderr || res.stdout}`.trim());
-  }
+  await runScheduledTaskOrThrow(taskName);
   stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }
