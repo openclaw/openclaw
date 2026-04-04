@@ -106,6 +106,51 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
+  it("resolves whatsapp onto the whatsapp vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "whatsapp", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("whatsapp");
+    expect(plan.config).toBe("vitest.extension-whatsapp.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("whatsapp"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves voice-call onto the voice-call vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "voice-call", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("voice-call");
+    expect(plan.config).toBe("vitest.extension-voice-call.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("voice-call"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves mattermost onto the mattermost vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "mattermost", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("mattermost");
+    expect(plan.config).toBe("vitest.extension-mattermost.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("mattermost"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves irc onto the irc vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "irc", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("irc");
+    expect(plan.config).toBe("vitest.extension-irc.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("irc"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves zalo onto the zalo vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "zalo", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("zalo");
+    expect(plan.config).toBe("vitest.extension-zalo.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("zalo"));
+    expect(plan.hasTests).toBe(true);
+  });
+
   it("resolves memory extensions onto the memory vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "memory-core", cwd: process.cwd() });
 
@@ -199,9 +244,15 @@ describe("scripts/test-extension.mjs", () => {
         "openai",
         "matrix",
         "telegram",
+        "mattermost",
+        "voice-call",
+        "whatsapp",
+        "zalo",
+        "zalouser",
         "memory-core",
         "msteams",
         "feishu",
+        "irc",
         "bluebubbles",
         "acpx",
         "diffs",
@@ -214,13 +265,19 @@ describe("scripts/test-extension.mjs", () => {
       "diffs",
       "feishu",
       "firecrawl",
+      "irc",
       "line",
       "matrix",
+      "mattermost",
       "memory-core",
       "msteams",
       "openai",
       "slack",
       "telegram",
+      "voice-call",
+      "whatsapp",
+      "zalo",
+      "zalouser",
     ]);
     expect(batch.planGroups).toEqual([
       {
@@ -254,9 +311,21 @@ describe("scripts/test-extension.mjs", () => {
         testFileCount: expect.any(Number),
       },
       {
+        config: "vitest.extension-irc.config.ts",
+        extensionIds: ["irc"],
+        roots: [bundledPluginRoot("irc")],
+        testFileCount: expect.any(Number),
+      },
+      {
         config: "vitest.extension-matrix.config.ts",
         extensionIds: ["matrix"],
         roots: [bundledPluginRoot("matrix")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-mattermost.config.ts",
+        extensionIds: ["mattermost"],
+        roots: [bundledPluginRoot("mattermost")],
         testFileCount: expect.any(Number),
       },
       {
@@ -281,6 +350,24 @@ describe("scripts/test-extension.mjs", () => {
         config: "vitest.extension-telegram.config.ts",
         extensionIds: ["telegram"],
         roots: [bundledPluginRoot("telegram")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-voice-call.config.ts",
+        extensionIds: ["voice-call"],
+        roots: [bundledPluginRoot("voice-call")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-whatsapp.config.ts",
+        extensionIds: ["whatsapp"],
+        roots: [bundledPluginRoot("whatsapp")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-zalo.config.ts",
+        extensionIds: ["zalo", "zalouser"],
+        roots: [bundledPluginRoot("zalo"), bundledPluginRoot("zalouser")],
         testFileCount: expect.any(Number),
       },
       {
