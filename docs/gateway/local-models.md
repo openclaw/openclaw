@@ -145,6 +145,16 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 
+Behavior note for local/proxied `/v1` backends:
+
+- OpenClaw treats these as proxy-style OpenAI-compatible routes, not native
+  OpenAI endpoints
+- native OpenAI-only request shaping does not apply here: no
+  `service_tier`, no Responses `store`, no OpenAI reasoning-compat payload
+  shaping, and no prompt-cache hints
+- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+  are not injected on these custom proxy URLs
+
 ## Troubleshooting
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.

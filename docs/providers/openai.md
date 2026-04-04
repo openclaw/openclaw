@@ -361,6 +361,9 @@ from generic OpenAI-compatible `/v1` proxies:
 - hidden OpenClaw attribution headers (`originator`, `version`, and
   `User-Agent`) are only attached on verified native OpenAI hosts
   (`api.openai.com`) and native Codex hosts (`chatgpt.com/backend-api`)
+- native OpenAI/Codex routes keep OpenAI-only request shaping such as
+  `service_tier`, Responses `store`, OpenAI reasoning-compat payloads, and
+  prompt-cache hints
 - proxy-style OpenAI-compatible routes keep the looser compat behavior and do
   not force strict tool schemas, native-only request shaping, or hidden
   OpenAI/Codex attribution headers

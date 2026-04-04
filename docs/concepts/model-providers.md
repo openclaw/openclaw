@@ -163,6 +163,11 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - OpenAI priority processing can be enabled via `agents.defaults.models["openai/<model>"].params.serviceTier`
 - `/fast` and `params.fastMode` map direct `openai/*` Responses requests to `service_tier=priority` on `api.openai.com`
 - Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
+- Hidden OpenClaw attribution headers (`originator`, `version`,
+  `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not
+  generic OpenAI-compatible proxies
+- Native OpenAI routes also keep Responses `store`, prompt-cache hints, and
+  OpenAI reasoning-compat payload shaping; proxy routes do not
 - `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because the live OpenAI API rejects it; Spark is treated as Codex-only
 
 ```json5
@@ -295,6 +300,9 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `openrouter/auto`
 - OpenClaw applies OpenRouter's documented app-attribution headers only when
   the request actually targets `openrouter.ai`
+- OpenRouter remains on the proxy-style OpenAI-compatible path, so native
+  OpenAI-only request shaping (`serviceTier`, Responses `store`,
+  prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - MiniMax: `minimax` (`MINIMAX_API_KEY`)

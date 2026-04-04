@@ -43,3 +43,6 @@ openclaw onboard --auth-choice openrouter-api-key
   `X-OpenRouter-Categories: cli-agent`.
 - If you repoint the OpenRouter provider at some other proxy/base URL, OpenClaw
   does not inject those OpenRouter-specific headers.
+- OpenRouter still runs through the proxy-style OpenAI-compatible path, so
+  native OpenAI-only request shaping such as `serviceTier`, Responses `store`,
+  OpenAI reasoning-compat payloads, and prompt-cache hints is not forwarded.
