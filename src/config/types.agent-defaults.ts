@@ -142,6 +142,8 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
+  /** Absolute path to a file whose contents are injected into the system prompt for all sessions. */
+  systemPromptFile?: string;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
