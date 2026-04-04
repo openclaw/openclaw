@@ -188,6 +188,13 @@ export const MessagesSchema = z
       .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
+    firewall: z
+      .object({
+        enabled: z.boolean().optional(),
+        selfTargets: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

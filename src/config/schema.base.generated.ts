@@ -8358,6 +8358,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          firewall: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              selfTargets: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },

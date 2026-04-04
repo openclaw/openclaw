@@ -83,6 +83,17 @@ export type StatusReactionsConfig = {
   timing?: StatusReactionsTimingConfig;
 };
 
+export type MessagingFirewallConfig = {
+  /** When true, messages to non-self targets require human confirmation before sending. Default: false. */
+  enabled?: boolean;
+  /**
+   * Pre-approved targets the agent may send to autonomously without confirmation.
+   * Each entry may be a bare target (e.g. "@alice") or a channel-qualified target
+   * (e.g. "telegram:@alice"). Targets not listed here trigger a confirmation prompt.
+   */
+  selfTargets?: string[];
+};
+
 export type MessagesConfig = {
   /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
   messagePrefix?: string;
@@ -122,6 +133,8 @@ export type MessagesConfig = {
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
+  /** Human-confirmation firewall for outbound messages. */
+  firewall?: MessagingFirewallConfig;
 };
 
 export type NativeCommandsSetting = boolean | "auto";

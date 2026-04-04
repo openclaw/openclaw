@@ -5,6 +5,7 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "../../agents/tools/common.js";
+import { callGatewayTool } from "../../agents/tools/gateway.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -281,6 +282,147 @@ type ResolvedActionContext = {
   resolvedTarget?: ResolvedMessagingTarget;
   abortSignal?: AbortSignal;
 };
+
+/**
+ * Check messaging firewall policy before sending. When `messages.firewall.enabled` is true,
+ * any target not listed in `selfTargets` requires explicit human confirmation via the
+ * plugin approval gateway before the message is dispatched.
+ *
+ * Throws if the send is denied or approval infrastructure is unavailable.
+ */
+async function checkMessageFirewall(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  to: string;
+  messagePreview: string;
+  agentId?: string;
+  sessionKey?: string;
+  abortSignal?: AbortSignal;
+  /** Gateway credentials to use for approval RPCs — should match the delivery gateway. */
+  gatewayUrl?: string;
+  gatewayToken?: string;
+  /**
+   * Turn-source metadata: the channel/target that triggered this agent turn.
+   * Enables the gateway's turn-source routing fallback so /approve can be sent
+   * from the originating conversation when no dedicated approvals client is connected.
+   */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+}): Promise<void> {
+  const firewall = params.cfg.messages?.firewall;
+  if (!firewall?.enabled) {
+    return;
+  }
+
+  // No target means no send; skip the firewall to avoid false positives
+  if (!params.to) {
+    return;
+  }
+
+  const selfTargets = firewall.selfTargets ?? [];
+  // Allow bare target match OR channel-qualified match (e.g. "telegram:@alice")
+  const channelTarget = `${params.channel}:${params.to}`;
+  if (selfTargets.includes(params.to) || selfTargets.includes(channelTarget)) {
+    return;
+  }
+
+  // Non-self target: request human confirmation via plugin approval gateway
+  const preview =
+    params.messagePreview.length > 200
+      ? `${params.messagePreview.slice(0, 200)}…`
+      : params.messagePreview;
+  const TIMEOUT_MS = 120_000;
+
+  const gatewayOpts = {
+    timeoutMs: TIMEOUT_MS + 10_000,
+    gatewayUrl: params.gatewayUrl,
+    gatewayToken: params.gatewayToken,
+  };
+
+  const requestResult = await callGatewayTool<{ id?: string; decision?: string | null }>(
+    "plugin.approval.request",
+    gatewayOpts,
+    {
+      pluginId: "messaging.firewall",
+      // Clamp composed strings to gateway protocol limits (title: 80, description: 256)
+      title: `Send message to ${params.to}`.slice(0, 80),
+      description: `Channel: ${params.channel} | Target: ${params.to} | Message: ${preview}`.slice(
+        0,
+        256,
+      ),
+      severity: "warning",
+      toolName: "message",
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      timeoutMs: TIMEOUT_MS,
+      twoPhase: true,
+      // Turn-source metadata lets the gateway route /approve back through the
+      // originating conversation when no dedicated approvals client is connected.
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
+      turnSourceAccountId: params.turnSourceAccountId,
+      turnSourceThreadId: params.turnSourceThreadId,
+    },
+    { expectFinal: false },
+  );
+
+  const id = requestResult?.id;
+  if (!id) {
+    throw new Error(
+      `messaging.firewall: send to "${params.to}" on ${params.channel} blocked — approval unavailable`,
+    );
+  }
+
+  // Check for an inline decision returned with the registration response
+  let decision: string | null | undefined;
+  if (Object.prototype.hasOwnProperty.call(requestResult ?? {}, "decision")) {
+    decision = requestResult?.decision;
+  } else {
+    // Wait for the human to decide; respect the caller's abort signal
+    const waitPromise = callGatewayTool<{ decision?: string | null }>(
+      "plugin.approval.waitDecision",
+      gatewayOpts,
+      { id },
+    );
+    if (params.abortSignal) {
+      const sig = params.abortSignal;
+      let onAbort: (() => void) | undefined;
+      const abortPromise = new Promise<never>((_, reject) => {
+        if (sig.aborted) {
+          reject(sig.reason);
+          return;
+        }
+        onAbort = () => reject(sig.reason);
+        sig.addEventListener("abort", onAbort, { once: true });
+      });
+      try {
+        const waitResult = await Promise.race([waitPromise, abortPromise]);
+        decision = waitResult?.decision;
+      } finally {
+        if (onAbort) {
+          sig.removeEventListener("abort", onAbort);
+        }
+      }
+    } else {
+      const waitResult = await waitPromise;
+      decision = waitResult?.decision;
+    }
+  }
+
+  if (decision === "allow-once" || decision === "allow-always") {
+    return;
+  }
+
+  throw new Error(
+    `messaging.firewall: send to "${params.to}" on ${params.channel} was not approved — send cancelled`,
+  );
+}
+
+/** Exported for unit tests only — do not use in production code. */
+export const checkMessageFirewallForTest = checkMessageFirewall;
+
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) {
     return undefined;
@@ -346,7 +488,10 @@ async function handleBroadcastAction(
           params: {
             ...params,
             channel: targetChannel,
-            target: resolved.target.to,
+            // Explicitly set `to` and clear `target` to avoid send-normalisation
+            // picking up the original broadcast `target` string over our resolved value.
+            to: resolved.target.to,
+            target: undefined,
           },
         });
         results.push({
@@ -785,6 +930,38 @@ export async function runMessageAction(
   }
 
   const gateway = resolveGateway(input);
+
+  // Firewall check: applies to all outbound send-like actions that deliver new
+  // content to a recipient. Runs before action routing so no send path can bypass it.
+  // CLI sends (openclaw message send ...) are excluded — the human is at the keyboard.
+  const OUTBOUND_SEND_ACTIONS = new Set<ChannelMessageActionName>([
+    "send",
+    "sendWithEffect",
+    "sendAttachment",
+    "reply",
+    "thread-reply",
+    "sticker",
+    "poll",
+  ]);
+  if (OUTBOUND_SEND_ACTIONS.has(action) && !dryRun && input.gateway?.mode !== "cli") {
+    const to = readStringParam(params, "to") ?? "";
+    const message = readStringParam(params, "message", { allowEmpty: true }) ?? "";
+    await checkMessageFirewall({
+      cfg,
+      channel,
+      to,
+      messagePreview: message,
+      agentId: resolvedAgentId,
+      sessionKey: input.sessionKey,
+      abortSignal: input.abortSignal,
+      gatewayUrl: gateway?.url,
+      gatewayToken: gateway?.token,
+      turnSourceChannel: input.toolContext?.currentChannelProvider,
+      turnSourceTo: readStringParam(params, "turnSourceTo") ?? undefined,
+      turnSourceAccountId: readStringParam(params, "turnSourceAccountId") ?? undefined,
+      turnSourceThreadId: input.toolContext?.currentThreadTs ?? undefined,
+    });
+  }
 
   if (action === "send") {
     return handleSendAction({

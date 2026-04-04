@@ -144,6 +144,50 @@ OpenClaw can expose or hide model reasoning:
 
 Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/reference/token-use).
 
+## Outbound firewall
+
+The outbound messaging firewall lets you require explicit human confirmation before
+the agent sends a message to any target that is not on your personal allow-list.
+This is useful when running an agent in an automated context where accidental
+outbound messages to third parties would be harmful.
+
+Enable it under `messages.firewall`:
+
+```json5
+{
+  messages: {
+    firewall: {
+      // Set to true to activate the firewall for all outbound sends.
+      enabled: true,
+
+      // Targets that are allowed without confirmation.
+      // Each entry can be a bare target (e.g. "@myself") or a
+      // channel-qualified target (e.g. "telegram:@myself").
+      selfTargets: ["@myself", "telegram:@myself", "discord:my-own-user-id"],
+    },
+  },
+}
+```
+
+**How it works**
+
+- When `enabled` is `true`, every `send` or `broadcast` to a target **not** listed in
+  `selfTargets` is held pending.
+- A human-confirmation request is sent to the gateway approval plugin
+  (`plugin.approval.request`). The agent waits up to 120 seconds for a decision.
+- If the human selects **allow once**, the message is dispatched.
+- If the human selects **deny** (or the timeout elapses without a decision), the send
+  is cancelled and an error is returned to the agent.
+- An empty or missing `to` parameter skips the firewall entirely (no false positive
+  on actions that rely on channel defaults).
+
+**Config reference**
+
+| Key                             | Type       | Default | Description                                                                                                                                |
+| ------------------------------- | ---------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `messages.firewall.enabled`     | `boolean`  | `false` | Activate the outbound firewall.                                                                                                            |
+| `messages.firewall.selfTargets` | `string[]` | `[]`    | Targets pre-approved for sending without confirmation. Supports bare targets (`@alice`) and channel-qualified targets (`telegram:@alice`). |
+
 ## Prefixes, threading, and replies
 
 Outbound message formatting is centralized in `messages`:

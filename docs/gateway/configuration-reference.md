@@ -1797,6 +1797,39 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
 - When `openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
 
+### Outbound messaging firewall
+
+When enabled, every outbound `message` tool call whose target is **not** in `selfTargets` is held pending explicit human approval before dispatch. The agent surfaces a confirmation prompt; the operator can allow (once) or deny. This prevents agents from contacting arbitrary external targets autonomously.
+
+```json5
+{
+  messages: {
+    firewall: {
+      enabled: true,
+      // Pre-approved targets the agent may send to without confirmation.
+      // Format: bare target (e.g. "-1001234567890") or channel-qualified
+      // (e.g. "telegram:-1001234567890").
+      selfTargets: [
+        "-1001234567890", // bare — matches any channel
+        "telegram:-1009876543210", // channel-qualified — telegram only
+      ],
+    },
+  },
+}
+```
+
+| Field                           | Type       | Default | Description                                                |
+| ------------------------------- | ---------- | ------- | ---------------------------------------------------------- |
+| `messages.firewall.enabled`     | `boolean`  | `false` | Enable the outbound send firewall.                         |
+| `messages.firewall.selfTargets` | `string[]` | `[]`    | Targets the agent is pre-approved to message autonomously. |
+
+**Notes:**
+
+- `broadcast` actions are also subject to the firewall; each broadcast target is evaluated individually.
+- Targets are matched as bare values first, then as `<channel>:<target>` (e.g. `telegram:-100…`).
+- `dryRun` sends bypass the firewall (no real message is sent).
+- A missing or empty `to` parameter short-circuits the check (no false positives).
+
 ---
 
 ## Talk
