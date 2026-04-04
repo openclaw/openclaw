@@ -470,6 +470,17 @@ API key auth, and dynamic model resolution.
       | 10 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
       | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
       | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
+
+    Runtime fallback notes:
+
+    - `normalizeConfig` checks the matched provider first, then other
+      hook-capable provider plugins until one actually changes the config.
+      If no provider hook rewrites a supported Google-family config entry, the
+      bundled Google config normalizer still applies.
+    - `resolveConfigApiKey` uses the provider hook when exposed. The bundled
+      `amazon-bedrock` path also has a built-in AWS env-marker resolver here,
+      even though Bedrock runtime auth itself still uses the AWS SDK default
+      chain.
       | 13 | `contributeResolvedModelCompat` | Compat flags for vendor models behind another compatible transport |
       | 14 | `capabilities` | Legacy static capability bag; compatibility only |
       | 15 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |

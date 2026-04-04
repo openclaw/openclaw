@@ -68,9 +68,16 @@ Typical split:
   before generic model assembly; OpenClaw checks the matched provider first,
   then other hook-capable provider plugins until one actually changes the
   transport
-- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it; OpenClaw checks the matched provider first, then other hook-capable provider plugins until one actually changes the config
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before
+  runtime uses it; OpenClaw checks the matched provider first, then other
+  hook-capable provider plugins until one actually changes the config. If no
+  provider hook rewrites the config, bundled Google-family helpers still
+  normalize supported Google provider entries.
 - `applyNativeStreamingUsageCompat`: provider applies endpoint-driven native streaming-usage compat rewrites for config providers
-- `resolveConfigApiKey`: provider resolves env-marker auth for config providers without forcing full runtime auth loading
+- `resolveConfigApiKey`: provider resolves env-marker auth for config providers
+  without forcing full runtime auth loading. `amazon-bedrock` also has a
+  built-in AWS env-marker resolver here, even though Bedrock runtime auth uses
+  the AWS SDK default chain.
 - `resolveSyntheticAuth`: provider can expose local/self-hosted or other
   config-backed auth availability without persisting plaintext secrets
 - `shouldDeferSyntheticProfileAuth`: provider can mark stored synthetic profile

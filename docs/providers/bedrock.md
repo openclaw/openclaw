@@ -63,6 +63,10 @@ Notes:
 - `refreshInterval` is seconds; set to `0` to disable caching.
 - `defaultContextWindow` (default: `32000`) and `defaultMaxTokens` (default: `4096`)
   are used for discovered models (override if you know your model limits).
+- For explicit `models.providers["amazon-bedrock"]` entries, OpenClaw can still
+  resolve Bedrock env-marker auth early from AWS env markers such as
+  `AWS_BEARER_TOKEN_BEDROCK` without forcing full runtime auth loading. The
+  actual model-call auth path still uses the AWS SDK default chain.
 
 ## Onboarding
 
