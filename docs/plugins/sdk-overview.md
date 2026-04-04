@@ -26,11 +26,14 @@ Always import from a specific subpath:
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 ```
 
 Each subpath is a small, self-contained module. This keeps startup fast and
-prevents circular dependency issues.
+prevents circular dependency issues. For channel-specific entry/build helpers,
+prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
+the broader umbrella surface and shared helpers such as
+`buildChannelConfigSchema`.
 
 Do not add or depend on provider-named convenience seams such as
 `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,

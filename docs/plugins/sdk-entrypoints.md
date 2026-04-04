@@ -60,14 +60,14 @@ export default definePluginEntry({
 
 ## `defineChannelPluginEntry`
 
-**Import:** `openclaw/plugin-sdk/core`
+**Import:** `openclaw/plugin-sdk/channel-core`
 
 Wraps `definePluginEntry` with channel-specific wiring. Automatically calls
 `api.registerChannel({ plugin })`, exposes an optional root-help CLI metadata
 seam, and gates `registerFull` on registration mode.
 
 ```typescript
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
 export default defineChannelPluginEntry({
   id: "my-channel",
@@ -114,13 +114,13 @@ export default defineChannelPluginEntry({
 
 ## `defineSetupPluginEntry`
 
-**Import:** `openclaw/plugin-sdk/core`
+**Import:** `openclaw/plugin-sdk/channel-core`
 
 For the lightweight `setup-entry.ts` file. Returns just `{ plugin }` with no
 runtime or CLI wiring.
 
 ```typescript
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
 export default defineSetupPluginEntry(myChannelPlugin);
 ```
