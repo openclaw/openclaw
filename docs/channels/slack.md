@@ -354,6 +354,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 - Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
+- Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
 - Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
