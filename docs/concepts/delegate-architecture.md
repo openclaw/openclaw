@@ -282,6 +282,12 @@ A complete delegate configuration for an organizational assistant that handles e
 
 The delegate's `AGENTS.md` defines its autonomous authority — what it may do without asking, what requires approval, and what is forbidden. [Cron Jobs](/automation/cron-jobs) drive its daily schedule.
 
+If you grant `sessions_history`, remember it is a bounded, safety-filtered
+recall view. OpenClaw redacts credential/token-like text, truncates long
+content, and can replace oversized rows with
+`[sessions_history omitted: message too large]` instead of returning a raw
+transcript dump.
+
 ## Scaling pattern
 
 The delegate model works for any small organization:

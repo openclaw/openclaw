@@ -28,6 +28,14 @@ counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
+The returned view is intentionally bounded and safety-filtered:
+
+- credential/token-like text is redacted before it is returned
+- long text blocks are truncated
+- very large histories can drop older rows or replace an oversized row with
+  `[sessions_history omitted: message too large]`
+- the tool reports summary flags such as `truncated`, `droppedMessages`,
+  `contentTruncated`, `contentRedacted`, and `bytes`
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID**
 from a previous list call.
