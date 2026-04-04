@@ -25,14 +25,14 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `security` (`deny | allowlist | full`): enforcement mode for `gateway`/`node`
 - `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
 - `node` (string): node id/name for `host=node`
-- `elevated` (bool): request elevated mode (gateway host); `security=full` is only forced when elevated resolves to `full`
+- `elevated` (bool): request elevated mode (escape the sandbox onto the configured host path); `security=full` is only forced when elevated resolves to `full`
 
 Notes:
 
 - `host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
-- `auto` is only the default routing strategy. It is not a wildcard override that lets a tool call jump from sandbox to gateway or node.
+- `auto` is the default routing strategy, not a wildcard. Per-call `host=node` is allowed from `auto`; per-call `host=gateway` is only allowed when no sandbox runtime is active.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
-- `elevated` forces `host=gateway`; it is only available when elevated access is enabled for the current session/provider.
+- `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.

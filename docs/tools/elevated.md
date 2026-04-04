@@ -1,5 +1,5 @@
 ---
-summary: "Elevated exec mode: run commands on the gateway host from a sandboxed agent"
+summary: "Elevated exec mode: run commands outside the sandbox from a sandboxed agent"
 read_when:
   - Adjusting elevated mode defaults, allowlists, or slash command behavior
   - Understanding how sandboxed agents can access the host
@@ -10,7 +10,7 @@ title: "Elevated Mode"
 
 When an agent runs inside a sandbox, its `exec` commands are confined to the
 sandbox environment. **Elevated mode** lets the agent break out and run commands
-on the gateway host instead, with configurable approval gates.
+outside the sandbox instead, with configurable approval gates.
 
 <Info>
   Elevated mode only changes behavior when the agent is **sandboxed**. For
@@ -21,12 +21,12 @@ on the gateway host instead, with configurable approval gates.
 
 Control elevated mode per-session with slash commands:
 
-| Directive        | What it does                                        |
-| ---------------- | --------------------------------------------------- |
-| `/elevated on`   | Run on the gateway host, keep exec approvals        |
-| `/elevated ask`  | Same as `on` (alias)                                |
-| `/elevated full` | Run on the gateway host **and** skip exec approvals |
-| `/elevated off`  | Return to sandbox-confined execution                |
+| Directive        | What it does                                                           |
+| ---------------- | ---------------------------------------------------------------------- |
+| `/elevated on`   | Run outside the sandbox on the configured host path, keep approvals    |
+| `/elevated ask`  | Same as `on` (alias)                                                   |
+| `/elevated full` | Run outside the sandbox on the configured host path and skip approvals |
+| `/elevated off`  | Return to sandbox-confined execution                                   |
 
 Also available as `/elev on|off|ask|full`.
 
@@ -69,9 +69,10 @@ Send `/elevated` with no argument to see the current level.
 
   </Step>
 
-  <Step title="Commands run on the host">
-    With elevated active, `exec` calls route to the gateway host instead of the
-    sandbox. In `full` mode, exec approvals are skipped. In `on`/`ask` mode,
+  <Step title="Commands run outside the sandbox">
+    With elevated active, `exec` calls leave the sandbox. The effective host is
+    `gateway` by default, or `node` when the configured/session exec target is
+    `node`. In `full` mode, exec approvals are skipped. In `on`/`ask` mode,
     configured approval rules still apply.
   </Step>
 </Steps>
@@ -104,6 +105,7 @@ Allowlist entry formats:
 ## What elevated does not control
 
 - **Tool policy**: if `exec` is denied by tool policy, elevated cannot override it
+- **Host selection policy**: elevated does not turn `auto` into a free cross-host override. It uses the configured/session exec target rules, choosing `node` only when the target is already `node`.
 - **Separate from `/exec`**: the `/exec` directive adjusts per-session exec defaults for authorized senders and does not require elevated mode
 
 ## Related
