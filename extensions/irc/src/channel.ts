@@ -27,6 +27,15 @@ import {
   resolveIrcAccount,
   type ResolvedIrcAccount,
 } from "./accounts.js";
+import {
+  buildBaseChannelStatusSummary,
+  createAccountStatusSink,
+  chunkTextForOutbound,
+  DEFAULT_ACCOUNT_ID,
+  getChatChannelMeta,
+  PAIRING_APPROVED_MESSAGE,
+  type ChannelPlugin,
+} from "./channel-api.js";
 import { IrcChannelConfigSchema } from "./config-schema.js";
 import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
 import { monitorIrcProvider } from "./monitor.js";
@@ -38,15 +47,6 @@ import {
 } from "./normalize.js";
 import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
-import {
-  buildBaseChannelStatusSummary,
-  createAccountStatusSink,
-  chunkTextForOutbound,
-  DEFAULT_ACCOUNT_ID,
-  getChatChannelMeta,
-  PAIRING_APPROVED_MESSAGE,
-  type ChannelPlugin,
-} from "./runtime-api.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import { ircSetupAdapter } from "./setup-core.js";
