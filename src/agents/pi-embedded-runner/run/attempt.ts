@@ -1290,7 +1290,7 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
+      const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config, sessionAgentId);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
       const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
