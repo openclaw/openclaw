@@ -50,6 +50,19 @@ model selection instead. Configured fallback chains still apply, but a plain
 model override with no explicit per-job fallback list no longer appends the
 agent primary as a hidden extra retry target.
 
+Note: isolated cron model precedence is Gmail-hook override first, then per-job
+`--model`, then any stored cron-session model override, then the normal
+agent/default selection.
+
+Note: isolated cron fast mode follows the resolved live model selection. Model
+config `params.fastMode` applies by default, but a stored session `fastMode`
+override still wins over config.
+
+Note: if an isolated run throws `LiveSessionModelSwitchError`, cron persists the
+switched provider/model (and switched auth profile override when present) before
+retrying. The outer retry loop is bounded to 2 switch retries after the initial
+attempt, then aborts instead of looping forever.
+
 Note: failure notifications use `delivery.failureDestination` first, then
 global `cron.failureDestination`, and finally fall back to the job's primary
 announce target when no explicit failure destination is configured.
