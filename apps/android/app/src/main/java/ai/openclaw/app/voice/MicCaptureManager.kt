@@ -244,7 +244,7 @@ class MicCaptureManager(
     pendingRunId = null
     pendingAssistantEntryId = null
     _isSending.value = false
-    if (messageQueue.isNotEmpty()) {
+    if (hasQueuedMessages()) {
       _statusText.value = queuedWaitingStatus()
     }
   }
@@ -352,7 +352,7 @@ class MicCaptureManager(
     _statusText.value =
       when {
         _isSending.value -> "Listening · sending queued voice"
-        messageQueue.isNotEmpty() -> "Listening · ${messageQueue.size} queued"
+        hasQueuedMessages() -> "Listening · ${queuedMessageCount()} queued"
         else -> "Listening"
       }
     _isListening.value = true

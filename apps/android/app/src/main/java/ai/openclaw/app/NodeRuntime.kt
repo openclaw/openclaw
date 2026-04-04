@@ -760,7 +760,7 @@ class NodeRuntime(
     prefs.setTalkEnabled(value)
     if (value) {
       // Tapping mic on interrupts any active TTS (barge-in)
-      talkMode.stopTts()
+      stopVoicePlayback()
       talkMode.ttsOnAllResponses = false
       scope.launch { talkMode.ensureChatSubscribed() }
     }
@@ -782,10 +782,17 @@ class NodeRuntime(
 
   private fun stopActiveVoiceSession() {
     talkMode.ttsOnAllResponses = false
-    talkMode.stopTts()
+    stopVoicePlayback()
     micCapture.setMicEnabled(false)
     prefs.setTalkEnabled(false)
     externalAudioCaptureActive.value = false
+  }
+
+  private fun stopVoicePlayback() {
+    talkMode.stopTts()
+    if (voiceReplySpeakerLazy.isInitialized()) {
+      voiceReplySpeaker.stopTts()
+    }
   }
 
   fun refreshGatewayConnection() {
