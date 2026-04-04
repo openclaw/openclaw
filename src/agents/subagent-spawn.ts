@@ -653,7 +653,30 @@ export async function spawnSubagentDirect(
         subagentFs?.workspaceOnly === true ||
         sessionsSpawnFs?.workspaceOnly === true ||
         params.fsPolicy?.workspaceOnly === true,
-      allowedPaths: undefined,
+      allowedPaths: (() => {
+        const lists = [
+          requesterFsCeiling?.allowedPaths,
+          subagentFs?.allowedPaths,
+          sessionsSpawnFs?.allowedPaths,
+          params.fsPolicy?.allowedPaths,
+        ].filter((value): value is string[] => Array.isArray(value));
+        if (lists.length === 0) {
+          return undefined;
+        }
+        // Use the same intersection semantics as the canonical combiner.
+        // (Note: combineToolFsPolicies intersects global/agent/spawn; here we only need
+        // spawn-layer intersection, so we rely on the combiner's allowlist intersection.
+        // We need intersection across multiple allowlists. Reuse the canonical
+        // intersectAll behavior by folding lists pairwise via combineToolFsPolicies.
+        let acc: string[] | undefined = lists[0];
+        for (const next of lists.slice(1)) {
+          acc = combineToolFsPolicies({
+            globalPolicy: { allowedPaths: acc },
+            spawnPolicy: { allowedPaths: next },
+          }).allowedPaths;
+        }
+        return acc;
+      })(),
       denyPaths:
         subagentFs?.denyPaths ||
         sessionsSpawnFs?.denyPaths ||
