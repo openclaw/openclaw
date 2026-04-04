@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
-import { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
 import { normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
+import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;

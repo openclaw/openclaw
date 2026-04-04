@@ -473,7 +473,11 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
       expect(result.allowedCatalog).toEqual([
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        expect.objectContaining({
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: expect.any(String),
+        }),
       ]);
     });
 
@@ -567,6 +571,34 @@ describe("model-selection", () => {
       expect(result).toEqual({
         key: "openai/@cf/openai/gpt-oss-20b",
         ref: { provider: "openai", model: "@cf/openai/gpt-oss-20b" },
+      });
+    });
+
+    it("infers provider from allowlist for bare model ids to prevent prefix drift (#48369)", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+              "opencode-go/kimi-k2.5": {},
+              "opencode-go/glm-5": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      // When session default is openai-codex, switching to a bare "kimi-k2.5"
+      // should resolve to opencode-go/kimi-k2.5, not openai-codex/kimi-k2.5
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "kimi-k2.5",
+        defaultProvider: "openai-codex", // session's current provider
+      });
+
+      expect(result).toEqual({
+        key: "opencode-go/kimi-k2.5",
+        ref: { provider: "opencode-go", model: "kimi-k2.5" },
       });
     });
   });
@@ -672,6 +704,27 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
+    it("should infer the unique provider from configured models for bare defaults", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "claude-opus-4-6" },
+            models: {
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
     it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

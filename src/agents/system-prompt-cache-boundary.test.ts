@@ -30,4 +30,15 @@ describe("system prompt cache boundary helpers", () => {
       }),
     ).toBe(`Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Per-turn lab context\n\nDynamic suffix`);
   });
+
+  it("normalizes structured additions and dynamic suffix whitespace", () => {
+    expect(
+      prependSystemPromptAdditionAfterCacheBoundary({
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix  \r\n\r\nMore detail \t\r\n`,
+        systemPromptAddition: "  Per-turn lab context \r\nSecond line\t\r\n",
+      }),
+    ).toBe(
+      `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Per-turn lab context\nSecond line\n\nDynamic suffix\n\nMore detail`,
+    );
+  });
 });

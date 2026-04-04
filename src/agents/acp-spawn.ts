@@ -108,8 +108,7 @@ export const ACP_SPAWN_ERROR_CODES = [
 ] as const;
 export type SpawnAcpErrorCode = (typeof ACP_SPAWN_ERROR_CODES)[number];
 
-type SpawnAcpAcceptedResult = {
-  status: "accepted";
+type SpawnAcpResultFields = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
@@ -117,9 +116,15 @@ type SpawnAcpAcceptedResult = {
   note?: string;
 };
 
-type SpawnAcpFailedResult = {
+type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
+  status: "accepted";
+  childSessionKey: string;
+  runId: string;
+  mode: SpawnAcpMode;
+};
+
+type SpawnAcpFailedResult = SpawnAcpResultFields & {
   status: "forbidden" | "error";
-  childSessionKey?: string;
   error: string;
   errorCode: SpawnAcpErrorCode;
 };

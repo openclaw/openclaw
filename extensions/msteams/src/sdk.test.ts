@@ -13,6 +13,10 @@ const jwtValidatorState = vi.hoisted(() => ({
   calls: [] as Array<{ jwksUri: string; token: string; overrideOptions?: unknown }>,
 }));
 
+const clientConstructorState = vi.hoisted(() => ({
+  calls: [] as Array<{ serviceUrl: string; options: unknown }>,
+}));
+
 vi.mock("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js", () => ({
   JwtValidator: class JwtValidator {
     private readonly config: Record<string, unknown>;
@@ -38,6 +42,7 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  clientConstructorState.calls.length = 0;
   jwtValidatorState.instances.length = 0;
   jwtValidatorState.calls.length = 0;
   jwtValidatorState.behaviorByJwks.clear();
@@ -56,7 +61,9 @@ function createSdkStub(): MSTeamsTeamsSdk {
   }
 
   class ClientStub {
-    constructor(_serviceUrl: string, _options: unknown) {}
+    constructor(serviceUrl: string, options: unknown) {
+      clientConstructorState.calls.push({ serviceUrl, options });
+    }
 
     conversations = {
       activities: (_conversationId: string) => ({
@@ -133,6 +140,43 @@ describe("createMSTeamsAdapter", () => {
         }),
       }),
     );
+  });
+
+  it("passes the OpenClaw User-Agent to the Bot Framework connector client", async () => {
+    const creds = {
+      appId: "app-id",
+      appPassword: "secret",
+      tenantId: "tenant-id",
+    } satisfies MSTeamsCredentials;
+    const sdk = createSdkStub();
+    const app = new sdk.App({
+      clientId: creds.appId,
+      clientSecret: creds.appPassword,
+      tenantId: creds.tenantId,
+    });
+    const adapter = createMSTeamsAdapter(app, sdk);
+
+    await adapter.continueConversation(
+      creds.appId,
+      {
+        serviceUrl: "https://service.example.com/",
+        conversation: { id: "19:conversation@thread.tacv2" },
+        channelId: "msteams",
+      },
+      async (ctx) => {
+        await ctx.sendActivity("hello");
+      },
+    );
+
+    expect(clientConstructorState.calls).toHaveLength(1);
+    expect(clientConstructorState.calls[0]).toMatchObject({
+      serviceUrl: "https://service.example.com/",
+      options: {
+        headers: {
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
+        },
+      },
+    });
   });
 });
 

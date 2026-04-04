@@ -170,6 +170,32 @@ describe("normalizeModelCompat", () => {
     expect(supportsStrictMode(normalized)).toBe(false);
   });
 
+  it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-qwen",
+      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
+  it("keeps supportsUsageInStreaming on for Moonshot-native endpoints regardless of provider id", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-kimi",
+      baseUrl: "https://api.moonshot.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(supportsDeveloperRole(normalized)).toBe(false);
+    expect(supportsUsageInStreaming(normalized)).toBe(true);
+    expect(supportsStrictMode(normalized)).toBe(false);
+  });
+
   it("leaves native api.openai.com model untouched", () => {
     const model = {
       ...baseModel(),

@@ -56,8 +56,20 @@
     "target": "Qwen"
   },
   {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
+  },
+  {
+    "source": "Moonshot AI",
+    "target": "Moonshot AI"
   },
   {
     "source": "Additional bundled variants",
@@ -166,6 +178,10 @@
   {
     "source": "Polls",
     "target": "投票"
+  },
+  {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
   },
   {
     "source": "Release Policy",

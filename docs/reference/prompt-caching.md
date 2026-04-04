@@ -11,6 +11,11 @@ read_when:
 
 Prompt caching means the model provider can reuse unchanged prompt prefixes (usually system/developer instructions and other stable context) across turns instead of re-processing them every time. OpenClaw normalizes provider usage into `cacheRead` and `cacheWrite` where the upstream API exposes those counters directly.
 
+Status surfaces can also recover cache counters from the most recent transcript
+usage log when the live session snapshot is missing them, so `/status` can keep
+showing a cache line after partial session metadata loss. Existing nonzero live
+cache values still take precedence over transcript fallback values.
+
 Why this matters: lower token cost, faster responses, and more predictable performance for long-running sessions. Without caching, repeated prompts pay the full prompt cost on every turn even when most input did not change.
 
 This page covers all cache-related knobs that affect prompt reuse and token cost.
@@ -114,11 +119,51 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 
 ### OpenRouter Anthropic models
 
-For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic `cache_control` on system/developer prompt blocks to improve prompt-cache reuse.
+For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic
+`cache_control` on system/developer prompt blocks to improve prompt-cache
+reuse only when the request is still targeting a verified OpenRouter route
+(`openrouter` on its default endpoint, or any provider/base URL that resolves
+to `openrouter.ai`).
+
+If you repoint the model at an arbitrary OpenAI-compatible proxy URL, OpenClaw
+stops injecting those OpenRouter-specific Anthropic cache markers.
 
 ### Other providers
 
 If the provider does not support this cache mode, `cacheRetention` has no effect.
+
+### Google Gemini direct API
+
+- Direct Gemini transport (`api: "google-generative-ai"`) reports cache hits
+  through upstream `cachedContentTokenCount`; OpenClaw maps that to `cacheRead`.
+- If you already have a Gemini cached-content handle, you can pass it through as
+  `params.cachedContent` (or legacy `params.cached_content`) on the configured
+  model.
+- This is separate from Anthropic/OpenAI prompt-prefix caching. OpenClaw is
+  forwarding a provider-native cached-content reference, not synthesizing cache
+  markers.
+
+### Gemini CLI JSON usage
+
+- Gemini CLI JSON output can also surface cache hits through `stats.cached`;
+  OpenClaw maps that to `cacheRead`.
+- If the CLI omits a direct `stats.input` value, OpenClaw derives input tokens
+  from `stats.input_tokens - stats.cached`.
+- This is usage normalization only. It does not mean OpenClaw is creating
+  Anthropic/OpenAI-style prompt-cache markers for Gemini CLI.
+
+## OpenClaw cache-stability guards
+
+OpenClaw also keeps several cache-sensitive payload shapes deterministic before
+the request reaches the provider:
+
+- Bundle MCP tool catalogs are sorted deterministically before tool
+  registration, so `listTools()` order changes do not churn the tools block and
+  bust prompt-cache prefixes.
+- Legacy sessions with persisted image blocks keep the **3 most recent
+  completed turns** intact; older already-processed image blocks may be
+  replaced with a marker so image-heavy follow-ups do not keep re-sending large
+  stale payloads.
 
 ## Tuning patterns
 
@@ -154,6 +199,10 @@ agents:
 ## Cache diagnostics
 
 OpenClaw exposes dedicated cache-trace diagnostics for embedded agent runs.
+
+For normal user-facing diagnostics, `/status` and other usage summaries can use
+the latest transcript usage entry as a fallback source for `cacheRead` /
+`cacheWrite` when the live session entry does not have those counters.
 
 ## Live regression tests
 

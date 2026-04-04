@@ -89,6 +89,31 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
+During trusted bootstrap handoff, `hello-ok.auth` may also include additional
+bounded role entries in `deviceTokens`:
+
+```json
+{
+  "auth": {
+    "deviceToken": "…",
+    "role": "node",
+    "scopes": [],
+    "deviceTokens": [
+      {
+        "deviceToken": "…",
+        "role": "operator",
+        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
+      }
+    ]
+  }
+}
+```
+
+For the built-in node/operator bootstrap flow, the primary node token stays
+`scopes: []` and any handed-off operator token stays bounded to the bootstrap
+operator allowlist (`operator.approvals`, `operator.read`,
+`operator.talk.secrets`, `operator.write`).
+
 ### Node example
 
 ```json
@@ -148,10 +173,26 @@ Common scopes:
 - `operator.admin`
 - `operator.approvals`
 - `operator.pairing`
+- `operator.talk.secrets`
+
+`talk.config` with `includeSecrets: true` requires `operator.talk.secrets`
+(or `operator.admin`).
+
+Plugin-registered gateway RPC methods may request their own operator scope, but
+reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,
+`update.*`) always resolve to `operator.admin`.
 
 Method scope is only the first gate. Some slash commands reached through
 `chat.send` apply stricter command-level checks on top. For example, persistent
 `/config set` and `/config unset` writes require `operator.admin`.
+
+`node.pair.approve` also has an extra approval-time scope check on top of the
+base method scope:
+
+- commandless requests: `operator.pairing`
+- requests with non-exec node commands: `operator.pairing` + `operator.write`
+- requests that include `system.run`, `system.run.prepare`, or `system.which`:
+  `operator.pairing` + `operator.admin`
 
 ### Caps/commands/permissions (node)
 
@@ -168,6 +209,151 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - `system-presence` returns entries keyed by device identity.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
+
+## Common RPC method families
+
+This page is not a generated full dump, but the public WS surface is broader
+than the handshake/auth examples above. These are the main method families the
+Gateway exposes today.
+
+### System and identity
+
+- `gateway.identity.get` returns the gateway device identity used by relay and
+  pairing flows.
+- `system-presence` returns the current presence snapshot for connected
+  operator/node devices.
+- `system-event` appends a system event and can update/broadcast presence
+  context.
+- `last-heartbeat` returns the latest persisted heartbeat event.
+- `set-heartbeats` toggles heartbeat processing on the gateway.
+
+### Models and usage
+
+- `models.list` returns the runtime-allowed model catalog.
+- `usage.status` returns provider usage windows/remaining quota summaries.
+- `usage.cost` returns aggregated cost usage summaries for a date range.
+- `sessions.usage` returns per-session usage summaries.
+- `sessions.usage.timeseries` returns timeseries usage for one session.
+- `sessions.usage.logs` returns usage log entries for one session.
+
+### Channels and login helpers
+
+- `channels.status` returns built-in + bundled channel/plugin status summaries.
+- `channels.logout` logs out a specific channel/account where the channel
+  supports logout.
+- `web.login.start` starts a QR/web login flow for the current QR-capable web
+  channel provider.
+- `web.login.wait` waits for that QR/web login flow to complete and starts the
+  channel on success.
+- `push.test` sends a test APNs push to a registered iOS node.
+- `voicewake.get` returns the stored wake-word triggers.
+- `voicewake.set` updates wake-word triggers and broadcasts the change.
+
+### Talk and TTS
+
+- `talk.config` returns the effective Talk config payload; `includeSecrets`
+  requires `operator.talk.secrets` (or `operator.admin`).
+- `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI
+  clients.
+- `talk.speak` synthesizes speech through the active Talk speech provider.
+- `tts.status` returns TTS enabled state, active provider, fallback providers,
+  and provider config state.
+- `tts.providers` returns the visible TTS provider inventory.
+- `tts.enable` and `tts.disable` toggle TTS prefs state.
+- `tts.setProvider` updates the preferred TTS provider.
+- `tts.convert` runs one-shot text-to-speech conversion.
+
+### Secrets, config, update, and wizard
+
+- `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state
+  only on full success.
+- `secrets.resolve` resolves command-target secret assignments for a specific
+  command/target set.
+- `config.get` returns the current config snapshot and hash.
+- `config.set` writes a validated config payload.
+- `config.patch` merges a partial config update.
+- `config.apply` validates + replaces the full config payload.
+- `config.schema` and `config.schema.lookup` expose the live config schema and
+  lookup helpers used by Control UI and CLI tooling.
+- `update.run` runs the gateway update flow and schedules a restart only when
+  the update itself succeeded.
+- `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the
+  onboarding wizard over WS RPC.
+
+### Existing major families
+
+#### Agent and workspace helpers
+
+- `agents.list` returns configured agent entries.
+- `agents.create`, `agents.update`, and `agents.delete` manage agent records and
+  workspace wiring.
+- `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the
+  bootstrap workspace files exposed for an agent.
+- `agent.identity.get` returns the effective assistant identity for an agent or
+  session.
+- `agent.wait` waits for a run to finish and returns the terminal snapshot when
+  available.
+
+#### Session control
+
+- `sessions.list` returns the current session index.
+- `sessions.subscribe` and `sessions.unsubscribe` toggle session change event
+  subscriptions for the current WS client.
+- `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle
+  transcript/message event subscriptions for one session.
+- `sessions.preview` returns bounded transcript previews for specific session
+  keys.
+- `sessions.resolve` resolves or canonicalizes a session target.
+- `sessions.create` creates a new session entry.
+- `sessions.send` sends a message into an existing session.
+- `sessions.steer` is the interrupt-and-steer variant for an active session.
+- `sessions.abort` aborts active work for a session.
+- `sessions.patch` updates session metadata/overrides.
+- `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session
+  maintenance.
+- `sessions.get` returns the full stored session row.
+- chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and
+  `chat.inject`.
+
+#### Device pairing and device tokens
+
+- `device.pair.list` returns pending and approved paired devices.
+- `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage
+  device-pairing records.
+- `device.token.rotate` rotates a paired device token within its approved role
+  and scope bounds.
+- `device.token.revoke` revokes a paired device token.
+
+#### Node pairing, invoke, and pending work
+
+- `node.pair.request`, `node.pair.list`, `node.pair.approve`,
+  `node.pair.reject`, and `node.pair.verify` cover node pairing and bootstrap
+  verification.
+- `node.list` and `node.describe` return known/connected node state.
+- `node.rename` updates a paired node label.
+- `node.invoke` forwards a command to a connected node.
+- `node.invoke.result` returns the result for an invoke request.
+- `node.event` carries node-originated events back into the gateway.
+- `node.canvas.capability.refresh` refreshes scoped canvas-capability tokens.
+- `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
+- `node.pending.enqueue` and `node.pending.drain` manage durable pending work
+  for offline/disconnected nodes.
+
+#### Approval families
+
+- `exec.approval.request` and `exec.approval.resolve` cover one-shot exec
+  approval requests.
+- `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval
+  policy snapshots.
+- `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec
+  approval policy via node relay commands.
+- `plugin.approval.request`, `plugin.approval.waitDecision`, and
+  `plugin.approval.resolve` cover plugin-defined approval flows.
+
+#### Other major families
+
+- automation: `cron.*`
+- skills/tools: `skills.*`, `tools.catalog`, `tools.effective`
 
 ### Node helper methods
 
@@ -188,12 +374,34 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
     caller-supplied auth or delivery context.
   - The response is session-scoped and reflects what the active conversation can use right now,
     including core, plugin, and channel tools.
+- Operators may call `skills.status` (`operator.read`) to fetch the visible
+  skill inventory for an agent.
+  - `agentId` is optional; omit it to read the default agent workspace.
+  - The response includes eligibility, missing requirements, config checks, and
+    sanitized install options without exposing raw secret values.
+- Operators may call `skills.search` and `skills.detail` (`operator.read`) for
+  ClawHub discovery metadata.
+- Operators may call `skills.install` (`operator.admin`) in two modes:
+  - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
+    skill folder into the default agent workspace `skills/` directory.
+  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+    runs a declared `metadata.openclaw.install` action on the gateway host.
+- Operators may call `skills.update` (`operator.admin`) in two modes:
+  - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
+    the default agent workspace.
+  - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
+    `apiKey`, and `env`.
 
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
 - For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
+- After approval, forwarded `node.invoke system.run` calls reuse that canonical
+  `systemRunPlan` as the authoritative command/cwd/session context.
+- If a caller mutates `command`, `rawCommand`, `cwd`, `agentId`, or
+  `sessionKey` between prepare and the final approved `system.run` forward, the
+  gateway rejects the run instead of trusting the mutated payload.
 
 ## Agent delivery fallback
 
@@ -212,13 +420,42 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 
 ## Auth
 
-- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
-  must match or the socket is closed.
+- Shared-secret gateway auth uses `connect.params.auth.token` or
+  `connect.params.auth.password`, depending on the configured auth mode.
+- Identity-bearing modes such as Tailscale Serve
+  (`gateway.auth.allowTailscale: true`) or non-loopback
+  `gateway.auth.mode: "trusted-proxy"` satisfy the connect auth check from
+  request headers instead of `connect.params.auth.*`.
+- Private-ingress `gateway.auth.mode: "none"` skips shared-secret connect auth
+  entirely; do not expose that mode on public/untrusted ingress.
 - After pairing, the Gateway issues a **device token** scoped to the connection
   role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
   persisted by the client for future connects.
+- Clients should persist the primary `hello-ok.auth.deviceToken` after any
+  successful connect.
+- Reconnecting with that **stored** device token should also reuse the stored
+  approved scope set for that token. This preserves read/probe/status access
+  that was already granted and avoids silently collapsing reconnects to a
+  narrower implicit admin-only scope.
+- Normal connect auth precedence is explicit shared token/password first, then
+  explicit `deviceToken`, then stored per-device token, then bootstrap token.
+- Additional `hello-ok.auth.deviceTokens` entries are bootstrap handoff tokens.
+  Persist them only when the connect used bootstrap auth on a trusted transport
+  such as `wss://` or loopback/local pairing.
+- If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
+  caller-requested scope set remains authoritative; cached scopes are only
+  reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
+- Token issuance/rotation stays bounded to the approved role set recorded in
+  that device's pairing entry; rotating a token cannot expand the device into a
+  role that pairing approval never granted.
+- For paired-device token sessions, device management is self-scoped unless the
+  caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
+  only their **own** device entry.
+- `device.token.rotate` also checks the requested operator scope set against the
+  caller's current session scopes. Non-admin callers cannot rotate a token into
+  a broader operator scope set than they already hold.
 - Auth failures include `error.details.code` plus recovery hints:
   - `error.details.canRetryWithDeviceToken` (boolean)
   - `error.details.recommendedNextStep` (`retry_with_device_token`, `update_auth_configuration`, `update_auth_credentials`, `wait_then_retry`, `review_auth_configuration`)
@@ -233,11 +470,15 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Gateways issue tokens per device + role.
 - Pairing approvals are required for new device IDs unless local auto-approval
   is enabled.
-- **Local** connects include loopback and the gateway host’s own tailnet address
-  (so same‑host tailnet binds can still auto‑approve).
+- Pairing auto-approval is centered on direct local loopback connects.
+- OpenClaw also has a narrow backend/container-local self-connect path for
+  trusted shared-secret helper flows.
+- Same-host tailnet or LAN connects are still treated as remote for pairing and
+  require approval.
 - All WS clients must include `device` identity during `connect` (operator + node).
   Control UI can omit it only in these modes:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
+  - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
 - All connections must sign the server-provided `connect.challenge` nonce.
 

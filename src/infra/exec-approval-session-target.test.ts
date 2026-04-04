@@ -8,6 +8,8 @@ import {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestChannelAccountId,
+} from "./approval-request-account-binding.js";
+import {
   resolveApprovalRequestOriginTarget,
   resolveExecApprovalSessionTarget,
 } from "./exec-approval-session-target.js";

@@ -35,12 +35,18 @@ private const val CONNECT_CHALLENGE_FRAME =
   """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce"}}"""
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
-  private val tokens = mutableMapOf<String, String>()
+  private val tokens = mutableMapOf<String, DeviceAuthEntry>()
 
-  override fun loadToken(deviceId: String, role: String): String? = tokens["${deviceId.trim()}|${role.trim()}"]?.trim()?.takeIf { it.isNotEmpty() }
+  override fun loadEntry(deviceId: String, role: String): DeviceAuthEntry? = tokens["${deviceId.trim()}|${role.trim()}"]
 
-  override fun saveToken(deviceId: String, role: String, token: String) {
-    tokens["${deviceId.trim()}|${role.trim()}"] = token.trim()
+  override fun saveToken(deviceId: String, role: String, token: String, scopes: List<String>) {
+    tokens["${deviceId.trim()}|${role.trim()}"] =
+      DeviceAuthEntry(
+        token = token.trim(),
+        role = role.trim(),
+        scopes = scopes,
+        updatedAtMs = System.currentTimeMillis(),
+      )
   }
 
   override fun clearToken(deviceId: String, role: String) {
@@ -293,8 +299,15 @@ class GatewaySessionInvokeTest {
       awaitConnectedOrThrow(connected, lastDisconnect, server)
 
       val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-      assertEquals("bootstrap-node-token", harness.deviceAuthStore.loadToken(deviceId, "node"))
-      assertEquals("bootstrap-operator-token", harness.deviceAuthStore.loadToken(deviceId, "operator"))
+      val nodeEntry = harness.deviceAuthStore.loadEntry(deviceId, "node")
+      val operatorEntry = harness.deviceAuthStore.loadEntry(deviceId, "operator")
+      assertEquals("bootstrap-node-token", nodeEntry?.token)
+      assertEquals(emptyList<String>(), nodeEntry?.scopes)
+      assertEquals("bootstrap-operator-token", operatorEntry?.token)
+      assertEquals(
+        listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+        operatorEntry?.scopes,
+      )
     } finally {
       shutdownHarness(harness, server)
     }

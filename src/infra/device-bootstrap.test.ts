@@ -105,12 +105,7 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
         roles: ["node", "operator"],
-        scopes: [
-          "operator.approvals",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
@@ -136,12 +131,7 @@ describe("device bootstrap tokens", () => {
     await expect(
       verifyBootstrapToken(baseDir, issued.token, {
         role: "operator",
-        scopes: [
-          "operator.approvals",
-          "operator.read",
-          "operator.write",
-          "operator.talk.secrets",
-        ],
+        scopes: ["operator.approvals", "operator.read", "operator.write", "operator.talk.secrets"],
       }),
     ).resolves.toEqual({ ok: true });
     await expect(
@@ -149,12 +139,7 @@ describe("device bootstrap tokens", () => {
         baseDir,
         token: issued.token,
         role: "operator",
-        scopes: [
-          "operator.approvals",
-          "operator.read",
-          "operator.write",
-          "operator.talk.secrets",
-        ],
+        scopes: ["operator.approvals", "operator.read", "operator.write", "operator.talk.secrets"],
       }),
     ).resolves.toEqual({
       recorded: true,
@@ -299,6 +284,21 @@ describe("device bootstrap tokens", () => {
         scopes: ["operator.read"],
       }),
     ).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects cross-role scope escalation (node role requesting operator scopes)", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "node",
+        scopes: ["operator.read"],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+
+    const raw = await fs.readFile(resolveBootstrapPath(baseDir), "utf8");
+    expect(raw).toContain(issued.token);
   });
 
   it("supports explicitly bound bootstrap profiles", async () => {

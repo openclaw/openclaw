@@ -33,6 +33,7 @@ type CacheUsage = {
   cacheRead?: number;
   cacheWrite?: number;
 };
+type BaselineLane = CacheLane | "disabled";
 type CacheRun = {
   hitRate: number;
   suffix: string;
@@ -349,7 +350,7 @@ function formatUsage(usage: CacheUsage | undefined) {
 }
 
 function assertAgainstBaseline(params: {
-  lane: string;
+  lane: BaselineLane;
   provider: ProviderKey;
   result: LaneResult;
   regressions: string[];

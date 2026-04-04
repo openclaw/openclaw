@@ -664,6 +664,9 @@ describe("doctor config flow", () => {
             discord: {
               streaming: false,
             },
+            googlechat: {
+              streamMode: "append",
+            },
             slack: {
               streaming: true,
             },
@@ -692,6 +695,14 @@ describe("doctor config flow", () => {
         noteSpy.mock.calls.some(
           ([message, title]) =>
             title === "Legacy config keys detected" &&
+            String(message).includes("channels.googlechat:") &&
+            String(message).includes("channels.googlechat.streamMode is legacy and no longer used"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
             String(message).includes("channels.slack:") &&
             String(message).includes("boolean channels.slack.streaming are legacy"),
         ),
@@ -706,6 +717,36 @@ describe("doctor config flow", () => {
     } finally {
       noteSpy.mockRestore();
     }
+  });
+
+  it("repairs legacy googlechat streamMode by removing it", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        channels: {
+          googlechat: {
+            streamMode: "append",
+            accounts: {
+              work: {
+                streamMode: "replace",
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        googlechat: {
+          accounts?: {
+            work?: Record<string, unknown>;
+          };
+        } & Record<string, unknown>;
+      };
+    };
+    expect(cfg.channels.googlechat.streamMode).toBeUndefined();
+    expect(cfg.channels.googlechat.accounts?.work?.streamMode).toBeUndefined();
   });
 
   it("warns clearly about legacy nested channel allow aliases and points to doctor --fix", async () => {
@@ -1975,5 +2016,55 @@ describe("doctor config flow", () => {
     };
     expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
     expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+  });
+
+  it("does not report repeat talk provider normalization on consecutive repair runs", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            talk: {
+              interruptOnSpeech: true,
+              silenceTimeoutMs: 1500,
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  apiKey: "secret-key",
+                  voiceId: "voice-123",
+                  modelId: "eleven_v3",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+      try {
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+        noteSpy.mockClear();
+
+        await loadAndMaybeMigrateDoctorConfig({
+          options: { nonInteractive: true, repair: true },
+          confirm: async () => false,
+        });
+        const secondRunTalkNormalizationLines = noteSpy.mock.calls
+          .filter((call) => call[1] === "Doctor changes")
+          .map((call) => String(call[0]))
+          .filter((line) => line.includes("Normalized talk.provider/providers shape"));
+        expect(secondRunTalkNormalizationLines).toEqual([]);
+      } finally {
+        noteSpy.mockRestore();
+      }
+    });
   });
 });
