@@ -561,7 +561,7 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "modelstudio",
+        provider: "qwen",
         api: "openai-completions",
         baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         capability: "llm",
@@ -745,9 +745,9 @@ describe("provider attribution", () => {
         },
       },
       {
-        name: "native ModelStudio completions",
+        name: "native Qwen completions",
         input: {
-          provider: "modelstudio",
+          provider: "qwen",
           api: "openai-completions",
           baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
           capability: "llm" as const,

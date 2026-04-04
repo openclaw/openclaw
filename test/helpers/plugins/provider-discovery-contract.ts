@@ -28,8 +28,7 @@ const bundledProviderModules = vi.hoisted(() => ({
     import.meta.url,
   ).pathname,
   minimaxIndexModuleUrl: new URL("../../../extensions/minimax/index.ts", import.meta.url).href,
-  modelStudioIndexModuleUrl: new URL("../../../extensions/modelstudio/index.ts", import.meta.url)
-    .href,
+  modelStudioIndexModuleUrl: new URL("../../../extensions/qwen/index.ts", import.meta.url).href,
   ollamaApiModuleId: new URL("../../../extensions/ollama/api.js", import.meta.url).pathname,
   ollamaIndexModuleUrl: new URL("../../../extensions/ollama/index.ts", import.meta.url).href,
   sglangApiModuleId: new URL("../../../extensions/sglang/api.js", import.meta.url).pathname,
@@ -230,7 +229,7 @@ function installDiscoveryHooks(state: DiscoveryState) {
     state.sglangProvider = requireProvider(sglangProviders, "sglang");
     state.minimaxProvider = requireProvider(minimaxProviders, "minimax");
     state.minimaxPortalProvider = requireProvider(minimaxProviders, "minimax-portal");
-    state.modelStudioProvider = requireProvider(modelStudioProviders, "modelstudio");
+    state.modelStudioProvider = requireProvider(modelStudioProviders, "qwen");
     state.cloudflareAiGatewayProvider = requireProvider(
       cloudflareAiGatewayProviders,
       "cloudflare-ai-gateway",

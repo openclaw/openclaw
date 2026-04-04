@@ -1,4 +1,13 @@
 export {
+  buildQwenDefaultModelDefinition,
+  buildQwenModelDefinition,
+  QWEN_CN_BASE_URL,
+  QWEN_DEFAULT_COST,
+  QWEN_DEFAULT_MODEL_ID,
+  QWEN_DEFAULT_MODEL_REF,
+  QWEN_GLOBAL_BASE_URL,
+  QWEN_STANDARD_CN_BASE_URL,
+  QWEN_STANDARD_GLOBAL_BASE_URL,
   buildModelStudioDefaultModelDefinition,
   buildModelStudioModelDefinition,
   MODELSTUDIO_CN_BASE_URL,

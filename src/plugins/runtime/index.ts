@@ -58,6 +58,12 @@ type RuntimeImageGenerationModule = Pick<
 >;
 let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
 
+type RuntimeVideoGenerationModule = Pick<
+  typeof import("../../plugin-sdk/video-generation-runtime.js"),
+  "generateVideo" | "listRuntimeVideoGenerationProviders"
+>;
+let cachedRuntimeVideoGenerationModule: RuntimeVideoGenerationModule | null = null;
+
 function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
   cachedRuntimeImageGenerationModule ??=
     loadBundledPluginPublicSurfaceModuleSync<RuntimeImageGenerationModule>({
@@ -72,6 +78,23 @@ function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
     generate: (params) => loadRuntimeImageGenerationModule().generateImage(params),
     listProviders: (params) =>
       loadRuntimeImageGenerationModule().listRuntimeImageGenerationProviders(params),
+  };
+}
+
+function loadRuntimeVideoGenerationModule(): RuntimeVideoGenerationModule {
+  cachedRuntimeVideoGenerationModule ??=
+    loadBundledPluginPublicSurfaceModuleSync<RuntimeVideoGenerationModule>({
+      dirName: "video-generation-core",
+      artifactBasename: "runtime-api.js",
+    });
+  return cachedRuntimeVideoGenerationModule;
+}
+
+function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
+  return {
+    generate: (params) => loadRuntimeVideoGenerationModule().generateVideo(params),
+    listProviders: (params) =>
+      loadRuntimeVideoGenerationModule().listRuntimeVideoGenerationProviders(params),
   };
 }
 
@@ -213,10 +236,13 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     taskFlow,
   } satisfies Omit<
     PluginRuntime,
-    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"
+    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration" | "videoGeneration"
   > &
     Partial<
-      Pick<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration">
+      Pick<
+        PluginRuntime,
+        "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration" | "videoGeneration"
+      >
     >;
 
   defineCachedValue(runtime, "tts", createRuntimeTts);
@@ -226,6 +252,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   }));
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
+  defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
 
   return runtime as PluginRuntime;
 }

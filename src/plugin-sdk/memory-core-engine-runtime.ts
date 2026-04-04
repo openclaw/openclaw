@@ -13,17 +13,17 @@ function loadFacadeModule(): FacadeModule {
     artifactBasename: "runtime-api.js",
   });
 }
-export const getBuiltinMemoryEmbeddingProviderDoctorMetadata: FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"] =
-  ((...args) =>
-    loadFacadeModule()["getBuiltinMemoryEmbeddingProviderDoctorMetadata"](
-      ...args,
-    )) as FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"];
 export const auditShortTermPromotionArtifacts: FacadeModule["auditShortTermPromotionArtifacts"] = ((
   ...args
 ) =>
   loadFacadeModule()["auditShortTermPromotionArtifacts"](
     ...args,
   )) as FacadeModule["auditShortTermPromotionArtifacts"];
+export const getBuiltinMemoryEmbeddingProviderDoctorMetadata: FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"] =
+  ((...args) =>
+    loadFacadeModule()["getBuiltinMemoryEmbeddingProviderDoctorMetadata"](
+      ...args,
+    )) as FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"];
 export const getMemorySearchManager: FacadeModule["getMemorySearchManager"] = ((...args) =>
   loadFacadeModule()["getMemorySearchManager"](...args)) as FacadeModule["getMemorySearchManager"];
 export const listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata: FacadeModule["listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata"] =

@@ -1,11 +1,11 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { registerAmazonBedrockPlugin } from "./register.runtime.js";
 
 export default definePluginEntry({
   id: "amazon-bedrock",
   name: "Amazon Bedrock Provider",
   description: "Bundled Amazon Bedrock provider policy plugin",
-  async register(api) {
-    const { registerAmazonBedrockPlugin } = await import("./register.runtime.js");
-    await registerAmazonBedrockPlugin(api);
+  register(api) {
+    registerAmazonBedrockPlugin(api);
   },
 });

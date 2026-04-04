@@ -12,14 +12,16 @@ type CapabilityProviderRegistryKey =
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
-  | "imageGenerationProviders";
+  | "imageGenerationProviders"
+  | "videoGenerationProviders";
 
 type CapabilityContractKey =
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
-  | "imageGenerationProviders";
+  | "imageGenerationProviders"
+  | "videoGenerationProviders";
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
@@ -30,6 +32,7 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
   realtimeVoiceProviders: "realtimeVoiceProviders",
   mediaUnderstandingProviders: "mediaUnderstandingProviders",
   imageGenerationProviders: "imageGenerationProviders",
+  videoGenerationProviders: "videoGenerationProviders",
 };
 
 function resolveBundledCapabilityCompatPluginIds(params: {
@@ -73,12 +76,8 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   if (activeProviders.length > 0) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
-  const loadOptions =
-    params.cfg === undefined
-      ? undefined
-      : {
-          config: resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg }),
-        };
+  const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });
+  const loadOptions = compatConfig === undefined ? undefined : { config: compatConfig };
   const registry = resolveRuntimePluginRegistry(loadOptions);
   return (registry?.[params.key] ?? []).map(
     (entry) => entry.provider,

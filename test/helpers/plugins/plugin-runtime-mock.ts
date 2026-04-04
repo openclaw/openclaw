@@ -162,6 +162,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       generate: vi.fn() as unknown as PluginRuntime["imageGeneration"]["generate"],
       listProviders: vi.fn() as unknown as PluginRuntime["imageGeneration"]["listProviders"],
     },
+    videoGeneration: {
+      generate: vi.fn() as unknown as PluginRuntime["videoGeneration"]["generate"],
+      listProviders: vi.fn() as unknown as PluginRuntime["videoGeneration"]["listProviders"],
+    },
     webSearch: {
       listProviders: vi.fn() as unknown as PluginRuntime["webSearch"]["listProviders"],
       search: vi.fn() as unknown as PluginRuntime["webSearch"]["search"],

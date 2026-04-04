@@ -16,7 +16,7 @@ export const providerExtensionIds = [
   "microsoft-foundry",
   "minimax",
   "mistral",
-  "modelstudio",
+  "qwen",
   "moonshot",
   "nvidia",
   "ollama",

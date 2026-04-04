@@ -1,4 +1,17 @@
 export {
+  applyQwenNativeStreamingUsageCompat,
+  buildQwenDefaultModelDefinition,
+  buildQwenModelDefinition,
+  isNativeQwenBaseUrl,
+  QWEN_BASE_URL,
+  QWEN_CN_BASE_URL,
+  QWEN_DEFAULT_COST,
+  QWEN_DEFAULT_MODEL_ID,
+  QWEN_DEFAULT_MODEL_REF,
+  QWEN_GLOBAL_BASE_URL,
+  QWEN_STANDARD_CN_BASE_URL,
+  QWEN_STANDARD_GLOBAL_BASE_URL,
+  QWEN_MODEL_CATALOG,
   applyModelStudioNativeStreamingUsageCompat,
   buildModelStudioDefaultModelDefinition,
   buildModelStudioModelDefinition,
@@ -13,4 +26,4 @@ export {
   MODELSTUDIO_STANDARD_GLOBAL_BASE_URL,
   MODELSTUDIO_MODEL_CATALOG,
 } from "./models.js";
-export { buildModelStudioProvider } from "./provider-catalog.js";
+export { buildModelStudioProvider, buildQwenProvider } from "./provider-catalog.js";

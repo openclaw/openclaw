@@ -28,7 +28,6 @@ export default definePluginEntry({
       resolveCopilotForwardCompatModel,
       wrapCopilotProviderStream,
     } = await import("./register.runtime.js");
-
     function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
       githubToken: string;
       hasProfile: boolean;

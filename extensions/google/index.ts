@@ -191,6 +191,13 @@ function createLazyGoogleMediaUnderstandingProvider(): MediaUnderstandingProvide
   return {
     id: "google",
     capabilities: ["image", "audio", "video"],
+    defaultModels: {
+      image: "gemini-3-flash-preview",
+      audio: "gemini-3-flash-preview",
+      video: "gemini-3-flash-preview",
+    },
+    autoPriority: { image: 30, audio: 40, video: 10 },
+    nativeDocumentInputs: ["pdf"],
     describeImage: async (...args) =>
       await (await loadGoogleRequiredMediaUnderstandingProvider()).describeImage(...args),
     describeImages: async (...args) =>

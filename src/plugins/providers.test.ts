@@ -16,16 +16,19 @@ const applyPluginAutoEnableMock = vi.fn<ApplyPluginAutoEnable>();
 
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolveOwningPluginIdsForModelRef: typeof import("./providers.js").resolveOwningPluginIdsForModelRef;
+let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 
 function createManifestProviderPlugin(params: {
   id: string;
   providerIds: string[];
   origin?: "bundled" | "workspace";
+  enabledByDefault?: boolean;
   modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
 }): PluginManifestRecord {
   return {
     id: params.id,
+    enabledByDefault: params.enabledByDefault,
     channels: [],
     cliBackends: [],
     providers: params.providerIds,
@@ -230,8 +233,11 @@ describe("resolvePluginProviders", () => {
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
-    ({ resolveOwningPluginIdsForProvider, resolveOwningPluginIdsForModelRef } =
-      await import("./providers.js"));
+    ({
+      resolveOwningPluginIdsForProvider,
+      resolveOwningPluginIdsForModelRef,
+      resolveEnabledProviderPluginIds,
+    } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
   });
 
@@ -255,10 +261,22 @@ describe("resolvePluginProviders", () => {
       }),
     );
     setManifestPlugins([
-      createManifestProviderPlugin({ id: "google", providerIds: ["google"] }),
+      createManifestProviderPlugin({
+        id: "google",
+        providerIds: ["google"],
+        enabledByDefault: true,
+      }),
       createManifestProviderPlugin({ id: "browser", providerIds: [] }),
-      createManifestProviderPlugin({ id: "kilocode", providerIds: ["kilocode"] }),
-      createManifestProviderPlugin({ id: "moonshot", providerIds: ["moonshot"] }),
+      createManifestProviderPlugin({
+        id: "kilocode",
+        providerIds: ["kilocode"],
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        enabledByDefault: true,
+      }),
       createManifestProviderPlugin({ id: "google-gemini-cli-auth", providerIds: [] }),
       createManifestProviderPlugin({
         id: "workspace-provider",
@@ -290,6 +308,14 @@ describe("resolvePluginProviders", () => {
         activate: false,
       }),
     );
+  });
+
+  it("keeps bundled provider plugins enabled when they default on outside Vitest compat", () => {
+    expect(resolveEnabledProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv })).toEqual([
+      "google",
+      "kilocode",
+      "moonshot",
+    ]);
   });
 
   it.each([

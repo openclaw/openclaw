@@ -265,4 +265,44 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
     });
   });
+
+  it("loads bundled capability providers even without an explicit cfg", () => {
+    const compatConfig = {
+      plugins: {
+        enabled: true,
+        allow: ["google"],
+        entries: { google: { enabled: true } },
+      },
+    } as OpenClawConfig;
+    const loaded = createEmptyPluginRegistry();
+    loaded.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "google",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image", "audio", "video"],
+        describeImage: vi.fn(),
+        transcribeAudio: vi.fn(),
+        describeVideo: vi.fn(),
+        autoPriority: { image: 30, audio: 40, video: 10 },
+        nativeDocumentInputs: ["pdf"],
+      },
+    } as never);
+    setBundledCapabilityFixture("mediaUnderstandingProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(compatConfig);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(compatConfig);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders" });
+
+    expectResolvedCapabilityProviderIds(providers, ["google"]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config: undefined,
+      env: process.env,
+    });
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({ config: compatConfig });
+  });
 });

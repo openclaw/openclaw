@@ -129,6 +129,7 @@ function createTestRegistryForSetup(
     realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},

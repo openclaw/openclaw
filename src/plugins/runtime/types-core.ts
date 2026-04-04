@@ -82,6 +82,10 @@ export type PluginRuntimeCore = {
     generate: typeof import("../../plugin-sdk/image-generation-runtime.js").generateImage;
     listProviders: typeof import("../../plugin-sdk/image-generation-runtime.js").listRuntimeImageGenerationProviders;
   };
+  videoGeneration: {
+    generate: typeof import("../../plugin-sdk/video-generation-runtime.js").generateVideo;
+    listProviders: typeof import("../../plugin-sdk/video-generation-runtime.js").listRuntimeVideoGenerationProviders;
+  };
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
     search: typeof import("../../web-search/runtime.js").runWebSearch;
