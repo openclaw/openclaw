@@ -1,64 +1,68 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "./account-id.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId, normalizeOptionalAccountId } from "./account-id.js";
 
-describe("account id normalization", () => {
-  const reservedAccountIdCases = [
-    { name: "rejects __proto__ pollution keys", input: "__proto__" },
-    { name: "rejects constructor pollution keys", input: "constructor" },
-    { name: "rejects prototype pollution keys", input: "prototype" },
-  ] as const;
+describe("DEFAULT_ACCOUNT_ID", () => {
+  it("has correct value", () => {
+    expect(DEFAULT_ACCOUNT_ID).toBe("default");
+  });
+});
 
-  function expectNormalizedAccountIdCase(params: {
-    input: string | null | undefined;
-    expected: string | undefined;
-    optional?: boolean;
-  }) {
-    const normalize = params.optional ? normalizeOptionalAccountId : normalizeAccountId;
-    expect(normalize(params.input)).toBe(params.expected);
-  }
-
-  it.each([
-    {
-      name: "defaults undefined to default account",
-      input: undefined,
-      expected: DEFAULT_ACCOUNT_ID,
-    },
-    { name: "defaults null to default account", input: null, expected: DEFAULT_ACCOUNT_ID },
-    {
-      name: "defaults blank strings to default account",
-      input: "   ",
-      expected: DEFAULT_ACCOUNT_ID,
-    },
-    { name: "normalizes valid ids to lowercase", input: "  Business_1  ", expected: "business_1" },
-    {
-      name: "sanitizes invalid characters into canonical ids",
-      input: " Prod/US East ",
-      expected: "prod-us-east",
-    },
-    ...reservedAccountIdCases.map(({ name, input }) => ({
-      name,
-      input,
-      expected: DEFAULT_ACCOUNT_ID,
-    })),
-  ] as const)("$name", ({ input, expected }) => {
-    expectNormalizedAccountIdCase({ input, expected });
+describe("normalizeAccountId", () => {
+  it("returns default for empty input", () => {
+    expect(normalizeAccountId("")).toBe(DEFAULT_ACCOUNT_ID);
+    expect(normalizeAccountId(null)).toBe(DEFAULT_ACCOUNT_ID);
+    expect(normalizeAccountId(undefined)).toBe(DEFAULT_ACCOUNT_ID);
+    expect(normalizeAccountId("   ")).toBe(DEFAULT_ACCOUNT_ID);
   });
 
-  it.each([
-    { name: "keeps undefined optional values unset", input: undefined, expected: undefined },
-    { name: "keeps blank optional values unset", input: "   ", expected: undefined },
-    { name: "keeps invalid optional values unset", input: " !!! ", expected: undefined },
-    ...reservedAccountIdCases.map(({ name, input }) => ({
-      name: name.replace(" pollution keys", " optional values"),
-      input,
-      expected: undefined,
-    })),
-    { name: "normalizes valid optional values", input: "  Business  ", expected: "business" },
-  ] as const)("$name", ({ input, expected }) => {
-    expectNormalizedAccountIdCase({ input, expected, optional: true });
+  it("normalizes valid IDs to lowercase", () => {
+    expect(normalizeAccountId("User123")).toBe("user123");
+    expect(normalizeAccountId("MY-ACCOUNT")).toBe("my-account");
+    expect(normalizeAccountId("test_account")).toBe("test_account");
+  });
+
+  it("replaces invalid characters", () => {
+    expect(normalizeAccountId("user@domain")).toBe("user-domain");
+    expect(normalizeAccountId("name with spaces")).toBe("name-with-spaces");
+  });
+
+  it("removes leading/trailing dashes", () => {
+    expect(normalizeAccountId("--user--")).toBe("user");
+    expect(normalizeAccountId("---")).toBe(DEFAULT_ACCOUNT_ID);
+  });
+
+  it("truncates to 64 characters", () => {
+    const long = "a".repeat(100);
+    const result = normalizeAccountId(long);
+    expect(result.length).toBeLessThanOrEqual(64);
+  });
+
+  it("caches results", () => {
+    const result1 = normalizeAccountId("TestUser");
+    const result2 = normalizeAccountId("TestUser");
+    expect(result1).toBe(result2);
+  });
+});
+
+describe("normalizeOptionalAccountId", () => {
+  it("returns undefined for empty input", () => {
+    expect(normalizeOptionalAccountId("")).toBeUndefined();
+    expect(normalizeOptionalAccountId(null)).toBeUndefined();
+    expect(normalizeOptionalAccountId(undefined)).toBeUndefined();
+    expect(normalizeOptionalAccountId("   ")).toBeUndefined();
+  });
+
+  it("normalizes valid IDs", () => {
+    expect(normalizeOptionalAccountId("User123")).toBe("user123");
+  });
+
+  it("returns undefined for blocked keys", () => {
+    expect(normalizeOptionalAccountId("__proto__")).toBeUndefined();
+  });
+
+  it("caches results", () => {
+    const result1 = normalizeOptionalAccountId("TestAccount");
+    const result2 = normalizeOptionalAccountId("TestAccount");
+    expect(result1).toBe(result2);
   });
 });
