@@ -17,7 +17,10 @@ function setupEnsureBrowserAvailableHarness() {
   const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
   isChromeReachable.mockResolvedValue(false);
 
-  const state = makeBrowserServerState();
+  // Use the triggering config: dangerouslyAllowPrivateNetwork:false was the bug report scenario.
+  const state = makeBrowserServerState({
+    resolvedOverrides: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
+  });
   const ctx = createBrowserRouteContext({ getState: () => state });
   const profile = ctx.forProfile("openclaw");
 
