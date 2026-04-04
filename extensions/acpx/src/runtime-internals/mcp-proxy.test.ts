@@ -2,11 +2,24 @@ import { spawn } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundledPluginFile } from "../../../../test/helpers/bundled-plugin-paths.js";
 
 const tempDirs: string[] = [];
 const proxyPath = path.resolve(bundledPluginFile("acpx", "src/runtime-internals/mcp-proxy.mjs"));
+
+type SplitCommandLine = (
+  value: string,
+  platform?: NodeJS.Platform | string,
+) => {
+  command: string;
+  args: string[];
+};
+
+async function loadSplitCommandLine(): Promise<SplitCommandLine> {
+  return (await import(pathToFileURL(proxyPath).href)).splitCommandLine as SplitCommandLine;
+}
 
 async function makeTempScript(name: string, content: string): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-mcp-proxy-"));
@@ -28,6 +41,42 @@ afterEach(async () => {
 });
 
 describe("mcp-proxy", () => {
+  it("parses quoted Windows executable paths without dropping backslashes", async () => {
+    const splitCommandLine = await loadSplitCommandLine();
+    const parsed = splitCommandLine(
+      '"C:\\Program Files\\Claude\\claude.exe" --stdio --flag "two words"',
+      "win32",
+    );
+
+    expect(parsed).toEqual({
+      command: "C:\\Program Files\\Claude\\claude.exe",
+      args: ["--stdio", "--flag", "two words"],
+    });
+  });
+
+  it("parses unquoted Windows executable paths without mangling backslashes", async () => {
+    const splitCommandLine = await loadSplitCommandLine();
+    const parsed = splitCommandLine("C:\\Users\\alerl\\.local\\bin\\claude.exe --version", "win32");
+
+    expect(parsed).toEqual({
+      command: "C:\\Users\\alerl\\.local\\bin\\claude.exe",
+      args: ["--version"],
+    });
+  });
+
+  it("preserves unquoted Windows path arguments after the executable", async () => {
+    const splitCommandLine = await loadSplitCommandLine();
+    const parsed = splitCommandLine(
+      '"C:\\Program Files\\Claude\\claude.exe" --config C:\\Users\\me\\cfg.json',
+      "win32",
+    );
+
+    expect(parsed).toEqual({
+      command: "C:\\Program Files\\Claude\\claude.exe",
+      args: ["--config", "C:\\Users\\me\\cfg.json"],
+    });
+  });
+
   it("injects configured MCP servers into ACP session bootstrap requests", async () => {
     const echoServerPath = await makeTempScript(
       "echo-server.cjs",
