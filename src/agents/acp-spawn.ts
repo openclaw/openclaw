@@ -566,9 +566,8 @@ function resolveConversationIdForThreadBinding(params: {
     return genericConversationId;
   }
 
-  const channel = params.channel?.trim().toLowerCase();
-  const target = params.to?.trim() || "";
-  if (channel === "line") {
+  const target = (params.groupId ?? params.to)?.trim() || "";
+  if (channelKey === "line") {
     const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
     if (prefixed) {
       return prefixed;
@@ -579,8 +578,8 @@ function resolveConversationIdForThreadBinding(params: {
   }
 
   // Strip channel prefix from numeric DM targets (e.g. "telegram:12345678" → "12345678")
-  if (channel && target.toLowerCase().startsWith(`${channel}:`)) {
-    const stripped = target.slice(channel.length + 1).trim();
+  if (channelKey && target.toLowerCase().startsWith(`${channelKey}:`)) {
+    const stripped = target.slice(channelKey.length + 1).trim();
     if (stripped && /^\d+$/.test(stripped)) {
       return stripped;
     }
