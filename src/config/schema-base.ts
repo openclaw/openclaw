@@ -1,5 +1,6 @@
 import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { VERSION } from "../version.js";
+import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigUiHints } from "./schema.hints.js";
 import {
   applySensitiveUrlHints,
@@ -7,7 +8,6 @@ import {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
 } from "./schema.hints.js";
-import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { asSchemaObject, cloneSchema } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
@@ -15,10 +15,21 @@ import { OpenClawSchema } from "./zod-schema.js";
 
 type ConfigSchema = Record<string, unknown>;
 
+type FieldDocumentation = {
+  titles: Record<string, string>;
+  descriptions: Record<string, string>;
+};
+
 type JsonSchemaObject = Record<string, unknown> & {
+  title?: string;
+  description?: string;
   properties?: Record<string, JsonSchemaObject>;
   required?: string[];
   additionalProperties?: JsonSchemaObject | boolean;
+  items?: JsonSchemaObject | JsonSchemaObject[];
+  anyOf?: JsonSchemaObject[];
+  oneOf?: JsonSchemaObject[];
+  allOf?: JsonSchemaObject[];
 };
 
 const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
@@ -26,30 +37,33 @@ const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
   asSchemaObject<JsonSchemaObject>(value);
 
-/**
- * Build a merged description lookup: FIELD_HELP (rich prose) takes priority,
- * falling back to FIELD_LABELS (short label) when no help text exists.
- */
-function buildDescriptionMap(): Record<string, string> {
-  const merged: Record<string, string> = { ...FIELD_LABELS };
-  // FIELD_HELP overwrites FIELD_LABELS for every key it covers
-  for (const [key, value] of Object.entries(FIELD_HELP)) {
+function buildFieldDocumentation(): FieldDocumentation {
+  const titles: Record<string, string> = {};
+  for (const [key, value] of Object.entries(FIELD_LABELS)) {
     if (value) {
-      merged[key] = value;
+      titles[key] = value;
     }
   }
-  return merged;
+
+  const descriptions: Record<string, string> = {};
+  for (const [key, value] of Object.entries(FIELD_HELP)) {
+    if (value) {
+      descriptions[key] = value;
+    }
+  }
+
+  return { titles, descriptions };
 }
 
 /**
- * Recursively walk a JSON Schema object and apply `description` from the
- * merged help/labels map using dot-path matching.  Existing descriptions
- * (e.g. from Zod `.describe()`) are never overwritten.
+ * Recursively walk a JSON Schema object and apply field docs using dot-path
+ * matching. Existing titles/descriptions (for example from Zod metadata) are
+ * preserved.
  */
-function applyDescriptions(
+function applyFieldDocumentation(
   node: JsonSchemaObject,
-  descriptions: Record<string, string>,
-  prefix: string = "",
+  documentation: FieldDocumentation,
+  prefixes: readonly string[] = [""],
 ): void {
   const props = node.properties;
   if (props) {
@@ -58,58 +72,74 @@ function applyDescriptions(
       if (!childObj) {
         continue;
       }
-      const dotPath = prefix ? `${prefix}.${key}` : key;
-      // Apply description only if none already present
-      if (!childObj.description && descriptions[dotPath]) {
-        childObj.description = descriptions[dotPath];
-      }
-      // Recurse into nested properties
-      applyDescriptions(childObj, descriptions, dotPath);
+      const childPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.${key}` : key));
+      applyNodeDocumentation(childObj, documentation, childPrefixes);
+      applyFieldDocumentation(childObj, documentation, childPrefixes);
     }
   }
   // Handle additionalProperties (wildcard keys like "models.providers.*")
   if (node.additionalProperties && typeof node.additionalProperties === "object") {
     const addObj = asJsonSchemaObject(node.additionalProperties);
     if (addObj) {
-      const wildcardPath = prefix ? `${prefix}.*` : "*";
-      if (!addObj.description && descriptions[wildcardPath]) {
-        addObj.description = descriptions[wildcardPath];
-      }
-      applyDescriptions(addObj, descriptions, wildcardPath);
+      const wildcardPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.*` : "*"));
+      applyNodeDocumentation(addObj, documentation, wildcardPrefixes);
+      applyFieldDocumentation(addObj, documentation, wildcardPrefixes);
     }
   }
-  // Handle array items. Labels may use either "[]" notation (bindings[].type)
-  // or wildcard "*" notation (agents.list.*.skills), so try both aliases.
+  // Handle array items. Help/labels may use either "[]" notation
+  // (bindings[].type) or wildcard "*" notation (agents.list.*.skills).
   if (node.items) {
     const itemsObj = asJsonSchemaObject(node.items);
     if (itemsObj) {
-      const arrayPath = prefix ? `${prefix}[]` : "[]";
-      const wildcardAlias = prefix ? `${prefix}.*` : "*";
-      if (!itemsObj.description) {
-        const desc = descriptions[arrayPath] ?? descriptions[wildcardAlias];
-        if (desc) {
-          itemsObj.description = desc;
-        }
-      }
-      // Recurse with the [] path, but also merge descriptions reachable
-      // via the * alias so that nested children match either convention.
-      applyDescriptions(itemsObj, descriptions, arrayPath);
-      if (wildcardAlias !== arrayPath) {
-        applyDescriptions(itemsObj, descriptions, wildcardAlias);
-      }
+      const itemPrefixes = Array.from(
+        new Set(
+          prefixes.flatMap((prefix) => {
+            const arrayPath = prefix ? `${prefix}[]` : "[]";
+            const wildcardAlias = prefix ? `${prefix}.*` : "*";
+            return wildcardAlias === arrayPath ? [arrayPath] : [arrayPath, wildcardAlias];
+          }),
+        ),
+      );
+      applyNodeDocumentation(itemsObj, documentation, itemPrefixes);
+      applyFieldDocumentation(itemsObj, documentation, itemPrefixes);
     }
   }
-  // Recurse into composition branches (anyOf, oneOf, allOf) using the
-  // same prefix so that properties nested inside union/intersection
-  // variants can still be annotated.
+  // Recurse into composition branches (anyOf, oneOf, allOf) using the same
+  // path aliases so union/intersection variants inherit the same field docs.
   for (const keyword of ["anyOf", "oneOf", "allOf"] as const) {
     const branches = node[keyword];
     if (Array.isArray(branches)) {
       for (const branch of branches) {
         const branchObj = asJsonSchemaObject(branch);
         if (branchObj) {
-          applyDescriptions(branchObj, descriptions, prefix);
+          applyFieldDocumentation(branchObj, documentation, prefixes);
         }
+      }
+    }
+  }
+}
+
+function applyNodeDocumentation(
+  node: JsonSchemaObject,
+  documentation: FieldDocumentation,
+  pathCandidates: readonly string[],
+): void {
+  if (!node.title) {
+    for (const path of pathCandidates) {
+      const title = documentation.titles[path];
+      if (title) {
+        node.title = title;
+        break;
+      }
+    }
+  }
+
+  if (!node.description) {
+    for (const path of pathCandidates) {
+      const description = documentation.descriptions[path];
+      if (description) {
+        node.description = description;
+        break;
       }
     }
   }
@@ -206,7 +236,7 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   schema.title = "OpenClawConfig";
   const schemaRoot = asJsonSchemaObject(schema);
   if (schemaRoot) {
-    applyDescriptions(schemaRoot, buildDescriptionMap());
+    applyFieldDocumentation(schemaRoot, buildFieldDocumentation());
   }
   const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
   const sensitiveUrlPaths = collectMatchingSchemaPaths(
