@@ -14,13 +14,16 @@ import { createExtensionAcpxVitestConfig } from "../vitest.extension-acpx.config
 import { createExtensionBlueBubblesVitestConfig } from "../vitest.extension-bluebubbles.config.ts";
 import { createExtensionChannelsVitestConfig } from "../vitest.extension-channels.config.ts";
 import { createExtensionDiffsVitestConfig } from "../vitest.extension-diffs.config.ts";
+import { createExtensionFeishuVitestConfig } from "../vitest.extension-feishu.config.ts";
 import { createExtensionMatrixVitestConfig } from "../vitest.extension-matrix.config.ts";
 import { createExtensionMemoryVitestConfig } from "../vitest.extension-memory.config.ts";
 import { createExtensionMessagingVitestConfig } from "../vitest.extension-messaging.config.ts";
+import { createExtensionMsTeamsVitestConfig } from "../vitest.extension-msteams.config.ts";
 import { createExtensionProvidersVitestConfig } from "../vitest.extension-providers.config.ts";
 import { createExtensionTelegramVitestConfig } from "../vitest.extension-telegram.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
+import { createHooksVitestConfig } from "../vitest.hooks.config.ts";
 import { createInfraVitestConfig } from "../vitest.infra.config.ts";
 import { createMediaUnderstandingVitestConfig } from "../vitest.media-understanding.config.ts";
 import { createMediaVitestConfig } from "../vitest.media.config.ts";
@@ -31,6 +34,7 @@ import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scop
 import { createSecretsVitestConfig } from "../vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "../vitest.shared-core.config.ts";
 import { createToolingVitestConfig } from "../vitest.tooling.config.ts";
+import { createTuiVitestConfig } from "../vitest.tui.config.ts";
 import { createUiVitestConfig } from "../vitest.ui.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
@@ -99,12 +103,15 @@ describe("scoped vitest configs", () => {
   const defaultExtensionBlueBubblesConfig = createExtensionBlueBubblesVitestConfig({});
   const defaultExtensionChannelsConfig = createExtensionChannelsVitestConfig({});
   const defaultExtensionDiffsConfig = createExtensionDiffsVitestConfig({});
+  const defaultExtensionFeishuConfig = createExtensionFeishuVitestConfig({});
   const defaultExtensionMatrixConfig = createExtensionMatrixVitestConfig({});
   const defaultExtensionMemoryConfig = createExtensionMemoryVitestConfig({});
+  const defaultExtensionMsTeamsConfig = createExtensionMsTeamsVitestConfig({});
   const defaultExtensionMessagingConfig = createExtensionMessagingVitestConfig({});
   const defaultExtensionProvidersConfig = createExtensionProvidersVitestConfig({});
   const defaultExtensionTelegramConfig = createExtensionTelegramVitestConfig({});
   const defaultGatewayConfig = createGatewayVitestConfig({});
+  const defaultHooksConfig = createHooksVitestConfig({});
   const defaultInfraConfig = createInfraVitestConfig({});
   const defaultPluginSdkConfig = createPluginSdkVitestConfig({});
   const defaultSecretsConfig = createSecretsVitestConfig({});
@@ -119,6 +126,7 @@ describe("scoped vitest configs", () => {
   const defaultAgentsConfig = createAgentsVitestConfig({});
   const defaultPluginsConfig = createPluginsVitestConfig({});
   const defaultToolingConfig = createToolingVitestConfig({});
+  const defaultTuiConfig = createTuiVitestConfig({});
   const defaultUiConfig = createUiVitestConfig({});
 
   it("defaults channel tests to non-isolated mode", () => {
@@ -192,6 +200,11 @@ describe("scoped vitest configs", () => {
     expect(defaultExtensionDiffsConfig.test?.include).toEqual(["diffs/**/*.test.ts"]);
   });
 
+  it("normalizes feishu extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionFeishuConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionFeishuConfig.test?.include).toEqual(["feishu/**/*.test.ts"]);
+  });
+
   it("normalizes extension include patterns relative to the scoped dir", () => {
     expect(defaultExtensionsConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionsConfig.test?.include).toEqual(["**/*.test.ts"]);
@@ -207,13 +220,18 @@ describe("scoped vitest configs", () => {
   it("normalizes extension messaging include patterns relative to the scoped dir", () => {
     expect(defaultExtensionMessagingConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionMessagingConfig.test?.include).toEqual(
-      expect.arrayContaining(["feishu/**/*.test.ts"]),
+      expect.arrayContaining(["googlechat/**/*.test.ts"]),
     );
   });
 
   it("normalizes matrix extension include patterns relative to the scoped dir", () => {
     expect(defaultExtensionMatrixConfig.test?.dir).toBe("extensions");
     expect(defaultExtensionMatrixConfig.test?.include).toEqual(["matrix/**/*.test.ts"]);
+  });
+
+  it("normalizes msteams extension include patterns relative to the scoped dir", () => {
+    expect(defaultExtensionMsTeamsConfig.test?.dir).toBe("extensions");
+    expect(defaultExtensionMsTeamsConfig.test?.include).toEqual(["msteams/**/*.test.ts"]);
   });
 
   it("normalizes telegram extension include patterns relative to the scoped dir", () => {
@@ -275,6 +293,11 @@ describe("scoped vitest configs", () => {
     expect(defaultSecretsConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
+  it("normalizes hooks include patterns relative to the scoped dir", () => {
+    expect(defaultHooksConfig.test?.dir).toBe("src/hooks");
+    expect(defaultHooksConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
   it("keeps memory plugin tests out of the shared extensions lane", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
     expect(
@@ -290,6 +313,13 @@ describe("scoped vitest configs", () => {
       extensionExcludes.some((pattern) =>
         path.matchesGlob("bluebubbles/src/monitor.test.ts", pattern),
       ),
+    ).toBe(true);
+  });
+
+  it("keeps feishu tests out of the shared extensions lane", () => {
+    const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
+    expect(
+      extensionExcludes.some((pattern) => path.matchesGlob("feishu/src/channel.test.ts", pattern)),
     ).toBe(true);
   });
 
@@ -345,6 +375,11 @@ describe("scoped vitest configs", () => {
   it("normalizes shared-core include patterns relative to the scoped dir", () => {
     expect(defaultSharedCoreConfig.test?.dir).toBe("src");
     expect(defaultSharedCoreConfig.test?.include).toEqual(["shared/**/*.test.ts"]);
+  });
+
+  it("normalizes tui include patterns relative to the scoped dir", () => {
+    expect(defaultTuiConfig.test?.dir).toBe("src");
+    expect(defaultTuiConfig.test?.include).toEqual(["tui/**/*.test.ts"]);
   });
 
   it("normalizes media-understanding include patterns relative to the scoped dir", () => {

@@ -212,6 +212,17 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes tui targets to the tui config", () => {
+    expect(buildVitestRunPlans(["src/tui/tui.test.ts"])).toEqual([
+      {
+        config: "vitest.tui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/tui/tui.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes media-understanding targets to the media-understanding config", () => {
     expect(buildVitestRunPlans(["src/media-understanding/runtime.test.ts"])).toEqual([
       {
@@ -262,6 +273,17 @@ describe("test-projects args", () => {
         config: "vitest.gateway.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/gateway/call.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes hooks targets to the hooks config", () => {
+    expect(buildVitestRunPlans(["src/hooks/install.test.ts"])).toEqual([
+      {
+        config: "vitest.hooks.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/hooks/install.test.ts"],
         watchMode: false,
       },
     ]);
@@ -364,6 +386,17 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes msteams extension tests to the msteams config", () => {
+    expect(buildVitestRunPlans(["extensions/msteams/src/config.test.ts"])).toEqual([
+      {
+        config: "vitest.extension-msteams.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/msteams/src/config.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes telegram extension tests to the telegram config", () => {
     expect(buildVitestRunPlans(["extensions/telegram/src/fetch.test.ts"])).toEqual([
       {
@@ -392,6 +425,17 @@ describe("test-projects args", () => {
         config: "vitest.extension-bluebubbles.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/bluebubbles/src/monitor.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes feishu extension tests to the feishu config", () => {
+    expect(buildVitestRunPlans(["extensions/feishu/src/channel.test.ts"])).toEqual([
+      {
+        config: "vitest.extension-feishu.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/feishu/src/channel.test.ts"],
         watchMode: false,
       },
     ]);

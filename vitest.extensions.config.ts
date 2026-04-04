@@ -3,9 +3,11 @@ import { extensionExcludedChannelTestGlobs } from "./vitest.channel-paths.mjs";
 import { acpxExtensionTestRoots } from "./vitest.extension-acpx-paths.mjs";
 import { blueBubblesExtensionTestRoots } from "./vitest.extension-bluebubbles-paths.mjs";
 import { diffsExtensionTestRoots } from "./vitest.extension-diffs-paths.mjs";
+import { feishuExtensionTestRoots } from "./vitest.extension-feishu-paths.mjs";
 import { matrixExtensionTestRoots } from "./vitest.extension-matrix-paths.mjs";
 import { memoryExtensionTestRoots } from "./vitest.extension-memory-paths.mjs";
 import { messagingExtensionTestRoots } from "./vitest.extension-messaging-paths.mjs";
+import { msTeamsExtensionTestRoots } from "./vitest.extension-msteams-paths.mjs";
 import { providerExtensionTestRoots } from "./vitest.extension-provider-paths.mjs";
 import { telegramExtensionTestRoots } from "./vitest.extension-telegram-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
@@ -33,9 +35,11 @@ export function createExtensionsVitestConfig(
       ...acpxExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...blueBubblesExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...diffsExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
+      ...feishuExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...matrixExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...memoryExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...messagingExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
+      ...msTeamsExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...providerExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
       ...telegramExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
     ],

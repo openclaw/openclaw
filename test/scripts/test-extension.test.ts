@@ -70,6 +70,15 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
+  it("resolves feishu onto the feishu vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "feishu", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("feishu");
+    expect(plan.config).toBe("vitest.extension-feishu.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("feishu"));
+    expect(plan.hasTests).toBe(true);
+  });
+
   it("resolves provider extensions onto the provider vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "openai", cwd: process.cwd() });
 
@@ -103,6 +112,15 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.extensionId).toBe("memory-core");
     expect(plan.config).toBe("vitest.extension-memory.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("memory-core"));
+    expect(plan.hasTests).toBe(true);
+  });
+
+  it("resolves msteams onto the msteams vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "msteams", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("msteams");
+    expect(plan.config).toBe("vitest.extension-msteams.config.ts");
+    expect(plan.roots).toContain(bundledPluginRoot("msteams"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -182,6 +200,8 @@ describe("scripts/test-extension.mjs", () => {
         "matrix",
         "telegram",
         "memory-core",
+        "msteams",
+        "feishu",
         "bluebubbles",
         "acpx",
         "diffs",
@@ -192,10 +212,12 @@ describe("scripts/test-extension.mjs", () => {
       "acpx",
       "bluebubbles",
       "diffs",
+      "feishu",
       "firecrawl",
       "line",
       "matrix",
       "memory-core",
+      "msteams",
       "openai",
       "slack",
       "telegram",
@@ -226,6 +248,12 @@ describe("scripts/test-extension.mjs", () => {
         testFileCount: expect.any(Number),
       },
       {
+        config: "vitest.extension-feishu.config.ts",
+        extensionIds: ["feishu"],
+        roots: [bundledPluginRoot("feishu")],
+        testFileCount: expect.any(Number),
+      },
+      {
         config: "vitest.extension-matrix.config.ts",
         extensionIds: ["matrix"],
         roots: [bundledPluginRoot("matrix")],
@@ -235,6 +263,12 @@ describe("scripts/test-extension.mjs", () => {
         config: "vitest.extension-memory.config.ts",
         extensionIds: ["memory-core"],
         roots: [bundledPluginRoot("memory-core")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "vitest.extension-msteams.config.ts",
+        extensionIds: ["msteams"],
+        roots: [bundledPluginRoot("msteams")],
         testFileCount: expect.any(Number),
       },
       {
