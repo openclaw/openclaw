@@ -8,6 +8,7 @@ import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
+import ai.openclaw.app.protocol.OpenClawHttpCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
@@ -67,6 +68,7 @@ class InvokeDispatcher(
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val callLogHandler: CallLogHandler,
+  private val httpHandler: HttpHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
@@ -208,6 +210,9 @@ class InvokeDispatcher(
 
       // CallLog command
       OpenClawCallLogCommand.Search.rawValue -> callLogHandler.handleCallLogSearch(paramsJson)
+
+      // HTTP command
+      OpenClawHttpCommand.Request.rawValue -> httpHandler.handleHttpRequest(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()
