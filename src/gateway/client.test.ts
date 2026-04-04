@@ -430,12 +430,24 @@ describe("GatewayClient connect auth payload", () => {
     return parsed.params?.auth ?? {};
   }
 
+  function connectScopesFrom(ws: MockWebSocket) {
+    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
+    expect(raw).toBeTruthy();
+    const parsed = JSON.parse(raw ?? "{}") as {
+      params?: {
+        scopes?: string[];
+      };
+    };
+    return parsed.params?.scopes ?? [];
+  }
+
   function connectRequestFrom(ws: MockWebSocket) {
     const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
     expect(raw).toBeTruthy();
     return JSON.parse(raw ?? "{}") as {
       id?: string;
       params?: {
+        scopes?: string[];
         auth?: {
           token?: string;
           deviceToken?: string;
@@ -550,8 +562,11 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
-  it("uses stored device token when shared token is not provided", () => {
-    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+  it("uses stored device token scopes when shared token is not provided", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read", "operator.write"],
+    });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
     });
@@ -565,6 +580,7 @@ describe("GatewayClient connect auth payload", () => {
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
+    expect(connectScopesFrom(ws)).toEqual(["operator.read", "operator.write"]);
     client.stop();
   });
 
@@ -589,10 +605,14 @@ describe("GatewayClient connect auth payload", () => {
   });
 
   it("prefers explicit deviceToken over stored device token", () => {
-    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.admin", "operator.read"],
+    });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       deviceToken: "explicit-device-token",
+      scopes: ["operator.pairing"],
     });
 
     client.start();
@@ -604,11 +624,38 @@ describe("GatewayClient connect auth payload", () => {
       token: "explicit-device-token",
       deviceToken: "explicit-device-token",
     });
+    expect(connectScopesFrom(ws)).toEqual(["operator.pairing"]);
+    client.stop();
+  });
+
+  it("falls back to requested scopes when stored device token has no cached scopes", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: [],
+    });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      scopes: ["operator.approvals"],
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "stored-device-token",
+      deviceToken: "stored-device-token",
+    });
+    expect(connectScopesFrom(ws)).toEqual(["operator.approvals"]);
     client.stop();
   });
 
   it("retries with stored device token after shared-token mismatch on trusted endpoints", async () => {
-    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
@@ -627,6 +674,8 @@ describe("GatewayClient connect auth payload", () => {
       token: "shared-token",
       deviceToken: "stored-device-token",
     });
+    const ws = getLatestWs();
+    expect(connectScopesFrom(ws)).toEqual(["operator.read"]);
     client.stop();
   });
 
