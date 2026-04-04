@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
@@ -285,11 +286,53 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  /**
+   * Check if gateway is responding on the given port.
+   * Returns true if gateway is healthy and responding.
+   */
+  async function isGatewayResponding(port: number, timeoutMs = 2000): Promise<boolean> {
+    return new Promise((resolve) => {
+      try {
+        const req = spawn(
+          "curl",
+          ["-s", "-o", "/dev/null", "-w", "%{http_code}", `http://127.0.0.1:${port}/health`],
+          { timeout: timeoutMs },
+        );
+        let output = "";
+        req.stdout?.on("data", (data) => {
+          output += data.toString();
+        });
+        req.on("close", (code) => {
+          if (code === 0 && output.includes("200")) {
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        });
+        req.on("error", () => resolve(false));
+        setTimeout(() => {
+          resolve(false);
+        }, timeoutMs);
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    const stale = cleanStaleGatewayProcessesSync(port);
-    if (stale.length > 0) {
+    // Only kill "stale" gateways that are not responding
+    // This prevents killing healthy gateways that happen to be on the port
+    const isHealthy = await isGatewayResponding(port);
+    if (!isHealthy) {
+      const stale = cleanStaleGatewayProcessesSync(port);
+      if (stale.length > 0) {
+        gatewayLog.info(
+          `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+        );
+      }
+    } else {
       gatewayLog.info(
-        `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+        `service-mode: gateway already running and responding on port ${port}, skipping stale cleanup`,
       );
     }
   }
