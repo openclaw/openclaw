@@ -1,5 +1,6 @@
-const PROVIDER_ID = "litertlm-local";
-const PROVIDER_API = "litertlm-local";
+export const PROVIDER_ID = "litertlm-local";
+export const PROVIDER_API = "ollama" as const;
+export const SYNTHETIC_API_KEY = "litertlm-local";
 
 export const LITERTLM_MODEL_E2B = "litertlm/gemma4-e2b-edge-gallery";
 export const LITERTLM_MODEL_E4B = "litertlm/gemma4-e4b-edge-gallery";
@@ -40,15 +41,21 @@ export function buildLiteRtLmDiscoveredProvider() {
   return {
     api: PROVIDER_API,
     baseUrl: "litertlm://local",
-    apiKey: "litertlm-local",
+    apiKey: SYNTHETIC_API_KEY,
     models: LITERTLM_MODEL_PREFERENCES.map((entry) => ({
       id: entry.modelId,
       name: entry.displayName,
-      provider: PROVIDER_ID,
       api: PROVIDER_API,
-      contextWindow: 4096,
       reasoning: false,
-      experimental: true,
+      input: ["text"] as const,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 4096,
+      maxTokens: 1024,
     })),
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
 import {
   LITERTLM_MODEL_E2B,
@@ -35,13 +35,13 @@ describe("litertlm plugin skeleton", () => {
     expect(typeof provider.resolveSyntheticAuth).toBe("function");
   });
 
-  it("publishes discovery rows for E2B and E4B", async () => {
+  it("keeps discovery disabled in the current draft skeleton", async () => {
     const provider = registerProvider();
     const discovered = await provider.discovery.run({} as never);
-    const rows = discovered?.provider?.models ?? [];
 
-    expect(rows.some((entry: { id: string }) => entry.id === LITERTLM_MODEL_E2B)).toBe(true);
-    expect(rows.some((entry: { id: string }) => entry.id === LITERTLM_MODEL_E4B)).toBe(true);
+    expect(discovered).toBeNull();
+    expect(LITERTLM_MODEL_E2B).toContain("litertlm/");
+    expect(LITERTLM_MODEL_E4B).toContain("litertlm/");
   });
 
   it("uses E2B as the default experimental model id", () => {

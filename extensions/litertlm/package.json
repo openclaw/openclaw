@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/litertlm-provider",
+  "version": "2026.4.1-beta.1",
+  "private": true,
+  "description": "Experimental OpenClaw LiteRT-LM local provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

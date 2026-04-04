@@ -1,26 +1,89 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
-import {
-  buildAssistantMessage,
-  buildStreamErrorAssistantMessage,
-  buildUsageWithNoCost,
-  type StreamModelDescriptor,
-} from "../../../src/agents/stream-message-shared.js";
-import { getLiteRtLmModelPreference } from "./provider-models.js";
+import { PROVIDER_ID } from "./provider-models.js";
 
 const execFileAsync = promisify(execFile);
 
-function getWorkspaceShimPath() {
-  // Draft only: assume extension is developed inside the same workspace checkout.
-  return "scripts/litertlm_provider_shim.py";
+type StreamModelDescriptor = {
+  api: string;
+  provider: string;
+  id: string;
+};
+
+function buildUsageWithNoCost(params: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+}): Usage {
+  const input = params.input ?? 0;
+  const output = params.output ?? 0;
+  const cacheRead = params.cacheRead ?? 0;
+  const cacheWrite = params.cacheWrite ?? 0;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: params.totalTokens ?? input + output,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+function buildAssistantMessage(params: {
+  model: StreamModelDescriptor;
+  content: AssistantMessage["content"];
+  stopReason: StopReason;
+  usage: Usage;
+  timestamp?: number;
+}): AssistantMessage {
+  return {
+    role: "assistant",
+    content: params.content,
+    stopReason: params.stopReason,
+    api: params.model.api,
+    provider: params.model.provider,
+    model: params.model.id,
+    usage: params.usage,
+    timestamp: params.timestamp ?? Date.now(),
+  };
+}
+
+function buildStreamErrorAssistantMessage(params: {
+  model: StreamModelDescriptor;
+  errorMessage: string;
+  timestamp?: number;
+}): AssistantMessage & { stopReason: "error"; errorMessage: string } {
+  return {
+    ...buildAssistantMessage({
+      model: params.model,
+      content: [],
+      stopReason: "error",
+      usage: buildUsageWithNoCost({}),
+      timestamp: params.timestamp,
+    }),
+    stopReason: "error",
+    errorMessage: params.errorMessage,
+  };
+}
+
+function getShimPath() {
+  return path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../scripts/litertlm_provider_shim.py",
+  );
 }
 
 function buildModelDescriptor(modelId: string): StreamModelDescriptor {
   return {
-    api: "litertlm-local",
-    provider: "litertlm-local",
+    api: PROVIDER_ID,
+    provider: PROVIDER_ID,
     id: modelId,
   };
 }
@@ -59,13 +122,8 @@ export function createLiteRtLmShimStreamFn(params: { model: { id: string } }): S
           shimInput.system = context.systemPrompt;
         }
 
-        const preference = getLiteRtLmModelPreference(params.model.id);
-        if (preference?.preferredMatch === "Gemma_4_E4B_it") {
-          // Draft-only placeholder: for a real patch, resolve explicit E4B path here or teach shim/model resolver model-id preference.
-        }
-
         const { stdout } = await execFileAsync("python3", [
-          getWorkspaceShimPath(),
+          getShimPath(),
           "--input",
           JSON.stringify(shimInput),
         ]);

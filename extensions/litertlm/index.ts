@@ -1,13 +1,6 @@
-import {
-  definePluginEntry,
-  type OpenClawPluginApi,
-  type ProviderDiscoveryContext,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { buildLiteRtLmDiscoveredProvider } from "./src/provider-models.js";
+import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { PROVIDER_ID, SYNTHETIC_API_KEY } from "./src/provider-models.js";
 import { createLiteRtLmShimStreamFn } from "./src/stream.js";
-
-const PROVIDER_ID = "litertlm-local";
-const SYNTHETIC_API_KEY = "litertlm-local";
 
 export default definePluginEntry({
   id: "litertlm",
@@ -22,11 +15,7 @@ export default definePluginEntry({
       auth: [],
       discovery: {
         order: "late",
-        run: async (_ctx: ProviderDiscoveryContext) => {
-          return {
-            provider: buildLiteRtLmDiscoveredProvider(),
-          };
-        },
+        run: async () => null,
       },
       createStreamFn: ({ model }) => {
         return createLiteRtLmShimStreamFn({ model });

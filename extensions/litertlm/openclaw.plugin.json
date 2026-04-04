@@ -1,0 +1,10 @@
+{
+  "id": "litertlm",
+  "enabledByDefault": false,
+  "providers": ["litertlm-local"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
