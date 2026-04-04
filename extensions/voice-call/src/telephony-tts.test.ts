@@ -3,10 +3,6 @@ import type { VoiceCallTtsConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 
-vi.mock("openclaw/plugin-sdk/speech-runtime", () => ({
-  resolveTtsConfig: () => ({ timeoutMs: 8000 }),
-}));
-
 function createCoreConfig(): CoreConfig {
   const tts: VoiceCallTtsConfig = {
     provider: "openai",
@@ -119,5 +115,33 @@ describe("createTelephonyTtsProvider deepMerge hardening", () => {
     expect(warn).toHaveBeenCalledWith(
       "[voice-call] Telephony TTS fallback used from=elevenlabs to=microsoft attempts=elevenlabs -> microsoft",
     );
+  });
+
+  it("exposes configured timeoutMs as synthesisTimeoutMs", () => {
+    const provider = createTelephonyTtsProvider({
+      coreConfig: { messages: { tts: { provider: "openai", timeoutMs: 15000 } } },
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+        }),
+      },
+    });
+    expect(provider.synthesisTimeoutMs).toBe(15000);
+  });
+
+  it("defaults synthesisTimeoutMs to 8000 when not configured", () => {
+    const provider = createTelephonyTtsProvider({
+      coreConfig: createCoreConfig(),
+      runtime: {
+        textToSpeechTelephony: async () => ({
+          success: true,
+          audioBuffer: Buffer.alloc(2),
+          sampleRate: 8000,
+        }),
+      },
+    });
+    expect(provider.synthesisTimeoutMs).toBe(8000);
   });
 });
