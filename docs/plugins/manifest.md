@@ -216,6 +216,8 @@ read without importing the plugin runtime.
     "realtimeVoiceProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
     "imageGenerationProviders": ["openai"],
+    "videoGenerationProviders": ["qwen"],
+    "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["gemini"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
   }
