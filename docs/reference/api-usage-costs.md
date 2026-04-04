@@ -44,7 +44,7 @@ OpenClaw can pick up credentials from:
 - **Auth profiles** (per-agent, stored in `auth-profiles.json`).
 - **Environment variables** (e.g. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
 - **Config** (`models.providers.*.apiKey`, `tools.web.search.*`, `tools.web.fetch.firecrawl.*`,
-  `memorySearch.*`, `talk.apiKey`).
+  `memorySearch.*`, `talk.providers.*.apiKey`).
 - **Skills** (`skills.entries.<name>.apiKey`) which may export keys to the skill process env.
 
 ## Features that can spend keys
@@ -148,7 +148,7 @@ See [Models CLI](/cli/models).
 
 Talk mode can invoke **ElevenLabs** when configured:
 
-- `ELEVENLABS_API_KEY` or `talk.apiKey`
+- `ELEVENLABS_API_KEY` or `talk.providers.elevenlabs.apiKey`
 
 See [Talk mode](/nodes/talk).
 
