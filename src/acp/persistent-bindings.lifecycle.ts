@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
 import { resolveAcpAgentFromSessionKey } from "./control-plane/manager.utils.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "./persistent-bindings.resolve.js";
@@ -10,7 +11,9 @@ import {
   type ConfiguredAcpBindingSpec,
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
+import { toAcpRuntimeError } from "./runtime/errors.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
+import { isAcpStaleSessionError } from "./runtime/stale-session.js";
 
 function sessionMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
@@ -212,7 +215,32 @@ export async function resetAcpSessionInPlace(params: {
     }
     return { ok: true };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const acpError = toAcpRuntimeError({
+      error,
+      fallbackCode: "ACP_SESSION_INIT_FAILED",
+      fallbackMessage: "ACP session reset failed.",
+    });
+    const message = acpError.message;
+    if (isAcpStaleSessionError({ code: acpError.code, message })) {
+      try {
+        const removedBindings = await getSessionBindingService().unbind({
+          targetSessionKey: sessionKey,
+          reason: "acp-session-init-failed",
+        });
+        logVerbose(
+          `acp-configured-binding: removed ${removedBindings.length} stale binding(s) for ${sessionKey} after reset failure: ${message}`,
+        );
+      } catch (unbindError) {
+        logVerbose(
+          `acp-configured-binding: failed to unbind stale bindings for ${sessionKey}: ${unbindError instanceof Error ? unbindError.message : String(unbindError)}`,
+        );
+      }
+      return {
+        ok: false,
+        skipped: true,
+        error: message,
+      };
+    }
     logVerbose(`acp-configured-binding: failed reset for ${sessionKey}: ${message}`);
     return {
       ok: false,

@@ -9,6 +9,7 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { isAcpStaleSessionError } from "../../acp/runtime/stale-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -232,12 +233,7 @@ export type AcpDispatchAttemptResult = {
 const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 
 function isStaleSessionInitError(params: { code: string; message: string }): boolean {
-  if (params.code !== "ACP_SESSION_INIT_FAILED") {
-    return false;
-  }
-  return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
-    params.message,
-  );
+  return isAcpStaleSessionError(params);
 }
 
 async function maybeUnbindStaleBoundConversations(params: {

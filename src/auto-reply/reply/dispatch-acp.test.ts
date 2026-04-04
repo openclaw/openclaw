@@ -737,6 +737,56 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("unbinds stale bindings on ACP runTurn missing-cwd failures", async () => {
+    const aliasSessionKey = "main";
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta(),
+    });
+    const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new FreshAcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        "ACP runtime working directory does not exist: /tmp/opik-runtime-pr2",
+      ),
+    );
+    bindingServiceMocks.unbind.mockResolvedValueOnce([
+      {
+        bindingId: "telegram:default:topic-1",
+        targetSessionKey: canonicalSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1003817967251:topic:11345",
+        },
+        status: "active",
+        boundAt: 0,
+      },
+    ]);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      sessionKeyOverride: aliasSessionKey,
+    });
+
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
+      targetSessionKey: canonicalSessionKey,
+      reason: "acp-session-init-failed",
+    });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("working directory does not exist"),
+      }),
+    );
+  });
+
   it("uses canonical session keys for bound-session identity notices", async () => {
     const aliasSessionKey = "main";
     const canonicalSessionKey = "agent:main:main";
