@@ -360,8 +360,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         (await loadSlackDirectoryConfigModule()).listSlackDirectoryGroupsFromConfig(params),
       ...createRuntimeDirectoryLiveAdapter({
         getRuntime: loadSlackDirectoryLiveModule,
-        listPeersLive: (runtime) => runtime.listDirectoryPeersLive,
-        listGroupsLive: (runtime) => runtime.listDirectoryGroupsLive,
+        listPeersLive: (runtime) => runtime.listSlackDirectoryPeersLive,
+        listGroupsLive: (runtime) => runtime.listSlackDirectoryGroupsLive,
       }),
     }),
     resolver: {

@@ -250,7 +250,8 @@ const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResol
 const resolveDiscordAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveAccount: resolveDiscordAccount,
   resolveToken: (account: ResolvedDiscordAccount) => account.token,
-  resolveNames: ({ token, entries }) => resolveDiscordUserAllowlist({ token, entries }),
+  resolveNames: async ({ token, entries }) =>
+    (await loadDiscordResolveUsersModule()).resolveDiscordUserAllowlist({ token, entries }),
 });
 
 const collectDiscordSecurityWarnings =
@@ -465,8 +466,8 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           (await loadDiscordDirectoryConfigModule()).listDiscordDirectoryGroupsFromConfig(params),
         ...createRuntimeDirectoryLiveAdapter({
           getRuntime: loadDiscordDirectoryLiveModule,
-          listPeersLive: (runtime) => runtime.listDirectoryPeersLive,
-          listGroupsLive: (runtime) => runtime.listDirectoryGroupsLive,
+          listPeersLive: (runtime) => runtime.listDiscordDirectoryPeersLive,
+          listGroupsLive: (runtime) => runtime.listDiscordDirectoryGroupsLive,
         }),
       }),
       resolver: {

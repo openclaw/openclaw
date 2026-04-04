@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -10,14 +11,16 @@ import type { OpenClawConfig } from "./types.js";
 // test exercise the exact code path that caused the bug: AJV injecting
 // defaults during the write-back validation pass.
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
-    diagnostics: [],
-    plugins: [],
-  })),
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
 
 describe("config io write", () => {
@@ -424,8 +427,17 @@ describe("config io write", () => {
       plugins: [
         {
           id: "bluebubbles",
+          name: "BlueBubbles",
+          version: "0.0.0-test",
           origin: "bundled",
           channels: ["bluebubbles"],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: "/mock/bluebubbles",
+          source: "bundled",
+          manifestPath: "/mock/bluebubbles/openclaw.plugin.json",
           channelCatalogMeta: {
             id: "bluebubbles",
             label: "BlueBubbles",
