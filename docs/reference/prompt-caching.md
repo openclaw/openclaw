@@ -157,10 +157,19 @@ OpenClaw exposes dedicated cache-trace diagnostics for embedded agent runs.
 
 ## Live regression tests
 
-OpenClaw keeps provider-specific live cache probes for repeated prefixes, tool turns, image turns, and MCP-style tool transcripts.
+OpenClaw keeps one combined live cache regression gate for repeated prefixes, tool turns, image turns, MCP-style tool transcripts, and an Anthropic no-cache control.
 
-- `src/agents/pi-embedded-runner.cache.live.test.ts`
-- `src/agents/pi-mcp-style.cache.live.test.ts`
+- `src/agents/live-cache-regression.live.test.ts`
+- `src/agents/live-cache-regression-baseline.ts`
+
+Run the narrow live gate with:
+
+```sh
+OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache
+```
+
+The baseline file stores the most recent observed live numbers plus the provider-specific regression floors used by the test.
+The runner also uses fresh per-run session IDs and prompt namespaces so previous cache state does not pollute the current regression sample.
 
 These tests intentionally do not use identical success criteria across providers.
 
@@ -180,12 +189,14 @@ These tests intentionally do not use identical success criteria across providers
   - image transcript: `cacheRead >= 3840`, hit rate `>= 0.82`
   - MCP-style transcript: `cacheRead >= 4096`, hit rate `>= 0.85`
 
-Fresh OpenAI verification on 2026-04-04 landed at:
+Fresh combined live verification on 2026-04-04 landed at:
 
-- stable prefix: `cacheRead=4864`, hit rate `0.971`
-- tool transcript: `cacheRead=4608`, hit rate `0.900`
-- image transcript: `cacheRead=4864`, hit rate `0.959`
-- MCP-style transcript: `cacheRead=4608`, hit rate `0.895`
+- stable prefix: `cacheRead=4864`, hit rate `0.966`
+- tool transcript: `cacheRead=4608`, hit rate `0.896`
+- image transcript: `cacheRead=4864`, hit rate `0.954`
+- MCP-style transcript: `cacheRead=4608`, hit rate `0.891`
+
+Recent local wall-clock time for the combined gate was about `88s`.
 
 Why the assertions differ:
 

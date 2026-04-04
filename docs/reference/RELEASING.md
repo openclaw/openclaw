@@ -41,6 +41,10 @@ OpenClaw has three public release lanes:
   `dist/*` release artifacts and Control UI bundle exist for the pack
   validation step
 - Run `pnpm release:check` before every tagged release
+- Main-branch npm preflight also runs
+  `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache`
+  before packaging the tarball, using both `OPENAI_API_KEY` and
+  `ANTHROPIC_API_KEY` workflow secrets
 - Run `RELEASE_TAG=vYYYY.M.D node --import tsx scripts/openclaw-npm-release-check.ts`
   (or the matching beta/correction tag) before approval
 - After npm publish, run
