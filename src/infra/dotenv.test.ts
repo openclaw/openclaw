@@ -97,6 +97,31 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("loads the Ubuntu gateway.env compatibility fallback after ~/.openclaw/.env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+        process.env.HOME = base;
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          ["FOO=from-gateway", "BAR=from-gateway"].join("\n"),
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        loadDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+        expect(process.env.BAR).toBe("from-gateway");
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Conflicting values in"));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.env"));
+      });
+    });
+  });
+
   it("blocks dangerous and workspace-control vars from CWD .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
@@ -423,6 +448,28 @@ describe("loadCliDotEnv", () => {
         loadCliDotEnv({ quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+      });
+    });
+  });
+
+  it("loads the gateway.env compatibility fallback during CLI startup", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ base, cwdDir, stateDir }) => {
+        process.env.HOME = base;
+        await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
+        await writeEnvFile(
+          path.join(base, ".config", "openclaw", "gateway.env"),
+          "BAR=from-gateway\n",
+        );
+
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        delete process.env.FOO;
+        delete process.env.BAR;
+
+        loadCliDotEnv({ quiet: true });
+
+        expect(process.env.FOO).toBe("from-global");
+        expect(process.env.BAR).toBe("from-gateway");
       });
     });
   });
