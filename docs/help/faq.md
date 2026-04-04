@@ -2107,7 +2107,7 @@ for usage/billing and raise limits as needed.
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw currently assumes the configured default provider (currently `openai`) as a temporary deprecation fallback - but you should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.4`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 

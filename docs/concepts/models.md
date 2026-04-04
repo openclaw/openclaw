@@ -119,7 +119,10 @@ Notes:
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
 - If the model ID itself contains `/` (OpenRouter-style), you must include the provider prefix (example: `/model openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw resolves the input in this order:
+  1. alias match
+  2. unique configured-provider match for that exact unprefixed model id
+  3. deprecated fallback to the configured default provider
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
 
