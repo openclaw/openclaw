@@ -1,24 +1,28 @@
 ---
-summary: "Agent tools for listing sessions, reading history, and cross-session messaging"
+summary: "Agent tools for cross-session status, recall, messaging, and sub-agent orchestration"
 read_when:
   - You want to understand what session tools the agent has
   - You want to configure cross-session access or sub-agent spawning
+  - You want to inspect status or control spawned sub-agents
 title: "Session Tools"
 ---
 
 # Session Tools
 
-OpenClaw gives agents tools to work across sessions -- listing conversations,
-reading history, sending messages to other sessions, and spawning sub-agents.
+OpenClaw gives agents tools to work across sessions, inspect status, and
+orchestrate sub-agents.
 
 ## Available tools
 
-| Tool               | What it does                                            |
-| ------------------ | ------------------------------------------------------- |
-| `sessions_list`    | List sessions with optional filters (kind, recency)     |
-| `sessions_history` | Read the transcript of a specific session               |
-| `sessions_send`    | Send a message to another session and optionally wait   |
-| `sessions_spawn`   | Spawn an isolated sub-agent session for background work |
+| Tool               | What it does                                                                |
+| ------------------ | --------------------------------------------------------------------------- |
+| `sessions_list`    | List sessions with optional filters (kind, recency)                         |
+| `sessions_history` | Read the transcript of a specific session                                   |
+| `sessions_send`    | Send a message to another session and optionally wait                       |
+| `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
+| `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
+| `subagents`        | List, steer, or kill spawned sub-agents for this session                    |
+| `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
 
 ## Listing and reading sessions
 
@@ -65,6 +69,25 @@ After the target responds, OpenClaw can run a **reply-back loop** where the
 agents alternate messages (up to 5 turns). The target agent can reply
 `REPLY_SKIP` to stop early.
 
+## Status and orchestration helpers
+
+`session_status` is the lightweight `/status`-equivalent tool for the current
+or another visible session. It reports usage, time, model/runtime state, and
+linked background-task context when present. Like `/status`, it can backfill
+sparse token/cache counters from the latest transcript usage entry, and
+`model=default` clears a per-session override.
+
+`sessions_yield` intentionally ends the current turn so the next message can be
+the follow-up event you are waiting for. Use it after spawning sub-agents when
+you want completion results to arrive as the next message instead of polling.
+
+`subagents` is the control-plane helper for already spawned OpenClaw
+sub-agents. It supports:
+
+- `action: "list"` to inspect active/recent runs
+- `action: "steer"` to send follow-up guidance to a running child
+- `action: "kill"` to stop one child or `all`
+
 ## Spawning sub-agents
 
 `sessions_spawn` creates an isolated session for a background task. It is always
@@ -77,7 +100,12 @@ Key options:
 - `thread: true` to bind the spawn to a chat thread (Discord, Slack, etc.).
 - `sandbox: "require"` to enforce sandboxing on the child.
 
-Sub-agents get the full tool set minus session tools (no recursive spawning).
+Default leaf sub-agents do not get session tools. When
+`maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive
+`sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they
+can manage their own children. Leaf runs still do not get recursive
+orchestration tools.
+
 After completion, an announce step posts the result to the requester's channel.
 Completion delivery preserves bound thread/topic routing when available, and if
 the completion origin only identifies a channel OpenClaw can still reuse the

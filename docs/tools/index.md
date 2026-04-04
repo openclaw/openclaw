@@ -53,20 +53,20 @@ OpenClaw has three layers that work together:
 
 These tools ship with OpenClaw and are available without installing any plugins:
 
-| Tool                                    | What it does                                             | Page                                    |
-| --------------------------------------- | -------------------------------------------------------- | --------------------------------------- |
-| `exec` / `process`                      | Run shell commands, manage background processes          | [Exec](/tools/exec)                     |
-| `code_execution`                        | Run sandboxed remote Python analysis                     | [Code Execution](/tools/code-execution) |
-| `browser`                               | Control a Chromium browser (navigate, click, screenshot) | [Browser](/tools/browser)               |
-| `web_search` / `x_search` / `web_fetch` | Search the web, search X posts, fetch page content       | [Web](/tools/web)                       |
-| `read` / `write` / `edit`               | File I/O in the workspace                                |                                         |
-| `apply_patch`                           | Multi-hunk file patches                                  | [Apply Patch](/tools/apply-patch)       |
-| `message`                               | Send messages across all channels                        | [Agent Send](/tools/agent-send)         |
-| `canvas`                                | Drive node Canvas (present, eval, snapshot)              |                                         |
-| `nodes`                                 | Discover and target paired devices                       |                                         |
-| `cron` / `gateway`                      | Manage scheduled jobs, restart gateway                   |                                         |
-| `image` / `image_generate`              | Analyze or generate images                               |                                         |
-| `sessions_*` / `agents_list`            | Session management, sub-agents                           | [Sub-agents](/tools/subagents)          |
+| Tool                                       | What it does                                             | Page                                    |
+| ------------------------------------------ | -------------------------------------------------------- | --------------------------------------- |
+| `exec` / `process`                         | Run shell commands, manage background processes          | [Exec](/tools/exec)                     |
+| `code_execution`                           | Run sandboxed remote Python analysis                     | [Code Execution](/tools/code-execution) |
+| `browser`                                  | Control a Chromium browser (navigate, click, screenshot) | [Browser](/tools/browser)               |
+| `web_search` / `x_search` / `web_fetch`    | Search the web, search X posts, fetch page content       | [Web](/tools/web)                       |
+| `read` / `write` / `edit`                  | File I/O in the workspace                                |                                         |
+| `apply_patch`                              | Multi-hunk file patches                                  | [Apply Patch](/tools/apply-patch)       |
+| `message`                                  | Send messages across all channels                        | [Agent Send](/tools/agent-send)         |
+| `canvas`                                   | Drive node Canvas (present, eval, snapshot)              |                                         |
+| `nodes`                                    | Discover and target paired devices                       |                                         |
+| `cron` / `gateway`                         | Manage scheduled jobs, restart gateway                   |                                         |
+| `image` / `image_generate`                 | Analyze or generate images                               |                                         |
+| `sessions_*` / `subagents` / `agents_list` | Session management, status, and sub-agent orchestration  | [Sub-agents](/tools/subagents)          |
 
 For image work, use `image` for analysis and `image_generate` for generation or editing. If you target `openai/*`, `google/*`, `fal/*`, or another non-default image provider, configure that provider's auth/API key first.
 
