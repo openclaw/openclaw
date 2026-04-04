@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { buildChannelConfigSchema } from "./config-schema.js";
+import { buildChannelConfigSchema, emptyChannelConfigSchema } from "./config-schema.js";
 
 describe("buildChannelConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
@@ -43,6 +43,25 @@ describe("buildChannelConfigSchema", () => {
     expect(result.runtime?.safeParse({})).toEqual({
       success: true,
       data: { enabled: true },
+    });
+  });
+});
+
+describe("emptyChannelConfigSchema", () => {
+  it("accepts undefined and empty objects only", () => {
+    const result = emptyChannelConfigSchema();
+
+    expect(result.runtime?.safeParse(undefined)).toEqual({
+      success: true,
+      data: undefined,
+    });
+    expect(result.runtime?.safeParse({})).toEqual({
+      success: true,
+      data: {},
+    });
+    expect(result.runtime?.safeParse({ enabled: true })).toEqual({
+      success: false,
+      issues: [{ path: [], message: "config must be empty" }],
     });
   });
 });

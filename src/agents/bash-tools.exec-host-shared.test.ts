@@ -43,17 +43,17 @@ let resolveExecHostApprovalContext: typeof import("./bash-tools.exec-host-shared
 let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
 let logWarn: typeof import("../logger.js").logWarn;
 
-describe("sendExecApprovalFollowupResult", () => {
-  beforeAll(async () => {
-    ({
-      sendExecApprovalFollowupResult,
-      MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS: maxExecApprovalFollowupFailureLogKeys,
-      resolveExecHostApprovalContext,
-    } = await import("./bash-tools.exec-host-shared.js"));
-    ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
-    ({ logWarn } = await import("../logger.js"));
-  });
+beforeAll(async () => {
+  ({
+    sendExecApprovalFollowupResult,
+    MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS: maxExecApprovalFollowupFailureLogKeys,
+    resolveExecHostApprovalContext,
+  } = await import("./bash-tools.exec-host-shared.js"));
+  ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
+  ({ logWarn } = await import("../logger.js"));
+});
 
+describe("sendExecApprovalFollowupResult", () => {
   beforeEach(() => {
     vi.mocked(sendExecApprovalFollowup).mockReset();
     vi.mocked(logWarn).mockReset();
