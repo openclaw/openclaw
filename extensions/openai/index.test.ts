@@ -1,12 +1,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
+import { OPENAI_FRIENDLY_PROMPT_OVERLAY } from "./prompt-overlay.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
@@ -35,6 +37,22 @@ const registerOpenAIPlugin = () =>
     id: "openai",
     name: "OpenAI Provider",
   });
+
+function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
+  const on = vi.fn();
+  plugin.register(
+    createTestPluginApi({
+      id: "openai",
+      name: "OpenAI Provider",
+      source: "test",
+      config: {},
+      runtime: {} as never,
+      pluginConfig: params?.pluginConfig,
+      on,
+    }),
+  );
+  return { on };
+}
 
 describe("openai plugin", () => {
   beforeEach(() => {
@@ -220,5 +238,41 @@ describe("openai plugin", () => {
     expect(
       runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
     ).toBeLessThan(runtimeMocks.refreshOpenAICodexToken.mock.invocationCallOrder[0]);
+  });
+
+  it("registers the friendly prompt overlay by default and scopes it to OpenAI providers", async () => {
+    const { on } = registerOpenAIPluginWithHook();
+
+    expect(on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    const beforePromptBuild = on.mock.calls.find((call) => call[0] === "before_prompt_build")?.[1];
+    const openaiResult = await beforePromptBuild?.(
+      { prompt: "hello", messages: [] },
+      { modelProviderId: "openai", modelId: "gpt-5.4" },
+    );
+    expect(openaiResult).toEqual({
+      appendSystemContext: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+    });
+
+    const codexResult = await beforePromptBuild?.(
+      { prompt: "hello", messages: [] },
+      { modelProviderId: "openai-codex", modelId: "gpt-5.4" },
+    );
+    expect(codexResult).toEqual({
+      appendSystemContext: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+    });
+
+    const nonOpenAIResult = await beforePromptBuild?.(
+      { prompt: "hello", messages: [] },
+      { modelProviderId: "anthropic", modelId: "sonnet-4.6" },
+    );
+    expect(nonOpenAIResult).toBeUndefined();
+  });
+
+  it("supports opting out of the prompt overlay via plugin config", () => {
+    const { on } = registerOpenAIPluginWithHook({
+      pluginConfig: { personalityOverlay: "off" },
+    });
+
+    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
   });
 });

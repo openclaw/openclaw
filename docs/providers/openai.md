@@ -12,6 +12,68 @@ OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in*
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
 OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
 
+## Default interaction style
+
+OpenClaw adds a small OpenAI-specific prompt overlay by default for both
+`openai/*` and `openai-codex/*` runs. The overlay keeps the assistant warm,
+collaborative, concise, and direct without replacing the base OpenClaw system
+prompt.
+
+Config key:
+
+`plugins.entries.openai.config.personalityOverlay`
+
+Allowed values:
+
+- `"friendly"`: default; enable the OpenAI-specific overlay.
+- `"off"`: disable the overlay and use the base OpenClaw prompt only.
+
+Scope:
+
+- Applies to `openai/*` models.
+- Applies to `openai-codex/*` models.
+- Does not affect other providers.
+
+This behavior is enabled by default:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openai: {
+        config: {
+          personalityOverlay: "friendly",
+        },
+      },
+    },
+  },
+}
+```
+
+### Disable the OpenAI prompt overlay
+
+If you prefer the unmodified base OpenClaw prompt, turn the overlay off:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openai: {
+        config: {
+          personalityOverlay: "off",
+        },
+      },
+    },
+  },
+}
+```
+
+You can also set it directly with the config CLI:
+
+```bash
+openclaw config set plugins.entries.openai.config.personalityOverlay off
+```
+
 ## Option A: OpenAI API key (OpenAI Platform)
 
 **Best for:** direct API access and usage-based billing.

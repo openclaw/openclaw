@@ -2000,6 +2000,10 @@ export type PluginHookAgentContext = {
   sessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
+  /** Resolved model provider for this run (for example "openai"). */
+  modelProviderId?: string;
+  /** Resolved model id for this run (for example "gpt-5.4"). */
+  modelId?: string;
   messageProvider?: string;
   /** What initiated this agent run: "user", "heartbeat", "cron", or "memory". */
   trigger?: string;
