@@ -433,7 +433,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     name: "cron",
     ownerOnly: true,
     displaySummary: "Schedule and manage cron jobs and wake events.",
-    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.
+    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
 Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
 

@@ -93,6 +93,17 @@ explicitly promotes one as public.
     | `plugin-sdk/outbound-runtime` | Outbound identity/send delegate helpers |
     | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
     | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
+    | `plugin-sdk/conversation-runtime` | Conversation/thread binding, pairing, and configured-binding helpers |
+    | `plugin-sdk/runtime-config-snapshot` | Runtime config snapshot helper |
+    | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
+    | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
+    | `plugin-sdk/channel-config-primitives` | Narrow channel config-schema primitives |
+    | `plugin-sdk/channel-config-writes` | Channel config-write authorization helpers |
+    | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
+    | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
+    | `plugin-sdk/group-access` | Shared group-access decision helpers |
+    | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
     | `plugin-sdk/channel-inbound` | Debounce, mention matching, envelope helpers |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
@@ -108,9 +119,17 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
     | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
+    | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
+    | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers |
+    | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
+    | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
+    | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
     | `plugin-sdk/provider-model-shared` | `normalizeModelCompat`, `buildProviderReplayFamilyHooks`, `sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
+    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
+    | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
+    | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/config helpers |
     | `plugin-sdk/provider-tools` | `buildProviderToolCompatFamilyHooks`, Gemini schema helpers |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | `buildProviderStreamFamilyHooks`, stream wrapper types, provider stream wrappers, shared OpenAI/OpenRouter stream-family helpers |
@@ -127,7 +146,13 @@ explicitly promotes one as public.
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
     | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
+    | `plugin-sdk/command-auth-native` | Native command auth + native session-target helpers |
+    | `plugin-sdk/command-detection` | Shared command detection helpers |
+    | `plugin-sdk/command-surface` | Command-body normalization and command-surface helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
+    | `plugin-sdk/security-runtime` | Shared trust, DM gating, external-content, and secret-collection helpers |
+    | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
+    | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, and SSRF policy helpers |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
@@ -136,13 +161,44 @@ explicitly promotes one as public.
   <Accordion title="Runtime and storage subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
+    | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
+    | `plugin-sdk/plugin-runtime` | Shared plugin command/hook/http/interactive helpers |
+    | `plugin-sdk/hook-runtime` | Shared webhook/internal hook pipeline helpers |
+    | `plugin-sdk/process-runtime` | Process exec helpers |
+    | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
+    | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
+    | `plugin-sdk/session-store-runtime` | Session store path + updated-at helpers |
+    | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
+    | `plugin-sdk/string-normalization-runtime` | Slug/string normalization helpers |
+    | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |
+    | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
+    | `plugin-sdk/param-readers` | Common tool/CLI param readers |
+    | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
+    | `plugin-sdk/temp-path` | Shared temp-download path helpers |
+    | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
+    | `plugin-sdk/markdown-table-runtime` | Markdown table mode helpers |
+    | `plugin-sdk/json-store` | Small JSON state read/write helpers |
+    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
+    | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
+    | `plugin-sdk/acp-runtime` | ACP runtime/session helpers |
+    | `plugin-sdk/agent-config-primitives` | Narrow agent runtime config-schema primitives |
+    | `plugin-sdk/boolean-param` | Loose boolean param reader |
+    | `plugin-sdk/dangerous-name-runtime` | Dangerous-name matching resolution helpers |
+    | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers |
+    | `plugin-sdk/extension-shared` | Shared passive-channel and status helper primitives |
+    | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
+    | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
+    | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
+    | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
@@ -158,10 +214,54 @@ explicitly promotes one as public.
   <Accordion title="Capability and testing subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
+    | `plugin-sdk/media-understanding-runtime` | Media-understanding runner facade and typed result helpers |
+    | `plugin-sdk/text-runtime` | Shared text, markdown, logging, and formatting helpers |
+    | `plugin-sdk/text-chunking` | Outbound text chunking helper |
+    | `plugin-sdk/speech-runtime` | Speech-core runtime facade for TTS resolution and synthesis |
+    | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
+    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types and registry helpers |
+    | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
+    | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/media-understanding` | Media understanding provider types |
     | `plugin-sdk/speech` | Speech provider types |
+    | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
+    | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
+    | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
+    | `plugin-sdk/zod` | Re-exported `zod` for plugin SDK consumers |
     | `plugin-sdk/testing` | `installCommonResolveTargetErrorCases`, `shouldAckReaction` |
+  </Accordion>
+
+  <Accordion title="Memory subpaths">
+    | Subpath | Key exports |
+    | --- | --- |
+    | `plugin-sdk/memory-core` | Bundled memory-core helper surface for manager/config/file/CLI helpers |
+    | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
+    | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine exports |
+    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
+    | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
+    | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
+    | `plugin-sdk/memory-core-host-query` | Memory host query helpers |
+    | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
+    | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
+    | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
+    | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
+    | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
+    | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helper surface |
+  </Accordion>
+
+  <Accordion title="Reserved bundled-helper subpaths">
+    | Family | Current generated subpaths | Intended use |
+    | --- | --- | --- |
+    | Browser | `plugin-sdk/browser`, `plugin-sdk/browser-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-support` | Bundled browser plugin maintenance and compatibility |
+    | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
+    | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
+    | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
+    | Channel-specific helpers | `plugin-sdk/googlechat`, `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles`, `plugin-sdk/bluebubbles-policy`, `plugin-sdk/mattermost`, `plugin-sdk/mattermost-policy`, `plugin-sdk/feishu-conversation`, `plugin-sdk/msteams`, `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`, `plugin-sdk/twitch` | Bundled channel compatibility/helper seams |
+    | Provider-specific helpers | `plugin-sdk/openai`, `plugin-sdk/moonshot`, `plugin-sdk/modelstudio`, `plugin-sdk/modelstudio-definitions`, `plugin-sdk/provider-moonshot`, `plugin-sdk/together`, `plugin-sdk/amazon-bedrock`, `plugin-sdk/anthropic-vertex`, `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`, `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`, `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`, `plugin-sdk/kilocode`, `plugin-sdk/minimax`, `plugin-sdk/mistral`, `plugin-sdk/nvidia`, `plugin-sdk/ollama`, `plugin-sdk/ollama-surface`, `plugin-sdk/opencode`, `plugin-sdk/opencode-go`, `plugin-sdk/qianfan`, `plugin-sdk/sglang`, `plugin-sdk/synthetic`, `plugin-sdk/venice`, `plugin-sdk/vllm`, `plugin-sdk/xai`, `plugin-sdk/volcengine` | Bundled provider-specific helper seams |
+    | Auth/plugin-specific helpers | `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`, `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`, `plugin-sdk/voice-call` | Bundled feature/plugin helper seams |
   </Accordion>
 </AccordionGroup>
 

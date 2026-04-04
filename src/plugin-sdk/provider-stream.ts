@@ -48,6 +48,7 @@ export function composeProviderStreamWrappers(
 
 export type ProviderStreamFamily =
   | "google-thinking"
+  | "kilocode-thinking"
   | "moonshot-thinking"
   | "minimax-fast-mode"
   | "openai-responses-defaults"
@@ -73,6 +74,16 @@ export function buildProviderStreamFamilyHooks(
             thinkingLevel: ctx.thinkingLevel,
           });
           return createMoonshotThinkingWrapper(ctx.streamFn, thinkingType);
+        },
+      };
+    case "kilocode-thinking":
+      return {
+        wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          const thinkingLevel =
+            ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)
+              ? undefined
+              : ctx.thinkingLevel;
+          return createKilocodeWrapper(ctx.streamFn, thinkingLevel);
         },
       };
     case "minimax-fast-mode":
