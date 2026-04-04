@@ -61,6 +61,63 @@ describe("parseCliJson", () => {
       },
     });
   });
+
+  it("falls back to input_tokens minus cached when Gemini stats omit input", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-456",
+        response: "Hello",
+        stats: {
+          total_tokens: 21,
+          input_tokens: 13,
+          output_tokens: 5,
+          cached: 8,
+        },
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result?.usage?.input).toBe(5);
+    expect(result?.usage?.cacheRead).toBe(8);
+  });
+
+  it("falls back to Gemini stats when usage exists without token fields", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-789",
+        response: "Gemini says hello",
+        usage: {},
+        stats: {
+          total_tokens: 21,
+          input_tokens: 13,
+          output_tokens: 5,
+          cached: 8,
+          input: 5,
+        },
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "Gemini says hello",
+      sessionId: "gemini-session-789",
+      usage: {
+        input: 5,
+        output: 5,
+        cacheRead: 8,
+        cacheWrite: undefined,
+        total: 21,
+      },
+    });
+  });
 });
 
 describe("parseCliJsonl", () => {

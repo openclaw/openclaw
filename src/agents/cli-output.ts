@@ -117,7 +117,10 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
 
 function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
   if (isRecord(parsed.usage)) {
-    return toCliUsage(parsed.usage);
+    const usage = toCliUsage(parsed.usage);
+    if (usage) {
+      return usage;
+    }
   }
   if (isRecord(parsed.stats)) {
     return toCliUsage(parsed.stats);
