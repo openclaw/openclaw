@@ -39,6 +39,11 @@ openclaw security audit --fix
 openclaw security audit --json
 ```
 
+`security audit --fix` stays intentionally narrow: it flips common open group
+policies to allowlists, restores `logging.redactSensitive: "tools"`, tightens
+state/config/include-file permissions, and uses Windows ACL resets instead of
+POSIX `chmod` when running on Windows.
+
 It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions, permissive exec approvals, and open-channel tool exposure).
 
 OpenClaw is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
