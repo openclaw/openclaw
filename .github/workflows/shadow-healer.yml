@@ -1,0 +1,138 @@
+name: 'Shadow Healer (Phase 1)'
+
+on:
+  workflow_run:
+    workflows: ['CI', 'Dagger CI']
+    types: [completed]
+
+jobs:
+  shadow-heal:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get failure logs
+        run: |
+          FAILED_RUN="${{ github.event.workflow_run.id }}"
+          echo "Fetching logs from workflow run: $FAILED_RUN"
+          gh run view "$FAILED_RUN" --log 2>&1 | tail -500 > /tmp/failure-log.txt || echo "Log fetch failed, using partial data"
+          cat /tmp/failure-log.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: AI Shadow Analysis
+        run: |
+          mkdir -p /tmp/claude-analysis
+
+          # Prepare log excerpt (last 300 lines for context)
+          if [ -f /tmp/failure-log.txt ]; then
+            tail -300 /tmp/failure-log.txt > /tmp/log-excerpt.txt
+          else
+            echo "No failure log available" > /tmp/log-excerpt.txt
+          fi
+
+          # Get workflow context
+          WORKFLOW_NAME="${{ github.event.workflow_run.name }}"
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          BRANCH="${{ github.event.workflow_run.head_branch }}"
+          COMMIT="${{ github.event.workflow_run.head_commit }}"
+
+          echo "Analyzing failure for: $WORKFLOW_NAME (Run: $RUN_ID)"
+
+          # Call GLM for AI analysis (using z.ai free endpoint)
+          {
+            echo "Workflow: $WORKFLOW_NAME"
+            echo "Branch: $BRANCH"
+            echo "Commit: $COMMIT"
+            echo "---"
+            cat /tmp/log-excerpt.txt
+          } > /tmp/analysis-prompt.txt
+
+          # Using glm CLI to call GLM-5.1
+          glm glm-5.1 --print --bare -p "分析這個 GitHub Actions CI 失敗日誌，提供：
+          1) 根本原因 (root_cause)
+          2) 失敗的步驟 (failed_step)
+          3) 建議修復的檔案和改動 (suggested_fixes)
+          4) 修復優先級 (priority: critical/high/medium)
+
+          只輸出有效的 JSON（無 markdown 包裝）：
+          {
+            \"root_cause\": \"...\",
+            \"failed_step\": \"...\",
+            \"affected_files\": [...],
+            \"suggested_fixes\": [...],
+            \"priority\": \"...\",
+            \"confidence\": 0.0
+          }
+
+          日誌內容：
+          $(cat /tmp/analysis-prompt.txt)" > /tmp/ai-patch.json 2>&1 || echo '{"error":"AI analysis failed","root_cause":"unknown"}' > /tmp/ai-patch.json
+
+          echo "AI Analysis Result:"
+          cat /tmp/ai-patch.json
+        env:
+          ANTHROPIC_BASE_URL: ${{ secrets.ZAI_BASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ZAI_API_KEY }}
+
+      - name: Record to healing log
+        run: |
+          mkdir -p "$(dirname ci-healing-log.jsonl)"
+
+          # Parse AI patch or use error fallback
+          if [ ! -f /tmp/ai-patch.json ] || [ ! -s /tmp/ai-patch.json ]; then
+            AI_PATCH='{"error":"analysis_unavailable"}'
+          else
+            AI_PATCH=$(cat /tmp/ai-patch.json)
+          fi
+
+          # Create healing log entry
+          LOG_ENTRY=$(jq -n \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg workflow "${{ github.event.workflow_run.name }}" \
+            --arg run_id "${{ github.event.workflow_run.id }}" \
+            --arg branch "${{ github.event.workflow_run.head_branch }}" \
+            --arg commit "${{ github.event.workflow_run.head_commit }}" \
+            --arg conclusion "${{ github.event.workflow_run.conclusion }}" \
+            --arg html_url "${{ github.event.workflow_run.html_url }}" \
+            --argjson ai_patch "$AI_PATCH" \
+            '{timestamp, workflow, run_id, branch, commit, conclusion, html_url, ai_patch, phase: "shadow-mode"}')
+
+          echo "$LOG_ENTRY" >> ci-healing-log.jsonl
+
+          echo "Healing log entry recorded:"
+          echo "$LOG_ENTRY" | jq .
+
+      - name: Commit healing log
+        run: |
+          git config user.name 'shadow-healer[bot]'
+          git config user.email 'shadow-healer@noreply.github.com'
+
+          # Only commit if ci-healing-log.jsonl has changes
+          if git diff --quiet ci-healing-log.jsonl; then
+            echo "No new entries to commit"
+          else
+            git add ci-healing-log.jsonl
+            git commit -m "shadow: record CI failure analysis [auto] - ${{ github.event.workflow_run.name }} #${{ github.event.workflow_run.id }}"
+            git push origin "${{ github.ref }}"
+            echo "Healing log committed and pushed"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Shadow Healer Phase 1 Report"
+          echo ""
+          echo "- **Workflow**: ${{ github.event.workflow_run.name }}"
+          echo "- **Run ID**: ${{ github.event.workflow_run.id }}"
+          echo "- **Status**: ${{ github.event.workflow_run.conclusion }}"
+          echo "- **Mode**: Shadow (analysis only, no fixes applied)"
+          echo "- **Log Location**: ci-healing-log.jsonl"
+          echo ""
+          echo "Analysis recorded to audit trail. No modifications attempted."

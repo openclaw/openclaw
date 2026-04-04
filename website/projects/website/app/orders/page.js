@@ -7,6 +7,8 @@ import Title from '@/components/core/Title.js';
 import Orders from './Orders.js';
 import parseMetadataTitle from '@/utils/parseMetadataTitle.js';
 
+export const dynamic = 'force-dynamic';
+
 export const metadata = {
   title: parseMetadataTitle('我的課程'),
 };
