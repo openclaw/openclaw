@@ -1068,7 +1068,8 @@
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
-                      "concepts/memory-search"
+                      "concepts/memory-search",
+                      "concepts/memory-dreaming"
                     ]
                   },
                   "concepts/compaction"
