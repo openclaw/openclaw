@@ -388,6 +388,7 @@ function restoreSubagentRunsOnce() {
   if (restoreAttempted) {
     return;
   }
+  const restoreSnapshot = new Map(subagentRuns);
   restoreAttempted = true;
   try {
     const restoredCount = subagentRegistryDeps.restoreSubagentRunsFromDisk({
@@ -430,7 +431,11 @@ function restoreSubagentRunsOnce() {
       },
     );
   } catch {
-    // ignore restore failures
+    subagentRuns.clear();
+    for (const [runId, entry] of restoreSnapshot.entries()) {
+      subagentRuns.set(runId, entry);
+    }
+    restoreAttempted = false;
   }
 }
 

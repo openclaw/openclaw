@@ -185,8 +185,14 @@ describe("subagent registry persistence", () => {
   afterEach(async () => {
     announceSpy.mockClear();
     resetSubagentRegistryForTests({ persist: false });
+    await flushQueuedRegistryWork();
     if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
+      await fs.rm(tempStateDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 20,
+      });
       tempStateDir = null;
     }
     envSnapshot.restore();
