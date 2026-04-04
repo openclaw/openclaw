@@ -1944,6 +1944,13 @@ export async function runEmbeddedAttempt(
               })),
             },
           });
+        } else if (cacheTrace) {
+          cacheTrace.recordStage("cache:result", {
+            note: "stable cache inputs",
+            options: {
+              cacheRead: attemptUsage?.cacheRead ?? 0,
+            },
+          });
         }
       }
 
