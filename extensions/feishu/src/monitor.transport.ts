@@ -148,12 +148,15 @@ function runFeishuWSClientUntilDead(params: {
     wsClient.start({ eventDispatcher });
     log(`feishu[${accountId}]: WebSocket client started`);
 
-    // The stall poller tracks changes in lastConnectTime. We only start the
-    // idle clock once we see a non-zero lastConnectTime (i.e. the SDK has
-    // actually attempted a connect). This avoids falsely tripping on a
-    // healthy connection whose lastConnectTime has simply been stable since
-    // the initial connect.
+    // The Lark SDK exposes reconnect bookkeeping via getReconnectInfo().
+    // lastConnectTime only changes when the SDK *attempts* to (re)connect, so it
+    // is expected to be stable during a healthy long-lived connection.
+    //
+    // To avoid restarting healthy sockets, we only consider the connection
+    // "stalled" when the SDK indicates it has a reconnect scheduled
+    // (nextConnectTime > 0) but that schedule is overdue and not making progress.
     let lastSeenConnectTime = 0;
+    let lastSeenNextConnectTime = 0;
     let lastActivityAt: number | null = null; // null = waiting for first connect
 
     const handleAbort = () => {
@@ -171,23 +174,42 @@ function runFeishuWSClientUntilDead(params: {
 
       const info = wsClient.getReconnectInfo();
       const currentConnectTime = info.lastConnectTime;
+      const nextConnectTime = info.nextConnectTime;
+
+      // Wait until the SDK has attempted the first connect before starting any
+      // stall heuristics.
+      if (currentConnectTime > 0 && lastActivityAt === null) {
+        lastSeenConnectTime = currentConnectTime;
+        lastSeenNextConnectTime = nextConnectTime;
+        lastActivityAt = Date.now();
+        return;
+      }
 
       if (currentConnectTime !== lastSeenConnectTime) {
-        // SDK has (re)connected — reset the stall clock.
+        // SDK started a new (re)connect attempt.
         lastSeenConnectTime = currentConnectTime;
         lastActivityAt = Date.now();
         return;
       }
 
-      // Still waiting for the first connect: don't start the stall clock yet.
-      if (lastActivityAt === null) {
+      if (nextConnectTime !== lastSeenNextConnectTime) {
+        // SDK updated its reconnect schedule (e.g. due to backoff).
+        lastSeenNextConnectTime = nextConnectTime;
+        lastActivityAt = Date.now();
         return;
       }
 
-      const idleMs = Date.now() - lastActivityAt;
-      if (idleMs >= FEISHU_WS_STALL_DETECT_MS) {
+      // If the SDK is not currently scheduling a reconnect, assume the socket is
+      // in a steady/healthy state. lastConnectTime will be stable here.
+      if (nextConnectTime === 0) {
+        return;
+      }
+
+      // Only flag a stall when a scheduled reconnect is overdue.
+      const overdueMs = Date.now() - nextConnectTime;
+      if (overdueMs >= FEISHU_WS_STALL_DETECT_MS) {
         log(
-          `feishu[${accountId}]: WebSocket stall detected (no reconnect activity for ${Math.round(idleMs / 1000)}s after last connect); will restart supervisor cycle`,
+          `feishu[${accountId}]: WebSocket reconnect seems stalled (nextConnectTime overdue by ${Math.round(overdueMs / 1000)}s); will restart supervisor cycle`,
         );
         clearInterval(stallPoller);
         abortSignal?.removeEventListener("abort", handleAbort);
