@@ -55,6 +55,9 @@ Alternatively, install it manually:
 npm install -g openclaw@<version>
 ```
 
+`pnpm add -g openclaw@<version>` and `bun add -g openclaw@<version>` also work.
+For the Gateway runtime, Node remains the recommended path.
+
 ## Troubleshooting
 
 ### Build Fails: Toolchain or SDK Mismatch
