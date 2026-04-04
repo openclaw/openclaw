@@ -141,31 +141,6 @@ static void on_delete(GtkButton *btn, gpointer user_data) {
     adw_alert_dialog_choose(dialog, toplevel, NULL, on_delete_dialog_response, NULL);
 }
 
-/* G1: Helper to insert route before #token fragment */
-static gchar* dashboard_url_with_route(const gchar *base_url, const gchar *route) {
-    if (!base_url || !route) return NULL;
-    
-    /* Find fragment marker */
-    const gchar *fragment = strchr(base_url, '#');
-    if (fragment) {
-        /* Insert route before fragment */
-        gsize base_len = fragment - base_url;
-        /* Ensure base ends with / */
-        gboolean needs_slash = (base_len == 0 || base_url[base_len - 1] != '/');
-        return g_strdup_printf("%.*s%s%s%s",
-                              (int)base_len, base_url,
-                              needs_slash ? "/" : "",
-                              route, fragment);
-    } else {
-        /* No fragment, append route normally */
-        gboolean needs_slash = base_url[strlen(base_url) - 1] != '/';
-        return g_strdup_printf("%s%s%s",
-                              base_url,
-                              needs_slash ? "/" : "",
-                              route);
-    }
-}
-
 static void on_open_transcript(GtkButton *btn, gpointer user_data) {
     (void)user_data;
     const gchar *key = (const gchar *)g_object_get_data(G_OBJECT(btn), "session-key");
@@ -197,7 +172,7 @@ static void on_open_transcript(GtkButton *btn, gpointer user_data) {
 
     /* Dashboard route for session logs: chat/:sessionKey */
     g_autofree gchar *route = g_strdup_printf("chat/%s", key);
-    g_autofree gchar *log_url = dashboard_url_with_route(url, route);
+    g_autofree gchar *log_url = gateway_config_dashboard_url_with_route(url, route);
     if (log_url) {
         g_app_info_launch_default_for_uri(log_url, NULL, NULL);
     }
