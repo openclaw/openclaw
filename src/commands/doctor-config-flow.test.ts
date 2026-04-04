@@ -664,6 +664,9 @@ describe("doctor config flow", () => {
             discord: {
               streaming: false,
             },
+            googlechat: {
+              streamMode: "append",
+            },
             slack: {
               streaming: true,
             },
@@ -692,6 +695,14 @@ describe("doctor config flow", () => {
         noteSpy.mock.calls.some(
           ([message, title]) =>
             title === "Legacy config keys detected" &&
+            String(message).includes("channels.googlechat:") &&
+            String(message).includes("channels.googlechat.streamMode is legacy and no longer used"),
+        ),
+      ).toBe(true);
+      expect(
+        noteSpy.mock.calls.some(
+          ([message, title]) =>
+            title === "Legacy config keys detected" &&
             String(message).includes("channels.slack:") &&
             String(message).includes("boolean channels.slack.streaming are legacy"),
         ),
@@ -706,6 +717,36 @@ describe("doctor config flow", () => {
     } finally {
       noteSpy.mockRestore();
     }
+  });
+
+  it("repairs legacy googlechat streamMode by removing it", async () => {
+    const result = await runDoctorConfigWithInput({
+      config: {
+        channels: {
+          googlechat: {
+            streamMode: "append",
+            accounts: {
+              work: {
+                streamMode: "replace",
+              },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        googlechat: {
+          accounts?: {
+            work?: Record<string, unknown>;
+          };
+        } & Record<string, unknown>;
+      };
+    };
+    expect(cfg.channels.googlechat.streamMode).toBeUndefined();
+    expect(cfg.channels.googlechat.accounts?.work?.streamMode).toBeUndefined();
   });
 
   it("warns clearly about legacy nested channel allow aliases and points to doctor --fix", async () => {

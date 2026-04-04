@@ -242,6 +242,14 @@ function hasLegacySlackStreamingKeys(value: unknown): boolean {
   return entry.streamMode !== undefined || typeof entry.streaming === "boolean";
 }
 
+function hasLegacyGoogleChatStreamMode(value: unknown): boolean {
+  const entry = getRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return entry.streamMode !== undefined;
+}
+
 function hasLegacyKeysInAccounts(
   value: unknown,
   matchEntry: (entry: Record<string, unknown>) => boolean,
@@ -406,6 +414,21 @@ const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
     message:
       "channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
     match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordGuildChannelAllowAlias),
+  },
+];
+
+const GOOGLECHAT_STREAMMODE_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "googlechat"],
+    message:
+      "channels.googlechat.streamMode is legacy and no longer used; it is removed on load.",
+    match: (value) => hasLegacyGoogleChatStreamMode(value),
+  },
+  {
+    path: ["channels", "googlechat", "accounts"],
+    message:
+      "channels.googlechat.accounts.<id>.streamMode is legacy and no longer used; it is removed on load.",
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyGoogleChatStreamMode),
   },
 ];
 
@@ -680,6 +703,48 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       migrateProviderAccounts("slack", migrateSlackEntry);
       migrateProviderAccounts("googlechat", migrateGoogleChatEntry);
       migrateProviderAccounts("discord", migrateDiscordEntry);
+      raw.channels = channels;
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "channels.googlechat.streamMode->remove",
+    describe: "Remove legacy Google Chat streamMode keys that are no longer used",
+    legacyRules: GOOGLECHAT_STREAMMODE_RULES,
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+
+      const migrateEntry = (entry: Record<string, unknown>, pathPrefix: string) => {
+        if (entry.streamMode === undefined) {
+          return;
+        }
+        delete entry.streamMode;
+        changes.push(`Removed ${pathPrefix}.streamMode (legacy key no longer used).`);
+      };
+
+      const googlechat = getRecord(channels.googlechat);
+      if (!googlechat) {
+        return;
+      }
+
+      migrateEntry(googlechat, "channels.googlechat");
+
+      const accounts = getRecord(googlechat.accounts);
+      if (accounts) {
+        for (const [accountId, accountValue] of Object.entries(accounts)) {
+          const account = getRecord(accountValue);
+          if (!account) {
+            continue;
+          }
+          migrateEntry(account, `channels.googlechat.accounts.${accountId}`);
+          accounts[accountId] = account;
+        }
+        googlechat.accounts = accounts;
+      }
+
+      channels.googlechat = googlechat;
       raw.channels = channels;
     },
   }),
