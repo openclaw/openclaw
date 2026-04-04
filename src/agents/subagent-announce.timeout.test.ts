@@ -70,6 +70,10 @@ function createTimeoutHistoryWithNoReply() {
   ];
 }
 
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => configOverride,
+}));
+vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
@@ -315,7 +319,7 @@ describe("subagent announce timeout config", () => {
   it("regression, routes child announce to parent session instead of grandparent when parent session still exists", async () => {
     const parentSessionKey = "agent:main:subagent:parent";
     setupParentSessionFallback(parentSessionKey);
-    sessionStore[parentSessionKey] = { updatedAt: Date.now() };
+    sessionStore[parentSessionKey] = { sessionId: "parent-session-id", updatedAt: Date.now() };
 
     await runAnnounceFlowForTest("run-parent-route", {
       requesterSessionKey: parentSessionKey,

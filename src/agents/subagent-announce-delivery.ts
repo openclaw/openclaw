@@ -104,6 +104,7 @@ function parseTelegramAnnounceTarget(to: string): {
   const rawChatId = parsed?.to?.trim() || trimmed;
   const chatId = rawChatId
     .replace(/^telegram:(?:group:)?/i, "")
+    .replace(/^tg:/i, "")
     .replace(/^group:/i, "")
     .replace(/:topic:\d+$/i, "")
     .trim();

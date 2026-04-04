@@ -201,7 +201,15 @@ function hasUsableSessionEntry(entry: unknown): boolean {
     return false;
   }
   const sessionId = (entry as { sessionId?: unknown }).sessionId;
-  return typeof sessionId !== "string" || sessionId.trim() !== "";
+  if (typeof sessionId === "string") {
+    return sessionId.trim() !== "";
+  }
+  const updatedAt = (entry as { updatedAt?: unknown }).updatedAt;
+  if (typeof updatedAt === "number" && Number.isFinite(updatedAt)) {
+    return true;
+  }
+  const createdAt = (entry as { createdAt?: unknown }).createdAt;
+  return typeof createdAt === "number" && Number.isFinite(createdAt);
 }
 
 function buildDescendantWakeMessage(params: { findings: string; taskLabel: string }): string {

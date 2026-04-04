@@ -26,14 +26,11 @@ function createRun(params: {
 }): FollowupRun {
   return {
     execution: { visibility: "internal", agentPrompt: params.prompt },
-    display:
-      params.displayText || params.summaryLine
-        ? {
-            visibility: "user-visible",
-            text: params.displayText,
-            summaryLine: params.summaryLine,
-          }
-        : undefined,
+    display: {
+      visibility: "user-visible",
+      text: params.displayText ?? params.prompt,
+      summaryLine: params.summaryLine,
+    },
     messageId: params.messageId,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,
