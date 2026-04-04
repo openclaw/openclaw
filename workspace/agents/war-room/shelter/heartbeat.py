@@ -66,7 +66,7 @@ def _run_harvest_echo():
     """
     import subprocess, time
 
-    HARVEST_SCRIPT = "/Users/sulaxd/Documents/thinker_official_website/projects/website/scripts/cafe-pipeline/harvest-echo.js"
+    HARVEST_SCRIPT = "/Users/sulaxd/clawd/website/projects/website/scripts/cafe-pipeline/harvest-echo.js"
     MARKER = "/tmp/harvest-echo-last-run"
 
     # Check if we ran in the last hour
@@ -1078,7 +1078,7 @@ def main():
         notebook_json_path = DATA_DIR / "notebook-briefing.json"
         notebook_json_path.write_text(json.dumps(notebook_data, ensure_ascii=False, indent=2))
         # Also copy to cafe-game data dir for Vercel access
-        cafe_data_dir = Path("/Users/sulaxd/Documents/thinker_official_website/projects/website/public/cafe-game/data")
+        cafe_data_dir = Path("/Users/sulaxd/clawd/website/projects/website/public/cafe-game/data")
         if cafe_data_dir.exists():
             (cafe_data_dir / "briefing.json").write_text(json.dumps(notebook_data, ensure_ascii=False, indent=2))
             # Also copy latest morning brief (deep news) to cafe-morning.json

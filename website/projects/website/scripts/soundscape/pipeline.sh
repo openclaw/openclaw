@@ -33,7 +33,7 @@ MIC_DEVICE=":MacBook Pro的麥克風"   # avfoundation input
 SMART_RECORD=${SMART_RECORD:-0}  # 1=event-driven recording (wait for quiet state)
 
 # Vercel deploy target (static asset via git push)
-REPO_ASSETS="/Users/sulaxd/Documents/thinker_official_website/projects/website/public/cafe-game/assets"
+REPO_ASSETS="/Users/sulaxd/clawd/website/projects/website/public/cafe-game/assets"
 
 HOUR=$(date +%H)
 TIMESTAMP=$(date +%Y%m%d_%H%M)

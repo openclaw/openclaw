@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-REPO="/Users/sulaxd/Documents/thinker_official_website"
+REPO="/Users/sulaxd/clawd/website"
 HOUR=$(date +%H)
 
 cd "$REPO"

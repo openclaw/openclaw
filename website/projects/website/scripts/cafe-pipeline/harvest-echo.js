@@ -22,7 +22,7 @@ const MOCK_LOG = path.join(__dirname, 'mock-history.log');
 // ── Git repos to scan when --source git ─────────────────────
 const GIT_REPOS = [
   { path: '/Users/sulaxd/clawd', label: 'clawd' },
-  { path: '/Users/sulaxd/Documents/thinker_official_website', label: 'cafe' },
+  { path: '/Users/sulaxd/clawd/website', label: 'cafe' },
   { path: '/Users/sulaxd/Documents/幣塔', label: 'bita' },
   { path: '/Users/sulaxd/Documents/two', label: 'bg666' },
   { path: '/Users/sulaxd/Documents/24bet', label: 'g9' },
