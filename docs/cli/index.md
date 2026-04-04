@@ -360,10 +360,49 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 
 ## Secrets
 
-- `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
-- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift (`--allow-exec` to execute exec providers during audit).
-- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply (`--allow-exec` to execute exec providers during preflight and exec-containing apply flows).
-- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported; use `--allow-exec` to permit exec providers in dry-run and exec-containing write plans).
+### `secrets`
+
+Manage SecretRefs and related runtime/config hygiene.
+
+Subcommands:
+
+- `secrets reload`
+- `secrets audit`
+- `secrets configure`
+- `secrets apply --from <path>`
+
+`secrets reload` options:
+
+- `--url`, `--token`, `--timeout`, `--expect-final`, `--json`
+
+`secrets audit` options:
+
+- `--check`
+- `--allow-exec`
+- `--json`
+
+`secrets configure` options:
+
+- `--apply`
+- `--yes`
+- `--providers-only`
+- `--skip-provider-setup`
+- `--agent <id>`
+- `--allow-exec`
+- `--plan-out <path>`
+- `--json`
+
+`secrets apply --from <path>` options:
+
+- `--dry-run`
+- `--allow-exec`
+- `--json`
+
+Notes:
+
+- `reload` is a Gateway RPC and keeps the last-known-good runtime snapshot when resolution fails.
+- `audit --check` returns non-zero on findings; unresolved refs use a higher-priority non-zero exit code.
+- Dry-run exec checks are skipped by default; use `--allow-exec` to opt in.
 
 ## Plugins
 
@@ -661,6 +700,31 @@ Subcommands:
 - `devices rotate --device <id> --role <role> [--scope <scope...>]`
 - `devices revoke --device <id> --role <role>`
 
+### `hooks`
+
+Manage internal agent hooks.
+
+Subcommands:
+
+- `hooks list`
+- `hooks info <name>`
+- `hooks check`
+- `hooks enable <name>`
+- `hooks disable <name>`
+- `hooks install <path-or-spec>` (deprecated alias for `openclaw plugins install`)
+- `hooks update [id]` (deprecated alias for `openclaw plugins update`)
+
+Common options:
+
+- `--json`
+- `--eligible`
+- `-v`, `--verbose`
+
+Notes:
+
+- Plugin-managed hooks cannot be enabled or disabled through `openclaw hooks`; enable or disable the owning plugin instead.
+- `hooks install` and `hooks update` still work as compatibility aliases, but they print deprecation warnings and forward to the plugin commands.
+
 ### `webhooks gmail`
 
 Gmail Pub/Sub hook setup + runner. See [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration).
@@ -669,6 +733,11 @@ Subcommands:
 
 - `webhooks gmail setup` (requires `--account <email>`; supports `--project`, `--topic`, `--subscription`, `--label`, `--hook-url`, `--hook-token`, `--push-token`, `--bind`, `--port`, `--path`, `--include-body`, `--max-bytes`, `--renew-minutes`, `--tailscale`, `--tailscale-path`, `--tailscale-target`, `--push-endpoint`, `--json`)
 - `webhooks gmail run` (runtime overrides for the same flags)
+
+Notes:
+
+- `setup` configures the Gmail watch plus the OpenClaw-facing push path.
+- `run` starts the local Gmail watcher/renew loop with optional runtime overrides.
 
 ### `dns setup`
 
