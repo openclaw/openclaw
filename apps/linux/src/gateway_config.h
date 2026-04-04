@@ -72,5 +72,6 @@ gchar* gateway_config_http_url(const GatewayConfig *config);
 gchar* gateway_config_ws_url(const GatewayConfig *config);
 gboolean gateway_config_equivalent(const GatewayConfig *a, const GatewayConfig *b);
 gchar* gateway_config_dashboard_url(const GatewayConfig *config);
+gchar* gateway_config_dashboard_url_with_route(const gchar *base_url, const gchar *route);
 
 #endif /* OPENCLAW_LINUX_GATEWAY_CONFIG_H */

@@ -16,6 +16,7 @@
 #include "gateway_mutations.h"
 #include "gateway_config.h"
 #include "gateway_client.h"
+#include "test_seams.h"
 #include <adwaita.h>
 
 /* ── State ───────────────────────────────────────────────────────── */
@@ -141,31 +142,6 @@ static void on_delete(GtkButton *btn, gpointer user_data) {
     adw_alert_dialog_choose(dialog, toplevel, NULL, on_delete_dialog_response, NULL);
 }
 
-/* G1: Helper to insert route before #token fragment */
-static gchar* dashboard_url_with_route(const gchar *base_url, const gchar *route) {
-    if (!base_url || !route) return NULL;
-    
-    /* Find fragment marker */
-    const gchar *fragment = strchr(base_url, '#');
-    if (fragment) {
-        /* Insert route before fragment */
-        gsize base_len = fragment - base_url;
-        /* Ensure base ends with / */
-        gboolean needs_slash = (base_len == 0 || base_url[base_len - 1] != '/');
-        return g_strdup_printf("%.*s%s%s%s",
-                              (int)base_len, base_url,
-                              needs_slash ? "/" : "",
-                              route, fragment);
-    } else {
-        /* No fragment, append route normally */
-        gboolean needs_slash = base_url[strlen(base_url) - 1] != '/';
-        return g_strdup_printf("%s%s%s",
-                              base_url,
-                              needs_slash ? "/" : "",
-                              route);
-    }
-}
-
 static void on_open_transcript(GtkButton *btn, gpointer user_data) {
     (void)user_data;
     const gchar *key = (const gchar *)g_object_get_data(G_OBJECT(btn), "session-key");
@@ -176,8 +152,9 @@ static void on_open_transcript(GtkButton *btn, gpointer user_data) {
        If it exists and is readable, open it directly.
        Otherwise, fall back to the dashboard web route. */
     if (cron_status_cache && cron_status_cache->store_path) {
-        /* In cron, transcripts are usually stored inside `sessions/` within the store path */
-        g_autofree gchar *sessions_dir = g_build_filename(cron_status_cache->store_path, "sessions", NULL);
+        /* In cron, transcripts are usually stored inside `sessions/` within the store directory */
+        g_autofree gchar *store_dir = g_path_get_dirname(cron_status_cache->store_path);
+        g_autofree gchar *sessions_dir = g_build_filename(store_dir, "sessions", NULL);
         g_autofree gchar *local_path = g_build_filename(sessions_dir, key, "transcript.jsonl", NULL);
         if (g_file_test(local_path, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
             g_autofree gchar *file_uri = g_filename_to_uri(local_path, NULL, NULL);
@@ -196,7 +173,7 @@ static void on_open_transcript(GtkButton *btn, gpointer user_data) {
 
     /* Dashboard route for session logs: chat/:sessionKey */
     g_autofree gchar *route = g_strdup_printf("chat/%s", key);
-    g_autofree gchar *log_url = dashboard_url_with_route(url, route);
+    g_autofree gchar *log_url = gateway_config_dashboard_url_with_route(url, route);
     if (log_url) {
         g_app_info_launch_default_for_uri(log_url, NULL, NULL);
     }
@@ -253,10 +230,7 @@ static void on_edit_job_dialog_response(GObject *source, GAsyncResult *result, g
     if (!name || *name == '\0' || !schedule || *schedule == '\0') return;
 
     gint target_idx = target_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(target_combo)) : 0;
-    const gchar *target_str = "new";
-    if (target_idx == 1) target_str = "main";
-    else if (target_idx == 2) target_str = "current";
-    else if (target_idx == 3) target_str = "isolated";
+    const gchar *target_str = session_target_from_index(target_idx);
 
     gint wake_idx = wake_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(wake_combo)) : 0;
     const gchar *wake_str = wake_idx == 1 ? "now" : "next-heartbeat";
@@ -382,12 +356,7 @@ static void on_edit_job(GtkButton *btn, gpointer user_data) {
     adw_preferences_row_set_title(ADW_PREFERENCES_ROW(target_combo), "Target Session");
     adw_combo_row_set_model(ADW_COMBO_ROW(target_combo), G_LIST_MODEL(target_model));
     /* Select based on current value */
-    gint target_idx = 0; /* default "new" */
-    if (job_target) {
-        if (g_strcmp0(job_target, "main") == 0) target_idx = 1;
-        else if (g_strcmp0(job_target, "current") == 0) target_idx = 2;
-        else if (g_strcmp0(job_target, "isolated") == 0) target_idx = 3;
-    }
+    gint target_idx = session_target_to_index(job_target);
     adw_combo_row_set_selected(ADW_COMBO_ROW(target_combo), target_idx);
     gtk_box_append(GTK_BOX(vbox), target_combo);
 
@@ -445,10 +414,7 @@ static void on_create_job_dialog_response(GObject *source, GAsyncResult *result,
     if (!name || *name == '\0' || !schedule || *schedule == '\0' || !prompt || *prompt == '\0') return;
 
     gint target_idx = target_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(target_combo)) : 0;
-    const gchar *target_str = "new";
-    if (target_idx == 1) target_str = "main";
-    else if (target_idx == 2) target_str = "current";
-    else if (target_idx == 3) target_str = "isolated";
+    const gchar *target_str = session_target_from_index(target_idx);
 
     gint wake_idx = wake_combo ? adw_combo_row_get_selected(ADW_COMBO_ROW(wake_combo)) : 0;
     const gchar *wake_str = wake_idx == 1 ? "now" : "next-heartbeat";
@@ -708,7 +674,7 @@ static void build_cron_card(GatewayCronJob *job) {
     g_object_set_data_full(G_OBJECT(btn_edit), "job-name", g_strdup(job->name ? job->name : job->id), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-schedule", g_strdup(job->schedule_value ? job->schedule_value : ""), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-agent", g_strdup(job->agent_id ? job->agent_id : ""), g_free);
-    g_object_set_data_full(G_OBJECT(btn_edit), "job-target", g_strdup(job->session_target ? job->session_target : "new"), g_free);
+    g_object_set_data_full(G_OBJECT(btn_edit), "job-target", g_strdup(job->session_target ? job->session_target : "isolated"), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-wake", g_strdup(job->wake_mode ? job->wake_mode : "next-heartbeat"), g_free);
     g_object_set_data_full(G_OBJECT(btn_edit), "job-prompt", g_strdup(job->payload_message ? job->payload_message : ""), g_free);
     g_signal_connect(btn_edit, "clicked", G_CALLBACK(on_edit_job), NULL);
@@ -1052,9 +1018,12 @@ static void cron_refresh(void) {
         return;
     }
 
+    /* H1: Use current generation so responses are not treated as stale */
+    guint current_gen = cron_refresh_generation;
+
     cron_fetch_in_flight = TRUE;
     g_autofree gchar *req_id1 = gateway_rpc_request(
-        "cron.list", NULL, 0, on_cron_rpc_response, NULL);
+        "cron.list", NULL, 0, on_cron_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id1) {
         cron_fetch_in_flight = FALSE;
         if (cron_status_label)
@@ -1063,7 +1032,7 @@ static void cron_refresh(void) {
 
     cron_status_fetch_in_flight = TRUE;
     g_autofree gchar *req_id2 = gateway_rpc_request(
-        "cron.status", NULL, 0, on_cron_status_rpc_response, NULL);
+        "cron.status", NULL, 0, on_cron_status_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id2) cron_status_fetch_in_flight = FALSE;
 
     cron_runs_fetch_in_flight = TRUE;
@@ -1076,7 +1045,7 @@ static void cron_refresh(void) {
     g_object_unref(b);
     
     g_autofree gchar *req_id3 = gateway_rpc_request(
-        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, NULL);
+        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id3) cron_runs_fetch_in_flight = FALSE;
     json_node_unref(runs_params);
 }

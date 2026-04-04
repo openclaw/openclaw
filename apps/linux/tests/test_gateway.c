@@ -1480,47 +1480,26 @@ static void test_protocol_parse_hello_ok_tick_interval_double_accepted(void) {
 
 /* ── Regression tests for URL route fragment preservation ── */
 
-/* Helper that mirrors dashboard_url_with_route logic from section_sessions.c */
-static gchar* test_dashboard_url_with_route(const gchar *base_url, const gchar *route) {
-    if (!base_url || !route) return NULL;
-    
-    const gchar *fragment = strchr(base_url, '#');
-    if (fragment) {
-        gsize base_len = fragment - base_url;
-        gboolean needs_slash = (base_len == 0 || base_url[base_len - 1] != '/');
-        return g_strdup_printf("%.*s%s%s%s",
-                              (int)base_len, base_url,
-                              needs_slash ? "/" : "",
-                              route, fragment);
-    } else {
-        gboolean needs_slash = base_url[strlen(base_url) - 1] != '/';
-        return g_strdup_printf("%s%s%s",
-                              base_url,
-                              needs_slash ? "/" : "",
-                              route);
-    }
-}
-
 static void test_dashboard_url_with_route_preserves_fragment(void) {
     /* Base URL with token fragment */
-    g_autofree gchar *url1 = test_dashboard_url_with_route(
+    g_autofree gchar *url1 = gateway_config_dashboard_url_with_route(
         "http://127.0.0.1:18789/#token=abc123", "chat/session-1");
     g_assert_cmpstr(url1, ==, "http://127.0.0.1:18789/chat/session-1#token=abc123");
     
     /* Base URL with path and fragment */
-    g_autofree gchar *url2 = test_dashboard_url_with_route(
+    g_autofree gchar *url2 = gateway_config_dashboard_url_with_route(
         "http://127.0.0.1:18789/ui/#token=xyz789", "chat/session-2");
     g_assert_cmpstr(url2, ==, "http://127.0.0.1:18789/ui/chat/session-2#token=xyz789");
 }
 
 static void test_dashboard_url_with_route_without_fragment(void) {
     /* Base URL with trailing slash, no fragment */
-    g_autofree gchar *url1 = test_dashboard_url_with_route(
+    g_autofree gchar *url1 = gateway_config_dashboard_url_with_route(
         "http://127.0.0.1:18789/", "chat/session-1");
     g_assert_cmpstr(url1, ==, "http://127.0.0.1:18789/chat/session-1");
     
     /* Base URL without trailing slash, no fragment */
-    g_autofree gchar *url2 = test_dashboard_url_with_route(
+    g_autofree gchar *url2 = gateway_config_dashboard_url_with_route(
         "http://127.0.0.1:18789", "chat/session-1");
     g_assert_cmpstr(url2, ==, "http://127.0.0.1:18789/chat/session-1");
 }

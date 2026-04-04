@@ -647,3 +647,35 @@ gchar* gateway_config_dashboard_url(const GatewayConfig *config) {
 
     return g_strdup(base);
 }
+
+/*
+ * Build a dashboard URL with a specific route inserted before the fragment.
+ *
+ * If base_url contains a '#' fragment marker, the route is inserted before it.
+ * Otherwise, the route is appended to the base URL. Handles slash normalization.
+ *
+ * Returns NULL if base_url or route is NULL.
+ */
+gchar* gateway_config_dashboard_url_with_route(const gchar *base_url, const gchar *route) {
+    if (!base_url || !route) return NULL;
+
+    /* Find fragment marker */
+    const gchar *fragment = strchr(base_url, '#');
+    if (fragment) {
+        /* Insert route before fragment */
+        gsize base_len = fragment - base_url;
+        /* Ensure base ends with / */
+        gboolean needs_slash = (base_len == 0 || base_url[base_len - 1] != '/');
+        return g_strdup_printf("%.*s%s%s%s",
+                              (int)base_len, base_url,
+                              needs_slash ? "/" : "",
+                              route, fragment);
+    } else {
+        /* No fragment, append route normally */
+        gboolean needs_slash = base_url[strlen(base_url) - 1] != '/';
+        return g_strdup_printf("%s%s%s",
+                              base_url,
+                              needs_slash ? "/" : "",
+                              route);
+    }
+}
