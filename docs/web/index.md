@@ -95,8 +95,8 @@ Open:
 
 ## Security notes
 
-- Gateway auth is required by default (token/password or Tailscale identity headers).
-- Non-loopback binds still **require** a shared token/password (`gateway.auth` or env).
+- Gateway auth is required by default (token, password, trusted-proxy, or Tailscale Serve identity headers when enabled).
+- Non-loopback binds still **require** gateway auth. In practice that means token/password auth or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - The wizard generates a gateway token by default (even on loopback).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
 - For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`

@@ -164,6 +164,12 @@ If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailsca
 the browser runs in a **non-secure context** and blocks WebCrypto. By default,
 OpenClaw **blocks** Control UI connections without device identity.
 
+Documented exceptions:
+
+- localhost-only insecure HTTP compatibility with `gateway.controlUi.allowInsecureAuth=true`
+- successful operator Control UI auth through `gateway.auth.mode: "trusted-proxy"`
+- break-glass `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+
 **Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
 
 - `https://<magicdns>/` (Serve)
@@ -202,6 +208,14 @@ OpenClaw **blocks** Control UI connections without device identity.
 
 `dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a
 severe security downgrade. Revert quickly after emergency use.
+
+Trusted-proxy note:
+
+- successful trusted-proxy auth can admit **operator** Control UI sessions without
+  device identity
+- this does **not** extend to node-role Control UI sessions
+- same-host loopback reverse proxies still do not satisfy trusted-proxy auth; see
+  [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
 
 See [Tailscale](/gateway/tailscale) for HTTPS setup guidance.
 

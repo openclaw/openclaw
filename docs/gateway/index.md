@@ -302,7 +302,7 @@ Events are not replayed. On sequence gaps, refresh state (`health`, `system-pres
 
 | Signature                                                      | Likely issue                                                                    |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `refusing to bind gateway ... without auth`                    | Non-loopback bind without token/password                                        |
+| `refusing to bind gateway ... without auth`                    | Non-loopback bind without a valid gateway auth path                             |
 | `another gateway instance is already listening` / `EADDRINUSE` | Port conflict                                                                   |
 | `Gateway start blocked: set gateway.mode=local`                | Config set to remote mode, or local-mode stamp is missing from a damaged config |
 | `unauthorized` during connect                                  | Auth mismatch between client and gateway                                        |

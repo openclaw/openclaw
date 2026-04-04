@@ -102,6 +102,7 @@ Docs: https://docs.openclaw.ai
 - Synology Chat/security: default low-level HTTPS helper TLS verification to on so helper/API defaults match the shipped safe account default, and only explicit `allowInsecureSsl: true` opts out.
 - Android/canvas security: require exact normalized A2UI URL matches before forwarding canvas bridge actions, rejecting query mismatches and descendant paths while still allowing fragment-only A2UI navigation.
 - Cron: send failure notifications through the job's primary delivery channel using the same session context as successful delivery when no explicit `failureDestination` is configured. (#60622) Thanks @artwalker.
+- Gateway/auth: serialize async shared-secret auth attempts per client so concurrent Tailscale-capable failures cannot overrun the intended auth rate-limit budget. Thanks @Telecaster2147.
 
 ## 2026.4.2
 
@@ -201,6 +202,7 @@ Docs: https://docs.openclaw.ai
 - Mattermost/slash commands: harden native slash-command callback token validation to use constant-time secret comparison, matching the existing interaction-token path.
 - Agents/scheduling: route delayed follow-up requests toward cron only when cron is actually available, while keeping background `exec`/`process` guidance scoped to work that starts now. (#60811) Thanks @vincentkoc.
 - Cron/security: reject unsafe custom `sessionTarget: "session:..."` IDs earlier during cron add, update, and execution so malformed custom session keys fail closed with clear errors.
+- Feishu/cards: replace the legacy `wide_screen_mode` schema 1.x config with schema 2.0 `width_mode: "fill"` in interactive approval, launcher, markdown, and structured card builders so Feishu card sends stop failing with parse-card errors while preserving wide-card rendering. (#53395) Thanks @drvoss
 
 ## 2026.4.1
 
@@ -610,6 +612,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/forum topics: keep native `/new` and `/reset` routed to the active topic by preserving the topic target on forum-thread command context. (#35963)
 - Status/port diagnostics: treat single-process dual-stack loopback gateway listeners as healthy in `openclaw status --all`, suppressing false "port already in use" conflict warnings. (#53398) Thanks @DanWebb1949.
 - CLI/Docker: treat loopback private-host CLI gateway connects as local for silent pairing auto-approval, while keeping remote backend and public-host CLI connects behind pairing. (#55113) Thanks @sar618.
+- Slack/socket mode: mark the underlying socket client as shutting down before provider stop paths call Bolt teardown so stale-socket restarts stop leaking orphaned ping reconnect loops. (#56646) Thanks @hsiaoa.
 
 ## 2026.3.24
 
