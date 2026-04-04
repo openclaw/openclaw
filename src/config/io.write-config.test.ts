@@ -2,26 +2,62 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
+
+type LoadPluginManifestRegistry =
+  typeof import("../plugins/manifest-registry.js").loadPluginManifestRegistry;
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
 // test exercise the exact code path that caused the bug: AJV injecting
 // defaults during the write-back validation pass.
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(
-    (): PluginManifestRegistry => ({
-      diagnostics: [],
-      plugins: [],
-    }),
-  ),
+  vi.fn((): PluginManifestRegistry => ({
+    diagnostics: [],
+    plugins: [],
+  })),
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
+
+function createBundledChannelManifestRecord(params: {
+  id: string;
+  channelId: string;
+  name?: string;
+  version?: string;
+  origin?: PluginManifestRecord["origin"];
+  providers?: string[];
+  cliBackends?: string[];
+  skills?: string[];
+  hooks?: string[];
+  rootDir?: string;
+  source?: string;
+  manifestPath?: string;
+  channelCatalogMeta: NonNullable<PluginManifestRecord["channelCatalogMeta"]>;
+  channelConfigs: NonNullable<PluginManifestRecord["channelConfigs"]>;
+}): PluginManifestRecord {
+  const origin = params.origin ?? "bundled";
+  return {
+    id: params.id,
+    name: params.name,
+    version: params.version,
+    origin,
+    channels: [params.channelId],
+    providers: params.providers ?? [],
+    cliBackends: params.cliBackends ?? [],
+    skills: params.skills ?? [],
+    hooks: params.hooks ?? [],
+    rootDir: params.rootDir ?? `/tmp/${params.id}`,
+    source: params.source ?? origin,
+    manifestPath: params.manifestPath ?? `/tmp/${params.id}/openclaw.plugin.json`,
+    channelCatalogMeta: params.channelCatalogMeta,
+    channelConfigs: params.channelConfigs,
+  };
+}
 
 describe("config io write", () => {
   let fixtureRoot = "";
@@ -45,7 +81,7 @@ describe("config io write", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   afterAll(async () => {
@@ -425,12 +461,11 @@ describe("config io write", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [
-        {
+        createBundledChannelManifestRecord({
           id: "bluebubbles",
           name: "BlueBubbles",
           version: "0.0.0-test",
           origin: "bundled",
-          channels: ["bluebubbles"],
           providers: [],
           cliBackends: [],
           skills: [],
@@ -438,6 +473,7 @@ describe("config io write", () => {
           rootDir: "/mock/bluebubbles",
           source: "bundled",
           manifestPath: "/mock/bluebubbles/openclaw.plugin.json",
+          channelId: "bluebubbles",
           channelCatalogMeta: {
             id: "bluebubbles",
             label: "BlueBubbles",
@@ -461,9 +497,9 @@ describe("config io write", () => {
               uiHints: {},
             },
           },
-        },
+        }),
       ],
-    });
+    } satisfies PluginManifestRegistry);
 
     await withSuiteHome(async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
@@ -513,7 +549,7 @@ describe("config io write", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
