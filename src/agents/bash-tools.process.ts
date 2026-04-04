@@ -21,6 +21,7 @@ import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pt
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
+  hasCronTool?: boolean;
   scopeKey?: string;
 };
 
@@ -116,6 +117,17 @@ function resetPollRetrySuggestion(sessionId: string): void {
   }
 }
 
+export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
+  return [
+    "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill.",
+    params?.hasCronTool
+      ? "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups."
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -149,8 +161,7 @@ export function createProcessTool(
   return {
     name: "process",
     label: "process",
-    description:
-      "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+    description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
     execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {

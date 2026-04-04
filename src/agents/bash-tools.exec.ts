@@ -1115,9 +1115,17 @@ function deriveExecShortName(fullPath: string): string {
   return base.replace(/\.exe$/i, "") || base;
 }
 
-function buildExecToolDescription(agentId?: string): string {
-  const base =
-    "Execute shell commands with background continuation for work that starts now. Use yieldMs/background to continue later via process tool. Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead. Use pty=true for TTY-required commands (terminal UIs, coding agents).";
+export function describeExecTool(params?: { agentId?: string; hasCronTool?: boolean }): string {
+  const base = [
+    "Execute shell commands with background continuation for work that starts now.",
+    "Use yieldMs/background to continue later via process tool.",
+    params?.hasCronTool
+      ? "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead."
+      : undefined,
+    "Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+  ]
+    .filter(Boolean)
+    .join(" ");
   if (process.platform !== "win32") {
     return base;
   }
@@ -1208,7 +1216,7 @@ export function createExecTool(
     name: "exec",
     label: "exec",
     get description() {
-      return buildExecToolDescription(agentId);
+      return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
     },
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {

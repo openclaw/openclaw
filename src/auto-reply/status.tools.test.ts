@@ -120,7 +120,7 @@ describe("tools product copy", () => {
                 label: "Cron",
                 description: "Schedule and manage cron jobs.",
                 rawDescription:
-                  "Manage Gateway cron jobs and send wake events.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }",
+                  'Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
                 source: "core",
               },
             ],
