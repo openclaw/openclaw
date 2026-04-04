@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { createJiti } from "jiti";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -162,6 +161,38 @@ export function clearPluginLoaderCache(): void {
 }
 
 const defaultLogger = () => createSubsystemLogger("plugins");
+
+type ChannelConfiguredModule = {
+  isChannelConfigured?: (
+    cfg: OpenClawConfig,
+    channelId: string,
+    env?: NodeJS.ProcessEnv,
+  ) => boolean;
+};
+
+let channelConfiguredLoader: ReturnType<typeof createJiti> | undefined;
+let cachedChannelConfiguredModule: ChannelConfiguredModule | undefined;
+
+function resolveChannelConfiguredModule(): ChannelConfiguredModule {
+  if (cachedChannelConfiguredModule) {
+    return cachedChannelConfiguredModule;
+  }
+  channelConfiguredLoader ??= createJiti(import.meta.url, { interopDefault: true });
+  const loaded = channelConfiguredLoader("../config/channel-configured.js");
+  if (!loaded || typeof loaded !== "object") {
+    throw new Error("failed to load config/channel-configured runtime");
+  }
+  cachedChannelConfiguredModule = loaded as ChannelConfiguredModule;
+  return cachedChannelConfiguredModule;
+}
+
+function resolveIsChannelConfigured() {
+  const fn = resolveChannelConfiguredModule().isChannelConfigured;
+  if (typeof fn !== "function") {
+    throw new Error("config/channel-configured runtime missing isChannelConfigured()");
+  }
+  return fn;
+}
 
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
@@ -545,6 +576,7 @@ function shouldLoadChannelPluginInSetupRuntime(params: {
   ) {
     return true;
   }
+  const isChannelConfigured = resolveIsChannelConfigured();
   return !params.manifestChannels.some((channelId) =>
     isChannelConfigured(params.cfg, channelId, params.env),
   );

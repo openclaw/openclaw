@@ -9,8 +9,7 @@ import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
-import { isValidIPv4 } from "../gateway/net.js";
+import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
@@ -18,10 +17,6 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import {
-  inspectBestEffortPrimaryTailnetIPv4,
-  pickBestEffortPrimaryLanIPv4,
-} from "../infra/network-discovery-display.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
@@ -32,6 +27,7 @@ import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, openUrlInBackground, resolveBrowserOpenCommand };
+export { resolveControlUiLinks };
 
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -298,34 +294,3 @@ function summarizeError(err: unknown): string {
 }
 
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
-
-export function resolveControlUiLinks(params: {
-  port: number;
-  bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
-  customBindHost?: string;
-  basePath?: string;
-}): { httpUrl: string; wsUrl: string } {
-  const port = params.port;
-  const bind = params.bind ?? "loopback";
-  const customBindHost = params.customBindHost?.trim();
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
-  const host = (() => {
-    if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
-      return customBindHost;
-    }
-    if (bind === "tailnet" && tailnetIPv4) {
-      return tailnetIPv4 ?? "127.0.0.1";
-    }
-    if (bind === "lan") {
-      return pickBestEffortPrimaryLanIPv4() ?? "127.0.0.1";
-    }
-    return "127.0.0.1";
-  })();
-  const basePath = normalizeControlUiBasePath(params.basePath);
-  const uiPath = basePath ? `${basePath}/` : "/";
-  const wsPath = basePath ? basePath : "";
-  return {
-    httpUrl: `http://${host}:${port}${uiPath}`,
-    wsUrl: `ws://${host}:${port}${wsPath}`,
-  };
-}

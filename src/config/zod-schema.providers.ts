@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { getBundledChannelRuntimeMap } from "./bundled-channel-config-runtime.js";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
@@ -12,7 +13,35 @@ const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
 
-const directChannelRuntimeSchemas = getBundledChannelRuntimeMap();
+let directChannelRuntimeSchemasCache: ReadonlyMap<string, ChannelConfigRuntimeSchema> | undefined;
+
+function getDirectChannelRuntimeSchemas(): ReadonlyMap<string, ChannelConfigRuntimeSchema> {
+  if (!directChannelRuntimeSchemasCache) {
+    const runtimeMap = new Map<string, ChannelConfigRuntimeSchema>();
+    for (const entry of listBundledPluginMetadata({
+      includeChannelConfigs: true,
+      includeSyntheticChannelConfigs: true,
+    })) {
+      const channelConfigs = entry.manifest.channelConfigs;
+      if (!channelConfigs) {
+        continue;
+      }
+      for (const [channelId, channelConfig] of Object.entries(channelConfigs)) {
+        if (channelConfig?.runtime && !runtimeMap.has(channelId)) {
+          runtimeMap.set(channelId, channelConfig.runtime);
+        }
+      }
+    }
+    directChannelRuntimeSchemasCache = runtimeMap;
+  }
+  return directChannelRuntimeSchemasCache;
+}
+
+function hasPluginOwnedChannelConfig(
+  value: ChannelsConfig,
+): value is ChannelsConfig & Record<string, unknown> {
+  return Object.keys(value).some((key) => key !== "defaults" && key !== "modelByChannel");
+}
 
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
@@ -50,12 +79,12 @@ function normalizeBundledChannelConfigs(
   value: ChannelsConfig | undefined,
   ctx: z.RefinementCtx,
 ): ChannelsConfig | undefined {
-  if (!value) {
+  if (!value || !hasPluginOwnedChannelConfig(value)) {
     return value;
   }
 
   let next: ChannelsConfig | undefined;
-  for (const [channelId, runtimeSchema] of directChannelRuntimeSchemas) {
+  for (const [channelId, runtimeSchema] of getDirectChannelRuntimeSchemas()) {
     if (!Object.prototype.hasOwnProperty.call(value, channelId)) {
       continue;
     }
