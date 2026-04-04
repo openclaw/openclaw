@@ -84,6 +84,9 @@ are filtered out to keep the sub-agent context small).
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
 
+If you want to make the agent sound less generic, start with
+[SOUL.md Personality Guide](/concepts/soul).
+
 To inspect how much each injected file contributes (raw vs injected, truncation, plus tool schema overhead), use `/context list` or `/context detail`. See [Context](/concepts/context).
 
 ## Time handling

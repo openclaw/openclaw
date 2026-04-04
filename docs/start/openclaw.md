@@ -107,7 +107,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
-- persona/instructions in `SOUL.md`
+- persona/instructions in [`SOUL.md`](/concepts/soul)
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
 
