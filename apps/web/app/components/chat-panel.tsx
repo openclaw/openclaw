@@ -1567,31 +1567,50 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		// ── Empty-stream error detection ──
 		// When the stream completes (submitted/streaming → ready) but no
 		// assistant message was produced, surface an error so the user knows
-		// the request was lost.
+		// the request was lost.  We defer the check by one tick so the
+		// `messages` state from `useChat` can settle — status can transition
+		// to "ready" before the final message batch is committed to state.
+		const emptyStreamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 		useEffect(() => {
+			if (emptyStreamTimerRef.current) {
+				clearTimeout(emptyStreamTimerRef.current);
+				emptyStreamTimerRef.current = null;
+			}
+
 			const wasActive =
 				previousStatus === "streaming" ||
 				previousStatus === "submitted";
 			const isNowReady = status === "ready";
 
 			if (wasActive && isNowReady) {
-				const lastMsg = messages[messages.length - 1];
-				const hasAssistantContent =
-					lastMsg?.role === "assistant" &&
-					lastMsg.parts.some(
-						(p) =>
-							(p.type === "text" && (p as { text: string }).text.trim().length > 0) ||
-							p.type === "tool-invocation",
-					);
-				if (!hasAssistantContent && !error) {
-					setStreamError("No response received from agent.");
-				} else {
-					setStreamError(null);
-				}
+				emptyStreamTimerRef.current = setTimeout(() => {
+					emptyStreamTimerRef.current = null;
+					const lastMsg = messages[messages.length - 1];
+					const hasAssistantContent =
+						lastMsg?.role === "assistant" &&
+						lastMsg.parts.some(
+							(p) =>
+								(p.type === "text" && (p as { text: string }).text.trim().length > 0) ||
+								p.type === "tool-invocation" ||
+								p.type === "reasoning" ||
+								(p.type as string) === "dynamic-tool",
+						);
+					if (!hasAssistantContent && !error) {
+						setStreamError("No response received from agent.");
+					} else {
+						setStreamError(null);
+					}
+				}, 50);
 			}
 			if (status === "submitted") {
 				setStreamError(null);
 			}
+			return () => {
+				if (emptyStreamTimerRef.current) {
+					clearTimeout(emptyStreamTimerRef.current);
+					emptyStreamTimerRef.current = null;
+				}
+			};
 		}, [previousStatus, status, messages, error]);
 
 		useEffect(() => {
