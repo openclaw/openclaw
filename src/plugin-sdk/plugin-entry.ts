@@ -65,6 +65,7 @@ import type {
   SpeechProviderPlugin,
   PluginCommandContext,
 } from "../plugins/types.js";
+import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
@@ -154,13 +155,6 @@ type DefinedPluginEntry = {
   register: NonNullable<OpenClawPluginDefinition["register"]>;
 } & Pick<OpenClawPluginDefinition, "kind">;
 
-/** Resolve either a concrete config schema or a lazy schema factory. */
-function resolvePluginConfigSchema(
-  configSchema: DefinePluginEntryOptions["configSchema"] = emptyPluginConfigSchema,
-): OpenClawPluginConfigSchema {
-  return typeof configSchema === "function" ? configSchema() : configSchema;
-}
-
 /**
  * Canonical entry helper for non-channel plugins.
  *
@@ -176,11 +170,7 @@ export function definePluginEntry({
   configSchema = emptyPluginConfigSchema,
   register,
 }: DefinePluginEntryOptions): DefinedPluginEntry {
-  let resolvedConfigSchema: OpenClawPluginConfigSchema | undefined;
-  const getConfigSchema = (): OpenClawPluginConfigSchema => {
-    resolvedConfigSchema ??= resolvePluginConfigSchema(configSchema);
-    return resolvedConfigSchema;
-  };
+  const getConfigSchema = createCachedLazyValueGetter(configSchema);
   return {
     id,
     name,
