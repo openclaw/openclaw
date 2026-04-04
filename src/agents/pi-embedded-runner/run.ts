@@ -195,7 +195,10 @@ export async function runEmbeddedPiAgent(
         modelId,
         runtimeModel,
       });
-      const ctxInfo = resolvedRuntimeModel.ctxInfo;
+      const ctxInfo = {
+        tokens: resolvedRuntimeModel.effectiveContextTokens,
+        source: resolvedRuntimeModel.effectiveContextSource,
+      };
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
 
       const authStore = ensureAuthProfileStore(agentDir, {

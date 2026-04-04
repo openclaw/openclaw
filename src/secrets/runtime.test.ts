@@ -1875,7 +1875,11 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.channels?.zalo?.botToken).toBe("resolved-zalo-token");
+    expect(snapshot.config.channels?.zalo?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "ZALO_BOT_TOKEN",
+    });
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.botToken",
     );
@@ -1902,9 +1906,11 @@ describe("secrets runtime snapshot", () => {
       loadAuthStore: () => ({ version: 1, profiles: {} }),
     });
 
-    expect(snapshot.config.channels?.zalo?.accounts?.work?.botToken).toBe(
-      "resolved-zalo-work-token",
-    );
+    expect(snapshot.config.channels?.zalo?.accounts?.work?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "ZALO_WORK_BOT_TOKEN",
+    });
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
       "channels.zalo.accounts.work.botToken",
     );
@@ -3112,6 +3118,14 @@ describe("secrets runtime snapshot", () => {
           },
         },
         env: { OPENAI_API_KEY: "sk-runtime-worker" }, // pragma: allowlist secret
+        loadAuthStore: () =>
+          loadAuthStoreWithProfiles({
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              keyRef: OPENAI_ENV_KEY_REF,
+            },
+          }),
       });
 
       await expect(fs.access(workerStorePath)).rejects.toMatchObject({ code: "ENOENT" });

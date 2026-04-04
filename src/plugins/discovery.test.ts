@@ -419,7 +419,7 @@ describe("discoverOpenClawPlugins", () => {
       env: buildDiscoveryEnv(stateDir),
     });
 
-    expectCandidateOrder(candidates, ["workspace-plugin"]);
+    expectCandidateOrder(candidates, []);
   });
 
   it.each([

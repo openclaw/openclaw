@@ -181,6 +181,9 @@ export function registerMatrixMonitorEvents(params: {
       return;
     }
 
-    routeVerificationEvent(roomId, event);
+    if (routeVerificationEvent(roomId, event)) {
+      return;
+    }
+    void onRoomMessage(roomId, event);
   });
 }

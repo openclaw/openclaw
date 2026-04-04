@@ -103,7 +103,11 @@ export function resolveEffectiveRuntimeModel(params: {
   provider: string;
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
-}) {
+}): {
+  effectiveModel: ProviderRuntimeModel;
+  effectiveContextTokens: number;
+  effectiveContextSource: string;
+} {
   const ctxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.provider,
@@ -140,7 +144,8 @@ export function resolveEffectiveRuntimeModel(params: {
   }
 
   return {
-    ctxInfo,
     effectiveModel,
+    effectiveContextTokens: ctxInfo.tokens,
+    effectiveContextSource: ctxInfo.source,
   };
 }

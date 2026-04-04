@@ -12,7 +12,8 @@ import type { OpenClawConfig } from "./types.js";
 const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistry: (...args: Parameters<typeof mockLoadPluginManifestRegistry>) =>
+    mockLoadPluginManifestRegistry(...args),
 }));
 
 describe("config io write", () => {
@@ -445,7 +446,7 @@ describe("config io write", () => {
             },
           },
         },
-      ],
+      ] as never[],
     });
 
     await withSuiteHome(async (home) => {

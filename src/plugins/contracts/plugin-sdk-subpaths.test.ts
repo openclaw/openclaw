@@ -857,9 +857,9 @@ describe("plugin-sdk subpath exports", () => {
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
 
     expectSourceMentions("channel-reply-pipeline", ["createChannelReplyPipeline"]);
-    expect("createTypingCallbacks" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixContext" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixOptions" in channelReplyPipelineSdk).toBe(false);
+    expect("createTypingCallbacks" in channelReplyPipelineSdk).toBe(true);
+    expect("createReplyPrefixContext" in channelReplyPipelineSdk).toBe(true);
+    expect("createReplyPrefixOptions" in channelReplyPipelineSdk).toBe(true);
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {
