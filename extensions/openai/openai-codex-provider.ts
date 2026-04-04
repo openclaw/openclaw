@@ -306,7 +306,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     supportsXHighThinking: ({ modelId }) =>
       matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
-    buildReplayPolicy: (ctx) => buildOpenAIReplayPolicy(ctx),
+    buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;
       if (transport === "auto" || transport === "sse" || transport === "websocket") {
@@ -317,7 +317,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         transport: "auto",
       };
     },
-    wrapStreamFn: (ctx) => OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn?.(ctx),
+    ...OPENAI_RESPONSES_STREAM_HOOKS,
     resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
     resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
     resolveReasoningOutputMode: () => "native",

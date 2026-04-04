@@ -41,7 +41,9 @@ Notes:
 
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw resolves the input as an alias first, then
+  as a unique configured-provider match for that exact model id, and only then
+  falls back to the configured default provider with a deprecation warning.
 - `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
 
 ### `models status`

@@ -3,6 +3,7 @@ import {
   definePluginEntry,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
+  type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 
 const PROVIDER_ID = "openrouter";
@@ -23,7 +24,6 @@ export default definePluginEntry({
     const {
       buildProviderReplayFamilyHooks,
       buildProviderStreamFamilyHooks,
-      composeProviderStreamWrappers,
       createProviderApiKeyAuthMethod,
       DEFAULT_CONTEXT_TOKENS,
       getOpenRouterModelCapabilities,
@@ -81,6 +81,28 @@ export default definePluginEntry({
         );
     }
 
+    function wrapOpenRouterProviderStream(
+      ctx: ProviderWrapStreamFnContext,
+    ): StreamFn | null | undefined {
+      const providerRouting =
+        ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
+          ? (ctx.extraParams.provider as Record<string, unknown>)
+          : undefined;
+      const routedStreamFn = providerRouting
+        ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
+        : ctx.streamFn;
+      const wrapStreamFn = OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn ?? undefined;
+      if (!wrapStreamFn) {
+        return routedStreamFn;
+      }
+      return (
+        wrapStreamFn({
+          ...ctx,
+          streamFn: routedStreamFn,
+        }) ?? undefined
+      );
+    }
+
     function isOpenRouterCacheTtlModel(modelId: string): boolean {
       return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
     }
@@ -134,19 +156,7 @@ export default definePluginEntry({
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
       isModernModelRef: () => true,
-      wrapStreamFn: (ctx) => {
-        const providerRouting =
-          ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
-            ? (ctx.extraParams.provider as Record<string, unknown>)
-            : undefined;
-        const routedStreamFn = providerRouting
-          ? injectOpenRouterRouting(ctx.streamFn, providerRouting)
-          : ctx.streamFn;
-        return OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn?.({
-          ...ctx,
-          streamFn: routedStreamFn,
-        });
-      },
+      wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);

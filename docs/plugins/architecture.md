@@ -473,6 +473,13 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
+Some bundled-plugin helper subpaths still remain in the generated SDK export
+map for compatibility and bundled-plugin maintenance. Current examples include
+`plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
+`plugin-sdk/zalo-setup`, and several `plugin-sdk/matrix*` seams. Treat those as
+reserved implementation-detail exports, not as the recommended SDK pattern for
+new third-party plugins.
+
 ## Load pipeline
 
 At startup, OpenClaw does roughly this:
@@ -711,10 +718,18 @@ api.registerProvider({
 
 - Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
   `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
-  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, and `isModernModelRef`
-  because it owns Claude 4.6 forward-compat, provider-family hints, auth
-  repair guidance, usage endpoint integration, prompt-cache eligibility,
-  auth-aware config defaults, and Claude default/adaptive thinking policy.
+  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  and `wrapStreamFn` because it owns Claude 4.6 forward-compat,
+  provider-family hints, auth repair guidance, usage endpoint integration,
+  prompt-cache eligibility, auth-aware config defaults, Claude
+  default/adaptive thinking policy, and Anthropic-specific stream shaping for
+  beta headers, `/fast` / `serviceTier`, and `context1m`.
+- Anthropic's Claude-specific stream helpers stay in the bundled plugin's own
+  public `api.ts` / `contract-api.ts` seam for now. That package surface
+  exports `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
+  `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level
+  Anthropic wrapper builders instead of widening the generic SDK around one
+  provider's beta-header rules.
 - OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
   `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `supportsXHighThinking`, and `isModernModelRef`
@@ -1019,6 +1034,8 @@ authoring plugins:
 
 - `openclaw/plugin-sdk/plugin-entry` for plugin registration primitives.
 - `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
+- `openclaw/plugin-sdk/config-schema` for the root `openclaw.json` Zod schema
+  export (`OpenClawSchema`).
 - Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
   `openclaw/plugin-sdk/channel-pairing`,
   `openclaw/plugin-sdk/channel-contract`,
@@ -1034,6 +1051,7 @@ authoring plugins:
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
+  `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
@@ -1045,6 +1063,9 @@ authoring plugins:
   `openclaw/plugin-sdk/status-helpers`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+  `telegram-command-config` is the narrow public seam for Telegram custom
+  command normalization/validation and stays available even if the bundled
+  Telegram contract surface is temporarily unavailable.
 - Approval-specific channel seams should prefer one `approvalCapability`
   contract on the plugin. Core then reads approval auth, delivery, render, and
   native-routing behavior through that one capability instead of mixing
@@ -1064,6 +1085,15 @@ authoring plugins:
   `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
   `<plugin-package-root>/index.js` is the bundled plugin entry,
   and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
+- Current bundled provider examples:
+  - Anthropic uses `api.js` / `contract-api.js` for Claude stream helpers such
+    as `wrapAnthropicProviderStream`, beta-header helpers, and `service_tier`
+    parsing.
+  - OpenAI uses `api.js` for provider builders, default-model helpers, and
+    realtime provider builders.
+  - OpenRouter uses `api.js` for its provider builder plus onboarding/config
+    helpers, while `register.runtime.js` can still re-export generic
+    `plugin-sdk/provider-stream` helpers for repo-local use.
 - Facade-loaded public entry points prefer the active runtime config snapshot
   when one exists, then fall back to the resolved config file on disk when
   OpenClaw is not yet serving a runtime snapshot.
@@ -1319,6 +1349,18 @@ Example:
   }
 }
 ```
+
+Useful `openclaw.channel` fields beyond the minimal example:
+
+- `detailLabel`: secondary label for richer catalog/status surfaces
+- `docsLabel`: override link text for the docs link
+- `preferOver`: lower-priority plugin/channel ids this catalog entry should outrank
+- `selectionDocsPrefix`, `selectionDocsOmitLabel`, `selectionExtras`: selection-surface copy controls
+- `markdownCapable`: marks the channel as markdown-capable for outbound formatting decisions
+- `showConfigured`: hide the channel from configured-channel listing surfaces when set to `false`
+- `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
+- `forceAccountBinding`: require explicit account binding even when only one account exists
+- `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets
 
 OpenClaw can also merge **external channel catalogs** (for example, an MPM
 registry export). Drop a JSON file at one of:

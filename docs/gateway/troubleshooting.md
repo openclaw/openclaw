@@ -117,6 +117,16 @@ Common signatures:
 - `device signature invalid` / `device signature expired` → client signed the wrong
   payload (or stale timestamp) for the current handshake.
 - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
+- That cached-token retry reuses the cached scope set stored with the paired
+  device token. Explicit `deviceToken` / explicit `scopes` callers keep their
+  requested scope set instead.
+- Outside that retry path, connect auth precedence is explicit shared
+  token/password first, then explicit `deviceToken`, then stored device token,
+  then bootstrap token.
+- On the async Tailscale Serve Control UI path, failed attempts for the same
+  `{scope, ip}` are serialized before the limiter records the failure. Two bad
+  concurrent retries from the same client can therefore surface `retry later`
+  on the second attempt instead of two plain mismatches.
 - `too many failed authentication attempts (retry later)` from a browser-origin
   loopback client → repeated failures from that same normalized `Origin` are
   locked out temporarily; another localhost origin uses a separate bucket.
@@ -127,12 +137,12 @@ Common signatures:
 
 Use `error.details.code` from the failed `connect` response to pick the next action:
 
-| Detail code                  | Meaning                                                  | Recommended action                                                                                                                                                   |
-| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.             | Paste/set token in the client and retry. For dashboard paths: `openclaw config get gateway.auth.token` then paste into Control UI settings.                          |
-| `AUTH_TOKEN_MISMATCH`        | Shared token did not match gateway auth token.           | If `canRetryWithDeviceToken=true`, allow one trusted retry. If still failing, run the [token drift recovery checklist](/cli/devices#token-drift-recovery-checklist). |
-| `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.             | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                    |
-| `PAIRING_REQUIRED`           | Device identity is known but not approved for this role. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`.                                                                        |
+| Detail code                  | Meaning                                                  | Recommended action                                                                                                                                                                                                                                                                       |
+| ---------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.             | Paste/set token in the client and retry. For dashboard paths: `openclaw config get gateway.auth.token` then paste into Control UI settings.                                                                                                                                              |
+| `AUTH_TOKEN_MISMATCH`        | Shared token did not match gateway auth token.           | If `canRetryWithDeviceToken=true`, allow one trusted retry. Cached-token retries reuse stored approved scopes; explicit `deviceToken` / `scopes` callers keep requested scopes. If still failing, run the [token drift recovery checklist](/cli/devices#token-drift-recovery-checklist). |
+| `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.             | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                                                                                                                                        |
+| `PAIRING_REQUIRED`           | Device identity is known but not approved for this role. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`.                                                                                                                                                                                            |
 
 Device auth v2 migration check:
 
@@ -147,6 +157,13 @@ If logs show nonce/signature errors, update the connecting client and verify it:
 1. waits for `connect.challenge`
 2. signs the challenge-bound payload
 3. sends `connect.params.device.nonce` with the same challenge nonce
+
+If `openclaw devices rotate` / `revoke` / `remove` is denied unexpectedly:
+
+- paired-device token sessions can manage only **their own** device unless the
+  caller also has `operator.admin`
+- `openclaw devices rotate --scope ...` can only request operator scopes that
+  the caller session already holds
 
 Related:
 
@@ -177,7 +194,7 @@ Look for:
 Common signatures:
 
 - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → local gateway mode is not enabled, or the config file was clobbered and lost `gateway.mode`. Fix: set `gateway.mode="local"` in your config, or re-run `openclaw onboard --mode local` / `openclaw setup` to restamp the expected local-mode config. If you are running OpenClaw via Podman, the default config path is `~/.openclaw/openclaw.json`.
-- `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
+- `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
 - `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
 
 Related:
@@ -233,13 +250,15 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
 
 Common signatures:
 
 - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
 - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
 - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
+- `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
+- `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
 - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
 - `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style destination while `agents.defaults.heartbeat.directPolicy` (or per-agent override) is set to `block`.
 

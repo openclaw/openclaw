@@ -32,12 +32,14 @@ Docs: https://docs.openclaw.ai
 - Prompt caching: keep prompt prefixes more reusable across transport fallback, deterministic MCP tool ordering, compaction, and embedded image history so follow-up turns hit cache more reliably. (#58036, #58037, #58038, #59054, #60603, #60691) Thanks @bcherny.
 - Agents/cache: diagnostics: add prompt-cache break diagnostics, trace live cache scenarios through embedded runner paths, and show cache reuse explicitly in `openclaw status --verbose`. Thanks @vincentkoc.
 - Agents/cache: stabilize cache-relevant system prompt fingerprints by normalizing equivalent structured prompt whitespace, line endings, hook-added system context, and runtime capability ordering so semantically unchanged prompts reuse KV/cache more reliably. Thanks @vincentkoc.
+- Plugin SDK/config: export `OpenClawSchema` via `openclaw/plugin-sdk/config-schema` so external tooling can validate and introspect full `openclaw.json` config through a supported public subpath. (#60557) Thanks @feniix.
 
 ### Fixes
 
 - Synology Chat/security: route webhook token comparison through the shared constant-time secret helper for consistency with other bundled plugins.
 - Gateway/security: scope loopback browser-origin auth throttling by normalized origin so one localhost Control UI tab cannot lock out a different localhost browser origin after repeated auth failures.
 - Node exec approvals: keep node-host `system.run` approvals bound to the prepared execution plan, so script-drift revalidation still runs after agent-side approval forwarding.
+- Agents/pairing: merge completion announce delivery context with the requester session fallback so missing `to` still reaches the original channel, and include `operator.talk.secrets` in CLI default operator scopes for node-role device pairing approvals. (#56481) Thanks @maxpetrusenko.
 - Models/MiniMax: honor `MINIMAX_API_HOST` for implicit bundled MiniMax provider catalogs so China-hosted API-key setups pick `api.minimaxi.com/anthropic` without manual provider config. (#34524) Thanks @caiqinghua.
 - Usage/MiniMax: invert remaining-style `usage_percent` fields when MiniMax reports only remaining percentage data, so usage bars stop showing nearly-full remaining quota as nearly-exhausted usage. (#60254) Thanks @jwchmodx.
 - Usage/MiniMax: prefer the chat-model `model_remains` entry and derive Coding Plan window labels from MiniMax interval timestamps so MiniMax usage snapshots stop picking zero-budget media rows and misreporting 4h windows as `5h`. (#52349) Thanks @IVY-AI-gif.
@@ -101,6 +103,16 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/node host: forward prepared `system.run` approval plans on the async node invoke path so mutable script operands keep their approval-time binding and drift revalidation instead of dropping back to unbound execution.
 - Synology Chat/security: default low-level HTTPS helper TLS verification to on so helper/API defaults match the shipped safe account default, and only explicit `allowInsecureSsl: true` opts out.
 - Android/canvas security: require exact normalized A2UI URL matches before forwarding canvas bridge actions, rejecting query mismatches and descendant paths while still allowing fragment-only A2UI navigation.
+- Cron: send failure notifications through the job's primary delivery channel using the same session context as successful delivery when no explicit `failureDestination` is configured. (#60622) Thanks @artwalker.
+- Mobile pairing/bootstrap: keep QR bootstrap handoff tokens bounded to the mobile-safe contract so node handoff stays unscoped and operator handoff drops mixed `node.*`, `operator.admin`, and `operator.pairing` scopes.
+- Gateway/auth: serialize async shared-secret auth attempts per client so concurrent Tailscale-capable failures cannot overrun the intended auth rate-limit budget. Thanks @Telecaster2147.
+- Doctor/config: compare normalized `talk` configs by deep structural equality instead of key-order-sensitive serialization so `openclaw doctor --fix` stops repeatedly reporting/applying no-op `talk.provider/providers` normalization. (#59911) Thanks @ejames-dev.
+- Gateway/device auth: reuse cached device-token scopes only for cached-token reconnects, while keeping explicit `deviceToken` scope requests and empty-cache fallbacks intact so reconnects preserve `operator.read` without breaking explicit auth flows. (#46032) Thanks @caicongyang.
+- Google Gemini CLI auth: improve OAuth credential discovery across Windows nvm and Homebrew libexec installs, and align Code Assist metadata so Gemini login stops failing on packaged CLI layouts. (#40729) Thanks @hughcube.
+- Mattermost/config schema: accept `groups.*.requireMention` again so existing Mattermost configs no longer fail strict validation after upgrade. (#58271) Thanks @MoerAI.
+- Providers/OpenRouter failover: classify `403 "Key limit exceeded"` spending-limit responses as billing so model fallback continues instead of stopping on generic auth. (#59892) Thanks @rockcent.
+- Device pairing/security: keep non-operator device scope checks bound to the requested role prefix so bootstrap verification cannot redeem `operator.*` scopes through `node` auth. (#57258) Thanks @jlapenna.
+- Gateway/device pairing: require non-admin paired-device sessions to manage only their own device for token rotate/revoke and paired-device removal, blocking cross-device token theft inside pairing-scoped sessions. (#50627) Thanks @coygeek.
 
 ## 2026.4.2
 
@@ -198,7 +210,9 @@ Docs: https://docs.openclaw.ai
 - Browser/profiles: reject remote browser profile `cdpUrl` values that violate strict SSRF policy before saving config, with clearer validation errors for blocked endpoints. (#60477) Thanks @eleqtrizit.
 - Browser/screenshots: stop sending `fromSurface: false` on CDP screenshots so managed Chrome 146+ browsers can capture images again. (#60682) Thanks @mvanhorn.
 - Mattermost/slash commands: harden native slash-command callback token validation to use constant-time secret comparison, matching the existing interaction-token path.
+- Agents/scheduling: route delayed follow-up requests toward cron only when cron is actually available, while keeping background `exec`/`process` guidance scoped to work that starts now. (#60811) Thanks @vincentkoc.
 - Cron/security: reject unsafe custom `sessionTarget: "session:..."` IDs earlier during cron add, update, and execution so malformed custom session keys fail closed with clear errors.
+- Feishu/cards: replace the legacy `wide_screen_mode` schema 1.x config with schema 2.0 `width_mode: "fill"` in interactive approval, launcher, markdown, and structured card builders so Feishu card sends stop failing with parse-card errors while preserving wide-card rendering. (#53395) Thanks @drvoss
 
 ## 2026.4.1
 
@@ -302,6 +316,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/agents: auto-load agent workspace files on initial Files panel open, and populate overview model/workspace/fallbacks from effective runtime agent metadata so defaulted models no longer show as `Not set`. (#56637) Thanks @dxsx84.
 - Control UI/slash commands: make `/steer` and `/redirect` work from the chat command palette with visible pending state for active-run `/steer`, correct redirected-run tracking, and a single canonical `/steer` entry in the command menu. (#54625) Thanks @fuller-stack-dev.
 - Cron/announce: preserve all deliverable text payloads for announce mode instead of collapsing to the last chunk, so multi-line cron reports deliver in full to Telegram forum topics.
+- Cron/model overrides: keep explicit cron `payload.model` runs on the shared override fallback policy so they still inherit configured fallback chains without silently dropping to the agent primary model. (#58294) Thanks @aaronagent.
 - Cron/isolated sessions: carry the full live-session provider, model, and auth-profile selection across retry restarts so cron jobs with model overrides no longer fail or loop on mid-run model-switch requests. (#57972) Thanks @issaba1.
 - Diffs/config: preserve schema-shaped plugin config parsing from `diffsPluginConfigSchema.safeParse()`, so direct callers keep `defaults` and `security` sections instead of receiving flattened tool defaults. (#57904) Thanks @gumadeiras.
 - Diffs: fall back to plain text when `lang` hints are invalid during diff render and viewer hydration, so bad or stale language values no longer break the diff viewer. (#57902) Thanks @gumadeiras.
@@ -608,6 +623,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/forum topics: keep native `/new` and `/reset` routed to the active topic by preserving the topic target on forum-thread command context. (#35963)
 - Status/port diagnostics: treat single-process dual-stack loopback gateway listeners as healthy in `openclaw status --all`, suppressing false "port already in use" conflict warnings. (#53398) Thanks @DanWebb1949.
 - CLI/Docker: treat loopback private-host CLI gateway connects as local for silent pairing auto-approval, while keeping remote backend and public-host CLI connects behind pairing. (#55113) Thanks @sar618.
+- Slack/socket mode: mark the underlying socket client as shutting down before provider stop paths call Bolt teardown so stale-socket restarts stop leaking orphaned ping reconnect loops. (#56646) Thanks @hsiaoa.
 
 ## 2026.3.24
 

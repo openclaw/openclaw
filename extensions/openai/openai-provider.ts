@@ -241,7 +241,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
         ? { api: "openai-responses", baseUrl }
         : undefined,
-    buildReplayPolicy: (ctx) => buildOpenAIReplayPolicy(ctx),
+    buildReplayPolicy: buildOpenAIReplayPolicy,
     prepareExtraParams: (ctx) => {
       const transport = ctx.extraParams?.transport;
       const hasSupportedTransport =
@@ -256,7 +256,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         ...(hasExplicitWarmup ? {} : { openaiWsWarmup: true }),
       };
     },
-    wrapStreamFn: (ctx) => OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn?.(ctx),
+    ...OPENAI_RESPONSES_STREAM_HOOKS,
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),

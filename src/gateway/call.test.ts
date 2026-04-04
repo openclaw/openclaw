@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   loadConfigMock as loadConfig,
   pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
@@ -423,6 +424,54 @@ describe("callGateway url resolution", () => {
 
     await callGatewayScoped({ method: "health", scopes: [] });
     expect(lastClientOptions?.scopes).toEqual([]);
+  });
+
+  it("yields one event-loop turn before starting CLI pairing requests", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    let preConnectYieldRan = false;
+    let sawYieldBeforeStart = false;
+    setImmediate(() => {
+      preConnectYieldRan = true;
+    });
+
+    __testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            sawYieldBeforeStart = preConnectYieldRan;
+            void opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+        }) as never,
+      loadConfig: loadConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    await callGateway({
+      method: "device.pair.list",
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+    });
+
+    expect(sawYieldBeforeStart).toBe(true);
   });
 });
 

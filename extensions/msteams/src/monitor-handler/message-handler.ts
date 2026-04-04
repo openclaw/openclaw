@@ -39,23 +39,22 @@ import {
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
 
-function isStringRecord(value: unknown): value is Record<string, string> {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
 function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
     if (attachment.contentType !== "text/html") {
       continue;
     }
-    const structuredContent = isStringRecord(attachment.content) ? attachment.content : null;
+    const content = attachment.content;
     const raw =
-      typeof attachment.content === "string"
-        ? attachment.content
-        : typeof structuredContent?.text === "string"
-          ? structuredContent.text
-          : typeof structuredContent?.body === "string"
-            ? structuredContent.body
+      typeof content === "string"
+        ? content
+        : isRecord(content) && typeof content.text === "string"
+          ? content.text
+          : isRecord(content) && typeof content.body === "string"
+            ? content.body
             : "";
     if (!raw) {
       continue;

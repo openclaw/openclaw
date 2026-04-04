@@ -4,9 +4,9 @@
   "description": "OpenClaw Twitch channel plugin",
   "type": "module",
   "dependencies": {
-    "@twurple/api": "^8.0.3",
-    "@twurple/auth": "^8.0.3",
-    "@twurple/chat": "^8.0.3"
+    "@twurple/api": "^8.1.2",
+    "@twurple/auth": "^8.1.2",
+    "@twurple/chat": "^8.1.2"
   },
   "openclaw": {
     "extensions": [

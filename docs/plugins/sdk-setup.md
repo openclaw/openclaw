@@ -70,14 +70,87 @@ fields are required. The canonical publish snippets live in
 
 ### `openclaw` fields
 
-| Field        | Type       | Description                                                                                |
-| ------------ | ---------- | ------------------------------------------------------------------------------------------ |
-| `extensions` | `string[]` | Entry point files (relative to package root)                                               |
-| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                    |
-| `channel`    | `object`   | Channel metadata: `id`, `label`, `blurb`, `selectionLabel`, `docsPath`, `order`, `aliases` |
-| `providers`  | `string[]` | Provider ids registered by this plugin                                                     |
-| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`                                     |
-| `startup`    | `object`   | Startup behavior flags                                                                     |
+| Field        | Type       | Description                                                                                            |
+| ------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `extensions` | `string[]` | Entry point files (relative to package root)                                                           |
+| `setupEntry` | `string`   | Lightweight setup-only entry (optional)                                                                |
+| `channel`    | `object`   | Channel catalog metadata for setup, picker, quickstart, and status surfaces                            |
+| `providers`  | `string[]` | Provider ids registered by this plugin                                                                 |
+| `install`    | `object`   | Install hints: `npmSpec`, `localPath`, `defaultChoice`, `minHostVersion`, `allowInvalidConfigRecovery` |
+| `startup`    | `object`   | Startup behavior flags                                                                                 |
+
+### `openclaw.channel`
+
+`openclaw.channel` is cheap package metadata for channel discovery and setup
+surfaces before runtime loads.
+
+| Field                                  | Type       | What it means                                                                 |
+| -------------------------------------- | ---------- | ----------------------------------------------------------------------------- |
+| `id`                                   | `string`   | Canonical channel id.                                                         |
+| `label`                                | `string`   | Primary channel label.                                                        |
+| `selectionLabel`                       | `string`   | Picker/setup label when it should differ from `label`.                        |
+| `detailLabel`                          | `string`   | Secondary detail label for richer channel catalogs and status surfaces.       |
+| `docsPath`                             | `string`   | Docs path for setup and selection links.                                      |
+| `docsLabel`                            | `string`   | Override label used for docs links when it should differ from the channel id. |
+| `blurb`                                | `string`   | Short onboarding/catalog description.                                         |
+| `order`                                | `number`   | Sort order in channel catalogs.                                               |
+| `aliases`                              | `string[]` | Extra lookup aliases for channel selection.                                   |
+| `preferOver`                           | `string[]` | Lower-priority plugin/channel ids this channel should outrank.                |
+| `systemImage`                          | `string`   | Optional icon/system-image name for channel UI catalogs.                      |
+| `selectionDocsPrefix`                  | `string`   | Prefix text before docs links in selection surfaces.                          |
+| `selectionDocsOmitLabel`               | `boolean`  | Show the docs path directly instead of a labeled docs link in selection copy. |
+| `selectionExtras`                      | `string[]` | Extra short strings appended in selection copy.                               |
+| `markdownCapable`                      | `boolean`  | Marks the channel as markdown-capable for outbound formatting decisions.      |
+| `showConfigured`                       | `boolean`  | Controls whether configured-channel listing surfaces show this channel.       |
+| `quickstartAllowFrom`                  | `boolean`  | Opt this channel into the standard quickstart `allowFrom` setup flow.         |
+| `forceAccountBinding`                  | `boolean`  | Require explicit account binding even when only one account exists.           |
+| `preferSessionLookupForAnnounceTarget` | `boolean`  | Prefer session lookup when resolving announce targets for this channel.       |
+
+Example:
+
+```json
+{
+  "openclaw": {
+    "channel": {
+      "id": "my-channel",
+      "label": "My Channel",
+      "selectionLabel": "My Channel (self-hosted)",
+      "detailLabel": "My Channel Bot",
+      "docsPath": "/channels/my-channel",
+      "docsLabel": "my-channel",
+      "blurb": "Webhook-based self-hosted chat integration.",
+      "order": 80,
+      "aliases": ["mc"],
+      "preferOver": ["my-channel-legacy"],
+      "selectionDocsPrefix": "Guide:",
+      "selectionExtras": ["Markdown"],
+      "markdownCapable": true,
+      "quickstartAllowFrom": true
+    }
+  }
+}
+```
+
+### `openclaw.install`
+
+`openclaw.install` is package metadata, not manifest metadata.
+
+| Field                        | Type                 | What it means                                                                    |
+| ---------------------------- | -------------------- | -------------------------------------------------------------------------------- |
+| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                     |
+| `localPath`                  | `string`             | Local development or bundled install path.                                       |
+| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                                |
+| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z`.                        |
+| `allowInvalidConfigRecovery` | `boolean`            | Lets bundled-plugin reinstall flows recover from specific stale-config failures. |
+
+If `minHostVersion` is set, install and manifest-registry loading both enforce
+it. Older hosts skip the plugin; invalid version strings are rejected.
+
+`allowInvalidConfigRecovery` is not a general bypass for broken configs. It is
+for narrow bundled-plugin recovery only, so reinstall/setup can repair known
+upgrade leftovers like a missing bundled plugin path or stale `channels.<id>`
+entry for that same plugin. If config is broken for unrelated reasons, install
+still fails closed and tells the operator to run `openclaw doctor --fix`.
 
 ### Deferred full load
 
@@ -343,20 +416,25 @@ openclaw plugins install @myorg/openclaw-my-plugin
 ```
 
 OpenClaw tries ClawHub first and falls back to npm automatically. You can also
-force a specific source:
+force ClawHub explicitly:
 
 ```bash
 openclaw plugins install clawhub:@myorg/openclaw-my-plugin   # ClawHub only
-openclaw plugins install npm:@myorg/openclaw-my-plugin       # npm only
+```
+
+There is no matching `npm:` override. Use the normal npm package spec when you
+want the npm path after ClawHub fallback:
+
+```bash
+openclaw plugins install @myorg/openclaw-my-plugin
 ```
 
 **In-repo plugins:** place under the bundled plugin workspace tree and they are automatically
 discovered during build.
 
-**Users can browse and install:**
+**Users can install:**
 
 ```bash
-openclaw plugins search <query>
 openclaw plugins install <package-name>
 ```
 
