@@ -223,6 +223,12 @@ What you set:
 Model behavior:
 
 - Pick default model from detected options, or enter provider and model manually.
+- When onboarding starts from a provider auth choice, the model picker prefers
+  that provider automatically. For Volcengine and BytePlus, the same preference
+  also matches their coding-plan variants (`volcengine-plan/*`,
+  `byteplus-plan/*`).
+- If that preferred-provider filter would be empty, the picker falls back to
+  the full catalog instead of showing no models.
 - Wizard runs a model check and warns if the configured model is unknown or missing auth.
 
 Credential and profile paths:

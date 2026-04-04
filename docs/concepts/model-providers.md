@@ -439,6 +439,11 @@ Volcano Engine (火山引擎) provides access to Doubao and other models in Chin
 Onboarding defaults to the coding surface, but the general `volcengine/*`
 catalog is registered at the same time.
 
+In onboarding/configure model pickers, the Volcengine auth choice prefers both
+`volcengine/*` and `volcengine-plan/*` rows. If those models are not loaded yet,
+OpenClaw falls back to the unfiltered catalog instead of showing an empty
+provider-scoped picker.
+
 Available models:
 
 - `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
@@ -474,6 +479,11 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 
 Onboarding defaults to the coding surface, but the general `byteplus/*`
 catalog is registered at the same time.
+
+In onboarding/configure model pickers, the BytePlus auth choice prefers both
+`byteplus/*` and `byteplus-plan/*` rows. If those models are not loaded yet,
+OpenClaw falls back to the unfiltered catalog instead of showing an empty
+provider-scoped picker.
 
 Available models:
 
