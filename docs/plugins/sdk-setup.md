@@ -106,6 +106,11 @@ gateway starts listening.
   the default behavior.
 </Warning>
 
+If your setup/full entry registers gateway RPC methods, keep them on a
+plugin-specific prefix. Reserved core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) stay core-owned and always resolve
+to `operator.admin`.
+
 ## Plugin manifest
 
 Every native plugin must ship an `openclaw.plugin.json` in the package root.
@@ -198,6 +203,9 @@ background services) during setup flows.
 - The channel plugin object (via `defineSetupPluginEntry`)
 - Any HTTP routes required before gateway listen
 - Any gateway methods needed during startup
+
+Those startup gateway methods should still avoid reserved core admin
+namespaces such as `config.*` or `update.*`.
 
 **What `setupEntry` should NOT include:**
 

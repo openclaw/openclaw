@@ -169,6 +169,10 @@ Common scopes:
 - `operator.approvals`
 - `operator.pairing`
 
+Plugin-registered gateway RPC methods may request their own operator scope, but
+reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,
+`update.*`) always resolve to `operator.admin`.
+
 Method scope is only the first gate. Some slash commands reached through
 `chat.send` apply stricter command-level checks on top. For example, persistent
 `/config set` and `/config unset` writes require `operator.admin`.

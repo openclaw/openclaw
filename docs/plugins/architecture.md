@@ -1240,6 +1240,11 @@ If your full entry still owns any required startup capability, do not enable
 this flag. Keep the plugin on the default behavior and let OpenClaw load the
 full entry during startup.
 
+When those startup surfaces include gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) remain reserved and always resolve
+to `operator.admin`, even if a plugin requests a narrower scope.
+
 Example:
 
 ```json
