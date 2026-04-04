@@ -171,3 +171,10 @@ describe("core gateway method classification", () => {
     expect(unclassified).toEqual([]);
   });
 });
+
+describe("CLI default operator scopes", () => {
+  it("includes operator.talk.secrets for node-role device pairing approvals", async () => {
+    const { CLI_DEFAULT_OPERATOR_SCOPES } = await import("./method-scopes.js");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.talk.secrets");
+  });
+});
