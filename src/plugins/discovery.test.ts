@@ -388,9 +388,10 @@ describe("discoverOpenClawPlugins", () => {
   it("skips dependency and build directories while scanning workspace roots", () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
-    const workspacePluginDir = path.join(workspaceDir, "packages", "workspace-plugin");
-    const nestedNodeModulesDir = path.join(workspaceDir, "node_modules", "openclaw");
-    const nestedDistDir = path.join(workspaceDir, "dist", "extensions", "diffs");
+    const workspaceRoot = path.join(workspaceDir, ".openclaw", "extensions");
+    const workspacePluginDir = path.join(workspaceRoot, "workspace-plugin");
+    const nestedNodeModulesDir = path.join(workspaceRoot, "node_modules", "openclaw");
+    const nestedDistDir = path.join(workspaceRoot, "dist", "extensions", "diffs");
     mkdirSafe(path.join(workspacePluginDir, "src"));
     mkdirSafe(path.join(nestedNodeModulesDir, "src"));
     mkdirSafe(nestedDistDir);

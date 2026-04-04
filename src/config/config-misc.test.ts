@@ -1033,7 +1033,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("does not mark resolved-only gateway.bind aliases as auto-migratable legacy", async () => {
+  it("does not treat resolved-only gateway.bind aliases as source-literal legacy or invalid", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         gateway: { bind: "${OPENCLAW_BIND}" },
@@ -1043,9 +1043,9 @@ describe("config strict validation", () => {
       process.env.OPENCLAW_BIND = "0.0.0.0";
       try {
         const snap = await readConfigFileSnapshot();
-        expect(snap.valid).toBe(false);
+        expect(snap.valid).toBe(true);
         expect(snap.legacyIssues).toHaveLength(0);
-        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+        expect(snap.issues).toHaveLength(0);
       } finally {
         if (prev === undefined) {
           delete process.env.OPENCLAW_BIND;
