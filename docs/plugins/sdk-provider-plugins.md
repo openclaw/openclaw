@@ -52,6 +52,9 @@ API key auth, and dynamic model resolution.
       "name": "Acme AI",
       "description": "Acme AI model provider",
       "providers": ["acme-ai"],
+      "modelSupport": {
+        "modelPrefixes": ["acme-"]
+      },
       "providerAuthEnvVars": {
         "acme-ai": ["ACME_AI_API_KEY"]
       },
@@ -77,7 +80,9 @@ API key auth, and dynamic model resolution.
     </CodeGroup>
 
     The manifest declares `providerAuthEnvVars` so OpenClaw can detect
-    credentials without loading your plugin runtime. If you publish the
+    credentials without loading your plugin runtime. `modelSupport` is optional
+    and lets OpenClaw auto-load your provider plugin from shorthand model ids
+    like `acme-large` before runtime hooks exist. If you publish the
     provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
     are required in `package.json`.
 

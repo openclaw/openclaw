@@ -2,6 +2,9 @@
   "id": "anthropic",
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "modelSupport": {
+    "modelPrefixes": ["claude-"]
+  },
   "cliBackends": ["claude-cli"],
   "providerAuthEnvVars": {
     "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]

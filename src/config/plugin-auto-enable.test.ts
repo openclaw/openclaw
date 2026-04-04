@@ -48,6 +48,7 @@ function makeRegistry(
     id: string;
     channels: string[];
     autoEnableWhenConfiguredProviders?: string[];
+    modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
     contracts?: { webFetchProviders?: string[] };
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
@@ -57,6 +58,7 @@ function makeRegistry(
       id: p.id,
       channels: p.channels,
       autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
+      modelSupport: p.modelSupport,
       contracts: p.contracts,
       channelConfigs: p.channelConfigs,
       providers: [],

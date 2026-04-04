@@ -5,11 +5,44 @@ import { createPluginLoaderLogger } from "./logger.js";
 import {
   resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
+  resolveOwningPluginIdsForModelRefs,
   withBundledProviderVitestCompat,
 } from "./providers.js";
 import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+
+function withRuntimeActivatedPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  pluginIds: readonly string[];
+}): PluginLoadOptions["config"] {
+  if (params.pluginIds.length === 0) {
+    return params.config;
+  }
+  const allow = new Set(params.config?.plugins?.allow ?? []);
+  const entries = {
+    ...params.config?.plugins?.entries,
+  };
+  for (const pluginId of params.pluginIds) {
+    const normalized = pluginId.trim();
+    if (!normalized) {
+      continue;
+    }
+    allow.add(normalized);
+    entries[normalized] = {
+      ...entries[normalized],
+      enabled: true,
+    };
+  }
+  return {
+    ...params.config,
+    plugins: {
+      ...params.config?.plugins,
+      ...(allow.size > 0 ? { allow: [...allow] } : {}),
+      entries,
+    },
+  };
+}
 
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
@@ -19,16 +52,33 @@ export function resolvePluginProviders(params: {
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   onlyPluginIds?: string[];
+  modelRefs?: readonly string[];
   activate?: boolean;
   cache?: boolean;
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  const modelOwnedPluginIds = params.modelRefs?.length
+    ? resolveOwningPluginIdsForModelRefs({
+        models: params.modelRefs,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env,
+      })
+    : [];
+  const requestedPluginIds =
+    params.onlyPluginIds || modelOwnedPluginIds.length > 0
+      ? [...new Set([...(params.onlyPluginIds ?? []), ...modelOwnedPluginIds])]
+      : undefined;
+  const runtimeConfig = withRuntimeActivatedPluginIds({
+    config: params.config,
+    pluginIds: modelOwnedPluginIds,
+  });
   const activation = resolveBundledPluginCompatibleActivationInputs({
-    rawConfig: params.config,
+    rawConfig: runtimeConfig,
     env,
     workspaceDir: params.workspaceDir,
-    onlyPluginIds: params.onlyPluginIds,
+    onlyPluginIds: requestedPluginIds,
     applyAutoEnable: true,
     compatMode: {
       allowlist: params.bundledProviderAllowlistCompat,
@@ -48,7 +98,7 @@ export function resolvePluginProviders(params: {
     config,
     workspaceDir: params.workspaceDir,
     env,
-    onlyPluginIds: params.onlyPluginIds,
+    onlyPluginIds: requestedPluginIds,
   });
   const registry = resolveRuntimePluginRegistry({
     config,
