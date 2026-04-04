@@ -77,6 +77,9 @@ function describeDiscordMessageTool({
     };
   }
   const actions = new Set<ChannelMessageActionName>(["send"]);
+  if (discovery.isEnabled("messages")) {
+    actions.add("upload-file");
+  }
   if (discovery.isEnabled("polls")) {
     actions.add("poll");
   }
