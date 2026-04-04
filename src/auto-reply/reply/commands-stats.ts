@@ -8,10 +8,10 @@ const LOG_PATH = path.join(os.homedir(), ".openclaw", "logs", "gateway.err.log")
 
 // [iris-tokens] turn in=X out=Y [cacheRead=Z] [cacheWrite=W] [cost=$N] | session total=T
 const TOKEN_RE =
-  /^\[iris-tokens\] turn in=(\d+) out=(\d+)(?:\s+cacheRead=(\d+))?(?:\s+cacheWrite=(\d+))?(?:\s+cost=\$([0-9.]+))?/;
+  /\[iris-tokens\] turn in=(\d+) out=(\d+)(?:\s+cacheRead=(\d+))?(?:\s+cacheWrite=(\d+))?(?:\s+cost=\$([0-9.]+))?/;
 
 // [iris-compress] before=Xch after=Ych saved=Zch (~Ntok, P%)
-const COMPRESS_RE = /^\[iris-compress\].*?saved=(\d+)ch.*?~(\d+)tok.*?(\d+)%/;
+const COMPRESS_RE = /\[iris-compress\].*?saved=(\d+)ch.*?~(\d+)tok.*?(\d+)%/;
 
 // ISO timestamp prefix: 2026-02-24T11:45:46.832Z
 const DATE_RE = /^(\d{4}-\d{2}-\d{2})T/;
@@ -62,7 +62,6 @@ async function parseIrisLog(days: number): Promise<Map<string, DayStats>> {
     const dateMatch = line.match(DATE_RE);
     if (dateMatch) {
       currentDate = dateMatch[1];
-      continue;
     }
 
     if (!currentDate || currentDate < cutoffDate) {

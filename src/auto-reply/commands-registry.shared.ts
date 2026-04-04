@@ -816,6 +816,14 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
+    defineChatCommand({
+      key: "stats",
+      nativeName: "stats",
+      description: "Show iris token usage stats for the last 7 days.",
+      textAlias: "/stats",
+      scope: "text",
+      category: "status",
+    }),
   ];
 
   registerAlias(commands, "whoami", "/id");

@@ -95,6 +95,7 @@ export async function saveSessionMemory(agentDir: string, messages: unknown[]): 
     return;
   }
   const dest = path.join(agentDir, IRIS_MEMORY_FILE);
+  await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(dest, content, "utf-8");
 }
 

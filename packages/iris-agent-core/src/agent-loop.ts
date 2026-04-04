@@ -467,6 +467,7 @@ async function executeToolCallsParallel(
   // Within-batch dedup: same (name, args) key shares one Promise so the tool
   // executes only once even if the LLM requested it multiple times in one turn.
   const batchPromises = new Map<string, Promise<AgentToolResult<unknown>>>();
+  const dedupedIndices = new Set<number>();
 
   // Launch every tool concurrently.
   const batchStart = Date.now();
@@ -493,6 +494,7 @@ async function executeToolCallsParallel(
     // share its Promise rather than launching a duplicate execution.
     const existing = batchPromises.get(cacheKey);
     if (existing) {
+      dedupedIndices.add(i);
       return existing;
     }
 
@@ -549,7 +551,10 @@ async function executeToolCallsParallel(
   // include single-tool calls too (useful for baselining).
   const logSingle = process.env["IRIS_PARALLEL_STATS"] === "always";
   if (toolCalls.length > 1 || logSingle) {
-    const seqEstimate = toolDurations.reduce((a, b) => a + b, 0);
+    const seqEstimate = toolDurations.reduce(
+      (sum, dur, i) => (dedupedIndices.has(i) ? sum : sum + dur),
+      0,
+    );
     const saved = seqEstimate - wall;
     const names = toolCalls.map((tc) => tc.name).join(",");
     const cacheStr = cacheHits > 0 ? ` cached=${cacheHits}` : "";
