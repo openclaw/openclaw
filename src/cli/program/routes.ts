@@ -115,6 +115,18 @@ const routeGatewayStatus: RouteSpec = {
   },
 };
 
+const routeSessionsList: RouteSpec = {
+  // `sessions list` is a common mistake — guide users to `sessions` instead.
+  match: (path) => path[0] === "sessions" && path[1] === "list",
+  run: async (_argv) => {
+    defaultRuntime.error(
+      "sessions does not have a 'list' subcommand. Use 'openclaw sessions' (without 'list') to list sessions.",
+    );
+    defaultRuntime.exit(1);
+    return true;
+  },
+};
+
 const routeSessions: RouteSpec = {
   // Fast-path only bare `sessions`; subcommands (e.g. `sessions cleanup`)
   // must fall through to Commander so nested handlers run.
@@ -297,6 +309,7 @@ const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
   routeGatewayStatus,
+  routeSessionsList,
   routeSessions,
   routeAgentsList,
   routeConfigGet,
