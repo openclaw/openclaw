@@ -189,8 +189,10 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("DOCKER_HOST")).toBe(false);
     expect(isDangerousHostEnvVarName("docker_cert_path")).toBe(false);
     expect(isDangerousHostEnvVarName("DOCKER_TLS_VERIFY")).toBe(false);
+    expect(isDangerousHostEnvVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(false);
     expect(isDangerousHostEnvVarName("AWS_CONFIG_FILE")).toBe(false);
     expect(isDangerousHostEnvVarName("aws_config_file")).toBe(false);
+    expect(isDangerousHostEnvVarName("yarn_rc_filename")).toBe(false);
     expect(isDangerousHostEnvVarName("PATH")).toBe(false);
     expect(isDangerousHostEnvVarName("FOO")).toBe(false);
     expect(isDangerousHostEnvVarName("GRADLE_USER_HOME")).toBe(false);
@@ -228,6 +230,8 @@ describe("sanitizeHostExecEnv", () => {
         PATH: "/usr/bin:/bin",
         HOME: "/tmp/trusted-home",
         ZDOTDIR: "/tmp/trusted-zdotdir",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://trusted.example/crates.io-index",
+        YARN_RC_FILENAME: ".trusted-yarnrc.yml",
       },
       overrides: {
         PATH: "/tmp/evil",
@@ -247,7 +251,9 @@ describe("sanitizeHostExecEnv", () => {
         EDITOR: "/tmp/editor",
         NPM_CONFIG_USERCONFIG: "/tmp/npmrc",
         GIT_CONFIG_GLOBAL: "/tmp/gitconfig",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
         AWS_CONFIG_FILE: "/tmp/override-aws-config",
+        YARN_RC_FILENAME: ".evil-yarnrc.yml",
         PIP_INDEX_URL: "https://example.invalid/simple",
         PIP_PYPI_URL: "https://example.invalid/simple",
         PIP_EXTRA_INDEX_URL: "https://example.invalid/simple",
@@ -313,12 +319,14 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.EDITOR).toBeUndefined();
     expect(env.NPM_CONFIG_USERCONFIG).toBeUndefined();
     expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
+    expect(env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBe("https://trusted.example/crates.io-index");
     expect(env.SHELLOPTS).toBeUndefined();
     expect(env.PS4).toBeUndefined();
     expect(env.CLASSPATH).toBeUndefined();
     expect(env.GOFLAGS).toBeUndefined();
     expect(env.PHPRC).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(env.YARN_RC_FILENAME).toBe(".trusted-yarnrc.yml");
     expect(env.PIP_INDEX_URL).toBeUndefined();
     expect(env.PIP_PYPI_URL).toBeUndefined();
     expect(env.PIP_EXTRA_INDEX_URL).toBeUndefined();
@@ -486,6 +494,8 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("editor")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("NPM_CONFIG_USERCONFIG")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("git_config_global")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_REGISTRIES_CRATES_IO_INDEX")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("cargo_registries_internal_index")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("GRADLE_USER_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("gradle_user_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("PIP_INDEX_URL")).toBe(true);
@@ -523,6 +533,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("AWS_CONFIG_FILE")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("aws_config_file")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("yarn_rc_filename")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("BASH_ENV")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("FOO")).toBe(false);
   });
@@ -537,6 +548,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       overrides: {
         PATH: "/tmp/evil",
         CXX: "/tmp/evil-cxx",
+        CARGO_REGISTRIES_CRATES_IO_INDEX: "https://example.invalid/crates.io-index",
         CMAKE_C_COMPILER: "/tmp/evil-c-compiler",
         CLASSPATH: "/tmp/evil-classpath",
         PIP_INDEX_URL: "https://example.invalid/simple",
@@ -573,6 +585,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GOPATH: "/tmp/evil-go",
         PYTHONUSERBASE: "/tmp/evil-python-userbase",
         VIRTUAL_ENV: "/tmp/evil-venv",
+        YARN_RC_FILENAME: ".evil-yarnrc.yml",
         HTTPS_PROXY: "http://proxy.example.test:8080",
         GIT_SSL_NO_VERIFY: "1",
         GIT_SSL_CAINFO: "/tmp/evil-git-ca.pem",
@@ -585,6 +598,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
 
     expect(result.rejectedOverrideBlockedKeys).toEqual([
       "C_INCLUDE_PATH",
+      "CARGO_REGISTRIES_CRATES_IO_INDEX",
       "CLASSPATH",
       "CMAKE_C_COMPILER",
       "CPATH",
@@ -627,6 +641,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "UV_INDEX_URL",
       "UV_PYTHON",
       "VIRTUAL_ENV",
+      "YARN_RC_FILENAME",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toEqual(["BAD-KEY"]);
     expect(result.env.SAFE_KEY).toBe("ok");
@@ -634,6 +649,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.CLASSPATH).toBeUndefined();
     expect(result.env.CXX).toBeUndefined();
     expect(result.env.CMAKE_C_COMPILER).toBeUndefined();
+    expect(result.env.CARGO_REGISTRIES_CRATES_IO_INDEX).toBeUndefined();
     expect(result.env.PIP_INDEX_URL).toBeUndefined();
     expect(result.env.PIP_PYPI_URL).toBeUndefined();
     expect(result.env.PIP_EXTRA_INDEX_URL).toBeUndefined();
@@ -673,6 +689,7 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
     expect(result.env.PYTHONUSERBASE).toBeUndefined();
     expect(result.env.VIRTUAL_ENV).toBeUndefined();
+    expect(result.env.YARN_RC_FILENAME).toBeUndefined();
   });
 
   it("allows Windows-style override names while still rejecting invalid keys", () => {
