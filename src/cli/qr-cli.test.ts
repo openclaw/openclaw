@@ -168,7 +168,7 @@ describe("registerQrCli", () => {
   }
 
   function parseLastLoggedQrJson() {
-    const raw = runtime.log.mock.calls.at(-1)?.[0];
+    const raw = vi.mocked(runtime.log).mock.calls.at(-1)?.[0];
     return JSON.parse(typeof raw === "string" ? raw : "{}") as {
       setupCode?: string;
       gatewayUrl?: string;
@@ -202,7 +202,7 @@ describe("registerQrCli", () => {
     runtimeState.resetRuntimeCapture();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    runtime.exit.mockImplementation(() => {
+    vi.mocked(runtime.exit).mockImplementation(() => {
       throw new Error("exit");
     });
   });
@@ -243,7 +243,10 @@ describe("registerQrCli", () => {
     await runQr([]);
 
     expect(qrGenerate).toHaveBeenCalledTimes(1);
-    const output = runtime.log.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    const output = vi
+      .mocked(runtime.log)
+      .mock.calls.map((call) => readRuntimeCallText(call))
+      .join("\n");
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
     expect(output).toContain("Gateway:");
@@ -440,9 +443,11 @@ describe("registerQrCli", () => {
     await runQr(["--remote"]);
 
     expect(
-      runtime.log.mock.calls.some((call) =>
-        readRuntimeCallText(call).includes("gateway.remote.token inactive"),
-      ),
+      vi
+        .mocked(runtime.log)
+        .mock.calls.some((call) =>
+          readRuntimeCallText(call).includes("gateway.remote.token inactive"),
+        ),
     ).toBe(true);
   });
 
@@ -496,9 +501,11 @@ describe("registerQrCli", () => {
     const payload = parseLastLoggedQrJson();
     expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
     expect(
-      runtime.error.mock.calls.some((call) =>
-        readRuntimeCallText(call).includes("gateway.remote.password inactive"),
-      ),
+      vi
+        .mocked(runtime.error)
+        .mock.calls.some((call) =>
+          readRuntimeCallText(call).includes("gateway.remote.password inactive"),
+        ),
     ).toBe(true);
   });
 
@@ -539,7 +546,7 @@ describe("registerQrCli", () => {
 
     await runQr(["--json", "--remote"]);
 
-    const raw = runtime.log.mock.calls.at(-1)?.[0];
+    const raw = vi.mocked(runtime.log).mock.calls.at(-1)?.[0];
     const payload = JSON.parse(typeof raw === "string" ? raw : "{}") as {
       gatewayUrl?: string;
       auth?: string;

@@ -133,7 +133,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     vi.clearAllMocks();
-    runtime.exit.mockImplementation(() => {});
+    vi.mocked(runtime.exit).mockImplementation(() => {});
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;

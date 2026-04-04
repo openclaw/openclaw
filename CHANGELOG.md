@@ -171,6 +171,7 @@ Docs: https://docs.openclaw.ai
 - Channels/WhatsApp: pass inbound message timestamp to model context so the AI can see when WhatsApp messages were sent. (#58590) Thanks @Maninae
 - QQBot/voice: lazy-load `silk-wasm` in `audio-convert.ts` so qqbot still starts when the optional voice dependency is missing, while voice encode/decode degrades gracefully instead of crashing at module load time. (#58829) Thanks @WideLee.
 - WhatsApp/groups: fix bot waking up on self-number quoted replies in groups with `selfChatMode` enabled. (#60148) Thanks @lurebat
+- Device pairing: require `operator.pairing` or `operator.admin` for internal `/pair` setup-code, QR, and cleanup commands so lower-privilege gateway callers cannot mint or revoke pairing bootstrap material. (#60491) Thanks @eleqtrizit.
 
 ## 2026.3.31
 
