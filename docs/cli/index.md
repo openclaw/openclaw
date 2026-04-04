@@ -1095,9 +1095,9 @@ Options:
 
 Options:
 
-- `add`: interactive token-auth helper
+- `add`: interactive auth helper (provider auth flow or token paste)
 - `login`: `--provider <name>`, `--method <method>`, `--set-default`
-- `login-github-copilot`: GitHub Copilot OAuth login flow
+- `login-github-copilot`: GitHub Copilot OAuth login flow (`--yes`)
 - `setup-token`: `--provider <name>`, `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 
