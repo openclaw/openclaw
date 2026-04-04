@@ -1492,8 +1492,8 @@ private fun PermissionsStep(
     if (smsAvailable) {
       InlineDivider()
       PermissionToggleRow(
-        title = "SMS",
-        subtitle = "Send and search text messages via the gateway",
+        title = "SMS / MMS",
+        subtitle = "Send, search, and read SMS & MMS messages via the gateway",
         checked = enableSms,
         granted =
           isPermissionGranted(context, Manifest.permission.SEND_SMS) ||
