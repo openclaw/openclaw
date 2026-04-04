@@ -18,7 +18,11 @@ async function setupPairedNode(baseDir: string): Promise<string> {
     },
     baseDir,
   );
-  await approveNodePairing(request.request.requestId, baseDir);
+  await approveNodePairing(
+    request.request.requestId,
+    { callerScopes: ["operator.pairing", "operator.admin"] },
+    baseDir,
+  );
   const paired = await getPairedNode("node-1", baseDir);
   expect(paired).not.toBeNull();
   if (!paired) {
@@ -166,10 +170,51 @@ describe("node pairing tokens", () => {
     await expect(
       approveNodePairing(request.request.requestId, { callerScopes: ["operator.write"] }, baseDir),
     ).resolves.toEqual({
+      status: "forbidden",
+      missingScope: "operator.pairing",
+    });
+    await expect(
+      approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write"] },
+        baseDir,
+      ),
+    ).resolves.toEqual({
       requestId: request.request.requestId,
       node: expect.objectContaining({
         nodeId: "node-1",
         commands: ["canvas.present"],
+      }),
+    });
+  });
+
+  test("requires operator.pairing to approve commandless node requests", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const request = await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveNodePairing(request.request.requestId, { callerScopes: [] }, baseDir),
+    ).resolves.toEqual({
+      status: "forbidden",
+      missingScope: "operator.pairing",
+    });
+    await expect(
+      approveNodePairing(
+        request.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toEqual({
+      requestId: request.request.requestId,
+      node: expect.objectContaining({
+        nodeId: "node-1",
+        commands: undefined,
       }),
     });
   });
