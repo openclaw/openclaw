@@ -31,6 +31,13 @@ type BundledChannelDiscoveryCandidate = {
   };
 };
 
+const BUNDLED_CHANNEL_ENTRY_BASENAMES = [
+  "channel-entry.ts",
+  "channel-entry.mts",
+  "channel-entry.js",
+  "channel-entry.mjs",
+] as const;
+
 const log = createSubsystemLogger("channels");
 
 function resolveChannelPluginModuleEntry(
@@ -171,6 +178,12 @@ function resolvePreferredBundledChannelSource(
   candidate: BundledChannelDiscoveryCandidate,
   manifest: ReturnType<typeof loadPluginManifestRegistry>["plugins"][number],
 ): string {
+  for (const basename of BUNDLED_CHANNEL_ENTRY_BASENAMES) {
+    const preferred = resolveCompiledBundledModulePath(path.resolve(candidate.rootDir, basename));
+    if (fs.existsSync(preferred)) {
+      return preferred;
+    }
+  }
   const declaredEntry = candidate.packageManifest?.extensions?.find(
     (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
   );

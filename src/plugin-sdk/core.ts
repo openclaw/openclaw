@@ -443,21 +443,15 @@ export function defineChannelPluginEntry<TPlugin>({
   registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  let resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> | undefined;
-  const getConfigSchema = (): ChannelEntryConfigSchema<TPlugin> => {
-    resolvedConfigSchema ??=
-      typeof configSchema === "function"
-        ? configSchema()
-        : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
-    return resolvedConfigSchema;
-  };
+  const resolvedConfigSchema: ChannelEntryConfigSchema<TPlugin> =
+    typeof configSchema === "function"
+      ? configSchema()
+      : ((configSchema ?? emptyChannelConfigSchema()) as ChannelEntryConfigSchema<TPlugin>);
   const entry = {
     id,
     name,
     description,
-    get configSchema() {
-      return getConfigSchema();
-    },
+    configSchema: resolvedConfigSchema,
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);

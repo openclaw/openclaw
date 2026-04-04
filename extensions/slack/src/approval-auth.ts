@@ -1,7 +1,7 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-auth-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";

@@ -2,6 +2,7 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -11,18 +12,40 @@ import {
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
-import { discordDoctor } from "./doctor.js";
-import { createDiscordSetupWizardProxy } from "./setup-core.js";
+import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
 
-async function loadDiscordChannelRuntime() {
-  return await import("./channel.runtime.js");
+type DiscordDoctorModule = typeof import("./doctor.js");
+
+let discordDoctorModulePromise: Promise<DiscordDoctorModule> | undefined;
+
+async function loadDiscordDoctorModule(): Promise<DiscordDoctorModule> {
+  discordDoctorModulePromise ??= import("./doctor.js");
+  return await discordDoctorModulePromise;
 }
 
-export const discordSetupWizard = createDiscordSetupWizardProxy(
-  async () => (await loadDiscordChannelRuntime()).discordSetupWizard,
-);
+const discordDoctor: ChannelDoctorAdapter = {
+  dmAllowFromMode: "topOrNested",
+  groupModel: "route",
+  groupAllowFromFallbackToAllowFrom: false,
+  warnOnEmptyGroupSenderAllowlist: false,
+  legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
+  normalizeCompatibilityConfig: async (params) =>
+    (await loadDiscordDoctorModule()).discordDoctor.normalizeCompatibilityConfig?.(params) ?? {
+      config: params.cfg,
+      changes: [],
+    },
+  collectPreviewWarnings: async (params) =>
+    (await loadDiscordDoctorModule()).discordDoctor.collectPreviewWarnings?.(params) ?? [],
+  collectMutableAllowlistWarnings: async (params) =>
+    (await loadDiscordDoctorModule()).discordDoctor.collectMutableAllowlistWarnings?.(params) ?? [],
+  repairConfig: async (params) =>
+    (await loadDiscordDoctorModule()).discordDoctor.repairConfig?.(params) ?? {
+      config: params.cfg,
+      changes: [],
+    },
+};
 
 export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
   sectionKey: DISCORD_CHANNEL,
@@ -38,6 +61,7 @@ export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDis
 
 export function createDiscordPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedDiscordAccount>["setup"]>;
+  setupWizard?: ChannelPlugin<ResolvedDiscordAccount>["setupWizard"];
 }): Pick<
   ChannelPlugin<ResolvedDiscordAccount>,
   | "id"
@@ -54,7 +78,7 @@ export function createDiscordPluginBase(params: {
 > {
   return {
     id: DISCORD_CHANNEL,
-    setupWizard: discordSetupWizard,
+    ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     meta: { ...getChatChannelMeta(DISCORD_CHANNEL) },
     capabilities: {
       chatTypes: ["direct", "channel", "thread"],

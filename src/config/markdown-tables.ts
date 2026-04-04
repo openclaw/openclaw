@@ -31,7 +31,12 @@ function buildDefaultTableModes(): Map<string, MarkdownTableMode> {
   );
 }
 
-export const DEFAULT_TABLE_MODES = buildDefaultTableModes();
+let cachedDefaultTableModes: Map<string, MarkdownTableMode> | null = null;
+
+function getDefaultTableModes(): Map<string, MarkdownTableMode> {
+  cachedDefaultTableModes ??= buildDefaultTableModes();
+  return cachedDefaultTableModes;
+}
 
 const isMarkdownTableMode = (value: unknown): value is MarkdownTableMode =>
   value === "off" || value === "bullets" || value === "code" || value === "block";
@@ -62,7 +67,7 @@ export function resolveMarkdownTableMode(params: {
   accountId?: string | null;
 }): MarkdownTableMode {
   const channel = normalizeChannelId(params.channel);
-  const defaultMode = channel ? (DEFAULT_TABLE_MODES.get(channel) ?? "code") : "code";
+  const defaultMode = channel ? (getDefaultTableModes().get(channel) ?? "code") : "code";
   if (!channel || !params.cfg) {
     return defaultMode;
   }

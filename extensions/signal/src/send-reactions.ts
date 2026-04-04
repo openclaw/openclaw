@@ -2,7 +2,6 @@
  * Signal reactions via signal-cli JSON-RPC API
  */
 
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
@@ -30,6 +29,15 @@ type SignalReactionErrorMessages = {
   missingEmoji: string;
   missingTargetAuthor: string;
 };
+
+let signalConfigRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
+  | undefined;
+
+async function loadSignalConfigRuntime() {
+  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
+  return await signalConfigRuntimePromise;
+}
 
 function normalizeSignalId(raw: string): string {
   const trimmed = raw.trim();
@@ -77,7 +85,7 @@ async function sendReactionSignalCore(params: {
   opts: SignalReactionOpts;
   errors: SignalReactionErrorMessages;
 }): Promise<SignalReactionResult> {
-  const cfg = params.opts.cfg ?? loadConfig();
+  const cfg = params.opts.cfg ?? (await loadSignalConfigRuntime()).loadConfig();
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: params.opts.accountId,

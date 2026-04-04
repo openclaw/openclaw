@@ -63,7 +63,7 @@ import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js"
 import type { DiscordProbe } from "./probe.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
-import { discordSetupAdapter } from "./setup-core.js";
+import { discordSetupAdapter } from "./setup-adapter.js";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 import { collectDiscordStatusIssues } from "./status-issues.js";
 import { parseDiscordTarget } from "./target-parsing.js";

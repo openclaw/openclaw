@@ -1,7 +1,7 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-auth-runtime";
 import { resolveMattermostAccount } from "./mattermost/accounts.js";
 
 const MATTERMOST_USER_ID_RE = /^[a-z0-9]{26}$/;
