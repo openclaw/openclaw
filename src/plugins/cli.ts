@@ -46,13 +46,13 @@ function mergeCliRegistrars(params: {
   runtimeRegistry: PluginRegistry;
   metadataRegistry: PluginRegistry;
 }) {
-  const metadataCommands = new Set(
-    params.metadataRegistry.cliRegistrars.flatMap((entry) => entry.commands),
+  const runtimeCommands = new Set(
+    params.runtimeRegistry.cliRegistrars.flatMap((entry) => entry.commands),
   );
   return [
-    ...params.metadataRegistry.cliRegistrars,
-    ...params.runtimeRegistry.cliRegistrars.filter(
-      (entry) => !entry.commands.some((command) => metadataCommands.has(command)),
+    ...params.runtimeRegistry.cliRegistrars,
+    ...params.metadataRegistry.cliRegistrars.filter(
+      (entry) => !entry.commands.some((command) => runtimeCommands.has(command)),
     ),
   ];
 }

@@ -26,10 +26,15 @@ function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
   );
 }
 
-export const UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
-  ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
-  ...collectChannelUnsupportedSecretRefSurfacePatterns(),
-] as const;
+let cachedUnsupportedSecretRefSurfacePatterns: string[] | null = null;
+
+export function getUnsupportedSecretRefSurfacePatterns(): string[] {
+  cachedUnsupportedSecretRefSurfacePatterns ??= [
+    ...CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS,
+    ...collectChannelUnsupportedSecretRefSurfacePatterns(),
+  ];
+  return cachedUnsupportedSecretRefSurfacePatterns;
+}
 
 export type UnsupportedSecretRefConfigCandidate = {
   path: string;

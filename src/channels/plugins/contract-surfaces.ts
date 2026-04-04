@@ -9,7 +9,12 @@ import {
   shouldPreferNativeJiti,
 } from "../../plugins/sdk-alias.js";
 
-const CONTRACT_BASENAME = "contract-api.ts";
+const CONTRACT_SURFACE_BASENAMES = [
+  "contract-surfaces.ts",
+  "contract-surfaces.js",
+  "contract-api.ts",
+  "contract-api.js",
+] as const;
 
 let cachedSurfaces: unknown[] | null = null;
 let cachedSurfaceEntries: Array<{
@@ -41,6 +46,16 @@ function createModuleLoader() {
 
 const loadModule = createModuleLoader();
 
+function resolveContractSurfaceModulePath(rootDir: string): string | null {
+  for (const basename of CONTRACT_SURFACE_BASENAMES) {
+    const modulePath = path.join(rootDir, basename);
+    if (fs.existsSync(modulePath)) {
+      return modulePath;
+    }
+  }
+  return null;
+}
+
 function loadBundledChannelContractSurfaces(): unknown[] {
   return loadBundledChannelContractSurfaceEntries().map((entry) => entry.surface);
 }
@@ -61,8 +76,8 @@ function loadBundledChannelContractSurfaceEntries(): Array<{
     if (manifest.origin !== "bundled" || manifest.channels.length === 0) {
       continue;
     }
-    const modulePath = path.join(manifest.rootDir, CONTRACT_BASENAME);
-    if (!fs.existsSync(modulePath)) {
+    const modulePath = resolveContractSurfaceModulePath(manifest.rootDir);
+    if (!modulePath) {
       continue;
     }
     try {
