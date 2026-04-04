@@ -30,7 +30,7 @@ Related:
   falls back to `agents.defaults.imageModel`, then the resolved session/default
   model.
 - `agents.defaults.imageGenerationModel` is used by the shared image-generation capability. If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
-- `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. If omitted, video-generation providers can still use their own default model selection; if you set a specific provider/model, configure that provider's auth/API key too.
+- `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. Unlike image generation, this does not infer a provider default today. Set an explicit `provider/model` such as `qwen/wan2.6-t2v`, and configure that provider's auth/API key too.
 - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [/concepts/multi-agent](/concepts/multi-agent)).
 
 ## Quick model policy
