@@ -6,6 +6,7 @@
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveGoogleGenerativeAiApiOrigin } from "../google-generative-ai.js";
+import { retry } from "./retry.js";
 
 type PdfInput = {
   base64: string;
@@ -61,27 +62,42 @@ export async function anthropicAnalyzePdf(params: {
   content.push({ type: "text", text: params.prompt });
 
   const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
-  const res = await fetch(`${baseUrl}/v1/messages`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta": "pdfs-2024-09-25",
-    },
-    body: JSON.stringify({
-      model: params.modelId,
-      max_tokens: params.maxTokens ?? 4096,
-      messages: [{ role: "user", content }],
-    }),
-  });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(
-      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
-    );
+  // Wrap API call with retry for transient errors (rate limits, 503s, timeouts)
+  const response = await retry(
+    async () => {
+      const res = await fetch(`${baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-beta": "pdfs-2024-09-25",
+        },
+        body: JSON.stringify({
+          model: params.modelId,
+          max_tokens: params.maxTokens ?? 4096,
+          messages: [{ role: "user", content }],
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(
+          `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+        );
+      }
+
+      return res;
+    },
+    { maxAttempts: 3, baseDelayMs: 1500, maxDelayMs: 15000, throwOnFailure: false },
+  );
+
+  if (!response) {
+    throw new Error("Anthropic PDF request failed after 3 attempts");
   }
+
+  const res = response;
 
   const json = (await res.json().catch(() => null)) as unknown;
   if (!isRecord(json)) {
@@ -141,20 +157,34 @@ export async function geminiAnalyzePdf(params: {
   const baseUrl = resolveGoogleGenerativeAiApiOrigin(params.baseUrl);
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts }],
-    }),
-  });
+  // Wrap API call with retry for transient errors (rate limits, 503s, timeouts)
+  const response = await retry(
+    async () => {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+        }),
+      });
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(
-      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
-    );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(
+          `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+        );
+      }
+
+      return res;
+    },
+    { maxAttempts: 3, baseDelayMs: 1500, maxDelayMs: 15000, throwOnFailure: false },
+  );
+
+  if (!response) {
+    throw new Error("Gemini PDF request failed after 3 attempts");
   }
+
+  const res = response;
 
   const json = (await res.json().catch(() => null)) as unknown;
   if (!isRecord(json)) {
