@@ -313,7 +313,7 @@ export async function POST(req: Request) {
 						controller.enqueue(encoder.encode(`data: ${json}\n\n`));
 					} catch { /* ignore */ }
 				},
-				{ replay: false, replayTerminalBuffer: true },
+				{ replay: true },
 			);
 
 			if (!unsubscribe) {

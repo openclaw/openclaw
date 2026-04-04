@@ -2047,6 +2047,16 @@ function wireChildProcess(run: ActiveRun): void {
 
 		const exitedClean = code === 0 || code === null;
 
+		if (!everSentResponseActivity) {
+			const elapsed = Date.now() - run.startedAt;
+			const hasStderr = stderrChunks.length > 0;
+			console.warn(
+				`[active-runs] Empty response for session ${run.sessionId}: ` +
+				`exitCode=${code}, clean=${exitedClean}, elapsed=${elapsed}ms, ` +
+				`hasStderr=${hasStderr}, agentErrorReported=${agentErrorReported}`,
+			);
+		}
+
 		if (!everSentResponseActivity && !exitedClean) {
 			const tid = nextId("text");
 			emit({ type: "text-start", id: tid });
