@@ -15,6 +15,14 @@ function hasAnthropicVertexMetadataServerAdc(env: NodeJS.ProcessEnv = process.en
   return explicitMetadataOptIn === "1" || explicitMetadataOptIn?.toLowerCase() === "true";
 }
 
+function normalizeOptionalPathInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.env): string {
   return platform() === "win32"
     ? join(
@@ -29,7 +37,7 @@ function resolveAnthropicVertexAdcCredentialsPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return (
-    normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS) ??
+    normalizeOptionalPathInput(env.GOOGLE_APPLICATION_CREDENTIALS) ??
     resolveAnthropicVertexDefaultAdcPath(env)
   );
 }
