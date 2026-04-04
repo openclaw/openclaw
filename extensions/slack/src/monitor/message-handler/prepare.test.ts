@@ -916,7 +916,7 @@ describe("requireMentionInThreads", () => {
       message: makeMessage({ thread_ts: "100.000" }),
       opts: { source: "message" },
     });
-    // requireMentionInThreads: true overrides implicit mention — explicit @mention needed.
+    // requireMentionInThreads: true overrides implicit mention — mention needed.
     expect(result).toBeNull();
   });
 

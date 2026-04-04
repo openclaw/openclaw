@@ -404,7 +404,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
-    - `requireMentionInThreads` — override mention gating for thread replies (`true` = always require explicit @mention; `false` = threads never require a mention; unset = inherit `requireMention`)
+    - `requireMentionInThreads` — override mention gating for thread replies (`true` = always require a mention; `false` = threads never require a mention; unset = inherit `requireMention`)
     - `users` (allowlist)
     - `allowBots`
     - `skills`
