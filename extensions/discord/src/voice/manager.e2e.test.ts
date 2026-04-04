@@ -87,16 +87,20 @@ vi.mock("./sdk-runtime.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+vi.mock("openclaw/plugin-sdk/routing", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/routing")>(
+    "openclaw/plugin-sdk/routing",
+  );
   return {
     ...actual,
     resolveAgentRoute: resolveAgentRouteMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
@@ -290,6 +294,16 @@ describe("DiscordVoiceManager", () => {
         decryptionFailureTolerance: 8,
       }),
     );
+  });
+
+  it("keeps the shorter timeout for initial voice connection readiness", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 15_000);
   });
 
   it("stores guild metadata on joined voice sessions", async () => {
@@ -532,5 +546,16 @@ describe("DiscordVoiceManager", () => {
 
     expect(client.fetchGuild).toHaveBeenCalledWith("g1");
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("DiscordVoiceReadyListener: propagates autoJoin errors fire-and-forget without throwing", async () => {
+    const manager = createManager();
+    vi.spyOn(manager, "autoJoin").mockRejectedValue(new Error("autoJoin rejected"));
+
+    const { DiscordVoiceReadyListener } = managerModule;
+    const listener = new DiscordVoiceReadyListener(manager);
+
+    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    expect(manager.autoJoin).toHaveBeenCalledTimes(1);
   });
 });

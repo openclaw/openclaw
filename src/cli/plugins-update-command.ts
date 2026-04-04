@@ -89,7 +89,7 @@ function resolveHookPackUpdateSelection(params: {
 
 export async function runPluginUpdateCommand(params: {
   id?: string;
-  opts: { all?: boolean; dryRun?: boolean };
+  opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
 }) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const cfg = loadConfig();
@@ -122,6 +122,7 @@ export async function runPluginUpdateCommand(params: {
     pluginIds: pluginSelection.pluginIds,
     specOverrides: pluginSelection.specOverrides,
     dryRun: params.opts.dryRun,
+    dangerouslyForceUnsafeInstall: params.opts.dangerouslyForceUnsafeInstall,
     logger,
     onIntegrityDrift: async (drift) => {
       const specLabel = drift.resolvedSpec ?? drift.spec;

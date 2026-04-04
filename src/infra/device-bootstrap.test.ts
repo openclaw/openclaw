@@ -5,10 +5,15 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearDeviceBootstrapTokens,
   DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+  getBoundDeviceBootstrapProfile,
+  getDeviceBootstrapTokenProfile,
   issueDeviceBootstrapToken,
+  redeemDeviceBootstrapTokenProfile,
+  restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "./device-bootstrap.js";
+import { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } from "./device-identity.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-device-bootstrap-test-");
@@ -65,7 +70,7 @@ describe("device bootstrap tokens", () => {
       issuedAtMs: Date.now(),
       profile: {
         roles: ["node", "operator"],
-        scopes: ["operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
     });
   });
@@ -93,6 +98,55 @@ describe("device bootstrap tokens", () => {
     });
   });
 
+  it("loads the issued bootstrap profile for a valid token", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
+      {
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    );
+    await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
+  });
+
+  it("persists bootstrap redemption state across verification reloads", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "node",
+        scopes: [],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: false,
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.approvals", "operator.read", "operator.write", "operator.talk.secrets"],
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      redeemDeviceBootstrapTokenProfile({
+        baseDir,
+        token: issued.token,
+        role: "operator",
+        scopes: ["operator.approvals", "operator.read", "operator.write", "operator.talk.secrets"],
+      }),
+    ).resolves.toEqual({
+      recorded: true,
+      fullyRedeemed: true,
+    });
+  });
+
   it("clears outstanding bootstrap tokens on demand", async () => {
     const baseDir = await createTempDir();
     const first = await issueDeviceBootstrapToken({ baseDir });
@@ -112,12 +166,30 @@ describe("device bootstrap tokens", () => {
     });
   });
 
+  it("restores a revoked bootstrap token record after send failure recovery", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+    const revoked = await revokeDeviceBootstrapToken({ baseDir, token: issued.token });
+    expect(revoked.removed).toBe(true);
+    expect(revoked.record?.token).toBe(issued.token);
+
+    if (!revoked.record) {
+      throw new Error("expected revoked bootstrap token record");
+    }
+    await restoreDeviceBootstrapToken({ baseDir, record: revoked.record });
+    await expect(verifyBootstrapToken(baseDir, issued.token)).resolves.toEqual({ ok: true });
+  });
+
   it("revokes a specific bootstrap token", async () => {
     const baseDir = await createTempDir();
     const first = await issueDeviceBootstrapToken({ baseDir });
     const second = await issueDeviceBootstrapToken({ baseDir });
 
-    await expect(revokeDeviceBootstrapToken({ baseDir, token: first.token })).resolves.toEqual({
+    await expect(
+      revokeDeviceBootstrapToken({ baseDir, token: first.token }),
+    ).resolves.toMatchObject({
       removed: true,
     });
 
@@ -144,7 +216,12 @@ describe("device bootstrap tokens", () => {
             issuedAtMs,
             profile: {
               roles: ["node", "operator"],
-              scopes: ["operator.read", "operator.talk.secrets", "operator.write"],
+              scopes: [
+                "operator.approvals",
+                "operator.read",
+                "operator.talk.secrets",
+                "operator.write",
+              ],
             },
           },
         },
@@ -286,6 +363,37 @@ describe("device bootstrap tokens", () => {
 
     expect(Object.keys(parsed)).toEqual([issued.token]);
     expect(parsed[issued.token]?.token).toBe(issued.token);
+  });
+
+  it("accepts equivalent public key encodings after binding the bootstrap token", async () => {
+    const baseDir = await createTempDir();
+    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "device.json"));
+    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const rawPublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: identity.deviceId,
+        publicKey: identity.publicKeyPem,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        deviceId: identity.deviceId,
+        publicKey: rawPublicKey,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      getBoundDeviceBootstrapProfile({
+        token: issued.token,
+        deviceId: identity.deviceId,
+        publicKey: rawPublicKey,
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      roles: ["node", "operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+    });
   });
 
   it("rejects a second device identity after the first verification binds the token", async () => {

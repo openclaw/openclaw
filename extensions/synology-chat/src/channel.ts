@@ -29,6 +29,7 @@ import {
   registerSynologyWebhookRoute,
   validateSynologyGatewayAccountStartup,
 } from "./gateway-runtime.js";
+import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
 import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
@@ -318,6 +319,7 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
         ),
         collectSynologyChatRoutingWarnings,
       ),
+      collectAuditFindings: collectSynologyChatSecurityAuditFindings,
     },
     outbound: {
       deliveryMode: "gateway" as const,

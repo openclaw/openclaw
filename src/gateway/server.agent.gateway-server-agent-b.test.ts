@@ -112,7 +112,7 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
 }
 
 function readAgentCommandCall(fromEnd = 1) {
-  const calls = vi.mocked(agentCommand).mock.calls as unknown[][];
+  const calls = vi.mocked(agentCommand).mock.calls;
   return (calls.at(-fromEnd)?.[0] ?? {}) as Record<string, unknown>;
 }
 
@@ -376,7 +376,7 @@ describe("gateway server agent", () => {
   test("agent routes bare /new through session reset before running greeting prompt", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
     const spy = vi.mocked(agentCommand);
-    const calls = spy.mock.calls as unknown[][];
+    const calls = spy.mock.calls;
     const callsBefore = calls.length;
     const res = await rpcReq(ws, "agent", {
       message: "/new",

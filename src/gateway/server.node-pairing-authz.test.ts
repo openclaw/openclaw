@@ -40,7 +40,7 @@ async function connectNodeClient(params: {
 }
 
 describe("gateway node pairing authorization", () => {
-  test("requires operator.write before node pairing approvals", async () => {
+  test("requires operator.admin for exec-capable node pairing approvals", async () => {
     const started = await startServerWithClient("secret");
     const approver = await issueOperatorToken({
       name: "node-pair-approve-pairing-only",
@@ -70,7 +70,7 @@ describe("gateway node pairing authorization", () => {
         requestId: request.request.requestId,
       });
       expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("missing scope: operator.write");
+      expect(approve.error?.message).toBe("missing scope: operator.admin");
 
       await expect(
         import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
@@ -83,7 +83,7 @@ describe("gateway node pairing authorization", () => {
     }
   });
 
-  test("rejects approving exec-capable node commands above the caller session scopes", async () => {
+  test("requires operator.pairing before node pairing approvals", async () => {
     const started = await startServerWithClient("secret");
     const approver = await issueOperatorToken({
       name: "node-pair-approve-attacker",
@@ -113,11 +113,61 @@ describe("gateway node pairing authorization", () => {
         requestId: request.request.requestId,
       });
       expect(approve.ok).toBe(false);
-      expect(approve.error?.message).toBe("missing scope: operator.admin");
+      expect(approve.error?.message).toBe("missing scope: operator.pairing");
 
       await expect(
         import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
       ).resolves.toBeNull();
+    } finally {
+      pairingWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("allows pairing-only operators to approve commandless node requests", async () => {
+    const started = await startServerWithClient("secret");
+    const approver = await issueOperatorToken({
+      name: "node-pair-approve-commandless",
+      approvedScopes: ["operator.admin"],
+      tokenScopes: ["operator.pairing"],
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    let pairingWs: WebSocket | undefined;
+    try {
+      const request = await requestNodePairing({
+        nodeId: "node-approve-target",
+        platform: "darwin",
+      });
+
+      pairingWs = await openTrackedWs(started.port);
+      await connectOk(pairingWs, {
+        skipDefaultAuth: true,
+        deviceToken: approver.token,
+        deviceIdentityPath: approver.identityPath,
+        scopes: ["operator.pairing"],
+      });
+
+      const approve = await rpcReq<{
+        requestId?: string;
+        node?: { nodeId?: string };
+      }>(pairingWs, "node.pair.approve", {
+        requestId: request.request.requestId,
+      });
+      expect(approve.ok).toBe(true);
+      expect(approve.payload?.requestId).toBe(request.request.requestId);
+      expect(approve.payload?.node?.nodeId).toBe("node-approve-target");
+
+      await expect(
+        import("../infra/node-pairing.js").then((m) => m.getPairedNode("node-approve-target")),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          nodeId: "node-approve-target",
+        }),
+      );
     } finally {
       pairingWs?.close();
       started.ws.close();
@@ -155,7 +205,9 @@ describe("gateway node pairing authorization", () => {
         platform: "darwin",
         commands: ["canvas.snapshot"],
       });
-      await approveNodePairing(request.request.requestId);
+      await approveNodePairing(request.request.requestId, {
+        callerScopes: ["operator.pairing", "operator.write"],
+      });
 
       nodeClient = await connectNodeClient({
         port: started.port,
@@ -217,7 +269,9 @@ describe("gateway node pairing authorization", () => {
         nodeId: pairedNode.identity.deviceId,
         platform: "darwin",
       });
-      await approveNodePairing(initialApproval.request.requestId);
+      await approveNodePairing(initialApproval.request.requestId, {
+        callerScopes: ["operator.pairing"],
+      });
 
       nodeClient = await connectNodeClient({
         port: started.port,

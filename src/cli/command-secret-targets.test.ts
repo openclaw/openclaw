@@ -1,4 +1,56 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const REGISTRY_IDS = [
+  "agents.defaults.memorySearch.remote.apiKey",
+  "agents.list[].memorySearch.remote.apiKey",
+  "channels.discord.token",
+  "channels.discord.accounts.ops.token",
+  "channels.discord.accounts.chat.token",
+  "channels.telegram.botToken",
+  "gateway.auth.token",
+  "gateway.auth.password",
+  "gateway.remote.token",
+  "gateway.remote.password",
+  "models.providers.openai.apiKey",
+  "messages.tts.providers.openai.apiKey",
+  "plugins.entries.firecrawl.config.webFetch.apiKey",
+  "skills.entries.demo.apiKey",
+  "tools.web.search.apiKey",
+] as const;
+
+vi.mock("../secrets/target-registry.js", () => ({
+  listSecretTargetRegistryEntries: vi.fn(() =>
+    REGISTRY_IDS.map((id) => ({
+      id,
+    })),
+  ),
+  discoverConfigSecretTargetsByIds: vi.fn((config: unknown, targetIds?: Iterable<string>) => {
+    const allowed = targetIds ? new Set(targetIds) : null;
+    const out: Array<{ path: string; pathSegments: string[] }> = [];
+    const record = (path: string) => {
+      if (allowed && !allowed.has(path)) {
+        return;
+      }
+      out.push({ path, pathSegments: path.split(".") });
+    };
+
+    const channels = (config as { channels?: Record<string, unknown> } | undefined)?.channels;
+    const discord = channels?.discord as
+      | { token?: unknown; accounts?: Record<string, { token?: unknown }> }
+      | undefined;
+
+    if (discord?.token !== undefined) {
+      record("channels.discord.token");
+    }
+    for (const [accountId, account] of Object.entries(discord?.accounts ?? {})) {
+      if (account?.token !== undefined) {
+        record(`channels.discord.accounts.${accountId}.token`);
+      }
+    }
+    return out;
+  }),
+}));
+
 import {
   getAgentRuntimeCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
@@ -10,8 +62,7 @@ describe("command secret target ids", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
-    expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
-    expect(ids.has("tools.web.x_search.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
   });
 
   it("includes gateway auth and channel targets for security audit", () => {

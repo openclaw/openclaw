@@ -38,15 +38,33 @@ import {
   materializeRuntimeConfig,
 } from "./materialize.js";
 import { applyMergePatch } from "./merge-patch.js";
-import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import {
+  clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState,
+  getRuntimeConfigSnapshot as getRuntimeConfigSnapshotState,
+  getRuntimeConfigSnapshotRefreshHandler,
+  getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState,
+  resetConfigRuntimeState as resetConfigRuntimeStateState,
+  setRuntimeConfigSnapshot as setRuntimeConfigSnapshotState,
+  setRuntimeConfigSnapshotRefreshHandler as setRuntimeConfigSnapshotRefreshHandlerState,
+} from "./runtime-snapshot.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
+
+export {
+  clearRuntimeConfigSnapshotState as clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotState as getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshotState as getRuntimeConfigSourceSnapshot,
+  resetConfigRuntimeStateState as resetConfigRuntimeState,
+  setRuntimeConfigSnapshotState as setRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshotRefreshHandlerState as setRuntimeConfigSnapshotRefreshHandler,
+};
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -226,15 +244,6 @@ export type ConfigWriteOptions = {
 export type ReadConfigFileSnapshotForWriteResult = {
   snapshot: ConfigFileSnapshot;
   writeOptions: ConfigWriteOptions;
-};
-
-export type RuntimeConfigSnapshotRefreshParams = {
-  sourceConfig: OpenClawConfig;
-};
-
-export type RuntimeConfigSnapshotRefreshHandler = {
-  refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
-  clearOnRefreshFailure?: () => void;
 };
 
 export type ConfigWriteNotification = {
@@ -1673,12 +1682,7 @@ async function finalizeReadConfigSnapshotInternalResult(
 
 export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
-  const requestedConfigPath = resolveConfigPathForDeps(deps);
-  const candidatePaths = deps.configPath
-    ? [requestedConfigPath]
-    : resolveDefaultConfigCandidates(deps.env, deps.homedir);
-  const configPath =
-    candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
+  const configPath = resolveConfigPathForDeps(deps);
 
   function observeLoadConfigSnapshot(snapshot: ConfigFileSnapshot): ConfigFileSnapshot {
     observeConfigSnapshotSync(deps, snapshot);
@@ -1885,7 +1889,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const hash = hashConfigRaw(null);
-      const config = materializeRuntimeConfig({}, "missing");
+      const config = {};
       const legacyIssues: LegacyConfigIssue[] = [];
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: createConfigFileSnapshot({
@@ -2376,9 +2380,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
-let runtimeConfigSnapshot: OpenClawConfig | null = null;
-let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
-let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 const configWriteListeners = new Set<(event: ConfigWriteNotification) => void>();
 
 function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
@@ -2402,31 +2403,6 @@ export function registerConfigWriteListener(
   return () => {
     configWriteListeners.delete(listener);
   };
-}
-
-export function setRuntimeConfigSnapshot(
-  config: OpenClawConfig,
-  sourceConfig?: OpenClawConfig,
-): void {
-  runtimeConfigSnapshot = config;
-  runtimeConfigSourceSnapshot = sourceConfig ?? null;
-}
-
-export function resetConfigRuntimeState(): void {
-  runtimeConfigSnapshot = null;
-  runtimeConfigSourceSnapshot = null;
-}
-
-export function clearRuntimeConfigSnapshot(): void {
-  resetConfigRuntimeState();
-}
-
-export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
-  return runtimeConfigSnapshot;
-}
-
-export function getRuntimeConfigSourceSnapshot(): OpenClawConfig | null {
-  return runtimeConfigSourceSnapshot;
 }
 
 function isCompatibleTopLevelRuntimeProjectionShape(params: {
@@ -2459,6 +2435,8 @@ function isCompatibleTopLevelRuntimeProjectionShape(params: {
 }
 
 export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): OpenClawConfig {
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
   if (!runtimeConfigSnapshot || !runtimeConfigSourceSnapshot) {
     return config;
   }
@@ -2481,13 +2459,8 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   return coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot, runtimePatch));
 }
 
-export function setRuntimeConfigSnapshotRefreshHandler(
-  refreshHandler: RuntimeConfigSnapshotRefreshHandler | null,
-): void {
-  runtimeConfigSnapshotRefreshHandler = refreshHandler;
-}
-
 export function loadConfig(): OpenClawConfig {
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
   }
@@ -2495,8 +2468,8 @@ export function loadConfig(): OpenClawConfig {
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  setRuntimeConfigSnapshot(config);
-  return runtimeConfigSnapshot ?? config;
+  setRuntimeConfigSnapshotState(config);
+  return getRuntimeConfigSnapshotState() ?? config;
 }
 
 export function getRuntimeConfig(): OpenClawConfig {
@@ -2530,6 +2503,8 @@ export async function writeConfigFile(
 ): Promise<void> {
   const io = createConfigIO();
   let nextCfg = cfg;
+  const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
+  const runtimeConfigSourceSnapshot = getRuntimeConfigSourceSnapshotState();
   const hadRuntimeSnapshot = Boolean(runtimeConfigSnapshot);
   const hadBothSnapshots = Boolean(runtimeConfigSnapshot && runtimeConfigSourceSnapshot);
   if (hadBothSnapshots) {
@@ -2543,20 +2518,21 @@ export async function writeConfigFile(
     unsetPaths: options.unsetPaths,
   });
   const notifyCommittedWrite = () => {
-    if (!runtimeConfigSnapshot) {
+    const currentRuntimeConfig = getRuntimeConfigSnapshotState();
+    if (!currentRuntimeConfig) {
       return;
     }
     notifyConfigWriteListeners({
       configPath: io.configPath,
       sourceConfig: nextCfg,
-      runtimeConfig: runtimeConfigSnapshot,
+      runtimeConfig: currentRuntimeConfig,
       persistedHash: writeResult.persistedHash,
       writtenAtMs: Date.now(),
     });
   };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
-  const refreshHandler = runtimeConfigSnapshotRefreshHandler;
+  const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
     try {
       const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
@@ -2581,16 +2557,16 @@ export async function writeConfigFile(
     // Refresh both snapshots from disk atomically so follow-up reads get normalized config and
     // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
     const fresh = io.loadConfig();
-    setRuntimeConfigSnapshot(fresh, nextCfg);
+    setRuntimeConfigSnapshotState(fresh, nextCfg);
     notifyCommittedWrite();
     return;
   }
   if (hadRuntimeSnapshot) {
     const fresh = io.loadConfig();
-    setRuntimeConfigSnapshot(fresh);
+    setRuntimeConfigSnapshotState(fresh);
     notifyCommittedWrite();
     return;
   }
-  setRuntimeConfigSnapshot(io.loadConfig());
+  setRuntimeConfigSnapshotState(io.loadConfig());
   notifyCommittedWrite();
 }

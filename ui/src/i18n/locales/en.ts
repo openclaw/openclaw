@@ -45,6 +45,7 @@ export const en: TranslationMap = {
     aiAgents: "AI & Agents",
     debug: "Debug",
     logs: "Logs",
+    dreams: "Dreams",
   },
   subtitles: {
     agents: "Workspaces, tools, identities.",
@@ -65,6 +66,7 @@ export const en: TranslationMap = {
     aiAgents: "Agents, models, skills, tools, memory, session.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
+    dreams: "Memory consolidation while sleeping.",
   },
   overview: {
     access: {

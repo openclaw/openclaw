@@ -5,7 +5,7 @@ summary: 为在 OpenClaw macOS 应用上工作的开发者提供的设置指南
 title: macOS 开发设置
 x-i18n:
   generated_at: "2026-02-03T07:52:36Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 4ea67701bd58b7512f945fce58d79e1b3d990fbf45183323a1e3ab9688827623
   source_path: platforms/mac/dev-setup.md

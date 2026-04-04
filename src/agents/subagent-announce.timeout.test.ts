@@ -79,60 +79,56 @@ function createTimeoutHistoryWithNoReply() {
 }
 
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-    resolveGatewayPort: () => 18789,
-  };
-});
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    ...createSessionsModuleMock(),
-  };
-});
 vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./pi-embedded.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
-    waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
-      waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
-  };
-});
-vi.mock("./subagent-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry.js")>();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun: () => 0,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    replaceSubagentRunAfterSteer: () => true,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
-  };
-});
-vi.mock("./subagent-registry-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry-runtime.js")>();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    countPendingDescendantRunsExcludingRun: () => 0,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    replaceSubagentRunAfterSteer: () => true,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
-  };
-});
+vi.mock("./subagent-announce-delivery.runtime.js", () => ({
+  createBoundDeliveryRouter: () => ({
+    resolveDestination: () => ({ mode: "none" }),
+  }),
+  resolveConversationIdFromTargets: () => "",
+  resolveExternalBestEffortDeliveryTarget: (params: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  }) => ({
+    deliver: Boolean(params.channel && params.to),
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+  }),
+  resolveQueueSettings: (params: {
+    cfg?: {
+      messages?: {
+        queue?: {
+          byChannel?: Record<string, string>;
+        };
+      };
+    };
+    channel?: string;
+  }) => ({
+    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
+  }),
+}));
+vi.mock("./subagent-announce.runtime.js", () => ({
+  callGateway: createGatewayCallModuleMock().callGateway,
+  loadConfig: () => configOverride,
+  ...createSessionsModuleMock(),
+  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
+  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
+}));
+vi.mock("./subagent-announce.registry.runtime.js", () => ({
+  countActiveDescendantRuns: () => 0,
+  countPendingDescendantRuns: () => pendingDescendantRuns,
+  countPendingDescendantRunsExcludingRun: () => 0,
+  listSubagentRunsForRequester: () => [],
+  isSubagentSessionRunActive: () => subagentSessionRunActive,
+  shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+  replaceSubagentRunAfterSteer: () => true,
+  resolveRequesterForChildSession: () => fallbackRequesterResolution,
+}));
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
   typeof import("./subagent-announce.js").runSubagentAnnounceFlow

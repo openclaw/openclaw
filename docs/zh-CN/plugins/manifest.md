@@ -6,7 +6,7 @@ summary: 插件清单及 JSON Schema 要求（严格配置验证）
 title: 插件清单
 x-i18n:
   generated_at: "2026-02-01T21:34:21Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 47b3e33c915f47bdd172ae0316af7ef16ca831c317e3f1a7fdfcd67e3bd43f56
   source_path: plugins/manifest.md

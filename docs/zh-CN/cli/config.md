@@ -5,7 +5,7 @@ summary: "`openclaw config` 的 CLI 参考（获取/设置/取消设置配置值
 title: config
 x-i18n:
   generated_at: "2026-02-03T10:04:13Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d60a35f5330f22bc99a0df090590586109d329ddd2ca294aeed191a22560c1c2
   source_path: cli/config.md

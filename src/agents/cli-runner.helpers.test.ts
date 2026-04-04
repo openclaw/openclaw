@@ -1,9 +1,10 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
-import { buildCliArgs, loadPromptRefImages } from "./cli-runner/helpers.js";
+import { buildCliArgs, loadPromptRefImages, resolveCliRunQueueKey } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
 describe("loadPromptRefImages", () => {
@@ -116,5 +117,68 @@ describe("buildCliArgs", () => {
         useResume: true,
       }),
     ).toEqual(["exec", "resume", "thread-123", "--model", "gpt-5.4"]);
+  });
+
+  it("strips the internal cache boundary from CLI system prompt args", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+        },
+        baseArgs: ["-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        useResume: false,
+      }),
+    ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
+  });
+});
+
+describe("resolveCliRunQueueKey", () => {
+  it("scopes Claude CLI serialization to the workspace for fresh runs", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-1",
+        workspaceDir: "/tmp/project-a",
+      }),
+    ).toBe("claude-cli:workspace:/tmp/project-a");
+  });
+
+  it("scopes Claude CLI serialization to the resumed CLI session id", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: true,
+        runId: "run-2",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "claude-session-123",
+      }),
+    ).toBe("claude-cli:session:claude-session-123");
+  });
+
+  it("keeps non-Claude backends on the provider lane when serialized", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "codex-cli",
+        serialize: true,
+        runId: "run-3",
+        workspaceDir: "/tmp/project-a",
+        cliSessionId: "thread-123",
+      }),
+    ).toBe("codex-cli");
+  });
+
+  it("disables serialization when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "claude-cli",
+        serialize: false,
+        runId: "run-4",
+        workspaceDir: "/tmp/project-a",
+      }),
+    ).toBe("claude-cli:run-4");
   });
 });

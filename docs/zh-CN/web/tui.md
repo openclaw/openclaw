@@ -6,7 +6,7 @@ summary: 终端 UI（TUI）：从任何机器连接到 Gateway 网关
 title: TUI
 x-i18n:
   generated_at: "2026-02-03T10:13:10Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 4bf5b0037bbb3a166289f2f0a9399489637d4cf26335ae3577af9ea83eee747e
   source_path: web/tui.md

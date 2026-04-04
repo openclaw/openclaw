@@ -9,7 +9,7 @@ title: "Background Tasks"
 
 # Background Tasks
 
-> **Cron vs Heartbeat vs Tasks?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for choosing the right scheduling mechanism. This page covers **tracking** background work, not scheduling it.
+> **Looking for scheduling?** See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
 
 Background tasks track work that runs **outside your main conversation session**:
 ACP runs, subagent spawns, isolated cron job executions, and CLI-initiated operations.
@@ -25,6 +25,11 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - Tasks are **records**, not schedulers — cron and heartbeat decide _when_ work runs, tasks track _what happened_.
 - ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
+- Cron tasks stay live while the cron runtime still owns the job; chat-backed CLI tasks stay live only while their owning run context is still active.
+- Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
+- Isolated cron delivery suppresses stale interim parent replies while
+  descendant subagent work is still draining, and it prefers final descendant
+  output when that arrives before delivery.
 - Completion notifications are delivered directly to a channel or queued for the next heartbeat.
 - `openclaw tasks list` shows all tasks; `openclaw tasks audit` surfaces issues.
 - Terminal records are kept for 7 days, then automatically pruned.
@@ -50,6 +55,15 @@ openclaw tasks notify <lookup> state_changes
 
 # Run a health audit
 openclaw tasks audit
+
+# Preview or apply maintenance
+openclaw tasks maintenance
+openclaw tasks maintenance --apply
+
+# Inspect TaskFlow state
+openclaw tasks flow list
+openclaw tasks flow show <lookup>
+openclaw tasks flow cancel <lookup>
 ```
 
 ## What creates a task
@@ -59,7 +73,7 @@ openclaw tasks audit
 | ACP background runs    | `acp`        | Spawning a child ACP session                           | `done_only`           |
 | Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
 | Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `done_only`           |
+| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `silent`              |
 
 Main-session cron tasks use `silent` notify policy by default — they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
@@ -91,9 +105,16 @@ stateDiagram-v2
 | `failed`    | Completed with an error                                                    |
 | `timed_out` | Exceeded the configured timeout                                            |
 | `cancelled` | Stopped by the operator via `openclaw tasks cancel`                        |
-| `lost`      | Backing child session disappeared (detected after a 5-minute grace period) |
+| `lost`      | The runtime lost authoritative backing state after a 5-minute grace period |
 
 Transitions happen automatically — when the associated agent run ends, the task status updates to match.
+
+`lost` is runtime-aware:
+
+- ACP tasks: backing ACP child session metadata disappeared.
+- Subagent tasks: backing child session disappeared from the target agent store.
+- Cron tasks: the cron runtime no longer tracks the job as active.
+- CLI tasks: isolated child-session tasks use the child session; chat-backed CLI tasks use the live run context instead, so lingering channel/group/direct session rows do not keep them alive.
 
 ## Delivery and notifications
 
@@ -167,10 +188,45 @@ Surfaces operational issues. Findings also appear in `openclaw status` when issu
 | ------------------------- | -------- | ----------------------------------------------------- |
 | `stale_queued`            | warn     | Queued for more than 10 minutes                       |
 | `stale_running`           | error    | Running for more than 30 minutes                      |
-| `lost`                    | error    | Backing session is gone                               |
+| `lost`                    | error    | Runtime-backed task ownership disappeared             |
 | `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`     |
 | `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
 | `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
+
+### `tasks maintenance`
+
+```bash
+openclaw tasks maintenance [--json]
+openclaw tasks maintenance --apply [--json]
+```
+
+Use this to preview or apply reconciliation, cleanup stamping, and pruning for
+tasks and Task Flow state.
+
+Reconciliation is runtime-aware:
+
+- ACP/subagent tasks check their backing child session.
+- Cron tasks check whether the cron runtime still owns the job.
+- Chat-backed CLI tasks check the owning live run context, not just the chat session row.
+
+Completion cleanup is also runtime-aware:
+
+- Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
+- Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
+- Isolated cron delivery waits out descendant subagent follow-up when needed and
+  suppresses stale parent acknowledgement text instead of announcing it.
+- Cleanup failures do not mask the real task outcome.
+
+### `tasks flow list|show|cancel`
+
+```bash
+openclaw tasks flow list [--status <status>] [--json]
+openclaw tasks flow show <lookup> [--json]
+openclaw tasks flow cancel <lookup>
+```
+
+Use these when the orchestrating Task Flow is the thing you care about rather
+than one individual background task record.
 
 ## Chat task board (`/tasks`)
 
@@ -216,7 +272,7 @@ The registry loads into memory at gateway start and syncs writes to SQLite for d
 
 A sweeper runs every **60 seconds** and handles three things:
 
-1. **Reconciliation** — checks if active tasks' backing sessions still exist. If a child session has been gone for more than 5 minutes, the task is marked `lost`.
+1. **Reconciliation** — checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
 2. **Cleanup stamping** — sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days).
 3. **Pruning** — deletes records past their `cleanupAfter` date.
 
@@ -224,11 +280,11 @@ A sweeper runs every **60 seconds** and handles three things:
 
 ## How tasks relate to other systems
 
-### Tasks and older flow references
+### Tasks and Task Flow
 
-Some older OpenClaw release notes and docs referred to task management as `ClawFlow` and documented an `openclaw flows` command surface.
+[Task Flow](/automation/taskflow) is the flow orchestration layer above background tasks. A single flow may coordinate multiple tasks over its lifetime using managed or mirrored sync modes. Use `openclaw tasks` to inspect individual task records and `openclaw tasks flow` to inspect the orchestrating flow.
 
-In the current codebase, the supported operator surface is `openclaw tasks`. See [ClawFlow](/automation/clawflow) and [CLI: flows](/cli/flows) for compatibility notes that map those older references to the current task commands.
+See [Task Flow](/automation/taskflow) for details.
 
 ### Tasks and cron
 
@@ -252,10 +308,8 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 
 ## Related
 
-- [Automation Overview](/automation) — all automation mechanisms at a glance
-- [ClawFlow](/automation/clawflow) — compatibility note for older docs and release notes
-- [Cron Jobs](/automation/cron-jobs) — scheduling background work
-- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Task Flow](/automation/taskflow) — flow orchestration above tasks
+- [Scheduled Tasks](/automation/cron-jobs) — scheduling background work
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: flows](/cli/flows) — compatibility note for the mistaken command name
 - [CLI: Tasks](/cli/index#tasks) — CLI command reference

@@ -117,7 +117,14 @@ export type ChannelAccountState =
 
 export type ChannelHeartbeatDeps = {
   webAuthExists?: () => Promise<boolean>;
-  hasActiveWebListener?: () => boolean;
+  hasActiveWebListener?: (accountId?: string) => boolean;
+};
+
+export type ChannelLegacyStateMigrationPlan = {
+  kind: "copy" | "move";
+  label: string;
+  sourcePath: string;
+  targetPath: string;
 };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
@@ -397,6 +404,24 @@ export type ChannelThreadingToolContext = {
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
   normalizeTarget?: (raw: string) => string | undefined;
+  normalizeExplicitSessionKey?: (params: {
+    sessionKey: string;
+    ctx: MsgContext;
+  }) => string | undefined;
+  resolveInboundConversation?: (params: {
+    from?: string;
+    to?: string;
+    conversationId?: string;
+    threadId?: string | number;
+    isGroup: boolean;
+  }) => {
+    conversationId?: string;
+    parentConversationId?: string;
+  } | null;
+  resolveDeliveryTarget?: (params: { conversationId: string; parentConversationId?: string }) => {
+    to?: string;
+    threadId?: string;
+  } | null;
   /**
    * Canonical plugin-owned session conversation grammar.
    * Use this when the provider encodes thread or scoped-conversation semantics
@@ -440,6 +465,11 @@ export type ChannelMessagingAdapter = {
    */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
+  transformReplyPayload?: (params: {
+    payload: ReplyPayload;
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => ReplyPayload | null;
   enableInteractiveReplies?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -496,6 +526,12 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
+  inboundFormattingHints?: (params: { accountId?: string | null }) =>
+    | {
+        text_markup: string;
+        rules: string[];
+      }
+    | undefined;
   reactionGuidance?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -563,6 +599,13 @@ export type ChannelMessageActionAdapter = {
     params: ChannelMessageActionDiscoveryContext,
   ) => ChannelMessageToolDiscovery | null | undefined;
   supportsAction?: (params: { action: ChannelMessageActionName }) => boolean;
+  resolveCliActionRequest?: (params: {
+    action: ChannelMessageActionName;
+    args: Record<string, unknown>;
+  }) => {
+    action: ChannelMessageActionName;
+    args: Record<string, unknown>;
+  };
   requiresTrustedRequesterSender?: (params: {
     action: ChannelMessageActionName;
     toolContext?: ChannelThreadingToolContext;

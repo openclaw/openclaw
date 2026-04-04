@@ -6,7 +6,7 @@ summary: 使用量跟踪界面及凭据要求
 title: 使用量跟踪
 x-i18n:
   generated_at: "2026-02-01T20:24:46Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 6f6ed2a70329b2a6206c327aa749a84fbfe979762caca5f0e7fb556f91631cbb
   source_path: concepts/usage-tracking.md

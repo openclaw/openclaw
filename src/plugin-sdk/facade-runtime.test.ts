@@ -5,13 +5,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   canLoadActivatedBundledPluginPublicSurface,
+  listImportedBundledPluginFacadeIds,
   loadActivatedBundledPluginPublicSurfaceModuleSync,
   loadBundledPluginPublicSurfaceModuleSync,
+  resetFacadeRuntimeStateForTest,
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const FACADE_RUNTIME_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
 
 function createBundledPluginDir(prefix: string, marker: string): string {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -44,9 +47,10 @@ function createCircularPluginDir(prefix: string): string {
   fs.writeFileSync(
     path.join(rootDir, "facade.mjs"),
     [
-      `import { loadBundledPluginPublicSurfaceModuleSync } from ${JSON.stringify(
-        new URL("./facade-runtime.js", import.meta.url).href,
-      )};`,
+      `const loadBundledPluginPublicSurfaceModuleSync = globalThis.${FACADE_RUNTIME_GLOBAL};`,
+      `if (typeof loadBundledPluginPublicSurfaceModuleSync !== "function") {`,
+      '  throw new Error("missing facade runtime test loader");',
+      "}",
       `export const marker = loadBundledPluginPublicSurfaceModuleSync({ dirName: "demo", artifactBasename: "api.js" }).marker;`,
       "",
     ].join("\n"),
@@ -70,6 +74,8 @@ function createCircularPluginDir(prefix: string): string {
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
+  resetFacadeRuntimeStateForTest();
+  delete (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_RUNTIME_GLOBAL];
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -114,11 +120,14 @@ describe("plugin-sdk facade runtime", () => {
     });
     expect(first).toBe(second);
     expect(first.marker).toBe("identity-check");
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["demo"]);
   });
 
   it("breaks circular facade re-entry during module evaluation", () => {
     const dir = createCircularPluginDir("openclaw-facade-circular-");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_RUNTIME_GLOBAL] =
+      loadBundledPluginPublicSurfaceModuleSync;
 
     const loaded = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
       dirName: "demo",
@@ -138,6 +147,8 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "api.js",
       }),
     ).toThrow("plugin load failure");
+
+    expect(listImportedBundledPluginFacadeIds()).toEqual(["bad"]);
 
     // A second call must also throw (not return a stale empty sentinel).
     expect(() =>

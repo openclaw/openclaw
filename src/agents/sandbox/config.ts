@@ -233,10 +233,14 @@ export function resolveSandboxConfigForAgent(
   if (agentConfig?.sandbox) {
     agentSandbox = agentConfig.sandbox;
   }
+  const legacyAgentSandbox = agentSandbox as
+    | (typeof agentSandbox & { perSession?: boolean })
+    | undefined;
+  const legacyDefaultSandbox = agent as (typeof agent & { perSession?: boolean }) | undefined;
 
   const scope = resolveSandboxScope({
     scope: agentSandbox?.scope ?? agent?.scope,
-    perSession: agentSandbox?.perSession ?? agent?.perSession,
+    perSession: legacyAgentSandbox?.perSession ?? legacyDefaultSandbox?.perSession,
   });
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);

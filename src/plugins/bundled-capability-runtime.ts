@@ -122,8 +122,11 @@ function createCapabilityPluginRecord(params: {
     cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
+    webFetchProviderIds: [],
     webSearchProviderIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -271,12 +274,19 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.cliBackendIds.push(...captured.cliBackends.map((entry) => entry.id));
       record.providerIds.push(...captured.providers.map((entry) => entry.id));
       record.speechProviderIds.push(...captured.speechProviders.map((entry) => entry.id));
+      record.realtimeTranscriptionProviderIds.push(
+        ...captured.realtimeTranscriptionProviders.map((entry) => entry.id),
+      );
+      record.realtimeVoiceProviderIds.push(
+        ...captured.realtimeVoiceProviders.map((entry) => entry.id),
+      );
       record.mediaUnderstandingProviderIds.push(
         ...captured.mediaUnderstandingProviders.map((entry) => entry.id),
       );
       record.imageGenerationProviderIds.push(
         ...captured.imageGenerationProviders.map((entry) => entry.id),
       );
+      record.webFetchProviderIds.push(...captured.webFetchProviders.map((entry) => entry.id));
       record.webSearchProviderIds.push(...captured.webSearchProviders.map((entry) => entry.id));
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
@@ -307,6 +317,24 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           rootDir: record.rootDir,
         })),
       );
+      registry.realtimeTranscriptionProviders.push(
+        ...captured.realtimeTranscriptionProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.realtimeVoiceProviders.push(
+        ...captured.realtimeVoiceProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
       registry.mediaUnderstandingProviders.push(
         ...captured.mediaUnderstandingProviders.map((provider) => ({
           pluginId: record.id,
@@ -318,6 +346,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       registry.imageGenerationProviders.push(
         ...captured.imageGenerationProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.webFetchProviders.push(
+        ...captured.webFetchProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,

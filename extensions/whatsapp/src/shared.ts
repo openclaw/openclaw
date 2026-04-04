@@ -1,11 +1,13 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
@@ -14,18 +16,18 @@ import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
+  hasAnyWhatsAppAuth,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
+import { whatsappDoctor } from "./doctor.js";
+import { resolveWhatsAppGroupIntroHint } from "./group-intro.js";
 import {
-  formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
-  normalizeE164,
-  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+} from "./group-policy.js";
+import { applyWhatsAppSecurityConfigFixes } from "./security-fix.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -71,8 +73,7 @@ export function createWhatsAppSetupWizardProxy(
       configuredScore: 5,
       unconfiguredScore: 4,
     },
-    resolveShouldPromptAccountIds: (params) =>
-      (params.shouldPromptAccountIds || params.options?.promptWhatsAppAccountId) ?? false,
+    resolveShouldPromptAccountIds: (params) => Boolean(params.shouldPromptAccountIds),
     credentials: [],
     delegateFinalize: true,
     disable: (cfg) => ({
@@ -86,7 +87,7 @@ export function createWhatsAppSetupWizardProxy(
       },
     }),
     onAccountRecorded: (accountId, options) => {
-      options?.onWhatsAppAccountId?.(accountId);
+      options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
     },
   });
 }
@@ -141,6 +142,7 @@ export function createWhatsAppPluginBase(params: {
       isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
+      hasPersistedAuthState: ({ cfg }) => hasAnyWhatsAppAuth(cfg),
       unconfiguredReason: () => "not linked",
       describeAccount: (account) =>
         describeAccountSnapshot({
@@ -154,9 +156,11 @@ export function createWhatsAppPluginBase(params: {
         }),
     },
     security: {
+      applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
       collectWarnings: collectWhatsAppSecurityWarnings,
     },
+    doctor: whatsappDoctor,
     setup: params.setup,
     groups: params.groups,
   });
@@ -181,6 +185,7 @@ export function createWhatsAppPluginBase(params: {
     | "configSchema"
     | "config"
     | "security"
+    | "doctor"
     | "setup"
     | "groups"
   >;
