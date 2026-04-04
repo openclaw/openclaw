@@ -36,10 +36,20 @@ vi.mock("./runtime-api.js", () => ({
   },
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
   resolveMarkdownTableMode: () => undefined,
-  resolveSendableOutboundReplyParts: (payload: { text?: string }) => ({
-    text: payload.text ?? "",
-    hasMedia: false,
-  }),
+  resolveSendableOutboundReplyParts: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+    mediaUrl?: string;
+  }) => {
+    const urls = [
+      ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+      ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+    ];
+    return {
+      text: payload.text ?? "",
+      hasMedia: urls.length > 0,
+    };
+  },
   resolveTextChunkLimit: () => 4000,
   shouldLogVerbose: () => false,
   toLocationContext: () => ({}),
@@ -360,7 +370,7 @@ describe("whatsapp inbound dispatch", () => {
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });
 
-  it("delivers block and final WhatsApp payloads, but suppresses tool payloads", async () => {
+  it("delivers block and final WhatsApp payloads; suppresses text-only tool payloads but delivers tool media", async () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
 
@@ -376,10 +386,16 @@ describe("whatsapp inbound dispatch", () => {
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
 
+    await deliver?.({ text: "tool image", mediaUrls: ["/tmp/generated.jpg"] } as never, {
+      kind: "tool",
+    });
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).toHaveBeenCalledTimes(1);
+
     await deliver?.({ text: "block payload" }, { kind: "block" });
     await deliver?.({ text: "final payload" }, { kind: "final" });
-    expect(deliverReply).toHaveBeenCalledTimes(2);
-    expect(rememberSentText).toHaveBeenCalledTimes(2);
+    expect(deliverReply).toHaveBeenCalledTimes(3);
+    expect(rememberSentText).toHaveBeenCalledTimes(3);
   });
 
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {

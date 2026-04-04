@@ -62,7 +62,7 @@ function shouldSuppressWhatsAppPayload(
   info: { kind: ReplyLifecycleKind },
 ): boolean {
   if (info.kind === "tool") {
-    return true;
+    return !resolveSendableOutboundReplyParts(payload).hasMedia;
   }
   if (payload.isReasoning === true || payload.isCompactionNotice === true) {
     return true;
