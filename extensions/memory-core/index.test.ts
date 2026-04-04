@@ -15,31 +15,34 @@ describe("buildPromptSection", () => {
     expect(buildPromptSection({ availableTools: new Set() })).toEqual([]);
   });
 
-  it("describes the two-step flow when both memory tools are available", () => {
+  it("describes the full memory system when both memory tools are available", () => {
     const result = buildPromptSection({
       availableTools: new Set(["memory_search", "memory_get"]),
     });
-    expect(result[0]).toBe("## Memory Recall");
-    expect(result[1]).toContain("run memory_search");
-    expect(result[1]).toContain("then use memory_get");
+    expect(result[0]).toBe("## Memory");
+    const joined = result.join("\n");
+    expect(joined).toContain("memory_search");
+    expect(joined).toContain("memory_get");
     expect(result).toContain(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
     expect(result.at(-1)).toBe("");
   });
 
-  it("limits the guidance to memory_search when only search is available", () => {
+  it("includes memory_search guidance when only search is available", () => {
     const result = buildPromptSection({ availableTools: new Set(["memory_search"]) });
-    expect(result[0]).toBe("## Memory Recall");
-    expect(result[1]).toContain("run memory_search");
-    expect(result[1]).not.toContain("then use memory_get");
+    expect(result[0]).toBe("## Memory");
+    const joined = result.join("\n");
+    expect(joined).toContain("memory_search");
+    expect(joined).not.toContain("memory_get");
   });
 
-  it("limits the guidance to memory_get when only get is available", () => {
+  it("includes memory_get guidance when only get is available", () => {
     const result = buildPromptSection({ availableTools: new Set(["memory_get"]) });
-    expect(result[0]).toBe("## Memory Recall");
-    expect(result[1]).toContain("run memory_get");
-    expect(result[1]).not.toContain("run memory_search");
+    expect(result[0]).toBe("## Memory");
+    const joined = result.join("\n");
+    expect(joined).toContain("memory_get");
+    expect(joined).not.toContain("memory_search");
   });
 
   it("includes citations-off instruction when citationsMode is off", () => {
