@@ -24,7 +24,6 @@
   gap: 2px;
   flex: 1 1 auto;
   max-width: min(900px, 68%);
-  min-width: 602px;
   align-items: flex-start;
 }
 
@@ -481,6 +480,12 @@ img.chat-avatar {
   background: #dc2626;
 }
 
+@media (max-width: 1100px) {
+  .chat-group-messages {
+    max-width: 82%;
+  }
+}
+
 @media (max-width: 768px) {
   .chat-group {
     margin-left: 0;
@@ -489,7 +494,6 @@ img.chat-avatar {
 
   .chat-group-messages {
     max-width: 100%;
-    min-width: auto;
   }
 }
 
