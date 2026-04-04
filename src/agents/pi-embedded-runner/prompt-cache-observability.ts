@@ -130,9 +130,7 @@ function diffSnapshots(
 }
 
 export function collectPromptCacheToolNames(tools: Array<{ name?: string }>): string[] {
-  return tools
-    .map((tool) => tool.name?.trim())
-    .filter((name): name is string => Boolean(name));
+  return tools.map((tool) => tool.name?.trim()).filter((name): name is string => Boolean(name));
 }
 
 export function beginPromptCacheObservation(params: {

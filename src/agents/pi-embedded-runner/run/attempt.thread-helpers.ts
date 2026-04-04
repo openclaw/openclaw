@@ -20,10 +20,9 @@ export function composeSystemPromptWithHookContext(params: {
   if (!prependSystem && !appendSystem) {
     return undefined;
   }
-  return joinPresentTextSegments(
-    [prependSystem, params.baseSystemPrompt, appendSystem],
-    { trim: true },
-  );
+  return joinPresentTextSegments([prependSystem, params.baseSystemPrompt, appendSystem], {
+    trim: true,
+  });
 }
 
 export function resolveAttemptSpawnWorkspaceDir(params: {

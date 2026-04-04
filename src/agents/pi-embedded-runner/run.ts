@@ -26,10 +26,7 @@ import {
   resolveFailoverStatus,
 } from "../failover-error.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
-import {
-  shouldSwitchToLiveModel,
-  clearLiveModelSwitchPending,
-} from "../live-model-switch.js";
+import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,

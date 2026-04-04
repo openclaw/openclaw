@@ -1,5 +1,8 @@
 export function normalizeStructuredPromptSection(text: string): string {
-  return text.replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").trim();
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
 }
 
 export function normalizePromptCapabilityIds(capabilities: ReadonlyArray<string>): string[] {
