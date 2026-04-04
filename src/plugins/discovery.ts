@@ -22,12 +22,15 @@ const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
   ".hg",
   ".svn",
   ".turbo",
+  ".venv",
   ".yarn",
   ".yarn-cache",
   "build",
   "coverage",
   "dist",
   "node_modules",
+  "venv",
+  "virtualenv",
 ]);
 
 export type PluginCandidate = {
