@@ -57,6 +57,7 @@ support. Works with any OpenClaw-supported channel. Requires Node.js 24+.
 
 ```bash
 openclaw plugins install financialclaw
+```
 
 ### Lossless Claw (LCM)
 
