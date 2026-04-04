@@ -133,6 +133,34 @@ describe("buildCliArgs", () => {
       }),
     ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
   });
+
+  it("strips null bytes from system prompt arg before spawn (fixes #61055)", () => {
+    const result = buildCliArgs({
+      backend: {
+        command: "claude",
+        systemPromptArg: "--append-system-prompt",
+      },
+      baseArgs: ["-p"],
+      modelId: "claude-sonnet-4-6",
+      systemPrompt: "Conversation info (untrusted metadata)\0\0more text",
+      useResume: false,
+    });
+    const systemPromptValue = result[result.indexOf("--append-system-prompt") + 1] ?? "";
+    expect(systemPromptValue).not.toContain("\0");
+    expect(systemPromptValue).toBe("Conversation info (untrusted metadata)more text");
+  });
+
+  it("strips null bytes from prompt arg before spawn (fixes #61055)", () => {
+    const result = buildCliArgs({
+      backend: { command: "codex" },
+      baseArgs: [],
+      modelId: "gpt-5.4",
+      promptArg: "Hello\0world",
+      useResume: false,
+    });
+    expect(result).toContain("Helloworld");
+    expect(result.join("")).not.toContain("\0");
+  });
 });
 
 describe("resolveCliRunQueueKey", () => {

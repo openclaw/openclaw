@@ -263,6 +263,10 @@ export async function writeCliImages(
   return { paths, cleanup };
 }
 
+function stripNullBytes(value: string): string {
+  return value.replaceAll("\0", "");
+}
+
 export function buildCliArgs(params: {
   backend: CliBackendConfig;
   baseArgs: string[];
@@ -278,7 +282,10 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
-    args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
+    args.push(
+      params.backend.systemPromptArg,
+      stripNullBytes(stripSystemPromptCacheBoundary(params.systemPrompt)),
+    );
   }
   if (!params.useResume && params.sessionId) {
     if (params.backend.sessionArgs && params.backend.sessionArgs.length > 0) {
@@ -303,7 +310,7 @@ export function buildCliArgs(params: {
     }
   }
   if (params.promptArg !== undefined) {
-    args.push(params.promptArg);
+    args.push(stripNullBytes(params.promptArg));
   }
   return args;
 }
