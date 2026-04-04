@@ -1,18 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../src/config/config.js";
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+  getRecordedUpdateLastRoute,
+  loadTelegramMessageContextRouteHarness,
+  recordInboundSessionMock,
+} from "./bot-message-context.route-test-support.js";
 
-const recordInboundSessionMock = vi.fn().mockResolvedValue(undefined);
-vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
-  return {
-    ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-  };
-});
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+let clearRuntimeConfigSnapshot: typeof import("openclaw/plugin-sdk/config-runtime").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("openclaw/plugin-sdk/config-runtime").setRuntimeConfigSnapshot;
 
 describe("buildTelegramMessageContext named-account DM fallback", () => {
   const baseCfg = {
@@ -23,14 +18,19 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+  });
+
+  beforeAll(async () => {
+    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot, buildTelegramMessageContextForTest } =
+      await loadTelegramMessageContextRouteHarness());
+  });
+
+  beforeEach(() => {
     recordInboundSessionMock.mockClear();
   });
 
   function getLastUpdateLastRoute(): { sessionKey?: string } | undefined {
-    const callArgs = recordInboundSessionMock.mock.calls.at(-1)?.[0] as {
-      updateLastRoute?: { sessionKey?: string };
-    };
-    return callArgs?.updateLastRoute;
+    return getRecordedUpdateLastRoute() as { sessionKey?: string } | undefined;
   }
 
   function buildNamedAccountDmMessage(messageId = 1) {

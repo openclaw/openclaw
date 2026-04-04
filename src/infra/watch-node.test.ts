@@ -2,6 +2,13 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
 import { runWatchMain } from "../../scripts/watch-node.mjs";
+import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+
+const VOICE_CALL_README = bundledPluginFile("voice-call", "README.md");
+const VOICE_CALL_MANIFEST = bundledPluginFile("voice-call", "openclaw.plugin.json");
+const VOICE_CALL_PACKAGE = bundledPluginFile("voice-call", "package.json");
+const VOICE_CALL_INDEX = bundledPluginFile("voice-call", "index.ts");
+const VOICE_CALL_RUNTIME = bundledPluginFile("voice-call", "src/runtime.ts");
 
 const createFakeProcess = () =>
   Object.assign(new EventEmitter(), {
@@ -50,11 +57,11 @@ describe("watch-node script", () => {
     expect(watchOptions.ignored("src/infra/watch-node.test.ts")).toBe(true);
     expect(watchOptions.ignored("src/infra/watch-node.test.tsx")).toBe(true);
     expect(watchOptions.ignored("src/infra/watch-node-test-helpers.ts")).toBe(true);
-    expect(watchOptions.ignored("extensions/voice-call/README.md")).toBe(true);
-    expect(watchOptions.ignored("extensions/voice-call/openclaw.plugin.json")).toBe(false);
-    expect(watchOptions.ignored("extensions/voice-call/package.json")).toBe(false);
-    expect(watchOptions.ignored("extensions/voice-call/index.ts")).toBe(false);
-    expect(watchOptions.ignored("extensions/voice-call/src/runtime.ts")).toBe(false);
+    expect(watchOptions.ignored(VOICE_CALL_README)).toBe(true);
+    expect(watchOptions.ignored(VOICE_CALL_MANIFEST)).toBe(false);
+    expect(watchOptions.ignored(VOICE_CALL_PACKAGE)).toBe(false);
+    expect(watchOptions.ignored(VOICE_CALL_INDEX)).toBe(false);
+    expect(watchOptions.ignored(VOICE_CALL_RUNTIME)).toBe(false);
     expect(watchOptions.ignored("src/infra/watch-node.ts")).toBe(false);
     expect(watchOptions.ignored("tsconfig.json")).toBe(false);
 
@@ -120,6 +127,25 @@ describe("watch-node script", () => {
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
   });
 
+  it("returns the child exit code when the runner exits on its own", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force", "--help"],
+      createWatcher,
+      process: fakeProcess,
+      spawn,
+    });
+
+    child.emit("exit", 0, null);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(0);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+    expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
   it("ignores test-only changes and restarts on non-test source changes", async () => {
     const childA = Object.assign(new EventEmitter(), {
       kill: vi.fn(function () {
@@ -173,17 +199,17 @@ describe("watch-node script", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
-    watcher.emit("change", "extensions/voice-call/README.md");
+    watcher.emit("change", VOICE_CALL_README);
     await new Promise((resolve) => setImmediate(resolve));
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
-    watcher.emit("change", "extensions/voice-call/openclaw.plugin.json");
+    watcher.emit("change", VOICE_CALL_MANIFEST);
     await new Promise((resolve) => setImmediate(resolve));
     expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(2);
 
-    watcher.emit("change", "extensions/voice-call/package.json");
+    watcher.emit("change", VOICE_CALL_PACKAGE);
     await new Promise((resolve) => setImmediate(resolve));
     expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(3);

@@ -14,7 +14,13 @@ import type { HooksConfig } from "../config/types.hooks.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
 
 type StubChannelOptions = {
   id: ChannelPlugin["id"];
@@ -27,6 +33,9 @@ type GetReplyFromConfigFn = (
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
+type CronIsolatedRunFn = (...args: unknown[]) => Promise<{ status: string; summary: string }>;
+type AgentCommandFn = (...args: unknown[]) => Promise<void>;
+type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 
 const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
@@ -72,6 +81,32 @@ const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => (
       loggedOut: false,
     }),
   },
+});
+
+type StubSpeechProviderOptions = {
+  id: SpeechProviderPlugin["id"];
+  label: string;
+  aliases?: string[];
+  voices?: string[];
+};
+
+const createStubSpeechProvider = (params: StubSpeechProviderOptions): SpeechProviderPlugin => ({
+  id: params.id,
+  label: params.label,
+  aliases: params.aliases,
+  voices: params.voices,
+  isConfigured: () => true,
+  synthesize: async () => ({
+    audioBuffer: Buffer.from(`${params.id}-audio`, "utf8"),
+    outputFormat: "mp3",
+    fileExtension: ".mp3",
+    voiceCompatible: true,
+  }),
+  listVoices: async () =>
+    (params.voices ?? []).map((voiceId) => ({
+      id: voiceId,
+      name: voiceId,
+    })),
 });
 
 const createStubPluginRegistry = (): PluginRegistry => ({
@@ -146,9 +181,31 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   ],
   channelSetups: [],
   providers: [],
-  speechProviders: [],
+  speechProviders: [
+    {
+      pluginId: "openai",
+      source: "test",
+      provider: createStubSpeechProvider({
+        id: "openai",
+        label: "OpenAI",
+        voices: ["alloy", "nova"],
+      }),
+    },
+    {
+      pluginId: "elevenlabs",
+      source: "test",
+      provider: createStubSpeechProvider({
+        id: "elevenlabs",
+        label: "ElevenLabs",
+        voices: ["EXAVITQu4vr4xnSDxMaL", "voice-default"],
+      }),
+    },
+  ],
+  realtimeTranscriptionProviders: [],
+  realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
   imageGenerationProviders: [],
+  webFetchProviders: [],
   webSearchProviders: [],
   gatewayHandlers: {},
   httpRoutes: [],
@@ -159,37 +216,117 @@ const createStubPluginRegistry = (): PluginRegistry => ({
   diagnostics: [],
 });
 
-const hoisted = vi.hoisted(() => ({
-  testTailnetIPv4: { value: undefined as string | undefined },
-  piSdkMock: {
-    enabled: false,
-    discoverCalls: 0,
-    models: [] as Array<{
-      id: string;
-      name?: string;
-      provider: string;
-      contextWindow?: number;
-      reasoning?: boolean;
-    }>,
-  },
-  cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
-  agentCommand: vi.fn().mockResolvedValue(undefined),
-  testIsNixMode: { value: false },
-  sessionStoreSaveDelayMs: { value: 0 },
-  embeddedRunMock: {
-    activeIds: new Set<string>(),
-    abortCalls: [] as string[],
-    waitCalls: [] as string[],
-    waitResults: new Map<string, boolean>(),
-  },
-  testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
-  getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
-  sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
-}));
+const GATEWAY_TEST_PLUGIN_REGISTRY_STATE_KEY = Symbol.for(
+  "openclaw.gatewayTestHelpers.pluginRegistryState",
+);
+const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
-const pluginRegistryState = {
+const hoisted = vi.hoisted(() => {
+  const key = Symbol.for("openclaw.gatewayTestHelpers.hoisted");
+  const store = globalThis as Record<PropertyKey, unknown>;
+  if (Object.prototype.hasOwnProperty.call(store, key)) {
+    return store[key] as {
+      testTailnetIPv4: { value: string | undefined };
+      piSdkMock: {
+        enabled: boolean;
+        discoverCalls: number;
+        models: Array<{
+          id: string;
+          name?: string;
+          provider: string;
+          contextWindow?: number;
+          reasoning?: boolean;
+        }>;
+      };
+      cronIsolatedRun: Mock<CronIsolatedRunFn>;
+      agentCommand: Mock<AgentCommandFn>;
+      testIsNixMode: { value: boolean };
+      sessionStoreSaveDelayMs: { value: number };
+      embeddedRunMock: {
+        activeIds: Set<string>;
+        abortCalls: string[];
+        waitCalls: string[];
+        waitResults: Map<string, boolean>;
+      };
+      testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
+      getReplyFromConfig: Mock<GetReplyFromConfigFn>;
+      sendWhatsAppMock: Mock<SendWhatsAppFn>;
+      testState: {
+        agentConfig: Record<string, unknown> | undefined;
+        agentsConfig: Record<string, unknown> | undefined;
+        bindingsConfig: AgentBinding[] | undefined;
+        channelsConfig: Record<string, unknown> | undefined;
+        sessionStorePath: string | undefined;
+        sessionConfig: Record<string, unknown> | undefined;
+        allowFrom: string[] | undefined;
+        cronStorePath: string | undefined;
+        cronEnabled: boolean | undefined;
+        gatewayBind: "auto" | "lan" | "tailnet" | "loopback" | undefined;
+        gatewayAuth: Record<string, unknown> | undefined;
+        gatewayControlUi: Record<string, unknown> | undefined;
+        hooksConfig: HooksConfig | undefined;
+        canvasHostPort: number | undefined;
+        legacyIssues: Array<{ path: string; message: string }>;
+        legacyParsed: Record<string, unknown>;
+        migrationConfig: Record<string, unknown> | null;
+        migrationChanges: string[];
+      };
+    };
+  }
+  const created = {
+    testTailnetIPv4: { value: undefined as string | undefined },
+    piSdkMock: {
+      enabled: false,
+      discoverCalls: 0,
+      models: [] as Array<{
+        id: string;
+        name?: string;
+        provider: string;
+        contextWindow?: number;
+        reasoning?: boolean;
+      }>,
+    },
+    cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
+    agentCommand: vi.fn().mockResolvedValue(undefined),
+    testIsNixMode: { value: false },
+    sessionStoreSaveDelayMs: { value: 0 },
+    embeddedRunMock: {
+      activeIds: new Set<string>(),
+      abortCalls: [] as string[],
+      waitCalls: [] as string[],
+      waitResults: new Map<string, boolean>(),
+    },
+    testTailscaleWhois: { value: null as TailscaleWhoisIdentity | null },
+    getReplyFromConfig: vi.fn<GetReplyFromConfigFn>().mockResolvedValue(undefined),
+    sendWhatsAppMock: vi.fn().mockResolvedValue({ messageId: "msg-1", toJid: "jid-1" }),
+    testState: {
+      agentConfig: undefined as Record<string, unknown> | undefined,
+      agentsConfig: undefined as Record<string, unknown> | undefined,
+      bindingsConfig: undefined as AgentBinding[] | undefined,
+      channelsConfig: undefined as Record<string, unknown> | undefined,
+      sessionStorePath: undefined as string | undefined,
+      sessionConfig: undefined as Record<string, unknown> | undefined,
+      allowFrom: undefined as string[] | undefined,
+      cronStorePath: undefined as string | undefined,
+      cronEnabled: false as boolean | undefined,
+      gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
+      gatewayAuth: undefined as Record<string, unknown> | undefined,
+      gatewayControlUi: undefined as Record<string, unknown> | undefined,
+      hooksConfig: undefined as HooksConfig | undefined,
+      canvasHostPort: undefined as number | undefined,
+      legacyIssues: [] as Array<{ path: string; message: string }>,
+      legacyParsed: {} as Record<string, unknown>,
+      migrationConfig: null as Record<string, unknown> | null,
+      migrationChanges: [] as string[],
+    },
+  };
+  store[key] = created;
+  return created;
+});
+
+const pluginRegistryState = resolveGlobalSingleton(GATEWAY_TEST_PLUGIN_REGISTRY_STATE_KEY, () => ({
   registry: createStubPluginRegistry(),
-};
+}));
 setActivePluginRegistry(pluginRegistryState.registry);
 
 export const setTestPluginRegistry = (registry: PluginRegistry) => {
@@ -202,9 +339,9 @@ export const resetTestPluginRegistry = () => {
   setActivePluginRegistry(pluginRegistryState.registry);
 };
 
-const testConfigRoot = {
+const testConfigRoot = resolveGlobalSingleton(GATEWAY_TEST_CONFIG_ROOT_KEY, () => ({
   value: path.join(os.tmpdir(), `openclaw-gateway-test-${process.pid}-${crypto.randomUUID()}`),
-};
+}));
 
 export const setTestConfigRoot = (root: string) => {
   testConfigRoot.value = root;
@@ -214,48 +351,110 @@ export const setTestConfigRoot = (root: string) => {
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const testTailscaleWhois = hoisted.testTailscaleWhois;
 export const piSdkMock = hoisted.piSdkMock;
-export const cronIsolatedRun = hoisted.cronIsolatedRun;
-export const agentCommand: Mock<() => void> = hoisted.agentCommand;
+export const cronIsolatedRun: Mock<CronIsolatedRunFn> = hoisted.cronIsolatedRun;
+export const agentCommand: Mock<AgentCommandFn> = hoisted.agentCommand;
 export const getReplyFromConfig: Mock<GetReplyFromConfigFn> = hoisted.getReplyFromConfig;
-
-export const testState = {
-  agentConfig: undefined as Record<string, unknown> | undefined,
-  agentsConfig: undefined as Record<string, unknown> | undefined,
-  bindingsConfig: undefined as AgentBinding[] | undefined,
-  channelsConfig: undefined as Record<string, unknown> | undefined,
-  sessionStorePath: undefined as string | undefined,
-  sessionConfig: undefined as Record<string, unknown> | undefined,
-  allowFrom: undefined as string[] | undefined,
-  cronStorePath: undefined as string | undefined,
-  cronEnabled: false as boolean | undefined,
-  gatewayBind: undefined as "auto" | "lan" | "tailnet" | "loopback" | undefined,
-  gatewayAuth: undefined as Record<string, unknown> | undefined,
-  gatewayControlUi: undefined as Record<string, unknown> | undefined,
-  hooksConfig: undefined as HooksConfig | undefined,
-  canvasHostPort: undefined as number | undefined,
-  legacyIssues: [] as Array<{ path: string; message: string }>,
-  legacyParsed: {} as Record<string, unknown>,
-  migrationConfig: null as Record<string, unknown> | null,
-  migrationChanges: [] as string[],
+export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {
+  getReplyFromConfig.mockImplementationOnce(impl);
 };
+export const sendWhatsAppMock: Mock<SendWhatsAppFn> = hoisted.sendWhatsAppMock;
+
+export const testState = hoisted.testState;
 
 export const testIsNixMode = hoisted.testIsNixMode;
 export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 export const embeddedRunMock = hoisted.embeddedRunMock;
+
+function createEmbeddedRunMockExports() {
+  return {
+    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    abortEmbeddedPiRun: (sessionId: string) => {
+      embeddedRunMock.abortCalls.push(sessionId);
+      return embeddedRunMock.activeIds.has(sessionId);
+    },
+    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
+      embeddedRunMock.waitCalls.push(sessionId);
+      return embeddedRunMock.waitResults.get(sessionId) ?? true;
+    },
+  };
+}
+
+async function importEmbeddedRunMockModule<TModule extends object>(
+  actualPath: string,
+  opts?: { includeActiveCount?: boolean },
+): Promise<TModule> {
+  const actual = await vi.importActual<TModule>(actualPath);
+  return {
+    ...actual,
+    ...createEmbeddedRunMockExports(),
+    ...(opts?.includeActiveCount
+      ? { getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size }
+      : {}),
+  };
+}
 
 vi.mock("../agents/pi-model-discovery.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/pi-model-discovery.js")>(
     "../agents/pi-model-discovery.js",
   );
 
-  class MockModelRegistry extends actual.ModelRegistry {
-    override getAll(): ReturnType<typeof actual.ModelRegistry.prototype.getAll> {
+  const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
+    const modelsFile = path.join(args[1], "models.json");
+    const Registry = actual.ModelRegistry as unknown as {
+      create?: (
+        authStorage: unknown,
+        modelsFile: string,
+      ) => {
+        getAll: () => Array<{ provider?: string; id?: string }>;
+        getAvailable: () => Array<{ provider?: string; id?: string }>;
+        find: (provider: string, modelId: string) => unknown;
+      };
+      new (
+        authStorage: unknown,
+        modelsFile: string,
+      ): {
+        getAll: () => Array<{ provider?: string; id?: string }>;
+        getAvailable: () => Array<{ provider?: string; id?: string }>;
+        find: (provider: string, modelId: string) => unknown;
+      };
+    };
+    if (typeof Registry.create === "function") {
+      return Registry.create(args[0], modelsFile);
+    }
+    return new Registry(args[0], modelsFile);
+  };
+
+  class MockModelRegistry {
+    private readonly actualRegistry?: ReturnType<typeof createActualRegistry>;
+
+    constructor(authStorage: unknown, modelsFile: string) {
       if (!piSdkMock.enabled) {
-        return super.getAll();
+        this.actualRegistry = createActualRegistry(authStorage as never, path.dirname(modelsFile));
+      }
+    }
+
+    getAll() {
+      if (!piSdkMock.enabled) {
+        return this.actualRegistry?.getAll() ?? [];
       }
       piSdkMock.discoverCalls += 1;
-      // Cast to expected type for testing purposes
-      return piSdkMock.models as ReturnType<typeof actual.ModelRegistry.prototype.getAll>;
+      return piSdkMock.models as Array<{ provider?: string; id?: string }>;
+    }
+
+    getAvailable() {
+      if (!piSdkMock.enabled) {
+        return this.actualRegistry?.getAvailable() ?? [];
+      }
+      return piSdkMock.models as Array<{ provider?: string; id?: string }>;
+    }
+
+    find(provider: string, modelId: string) {
+      if (!piSdkMock.enabled) {
+        return this.actualRegistry?.find(provider, modelId);
+      }
+      return (piSdkMock.models as Array<{ provider?: string; id?: string }>).find(
+        (model) => model.provider === provider && model.id === modelId,
+      );
     }
   }
 
@@ -530,8 +729,11 @@ vi.mock("../config/config.js", async () => {
       } catch {
         fileConfig = {};
       }
-      return applyPluginAutoEnable({ config: composeTestConfig(fileConfig), env: process.env })
-        .config;
+      const config = applyPluginAutoEnable({
+        config: composeTestConfig(fileConfig),
+        env: process.env,
+      }).config;
+      return config;
     },
     parseConfigJson5: (raw: string) => {
       try {
@@ -551,21 +753,29 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
     "../agents/pi-embedded.js",
   );
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
-    abortEmbeddedPiRun: (sessionId: string) => {
-      embeddedRunMock.abortCalls.push(sessionId);
-      return embeddedRunMock.activeIds.has(sessionId);
-    },
-    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
-      embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
-    },
-  };
+});
+
+vi.mock("/src/agents/pi-embedded.js", async () => {
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded.js")>(
+    "../agents/pi-embedded.js",
+  );
+});
+
+vi.mock("../agents/pi-embedded-runner/runs.js", async () => {
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded-runner/runs.js")>(
+    "../agents/pi-embedded-runner/runs.js",
+    { includeActiveCount: true },
+  );
+});
+
+vi.mock("/src/agents/pi-embedded-runner/runs.js", async () => {
+  return await importEmbeddedRunMockModule<typeof import("../agents/pi-embedded-runner/runs.js")>(
+    "../agents/pi-embedded-runner/runs.js",
+    { includeActiveCount: true },
+  );
 });
 
 vi.mock("../commands/health.js", () => ({
@@ -574,7 +784,7 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../../extensions/whatsapp/runtime-api.js", () => ({
+vi.mock(buildBundledPluginModuleId("whatsapp", "runtime-api.js"), () => ({
   sendMessageWhatsApp: (...args: unknown[]) =>
     (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
   sendPollWhatsApp: (...args: unknown[]) =>
@@ -594,7 +804,30 @@ vi.mock("../commands/agent.js", () => ({
   agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+    "../auto-reply/dispatch.js",
+  );
+});
+vi.mock("/src/auto-reply/dispatch.js", async () => {
+  return await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+    "../auto-reply/dispatch.js",
+  );
+});
 vi.mock("../auto-reply/reply.js", () => ({
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
+}));
+
+vi.mock("/src/auto-reply/reply.js", () => ({
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
+}));
+vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => ({
+  getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
+    hoisted.getReplyFromConfig(...args),
+}));
+vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
     hoisted.getReplyFromConfig(...args),
 }));
@@ -619,6 +852,14 @@ vi.mock("../plugins/loader.js", async () => {
     loadOpenClawPlugins: () => pluginRegistryState.registry,
   };
 });
+vi.mock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
+  sendWebChannelMessage: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
+vi.mock("/src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
+  sendWebChannelMessage: (...args: unknown[]) =>
+    (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
+}));
 
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";

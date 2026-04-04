@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createMockMatrixClient,
+  expectExplicitMatrixClientConfig,
+  expectOneOffSharedMatrixClient,
   matrixClientResolverMocks,
   primeMatrixClientResolverMocks,
 } from "../client-resolver.test-helpers.js";
@@ -39,10 +41,16 @@ vi.mock("../send.js", () => ({
   resolveMatrixRoomId: (...args: unknown[]) => resolveMatrixRoomIdMock(...args),
 }));
 
-const { withResolvedActionClient, withResolvedRoomAction, withStartedActionClient } =
-  await import("./client.js");
+let withResolvedActionClient: typeof import("./client.js").withResolvedActionClient;
+let withResolvedRoomAction: typeof import("./client.js").withResolvedRoomAction;
+let withStartedActionClient: typeof import("./client.js").withStartedActionClient;
 
 describe("action client helpers", () => {
+  beforeAll(async () => {
+    ({ withResolvedActionClient, withResolvedRoomAction, withStartedActionClient } =
+      await import("./client.js"));
+  });
+
   beforeEach(() => {
     primeMatrixClientResolverMocks();
     resolveMatrixRoomIdMock
@@ -59,17 +67,7 @@ describe("action client helpers", () => {
 
     const result = await withResolvedActionClient({ accountId: "default" }, async () => "ok");
 
-    expect(getActiveMatrixClientMock).toHaveBeenCalledWith("default");
-    expect(acquireSharedMatrixClientMock).toHaveBeenCalledTimes(1);
-    expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
-      cfg: {},
-      timeoutMs: undefined,
-      accountId: "default",
-      startClient: false,
-    });
-    const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
-    expect(sharedClient.prepareForOneOff).toHaveBeenCalledTimes(1);
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+    await expectOneOffSharedMatrixClient();
     expect(result).toBe("ok");
   });
 
@@ -147,12 +145,9 @@ describe("action client helpers", () => {
     });
     await withResolvedActionClient({}, async () => {});
 
-    expect(getActiveMatrixClientMock).toHaveBeenCalledWith("ops");
-    expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+    await expectOneOffSharedMatrixClient({
       cfg: loadConfigMock(),
-      timeoutMs: undefined,
       accountId: "ops",
-      startClient: false,
     });
   });
 
@@ -167,16 +162,9 @@ describe("action client helpers", () => {
 
     await withResolvedActionClient({ cfg: explicitCfg, accountId: "ops" }, async () => {});
 
-    expect(getMatrixRuntimeMock).not.toHaveBeenCalled();
-    expect(resolveMatrixAuthContextMock).toHaveBeenCalledWith({
+    expectExplicitMatrixClientConfig({
       cfg: explicitCfg,
       accountId: "ops",
-    });
-    expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
-      cfg: explicitCfg,
-      timeoutMs: undefined,
-      accountId: "ops",
-      startClient: false,
     });
   });
 

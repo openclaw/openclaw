@@ -1,4 +1,15 @@
-import { createAllowFromSection, createTopLevelChannelDmPolicy } from "openclaw/plugin-sdk/setup";
+import {
+  createAllowFromSection,
+  createStandardChannelSetupStatus,
+  mergeAllowFromEntries,
+} from "openclaw/plugin-sdk/setup";
+import { resolveDefaultLineAccountId } from "./accounts.js";
+import {
+  isLineConfigured,
+  listLineAccountIds,
+  parseLineAllowFromId,
+  patchLineAccountConfig,
+} from "./setup-core.js";
 import {
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
@@ -7,13 +18,7 @@ import {
   splitSetupEntries,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
-} from "../runtime-api.js";
-import {
-  isLineConfigured,
-  listLineAccountIds,
-  parseLineAllowFromId,
-  patchLineAccountConfig,
-} from "./setup-core.js";
+} from "./setup-runtime-api.js";
 
 const channel = "line" as const;
 
@@ -35,36 +40,68 @@ const LINE_ALLOW_FROM_HELP_LINES = [
   `Docs: ${formatDocsLink("/channels/line", "channels/line")}`,
 ];
 
-const lineDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
+const lineDmPolicy: ChannelSetupDmPolicy = {
   label: "LINE",
   channel,
   policyKey: "channels.line.dmPolicy",
   allowFromKey: "channels.line.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.line?.dmPolicy ?? "pairing",
-});
+  resolveConfigKeys: (cfg, accountId) =>
+    (accountId ?? resolveDefaultLineAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
+      ? {
+          policyKey: `channels.line.accounts.${accountId ?? resolveDefaultLineAccountId(cfg)}.dmPolicy`,
+          allowFromKey: `channels.line.accounts.${accountId ?? resolveDefaultLineAccountId(cfg)}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.line.dmPolicy",
+          allowFromKey: "channels.line.allowFrom",
+        },
+  getCurrent: (cfg, accountId) =>
+    resolveLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }).config
+      .dmPolicy ?? "pairing",
+  setPolicy: (cfg, policy, accountId) =>
+    patchLineAccountConfig({
+      cfg,
+      accountId: accountId ?? resolveDefaultLineAccountId(cfg),
+      enabled: true,
+      patch:
+        policy === "open"
+          ? {
+              dmPolicy: "open",
+              allowFrom: mergeAllowFromEntries(
+                resolveLineAccount({
+                  cfg,
+                  accountId: accountId ?? resolveDefaultLineAccountId(cfg),
+                }).config.allowFrom,
+                ["*"],
+              ),
+            }
+          : { dmPolicy: policy },
+      clearFields: policy === "pairing" || policy === "disabled" ? ["allowFrom"] : undefined,
+    }),
+};
 
 export { lineSetupAdapter } from "./setup-core.js";
 
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "LINE",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token + secret",
     configuredHint: "configured",
     unconfiguredHint: "needs token + secret",
     configuredScore: 1,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listLineAccountIds(cfg).some((accountId) => isLineConfigured(cfg, accountId)),
-    resolveStatusLines: ({ cfg, configured }) => [
-      `LINE: ${configured ? "configured" : "needs token + secret"}`,
-      `Accounts: ${listLineAccountIds(cfg).length || 0}`,
-    ],
-  },
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg, accountId }) =>
+      isLineConfigured(cfg, accountId ?? resolveDefaultLineAccountId(cfg)),
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
+  }),
   introNote: {
     title: "LINE Messaging API",
     lines: LINE_SETUP_HELP_LINES,
-    shouldShow: ({ cfg, accountId }) => !isLineConfigured(cfg, accountId),
+    shouldShow: ({ cfg, accountId }) =>
+      !isLineConfigured(cfg, accountId ?? resolveDefaultLineAccountId(cfg)),
   },
   credentials: [
     {

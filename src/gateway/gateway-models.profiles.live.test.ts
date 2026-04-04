@@ -4,13 +4,12 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
-  resolveAuthProfileOrder,
   saveAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import {
@@ -18,7 +17,9 @@ import {
   isAnthropicBillingError,
   isAnthropicRateLimitError,
 } from "../agents/live-auth-keys.js";
-import { isModernModelRef } from "../agents/live-model-filter.js";
+import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
+import { isHighSignalLiveModelRef } from "../agents/live-model-filter.js";
+import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
@@ -27,7 +28,9 @@ import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discover
 import { clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -40,11 +43,13 @@ import {
 import { startGatewayServer } from "./server.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
-const GATEWAY_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY);
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
+const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
-const THINKING_LEVEL = "high";
+const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
+const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
+const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
+const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -55,10 +60,28 @@ const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS, 90_000),
 );
+const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
+const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
+);
+const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
+  "google/gemini-3-flash-preview",
+  "google/gemini-3-pro-preview",
+  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-pro-preview",
+  "google/gemini-3.1-pro-preview-customtools",
+  "openai/gpt-5.2-pro",
+]);
+const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  "google/gemini-3.1-flash-lite-preview",
+]);
+const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
 const GATEWAY_LIVE_SUITE_TIMEOUT_MS = resolveGatewayLiveSuiteTimeoutMs(GATEWAY_LIVE_MAX_MODELS);
+const QUIET_LIVE_LOGS = process.env.OPENCLAW_LIVE_TEST_QUIET !== "0";
 
-const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
+const describeLive = isLiveTestEnabled(["OPENCLAW_LIVE_GATEWAY"]) ? describe : describe.skip;
 
 function parseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
@@ -70,6 +93,28 @@ function parseFilter(raw?: string): Set<string> | null {
     .map((s) => s.trim())
     .filter(Boolean);
   return ids.length ? new Set(ids) : null;
+}
+
+function shouldSuppressGatewayLiveOllamaWarnings(): boolean {
+  return PROVIDERS !== null && !PROVIDERS.has("ollama");
+}
+
+async function withSuppressedGatewayLiveWarnings<T>(run: () => Promise<T>): Promise<T> {
+  if (!shouldSuppressGatewayLiveOllamaWarnings()) {
+    return await run();
+  }
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    if (args.some((arg) => typeof arg === "string" && isOllamaUnavailableErrorMessage(arg))) {
+      return;
+    }
+    originalWarn(...args);
+  };
+  try {
+    return await run();
+  } finally {
+    console.warn = originalWarn;
+  }
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -102,26 +147,81 @@ function resolveGatewayLiveSuiteTimeoutMs(maxModels: number): number {
   );
 }
 
+function resolveGatewayLiveModelTimeoutMs(
+  gatewayModelTimeoutRaw = process.env.OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS,
+  liveModelTimeoutRaw = process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS,
+  stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+): number {
+  const requested = toInt(gatewayModelTimeoutRaw, toInt(liveModelTimeoutRaw, 120_000));
+  return Math.max(stepTimeoutMs, requested);
+}
+
 function isGatewayLiveProbeTimeout(error: string): boolean {
   return /probe timeout after \d+ms/i.test(error);
 }
 
-async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: string): Promise<T> {
+function isGatewayLiveModelTimeout(error: string): boolean {
+  return /model timeout after \d+ms/i.test(error);
+}
+
+async function withGatewayLiveTimeout<T>(params: {
+  operation: Promise<T>;
+  timeoutMs: number;
+  timeoutLabel: "probe" | "model";
+  context: string;
+}): Promise<T> {
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const startedAt = Date.now();
+  let heartbeatCount = 0;
+  const heartbeat = setInterval(() => {
+    heartbeatCount += 1;
+    logProgress(
+      `${params.context}: still running (${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s)`,
+    );
+  }, GATEWAY_LIVE_HEARTBEAT_MS);
+  heartbeat.unref?.();
   try {
     return await Promise.race([
-      operation,
+      params.operation,
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
-          reject(new Error(`probe timeout after ${GATEWAY_LIVE_PROBE_TIMEOUT_MS}ms (${context})`));
-        }, GATEWAY_LIVE_PROBE_TIMEOUT_MS);
+          reject(
+            new Error(
+              `${params.timeoutLabel} timeout after ${params.timeoutMs}ms (${params.context})`,
+            ),
+          );
+        }, params.timeoutMs);
       }),
     ]);
   } finally {
+    clearInterval(heartbeat);
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
+    if (heartbeatCount > 0) {
+      logProgress(
+        `${params.context}: completed after ${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s`,
+      );
+    }
   }
+}
+
+async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: string): Promise<T> {
+  return await withGatewayLiveTimeout({
+    operation,
+    timeoutMs: GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+    timeoutLabel: "probe",
+    context,
+  });
+}
+
+async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: string): Promise<T> {
+  return await withGatewayLiveTimeout({
+    operation,
+    timeoutMs: GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+    timeoutLabel: "model",
+    context,
+  });
 }
 
 function capByProviderSpread<T>(
@@ -168,7 +268,7 @@ function capByProviderSpread<T>(
 }
 
 function logProgress(message: string): void {
-  console.log(`[live] ${message}`);
+  process.stderr.write(`[live] ${message}\n`);
 }
 
 function enterProductionEnvForLiveRun() {
@@ -249,6 +349,160 @@ function isMeaningful(text: string): boolean {
   return true;
 }
 
+function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean {
+  if (!modelKey) {
+    return false;
+  }
+  if (GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(modelKey)) {
+    return true;
+  }
+  const [provider, ...rest] = modelKey.split("/");
+  const modelId = rest.join("/");
+  if (provider === "minimax" || provider === "minimax-portal") {
+    // MiniMax transcript persistence can mirror our <final> wrapper style even
+    // though user-visible surfaces already strip it. Keep the live reader
+    // aligned with the runtime-facing sanitizers for the whole provider family.
+    return true;
+  }
+  if (provider !== "google" || rest.length === 0) {
+    return false;
+  }
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
+  return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
+}
+
+function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: string): string {
+  if (!shouldStripAssistantScaffoldingForLiveModel(modelKey)) {
+    return text;
+  }
+  return stripAssistantInternalScaffolding(text).trim();
+}
+
+function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
+  if (!modelKey) {
+    return false;
+  }
+  if (GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(modelKey)) {
+    return true;
+  }
+  const [provider, ...rest] = modelKey.split("/");
+  if (provider !== "google" || rest.length === 0) {
+    return false;
+  }
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
+}
+
+function shouldSkipEmptyResponseForLiveModel(params: {
+  provider: string;
+  allowNotFoundSkip: boolean;
+}): boolean {
+  if (isGoogleishProvider(params.provider)) {
+    return true;
+  }
+  if (params.provider === "openrouter" || params.provider === "opencode") {
+    return true;
+  }
+  if (params.provider === "opencode-go") {
+    return true;
+  }
+  if (!params.allowNotFoundSkip) {
+    return false;
+  }
+  return (
+    params.provider === "google-antigravity" ||
+    params.provider === "minimax" ||
+    params.provider === "openai-codex" ||
+    params.provider === "zai"
+  );
+}
+
+describe("maybeStripAssistantScaffoldingForLiveModel", () => {
+  it("strips scaffolding for Gemini preview models with known transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-flash-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-flash-lite-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-pro-preview",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-3.1-pro-preview-customtools",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<think>hidden</think>Visible",
+        "google/gemini-2.5-flash",
+      ),
+    ).toBe("<think>hidden</think>Visible");
+  });
+
+  it("strips scaffolding for known OpenAI transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2-pro"),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2"),
+    ).toBe("<final>Visible</final>");
+  });
+
+  it("strips scaffolding for MiniMax transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "minimax/MiniMax-M2.5-highspeed",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<final>Visible</final>",
+        "minimax-portal/MiniMax-M2.7-highspeed",
+      ),
+    ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "minimax/MiniMax-M2.7"),
+    ).toBe("Visible");
+  });
+});
+
+describe("shouldSkipExecReadNonceMissForLiveModel", () => {
+  it("matches the known Gemini lite exec/read isolation case", () => {
+    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite-preview")).toBe(
+      true,
+    );
+    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite")).toBe(true);
+    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-preview")).toBe(false);
+  });
+});
+
+describe("resolveGatewayLiveModelTimeoutMs", () => {
+  it("prefers gateway-specific timeout when provided", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("180000", "45000", 90_000)).toBe(180_000);
+  });
+
+  it("falls back to the shared live timeout", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("", "45000", 30_000)).toBe(45_000);
+  });
+
+  it("never goes below the probe timeout", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
+  });
+});
+
 function isGoogleModelNotFoundText(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -292,6 +546,15 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
   );
 }
 
+function isOllamaUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("ollama could not be reached") ||
+    (msg.includes("127.0.0.1:11434") && msg.includes("econnrefused")) ||
+    (msg.includes("localhost:11434") && msg.includes("econnrefused"))
+  );
+}
+
 function isInstructionsRequiredError(error: string): boolean {
   return /instructions are required/i.test(error);
 }
@@ -323,6 +586,84 @@ function isToolNonceProbeMiss(error: string): boolean {
   return msg.includes("tool probe missing nonce") || msg.includes("exec+read probe missing nonce");
 }
 
+function isExecReadNonceProbeMiss(error: string): boolean {
+  return error.toLowerCase().includes("exec+read probe missing nonce");
+}
+
+function isPromptProbeMiss(error: string): boolean {
+  const msg = error.toLowerCase();
+  return msg.includes("not meaningful:") || msg.includes("missing required keywords:");
+}
+
+function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
+  if (!modelKey) {
+    return false;
+  }
+  if (GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(modelKey)) {
+    return true;
+  }
+  const [provider, ...rest] = modelKey.split("/");
+  if (
+    provider === "anthropic" ||
+    provider === "minimax" ||
+    provider === "opencode" ||
+    provider === "opencode-go" ||
+    provider === "xai" ||
+    provider === "zai"
+  ) {
+    return true;
+  }
+  if (provider !== "google" || rest.length === 0) {
+    return false;
+  }
+  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
+}
+
+describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
+  it.each([
+    { modelKey: "anthropic/claude-opus-4-6", expected: true },
+    { modelKey: "minimax/minimax-m1", expected: true },
+    { modelKey: "opencode/big-pickle", expected: true },
+    { modelKey: "opencode-go/glm-5", expected: true },
+    { modelKey: "xai/grok-4.1-fast", expected: true },
+    { modelKey: "zai/glm-4.7", expected: true },
+    { modelKey: "google/gemini-3-flash-preview", expected: true },
+    { modelKey: "openai/gpt-5.2", expected: false },
+  ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
+    expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
+  });
+});
+
+describe("shouldSkipEmptyResponseForLiveModel", () => {
+  it.each([
+    { provider: "google", allowNotFoundSkip: false, expected: true },
+    { provider: "google-antigravity", allowNotFoundSkip: false, expected: true },
+    { provider: "openrouter", allowNotFoundSkip: false, expected: true },
+    { provider: "opencode", allowNotFoundSkip: false, expected: true },
+    { provider: "opencode-go", allowNotFoundSkip: false, expected: true },
+    { provider: "minimax", allowNotFoundSkip: false, expected: false },
+    { provider: "minimax", allowNotFoundSkip: true, expected: true },
+    { provider: "zai", allowNotFoundSkip: true, expected: true },
+    { provider: "openai-codex", allowNotFoundSkip: true, expected: true },
+    { provider: "xai", allowNotFoundSkip: true, expected: false },
+  ])(
+    "returns $expected for $provider (allowNotFoundSkip=$allowNotFoundSkip)",
+    ({ provider, allowNotFoundSkip, expected }) => {
+      expect(shouldSkipEmptyResponseForLiveModel({ provider, allowNotFoundSkip })).toBe(expected);
+    },
+  );
+});
+
+describe("isPromptProbeMiss", () => {
+  it.each([
+    { error: "not meaningful: let me think", expected: true },
+    { error: "missing required keywords: event loop summary", expected: true },
+    { error: "tool probe missing nonce: nonce-a", expected: false },
+  ])("returns $expected for $error", ({ error, expected }) => {
+    expect(isPromptProbeMiss(error)).toBe(expected);
+  });
+});
 function isMissingProfileError(error: string): boolean {
   return /no credentials found for profile/i.test(error);
 }
@@ -352,6 +693,7 @@ async function runAnthropicRefusalProbe(params: {
     message: `Reply with the single word ok. Test token: ${magic}`,
     thinkingLevel: params.thinkingLevel,
     context: `${params.label}: refusal-probe`,
+    modelKey: params.modelKey,
   });
   assertNoReasoningTags({
     text: probeText,
@@ -370,6 +712,7 @@ async function runAnthropicRefusalProbe(params: {
     message: "Now reply with exactly: still ok.",
     thinkingLevel: params.thinkingLevel,
     context: `${params.label}: refusal-followup`,
+    modelKey: params.modelKey,
   });
   assertNoReasoningTags({
     text: followupText,
@@ -542,7 +885,7 @@ function extractTranscriptMessageText(message: unknown): string {
     .trim();
 }
 
-function readSessionAssistantTexts(sessionKey: string): string[] {
+function readSessionAssistantTexts(sessionKey: string, modelKey?: string): string[] {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
@@ -557,7 +900,9 @@ function readSessionAssistantTexts(sessionKey: string): string[] {
     if (role !== "assistant") {
       continue;
     }
-    assistantTexts.push(extractTranscriptMessageText(message));
+    assistantTexts.push(
+      maybeStripAssistantScaffoldingForLiveModel(extractTranscriptMessageText(message), modelKey),
+    );
   }
   return assistantTexts;
 }
@@ -566,11 +911,13 @@ async function waitForSessionAssistantText(params: {
   sessionKey: string;
   baselineAssistantCount: number;
   context: string;
+  modelKey?: string;
 }) {
   const startedAt = Date.now();
+  let lastHeartbeatAt = startedAt;
   let delayMs = 50;
   while (Date.now() - startedAt < GATEWAY_LIVE_PROBE_TIMEOUT_MS) {
-    const assistantTexts = readSessionAssistantTexts(params.sessionKey);
+    const assistantTexts = readSessionAssistantTexts(params.sessionKey, params.modelKey);
     if (assistantTexts.length > params.baselineAssistantCount) {
       const freshText = assistantTexts
         .slice(params.baselineAssistantCount)
@@ -579,6 +926,12 @@ async function waitForSessionAssistantText(params: {
       if (freshText) {
         return freshText;
       }
+    }
+    if (Date.now() - lastHeartbeatAt >= GATEWAY_LIVE_HEARTBEAT_MS) {
+      lastHeartbeatAt = Date.now();
+      logProgress(
+        `${params.context}: waiting for transcript (${Math.max(1, Math.round((Date.now() - startedAt) / 1_000))}s)`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     delayMs = Math.min(delayMs * 2, 250);
@@ -593,13 +946,17 @@ async function requestGatewayAgentText(params: {
   thinkingLevel: string;
   context: string;
   idempotencyKey: string;
+  modelKey?: string;
   attachments?: Array<{
     mimeType: string;
     fileName: string;
     content: string;
   }>;
 }) {
-  const baselineAssistantCount = readSessionAssistantTexts(params.sessionKey).length;
+  const baselineAssistantCount = readSessionAssistantTexts(
+    params.sessionKey,
+    params.modelKey,
+  ).length;
   const accepted = await withGatewayLiveProbeTimeout(
     params.client.request<{ runId?: unknown; status?: unknown }>("agent", {
       sessionKey: params.sessionKey,
@@ -618,6 +975,7 @@ async function requestGatewayAgentText(params: {
     sessionKey: params.sessionKey,
     baselineAssistantCount,
     context: `${params.context}: transcript-final`,
+    modelKey: params.modelKey,
   });
 }
 
@@ -625,6 +983,7 @@ type GatewayModelSuiteParams = {
   label: string;
   cfg: OpenClawConfig;
   candidates: Array<Model<Api>>;
+  allowNotFoundSkip: boolean;
   extraToolProbes: boolean;
   extraImageProbes: boolean;
   thinkingLevel: string;
@@ -753,6 +1112,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
     skipCron: process.env.OPENCLAW_SKIP_CRON,
     skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+    disableBonjour: process.env.OPENCLAW_DISABLE_BONJOUR,
+    logLevel: process.env.OPENCLAW_LOG_LEVEL,
     agentDir: process.env.OPENCLAW_AGENT_DIR,
     piAgentDir: process.env.PI_CODING_AGENT_DIR,
     stateDir: process.env.OPENCLAW_STATE_DIR,
@@ -764,6 +1125,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
   process.env.OPENCLAW_SKIP_CRON = "1";
   process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+  if (QUIET_LIVE_LOGS) {
+    process.env.OPENCLAW_DISABLE_BONJOUR = "1";
+    process.env.OPENCLAW_LOG_LEVEL = "silent";
+  }
 
   const token = `test-${randomUUID()}`;
   process.env.OPENCLAW_GATEWAY_TOKEN = token;
@@ -863,6 +1228,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     logProgress(
       `[${params.label}] running ${params.candidates.length} models (thinking=${params.thinkingLevel})`,
     );
+    logProgress(
+      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s`,
+    );
     const anthropicKeys = collectAnthropicApiKeys();
     if (anthropicKeys.length > 0) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
@@ -885,318 +1253,355 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
         }
         try {
-          // Ensure session exists + override model for this run.
-          // Reset between models: avoids cross-provider transcript incompatibilities
-          // (notably OpenAI Responses requiring reasoning replay for function_call items).
-          await withGatewayLiveProbeTimeout(
-            client.request("sessions.reset", {
-              key: sessionKey,
-            }),
-            `${progressLabel}: sessions-reset`,
-          );
-          await withGatewayLiveProbeTimeout(
-            client.request("sessions.patch", {
-              key: sessionKey,
-              model: modelKey,
-            }),
-            `${progressLabel}: sessions-patch`,
-          );
-
-          logProgress(`${progressLabel}: prompt`);
-          let text = await requestGatewayAgentText({
-            client,
-            sessionKey,
-            idempotencyKey: `idem-${randomUUID()}`,
-            message:
-              "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
-            thinkingLevel: params.thinkingLevel,
-            context: `${progressLabel}: prompt`,
-          });
-          if (!text) {
-            logProgress(`${progressLabel}: empty response, retrying`);
-            text = await requestGatewayAgentText({
-              client,
-              sessionKey,
-              idempotencyKey: `idem-${randomUUID()}-retry`,
-              message:
-                "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
-              thinkingLevel: params.thinkingLevel,
-              context: `${progressLabel}: prompt-retry`,
-            });
-          }
-          if (!text && isGoogleishProvider(model.provider)) {
-            logProgress(`${progressLabel}: skip (google empty response)`);
-            break;
-          }
-          if (
-            isEmptyStreamText(text) &&
-            (model.provider === "minimax" || model.provider === "openai-codex")
-          ) {
-            logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
-            break;
-          }
-          if (isGoogleishProvider(model.provider) && isGoogleModelNotFoundText(text)) {
-            // Catalog drift: model IDs can disappear or become unavailable on the API.
-            // Treat as skip when scanning "all models" for Google.
-            logProgress(`${progressLabel}: skip (google model not found)`);
-            break;
-          }
-          assertNoReasoningTags({
-            text,
-            model: modelKey,
-            phase: "prompt",
-            label: params.label,
-          });
-          if (!isMeaningful(text)) {
-            if (isGoogleishProvider(model.provider) && /gemini/i.test(model.id)) {
-              logProgress(`${progressLabel}: skip (google not meaningful)`);
-              break;
-            }
-            throw new Error(`not meaningful: ${text}`);
-          }
-          if (!/\bmicro\s*-?\s*tasks?\b/i.test(text) || !/\bmacro\s*-?\s*tasks?\b/i.test(text)) {
-            throw new Error(`missing required keywords: ${text}`);
-          }
-
-          // Real tool invocation: force the agent to Read a local file and echo a nonce.
-          logProgress(`${progressLabel}: tool-read`);
-          const runIdTool = randomUUID();
-          const maxToolReadAttempts = 3;
-          let toolText = "";
-          for (
-            let toolReadAttempt = 0;
-            toolReadAttempt < maxToolReadAttempts;
-            toolReadAttempt += 1
-          ) {
-            const strictReply = toolReadAttempt > 0;
-            toolText = await requestGatewayAgentText({
-              client,
-              sessionKey,
-              idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
-              message: strictReply
-                ? "OpenClaw live tool probe (local, safe): " +
-                  `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                  `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
-                : "OpenClaw live tool probe (local, safe): " +
-                  `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                  "Then reply with the two nonce values you read (include both).",
-              thinkingLevel: params.thinkingLevel,
-              context: `${progressLabel}: tool-read`,
-            });
-            if (
-              isEmptyStreamText(toolText) &&
-              (model.provider === "minimax" || model.provider === "openai-codex")
-            ) {
-              logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
-              break;
-            }
-            assertNoReasoningTags({
-              text: toolText,
-              model: modelKey,
-              phase: "tool-read",
-              label: params.label,
-            });
-            if (hasExpectedToolNonce(toolText, nonceA, nonceB)) {
-              break;
-            }
-            if (
-              shouldRetryToolReadProbe({
-                text: toolText,
-                nonceA,
-                nonceB,
-                provider: model.provider,
-                attempt: toolReadAttempt,
-                maxAttempts: maxToolReadAttempts,
-              })
-            ) {
-              logProgress(
-                `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) malformed tool output`,
+          const modelResult = await withGatewayLiveModelTimeout<"done" | "skip">(
+            (async () => {
+              // Ensure session exists + override model for this run.
+              // Reset between models: avoids cross-provider transcript incompatibilities
+              // (notably OpenAI Responses requiring reasoning replay for function_call items).
+              await withGatewayLiveProbeTimeout(
+                client.request("sessions.reset", {
+                  key: sessionKey,
+                }),
+                `${progressLabel}: sessions-reset`,
               );
-              continue;
-            }
-            throw new Error(`tool probe missing nonce: ${toolText}`);
-          }
-          if (!hasExpectedToolNonce(toolText, nonceA, nonceB)) {
-            throw new Error(`tool probe missing nonce: ${toolText}`);
-          }
+              await withGatewayLiveProbeTimeout(
+                client.request("sessions.patch", {
+                  key: sessionKey,
+                  model: modelKey,
+                }),
+                `${progressLabel}: sessions-patch`,
+              );
 
-          if (params.extraToolProbes) {
-            logProgress(`${progressLabel}: tool-exec`);
-            const nonceC = randomUUID();
-            const toolWritePath = path.join(tempDir, `write-${runIdTool}.txt`);
-            const maxExecReadAttempts = 3;
-            let execReadText = "";
-            for (
-              let execReadAttempt = 0;
-              execReadAttempt < maxExecReadAttempts;
-              execReadAttempt += 1
-            ) {
-              const strictReply = execReadAttempt > 0;
-              execReadText = await requestGatewayAgentText({
+              logProgress(`${progressLabel}: prompt`);
+              let text = await requestGatewayAgentText({
                 client,
                 sessionKey,
-                idempotencyKey: `idem-${runIdTool}-exec-read-${execReadAttempt + 1}`,
-                message: strictReply
-                  ? "OpenClaw live tool probe (local, safe): " +
-                    "use the tool named `exec` (or `Exec`) to run this command: " +
-                    `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                    `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
-                    `Then reply with exactly: ${nonceC}. No extra text.`
-                  : "OpenClaw live tool probe (local, safe): " +
-                    "use the tool named `exec` (or `Exec`) to run this command: " +
-                    `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                    `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
-                    "Finally reply including the nonce text you read back.",
+                idempotencyKey: `idem-${randomUUID()}`,
+                modelKey,
+                message:
+                  "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
                 thinkingLevel: params.thinkingLevel,
-                context: `${progressLabel}: tool-exec`,
+                context: `${progressLabel}: prompt`,
               });
-              if (
-                isEmptyStreamText(execReadText) &&
-                (model.provider === "minimax" || model.provider === "openai-codex")
-              ) {
-                logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
-                break;
-              }
-              assertNoReasoningTags({
-                text: execReadText,
-                model: modelKey,
-                phase: "tool-exec",
-                label: params.label,
-              });
-              if (hasExpectedSingleNonce(execReadText, nonceC)) {
-                break;
+              if (!text) {
+                logProgress(`${progressLabel}: empty response, retrying`);
+                text = await requestGatewayAgentText({
+                  client,
+                  sessionKey,
+                  idempotencyKey: `idem-${randomUUID()}-retry`,
+                  modelKey,
+                  message:
+                    "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
+                  thinkingLevel: params.thinkingLevel,
+                  context: `${progressLabel}: prompt-retry`,
+                });
               }
               if (
-                shouldRetryExecReadProbe({
-                  text: execReadText,
-                  nonce: nonceC,
+                !text &&
+                shouldSkipEmptyResponseForLiveModel({
                   provider: model.provider,
-                  attempt: execReadAttempt,
-                  maxAttempts: maxExecReadAttempts,
+                  allowNotFoundSkip: params.allowNotFoundSkip,
                 })
               ) {
-                logProgress(
-                  `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) malformed tool output`,
-                );
-                continue;
+                logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+                return "skip";
               }
-              throw new Error(`exec+read probe missing nonce: ${execReadText}`);
-            }
-            if (!hasExpectedSingleNonce(execReadText, nonceC)) {
-              throw new Error(`exec+read probe missing nonce: ${execReadText}`);
-            }
-
-            await fs.rm(toolWritePath, { force: true });
-          }
-
-          if (params.extraImageProbes && model.input?.includes("image")) {
-            logProgress(`${progressLabel}: image`);
-            // Shorter code => less OCR flake across providers, still tests image attachments end-to-end.
-            const imageCode = randomImageProbeCode();
-            const imageBase64 = renderCatNoncePngBase64(imageCode);
-            const runIdImage = randomUUID();
-
-            const imageText = await requestGatewayAgentText({
-              client,
-              sessionKey,
-              idempotencyKey: `idem-${runIdImage}-image`,
-              message:
-                "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
-                "(1) the animal shown or written in the image, lowercase; " +
-                "(2) the code printed in the image, uppercase. No extra text.",
-              attachments: [
-                {
-                  mimeType: "image/png",
-                  fileName: `probe-${runIdImage}.png`,
-                  content: imageBase64,
-                },
-              ],
-              thinkingLevel: params.thinkingLevel,
-              context: `${progressLabel}: image`,
-            });
-            // Best-effort: do not fail the whole live suite on flaky image handling.
-            // (We still keep prompt + tool probes as hard checks.)
-            if (
-              isEmptyStreamText(imageText) &&
-              (model.provider === "minimax" || model.provider === "openai-codex")
-            ) {
-              logProgress(`${progressLabel}: image skip (${model.provider} empty response)`);
-            } else {
+              if (
+                isEmptyStreamText(text) &&
+                shouldSkipEmptyResponseForLiveModel({
+                  provider: model.provider,
+                  allowNotFoundSkip: params.allowNotFoundSkip,
+                })
+              ) {
+                logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+                return "skip";
+              }
+              if (isGoogleishProvider(model.provider) && isGoogleModelNotFoundText(text)) {
+                // Catalog drift: model IDs can disappear or become unavailable on the API.
+                // Treat as skip when scanning "all models" for Google.
+                logProgress(`${progressLabel}: skip (google model not found)`);
+                return "skip";
+              }
+              if (params.allowNotFoundSkip && isModelNotFoundErrorMessage(text)) {
+                logProgress(`${progressLabel}: skip (model not found)`);
+                return "skip";
+              }
               assertNoReasoningTags({
-                text: imageText,
+                text,
                 model: modelKey,
-                phase: "image",
+                phase: "prompt",
                 label: params.label,
               });
-              if (!/\bcat\b/i.test(imageText)) {
-                logProgress(`${progressLabel}: image skip (missing 'cat')`);
-              } else {
-                const candidates = imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
-                const bestDistance = candidates.reduce((best, cand) => {
-                  if (Math.abs(cand.length - imageCode.length) > 2) {
-                    return best;
+              if (!isMeaningful(text)) {
+                if (isGoogleishProvider(model.provider) && /gemini/i.test(model.id)) {
+                  logProgress(`${progressLabel}: skip (google not meaningful)`);
+                  return "skip";
+                }
+                throw new Error(`not meaningful: ${text}`);
+              }
+              if (
+                !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
+                !/\bmacro\s*-?\s*tasks?\b/i.test(text)
+              ) {
+                throw new Error(`missing required keywords: ${text}`);
+              }
+
+              // Real tool invocation: force the agent to Read a local file and echo a nonce.
+              logProgress(`${progressLabel}: tool-read`);
+              const runIdTool = randomUUID();
+              const maxToolReadAttempts = 3;
+              let toolText = "";
+              for (
+                let toolReadAttempt = 0;
+                toolReadAttempt < maxToolReadAttempts;
+                toolReadAttempt += 1
+              ) {
+                const strictReply = toolReadAttempt > 0;
+                toolText = await requestGatewayAgentText({
+                  client,
+                  sessionKey,
+                  idempotencyKey: `idem-${runIdTool}-tool-${toolReadAttempt + 1}`,
+                  modelKey,
+                  message: strictReply
+                    ? "OpenClaw live tool probe (local, safe): " +
+                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                      `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`
+                    : "OpenClaw live tool probe (local, safe): " +
+                      `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                      "Then reply with the two nonce values you read (include both).",
+                  thinkingLevel: params.thinkingLevel,
+                  context: `${progressLabel}: tool-read`,
+                });
+                if (
+                  isEmptyStreamText(toolText) &&
+                  shouldSkipEmptyResponseForLiveModel({
+                    provider: model.provider,
+                    allowNotFoundSkip: params.allowNotFoundSkip,
+                  })
+                ) {
+                  logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+                  return "skip";
+                }
+                assertNoReasoningTags({
+                  text: toolText,
+                  model: modelKey,
+                  phase: "tool-read",
+                  label: params.label,
+                });
+                if (hasExpectedToolNonce(toolText, nonceA, nonceB)) {
+                  break;
+                }
+                if (
+                  shouldRetryToolReadProbe({
+                    text: toolText,
+                    nonceA,
+                    nonceB,
+                    provider: model.provider,
+                    attempt: toolReadAttempt,
+                    maxAttempts: maxToolReadAttempts,
+                  })
+                ) {
+                  logProgress(
+                    `${progressLabel}: tool-read retry (${toolReadAttempt + 2}/${maxToolReadAttempts}) malformed tool output`,
+                  );
+                  continue;
+                }
+                throw new Error(`tool probe missing nonce: ${toolText}`);
+              }
+              if (!hasExpectedToolNonce(toolText, nonceA, nonceB)) {
+                throw new Error(`tool probe missing nonce: ${toolText}`);
+              }
+
+              if (params.extraToolProbes) {
+                logProgress(`${progressLabel}: tool-exec`);
+                const nonceC = randomUUID();
+                const toolWritePath = path.join(tempDir, `write-${runIdTool}.txt`);
+                const maxExecReadAttempts = 3;
+                let execReadText = "";
+                for (
+                  let execReadAttempt = 0;
+                  execReadAttempt < maxExecReadAttempts;
+                  execReadAttempt += 1
+                ) {
+                  const strictReply = execReadAttempt > 0;
+                  execReadText = await requestGatewayAgentText({
+                    client,
+                    sessionKey,
+                    idempotencyKey: `idem-${runIdTool}-exec-read-${execReadAttempt + 1}`,
+                    modelKey,
+                    message: strictReply
+                      ? "OpenClaw live tool probe (local, safe): " +
+                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        `Then reply with exactly: ${nonceC}. No extra text.`
+                      : "OpenClaw live tool probe (local, safe): " +
+                        "use the tool named `exec` (or `Exec`) to run this command: " +
+                        `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                        `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                        "Finally reply including the nonce text you read back.",
+                    thinkingLevel: params.thinkingLevel,
+                    context: `${progressLabel}: tool-exec`,
+                  });
+                  if (
+                    isEmptyStreamText(execReadText) &&
+                    shouldSkipEmptyResponseForLiveModel({
+                      provider: model.provider,
+                      allowNotFoundSkip: params.allowNotFoundSkip,
+                    })
+                  ) {
+                    logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+                    return "skip";
                   }
-                  return Math.min(best, editDistance(cand, imageCode));
-                }, Number.POSITIVE_INFINITY);
-                // OCR / image-read flake: allow a small edit distance, but still require the "cat" token above.
-                if (!(bestDistance <= 3)) {
-                  logProgress(`${progressLabel}: image skip (code mismatch)`);
+                  assertNoReasoningTags({
+                    text: execReadText,
+                    model: modelKey,
+                    phase: "tool-exec",
+                    label: params.label,
+                  });
+                  if (hasExpectedSingleNonce(execReadText, nonceC)) {
+                    break;
+                  }
+                  if (
+                    shouldRetryExecReadProbe({
+                      text: execReadText,
+                      nonce: nonceC,
+                      provider: model.provider,
+                      attempt: execReadAttempt,
+                      maxAttempts: maxExecReadAttempts,
+                    })
+                  ) {
+                    logProgress(
+                      `${progressLabel}: tool-exec retry (${execReadAttempt + 2}/${maxExecReadAttempts}) malformed tool output`,
+                    );
+                    continue;
+                  }
+                  throw new Error(`exec+read probe missing nonce: ${execReadText}`);
+                }
+                if (!hasExpectedSingleNonce(execReadText, nonceC)) {
+                  throw new Error(`exec+read probe missing nonce: ${execReadText}`);
+                }
+
+                await fs.rm(toolWritePath, { force: true });
+              }
+
+              if (params.extraImageProbes && model.input?.includes("image")) {
+                logProgress(`${progressLabel}: image`);
+                // Shorter code => less OCR flake across providers, still tests image attachments end-to-end.
+                const imageCode = randomImageProbeCode();
+                const imageBase64 = renderCatNoncePngBase64(imageCode);
+                const runIdImage = randomUUID();
+
+                const imageText = await requestGatewayAgentText({
+                  client,
+                  sessionKey,
+                  idempotencyKey: `idem-${runIdImage}-image`,
+                  modelKey,
+                  message:
+                    "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
+                    "(1) the animal shown or written in the image, lowercase; " +
+                    "(2) the code printed in the image, uppercase. No extra text.",
+                  attachments: [
+                    {
+                      mimeType: "image/png",
+                      fileName: `probe-${runIdImage}.png`,
+                      content: imageBase64,
+                    },
+                  ],
+                  thinkingLevel: params.thinkingLevel,
+                  context: `${progressLabel}: image`,
+                });
+                if (
+                  isEmptyStreamText(imageText) &&
+                  shouldSkipEmptyResponseForLiveModel({
+                    provider: model.provider,
+                    allowNotFoundSkip: params.allowNotFoundSkip,
+                  })
+                ) {
+                  logProgress(`${progressLabel}: image skip (${model.provider} empty response)`);
+                } else {
+                  assertNoReasoningTags({
+                    text: imageText,
+                    model: modelKey,
+                    phase: "image",
+                    label: params.label,
+                  });
+                  if (!/\bcat\b/i.test(imageText)) {
+                    logProgress(`${progressLabel}: image skip (missing 'cat')`);
+                  } else {
+                    const candidates = imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
+                    const bestDistance = candidates.reduce((best, cand) => {
+                      if (Math.abs(cand.length - imageCode.length) > 2) {
+                        return best;
+                      }
+                      return Math.min(best, editDistance(cand, imageCode));
+                    }, Number.POSITIVE_INFINITY);
+                    if (!(bestDistance <= 3)) {
+                      logProgress(`${progressLabel}: image skip (code mismatch)`);
+                    }
+                  }
                 }
               }
-            }
+
+              if (
+                (model.provider === "openai" && model.api === "openai-responses") ||
+                (model.provider === "openai-codex" && model.api === "openai-codex-responses")
+              ) {
+                logProgress(`${progressLabel}: tool-only regression`);
+                const runId2 = randomUUID();
+                const firstText = await requestGatewayAgentText({
+                  client,
+                  sessionKey,
+                  idempotencyKey: `idem-${runId2}-1`,
+                  modelKey,
+                  message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
+                  thinkingLevel: params.thinkingLevel,
+                  context: `${progressLabel}: tool-only-regression-first`,
+                });
+                assertNoReasoningTags({
+                  text: firstText,
+                  model: modelKey,
+                  phase: "tool-only",
+                  label: params.label,
+                });
+
+                const reply = await requestGatewayAgentText({
+                  client,
+                  sessionKey,
+                  idempotencyKey: `idem-${runId2}-2`,
+                  modelKey,
+                  message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
+                  thinkingLevel: params.thinkingLevel,
+                  context: `${progressLabel}: tool-only-regression-second`,
+                });
+                assertNoReasoningTags({
+                  text: reply,
+                  model: modelKey,
+                  phase: "tool-only-followup",
+                  label: params.label,
+                });
+                if (!reply.includes(nonceA) || !reply.includes(nonceB)) {
+                  throw new Error(`unexpected reply: ${reply}`);
+                }
+              }
+
+              if (model.provider === "anthropic") {
+                await runAnthropicRefusalProbe({
+                  client,
+                  sessionKey,
+                  modelKey,
+                  label: progressLabel,
+                  thinkingLevel: params.thinkingLevel,
+                });
+              }
+              return "done";
+            })(),
+            `${progressLabel}: model`,
+          );
+          if (modelResult === "skip") {
+            skippedCount += 1;
+            break;
           }
-
-          // Regression: tool-call-only turn followed by a user message (OpenAI responses bug class).
-          if (
-            (model.provider === "openai" && model.api === "openai-responses") ||
-            (model.provider === "openai-codex" && model.api === "openai-codex-responses")
-          ) {
-            logProgress(`${progressLabel}: tool-only regression`);
-            const runId2 = randomUUID();
-            const firstText = await requestGatewayAgentText({
-              client,
-              sessionKey,
-              idempotencyKey: `idem-${runId2}-1`,
-              message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
-              thinkingLevel: params.thinkingLevel,
-              context: `${progressLabel}: tool-only-regression-first`,
-            });
-            assertNoReasoningTags({
-              text: firstText,
-              model: modelKey,
-              phase: "tool-only",
-              label: params.label,
-            });
-
-            const reply = await requestGatewayAgentText({
-              client,
-              sessionKey,
-              idempotencyKey: `idem-${runId2}-2`,
-              message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
-              thinkingLevel: params.thinkingLevel,
-              context: `${progressLabel}: tool-only-regression-second`,
-            });
-            assertNoReasoningTags({
-              text: reply,
-              model: modelKey,
-              phase: "tool-only-followup",
-              label: params.label,
-            });
-            if (!reply.includes(nonceA) || !reply.includes(nonceB)) {
-              throw new Error(`unexpected reply: ${reply}`);
-            }
-          }
-
-          if (model.provider === "anthropic") {
-            await runAnthropicRefusalProbe({
-              client,
-              sessionKey,
-              modelKey,
-              label: progressLabel,
-              thinkingLevel: params.thinkingLevel,
-            });
-          }
-
           logProgress(`${progressLabel}: done`);
           break;
         } catch (err) {
@@ -1208,6 +1613,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           ) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
+          }
+          if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (anthropic rate limit)`);
+            break;
           }
           if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
             if (attempt + 1 < attemptMax) {
@@ -1230,14 +1640,46 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
             break;
           }
+          if (
+            isEmptyStreamText(message) &&
+            shouldSkipEmptyResponseForLiveModel({
+              provider: model.provider,
+              allowNotFoundSkip: params.allowNotFoundSkip,
+            })
+          ) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
+            break;
+          }
           if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (google rate limit)`);
             break;
           }
+          if (
+            (model.provider === "minimax" ||
+              model.provider === "opencode" ||
+              model.provider === "opencode-go" ||
+              model.provider === "zai") &&
+            isRateLimitErrorMessage(message)
+          ) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (rate limit)`);
+            break;
+          }
           if (isProviderUnavailableErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (provider unavailable)`);
+            break;
+          }
+          if (model.provider === "openrouter" && isPromptProbeMiss(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (openrouter prompt probe miss)`);
+            break;
+          }
+          if (params.allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (model not found)`);
             break;
           }
           if (
@@ -1253,12 +1695,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (probe timeout)`);
             break;
           }
+          if (isGatewayLiveModelTimeout(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (model timeout)`);
+            break;
+          }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
           if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
+            skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
             break;
           }
           if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
+            skippedCount += 1;
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
             break;
           }
@@ -1283,14 +1732,27 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;
           }
-          if (model.provider === "anthropic" && isToolNonceProbeMiss(message)) {
+          if (
+            isExecReadNonceProbeMiss(message) &&
+            shouldSkipExecReadNonceMissForLiveModel(modelKey)
+          ) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (anthropic tool probe nonce miss)`);
+            logProgress(`${progressLabel}: skip (exec/read workspace isolation)`);
+            break;
+          }
+          if (shouldSkipToolNonceProbeMissForLiveModel(modelKey) && isToolNonceProbeMiss(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (${modelKey} tool probe nonce miss)`);
             break;
           }
           if (isMissingProfileError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (missing auth profile)`);
+            break;
+          }
+          if (model.provider === "ollama" && isOllamaUnavailableErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (ollama unavailable)`);
             break;
           }
           if (params.label.startsWith("minimax-")) {
@@ -1334,6 +1796,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
     process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
     process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
+    process.env.OPENCLAW_DISABLE_BONJOUR = previous.disableBonjour;
+    process.env.OPENCLAW_LOG_LEVEL = previous.logLevel;
     process.env.OPENCLAW_AGENT_DIR = previous.agentDir;
     process.env.PI_CODING_AGENT_DIR = previous.piAgentDir;
     process.env.OPENCLAW_STATE_DIR = previous.stateDir;
@@ -1343,106 +1807,113 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 describeLive("gateway live (dev agent, profile keys)", () => {
   it(
     "runs meaningful prompts across models with available keys",
-    async () => {
-      clearRuntimeConfigSnapshot();
-      const cfg = loadConfig();
-      await ensureOpenClawModelsJson(cfg);
+    async () =>
+      await withSuppressedGatewayLiveWarnings(async () => {
+        clearRuntimeConfigSnapshot();
+        const cfg = loadConfig();
+        await ensureOpenClawModelsJson(cfg);
 
-      const agentDir = resolveOpenClawAgentDir();
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
-      const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir);
-      const all = modelRegistry.getAll();
+        const agentDir = resolveOpenClawAgentDir();
+        const authStorage = discoverAuthStorage(agentDir);
+        const modelRegistry = discoverModels(authStorage, agentDir);
+        const all = modelRegistry.getAll();
 
-      const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
-      const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
-      const useExplicit = Boolean(rawModels) && !useModern;
-      const filter = useExplicit ? parseFilter(rawModels) : null;
-      const maxModels = GATEWAY_LIVE_MAX_MODELS;
-      const wanted = filter
-        ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
-        : all.filter((m) => isModernModelRef({ provider: m.provider, id: m.id }));
+        const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
+        const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
+        const useExplicit = Boolean(rawModels) && !useModern;
+        const filter = useExplicit ? parseFilter(rawModels) : null;
+        const maxModels = GATEWAY_LIVE_MAX_MODELS;
+        const wanted = filter
+          ? all.filter((m) => filter.has(`${m.provider}/${m.id}`))
+          : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
 
-      const providerProfileCache = new Map<string, boolean>();
-      const candidates: Array<Model<Api>> = [];
-      for (const model of wanted) {
-        if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
-          continue;
+        const candidates: Array<Model<Api>> = [];
+        const skipped: Array<{ model: string; error: string }> = [];
+        for (const model of wanted) {
+          if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+            continue;
+          }
+          if (PROVIDERS && !PROVIDERS.has(model.provider)) {
+            continue;
+          }
+          const modelRef = `${model.provider}/${model.id}`;
+          try {
+            const apiKeyInfo = await getApiKeyForModel({ model, cfg });
+            if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+              skipped.push({
+                model: modelRef,
+                error: `non-profile credential source: ${apiKeyInfo.source}`,
+              });
+              continue;
+            }
+            candidates.push(model);
+          } catch (error) {
+            skipped.push({ model: modelRef, error: String(error) });
+          }
         }
-        if (PROVIDERS && !PROVIDERS.has(model.provider)) {
-          continue;
-        }
-        let hasProfile = providerProfileCache.get(model.provider);
-        if (hasProfile === undefined) {
-          const order = resolveAuthProfileOrder({
-            cfg,
-            store: authStore,
-            provider: model.provider,
-          });
-          hasProfile = order.some((profileId) => Boolean(authStore.profiles[profileId]));
-          providerProfileCache.set(model.provider, hasProfile);
-        }
-        if (!hasProfile) {
-          continue;
-        }
-        candidates.push(model);
-      }
 
-      if (candidates.length === 0) {
-        logProgress("[all-models] no API keys found; skipping");
-        return;
-      }
-      const selectedCandidates = capByProviderSpread(
-        candidates,
-        maxModels > 0 ? maxModels : candidates.length,
-        (model) => model.provider,
-      );
-      logProgress(`[all-models] selection=${useExplicit ? "explicit" : "modern"}`);
-      if (selectedCandidates.length < candidates.length) {
-        logProgress(
-          `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
+        if (candidates.length === 0) {
+          if (skipped.length > 0) {
+            logProgress(
+              `[all-models] auth lookup skipped candidates:\n${formatFailurePreview(skipped, 8)}`,
+            );
+          }
+          logProgress("[all-models] no API keys found; skipping");
+          return;
+        }
+        const selectedCandidates = capByProviderSpread(
+          candidates,
+          maxModels > 0 ? maxModels : candidates.length,
+          (model) => model.provider,
         );
-      }
-      const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
-      if (imageCandidates.length === 0) {
-        logProgress("[all-models] no image-capable models selected; image probe will be skipped");
-      }
-      await runGatewayModelSuite({
-        label: "all-models",
-        cfg,
-        candidates: selectedCandidates,
-        extraToolProbes: true,
-        extraImageProbes: true,
-        thinkingLevel: THINKING_LEVEL,
-      });
-
-      const minimaxCandidates = selectedCandidates.filter((model) => model.provider === "minimax");
-      if (minimaxCandidates.length === 0) {
-        logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
-        return;
-      }
-
-      const minimaxAnthropic = buildMinimaxProviderOverride({
-        cfg,
-        api: "anthropic-messages",
-        baseUrl: "https://api.minimax.io/anthropic",
-      });
-      if (minimaxAnthropic) {
+        logProgress(`[all-models] selection=${useExplicit ? "explicit" : "high-signal"}`);
+        if (selectedCandidates.length < candidates.length) {
+          logProgress(
+            `[all-models] capped to ${selectedCandidates.length}/${candidates.length} via OPENCLAW_LIVE_GATEWAY_MAX_MODELS=${maxModels}`,
+          );
+        }
+        const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
+        if (imageCandidates.length === 0) {
+          logProgress("[all-models] no image-capable models selected; image probe will be skipped");
+        }
         await runGatewayModelSuite({
-          label: "minimax-anthropic",
+          label: "all-models",
           cfg,
-          candidates: minimaxCandidates,
-          extraToolProbes: true,
-          extraImageProbes: true,
+          candidates: selectedCandidates,
+          allowNotFoundSkip: useModern,
+          extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
+          extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
           thinkingLevel: THINKING_LEVEL,
-          providerOverrides: { minimax: minimaxAnthropic },
         });
-      } else {
-        logProgress("[minimax-anthropic] missing minimax provider config; skipping");
-      }
-    },
+
+        const minimaxCandidates = selectedCandidates.filter(
+          (model) => model.provider === "minimax",
+        );
+        if (minimaxCandidates.length === 0) {
+          logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
+          return;
+        }
+
+        const minimaxAnthropic = buildMinimaxProviderOverride({
+          cfg,
+          api: "anthropic-messages",
+          baseUrl: "https://api.minimax.io/anthropic",
+        });
+        if (minimaxAnthropic) {
+          await runGatewayModelSuite({
+            label: "minimax-anthropic",
+            cfg,
+            candidates: minimaxCandidates,
+            allowNotFoundSkip: useModern,
+            extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
+            extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
+            thinkingLevel: THINKING_LEVEL,
+            providerOverrides: { minimax: minimaxAnthropic },
+          });
+        } else {
+          logProgress("[minimax-anthropic] missing minimax provider config; skipping");
+        }
+      }),
     GATEWAY_LIVE_SUITE_TIMEOUT_MS,
   );
 
@@ -1475,7 +1946,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-5") as Model<Api> | null;
+    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;
     const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
 
     if (!anthropic || !zai) {
@@ -1539,7 +2010,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await withGatewayLiveProbeTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
-          model: "anthropic/claude-opus-4-5",
+          model: "anthropic/claude-opus-4-6",
         }),
         "zai-fallback: sessions-patch-anthropic",
       );
@@ -1554,6 +2025,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-tool`,
+        modelKey: "anthropic/claude-opus-4-6",
         message:
           `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
           `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
@@ -1562,7 +2034,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       });
       assertNoReasoningTags({
         text: toolText,
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         phase: "zai-fallback-tool",
         label: "zai-fallback",
       });
@@ -1582,6 +2054,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-followup`,
+        modelKey: "zai/glm-4.7",
         message:
           `What are the values of nonceA and nonceB in "${toolProbePath}"? ` +
           `Reply with exactly: ${nonceA} ${nonceB}.`,

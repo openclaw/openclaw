@@ -1,7 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
+import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
+import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
+import { isOpenRouterAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
 const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
@@ -9,10 +13,6 @@ const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 function resolveKilocodeAppHeaders(): Record<string, string> {
   const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
   return { [KILOCODE_FEATURE_HEADER]: feature };
-}
-
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
 }
 
 function mapThinkingLevelToOpenRouterReasoningEffort(
@@ -61,35 +61,13 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
     if (
       typeof model.provider !== "string" ||
       typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !isOpenRouterAnthropicModelRef(model.provider, model.id)
     ) {
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        const messages = (payload as Record<string, unknown>)?.messages;
-        if (Array.isArray(messages)) {
-          for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
-            if (msg.role !== "system" && msg.role !== "developer") {
-              continue;
-            }
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
-              }
-            }
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      applyAnthropicEphemeralCacheControlMarkers(payloadObj);
     });
   };
 }
@@ -100,24 +78,32 @@ export function createOpenRouterWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const onPayload = options?.onPayload;
-    const attributionHeaders = resolveProviderAttributionHeaders("openrouter");
-    return underlying(model, context, {
-      ...options,
-      headers: {
-        ...attributionHeaders,
-        ...options?.headers,
+    const headers = resolveProviderRequestPolicyConfig({
+      provider: typeof model.provider === "string" ? model.provider : "openrouter",
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: options?.headers,
+      precedence: "caller-wins",
+    }).headers;
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      {
+        ...options,
+        headers,
       },
-      onPayload: (payload) => {
+      (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, model);
       },
-    });
+    );
   };
 }
 
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  return modelId.toLowerCase().startsWith("x-ai/");
+  return isProxyReasoningUnsupportedModelHint(modelId);
 }
 
 export function createKilocodeWrapper(
@@ -126,17 +112,27 @@ export function createKilocodeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const onPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      headers: {
-        ...options?.headers,
-        ...resolveKilocodeAppHeaders(),
+    const headers = resolveProviderRequestPolicyConfig({
+      provider: typeof model.provider === "string" ? model.provider : "kilocode",
+      api: typeof model.api === "string" ? model.api : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: options?.headers,
+      providerHeaders: resolveKilocodeAppHeaders(),
+      precedence: "defaults-win",
+    }).headers;
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      {
+        ...options,
+        headers,
       },
-      onPayload: (payload) => {
+      (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        return onPayload?.(payload, model);
       },
-    });
+    );
   };
 }

@@ -7,10 +7,9 @@
 
 import type { OpenClawConfig } from "../runtime-api.js";
 import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
-import { resolveTwitchToken } from "./token.js";
+import { resolveTwitchAccountContext } from "./config.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
-import { generateMessageId, isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
+import { generateMessageId, normalizeTwitchChannel } from "./utils/twitch.js";
 
 /**
  * Result from sending a message to Twitch.
@@ -52,27 +51,30 @@ export async function sendMessageTwitchInternal(
   channel: string,
   text: string,
   cfg: OpenClawConfig,
-  accountId: string = DEFAULT_ACCOUNT_ID,
+  accountId?: string,
   stripMarkdown: boolean = true,
   logger: Console = console,
 ): Promise<SendMessageResult> {
-  const account = getAccountConfig(cfg, accountId);
+  const {
+    account,
+    configured,
+    availableAccountIds,
+    accountId: resolvedAccountId,
+  } = resolveTwitchAccountContext(cfg, accountId);
   if (!account) {
-    const availableIds = Object.keys(cfg.channels?.twitch?.accounts ?? {});
     return {
       ok: false,
       messageId: generateMessageId(),
-      error: `Account not found: ${accountId}. Available accounts: ${availableIds.join(", ") || "none"}`,
+      error: `Account not found: ${accountId ?? "(default)"}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
     };
   }
 
-  const tokenResolution = resolveTwitchToken(cfg, { accountId });
-  if (!isAccountConfigured(account, tokenResolution.token)) {
+  if (!configured) {
     return {
       ok: false,
       messageId: generateMessageId(),
       error:
-        `Account ${accountId} is not properly configured. ` +
+        `Account ${resolvedAccountId} is not properly configured. ` +
         "Required: username, clientId, and token (config or env for default account).",
     };
   }
@@ -94,12 +96,12 @@ export async function sendMessageTwitchInternal(
     };
   }
 
-  const clientManager = getRegistryClientManager(accountId);
+  const clientManager = getRegistryClientManager(resolvedAccountId);
   if (!clientManager) {
     return {
       ok: false,
       messageId: generateMessageId(),
-      error: `Client manager not found for account: ${accountId}. Please start the Twitch gateway first.`,
+      error: `Client manager not found for account: ${resolvedAccountId}. Please start the Twitch gateway first.`,
     };
   }
 
@@ -109,7 +111,7 @@ export async function sendMessageTwitchInternal(
       normalizeTwitchChannel(normalizedChannel),
       cleanedText,
       cfg,
-      accountId,
+      resolvedAccountId,
     );
 
     if (!result.ok) {

@@ -1,11 +1,12 @@
 import type { Message } from "@grammyjs/types";
-import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
+  shouldDebounceTextInbound,
+} from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import {
   hasInboundMedia,
   isRecoverableMediaGroupError,
@@ -14,7 +15,7 @@ import {
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { TelegramContext, TelegramSyntheticContextSource } from "./bot/types.js";
 import type { TelegramTransport } from "./fetch.js";
 
 export type TelegramDebounceLane = "default" | "forward";
@@ -84,6 +85,12 @@ export function createTelegramInboundBufferRuntime(params: {
     runtime,
     telegramTransport,
   } = params;
+  const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
+    cfg,
+    accountId,
+    token: opts.token,
+    transport: telegramTransport,
+  });
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
@@ -107,20 +114,7 @@ export function createTelegramInboundBufferRuntime(params: {
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
-    const forwardMeta = msg as {
-      forward_origin?: unknown;
-      forward_from?: unknown;
-      forward_from_chat?: unknown;
-      forward_sender_name?: unknown;
-      forward_date?: unknown;
-    };
-    return (forwardMeta.forward_origin ??
-      forwardMeta.forward_from ??
-      forwardMeta.forward_from_chat ??
-      forwardMeta.forward_sender_name ??
-      forwardMeta.forward_date)
-      ? "forward"
-      : "default";
+    return msg.forward_origin ? "forward" : "default";
   };
 
   const buildSyntheticTextMessage = (params: {
@@ -139,13 +133,11 @@ export function createTelegramInboundBufferRuntime(params: {
   });
 
   const buildSyntheticContext = (
-    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
+    ctx: TelegramSyntheticContextSource,
     message: Message,
   ): TelegramContext => {
     const getFile =
-      typeof ctx.getFile === "function"
-        ? (ctx.getFile as TelegramContext["getFile"]).bind(ctx as object)
-        : async () => ({});
+      typeof ctx.getFile === "function" ? ctx.getFile.bind(ctx as object) : async () => ({});
     return { message, me: ctx.me, getFile };
   };
 
@@ -162,16 +154,15 @@ export function createTelegramInboundBufferRuntime(params: {
       return [];
     }
     try {
-      const media = await resolveMedia(
-        {
+      const media = await resolveMedia({
+        ctx: {
           message: replyMessage,
           me: ctx.me,
           getFile: async () => await bot.api.getFile(replyFileId),
         },
-        mediaMaxBytes,
-        opts.token,
-        telegramTransport,
-      );
+        maxBytes: mediaMaxBytes,
+        ...mediaRuntimeOptions,
+      });
       if (!media) {
         return [];
       }
@@ -201,7 +192,11 @@ export function createTelegramInboundBufferRuntime(params: {
       for (const { ctx } of entry.messages) {
         let media;
         try {
-          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, telegramTransport);
+          media = await resolveMedia({
+            ctx,
+            maxBytes: mediaMaxBytes,
+            ...mediaRuntimeOptions,
+          });
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
             throw mediaErr;

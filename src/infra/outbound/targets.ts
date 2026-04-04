@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
@@ -14,7 +18,6 @@ import type {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
-  normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import {
   normalizeDeliverableOutboundChannel,
@@ -22,9 +25,9 @@ import {
 } from "./channel-resolution.js";
 import { missingTargetError } from "./target-errors.js";
 
-export type OutboundChannel = DeliverableMessageChannel | "none";
+export type OutboundChannel = DeliverableMessageChannel;
 
-export type HeartbeatTarget = OutboundChannel | "last";
+export type HeartbeatTarget = OutboundChannel;
 
 export type OutboundTarget = {
   channel: OutboundChannel;
@@ -44,141 +47,8 @@ export type HeartbeatSenderContext = {
 
 export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
-export type SessionDeliveryTarget = {
-  channel?: DeliverableMessageChannel;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-  /** Whether threadId came from an explicit source (config/param/:topic: parsing) vs session history. */
-  threadIdExplicit?: boolean;
-  mode: ChannelOutboundTargetMode;
-  lastChannel?: DeliverableMessageChannel;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-};
-
-function parseExplicitTargetWithPlugin(params: {
-  channel?: DeliverableMessageChannel;
-  fallbackChannel?: DeliverableMessageChannel;
-  raw?: string;
-}) {
-  const raw = params.raw?.trim();
-  if (!raw) {
-    return null;
-  }
-  const provider = params.channel ?? params.fallbackChannel;
-  if (!provider) {
-    return null;
-  }
-  return (
-    resolveOutboundChannelPlugin({ channel: provider })?.messaging?.parseExplicitTarget?.({
-      raw,
-    }) ?? null
-  );
-}
-
-export function resolveSessionDeliveryTarget(params: {
-  entry?: SessionEntry;
-  requestedChannel?: GatewayMessageChannel | "last";
-  explicitTo?: string;
-  explicitThreadId?: string | number;
-  fallbackChannel?: DeliverableMessageChannel;
-  allowMismatchedLastTo?: boolean;
-  mode?: ChannelOutboundTargetMode;
-  /**
-   * When set, this overrides the session-level `lastChannel` for "last"
-   * resolution.  This prevents cross-channel reply routing when multiple
-   * channels share the same session (dmScope = "main") and an inbound
-   * message from a different channel updates `lastChannel` while an agent
-   * turn is still in flight.
-   *
-   * Callers should set this to the channel that originated the current
-   * agent turn so the reply always routes back to the correct channel.
-   *
-   * @see https://github.com/openclaw/openclaw/issues/24152
-   */
-  turnSourceChannel?: DeliverableMessageChannel;
-  /** Turn-source `to` — paired with `turnSourceChannel`. */
-  turnSourceTo?: string;
-  /** Turn-source `accountId` — paired with `turnSourceChannel`. */
-  turnSourceAccountId?: string;
-  /** Turn-source `threadId` — paired with `turnSourceChannel`. */
-  turnSourceThreadId?: string | number;
-}): SessionDeliveryTarget {
-  const context = deliveryContextFromSession(params.entry);
-  const sessionLastChannel =
-    context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
-
-  // When a turn-source channel is provided, use only turn-scoped metadata.
-  // Falling back to mutable session fields would re-introduce routing races.
-  const hasTurnSourceChannel = params.turnSourceChannel != null;
-  const lastChannel = hasTurnSourceChannel ? params.turnSourceChannel : sessionLastChannel;
-  const lastTo = hasTurnSourceChannel ? params.turnSourceTo : context?.to;
-  const lastAccountId = hasTurnSourceChannel ? params.turnSourceAccountId : context?.accountId;
-  const lastThreadId = hasTurnSourceChannel ? params.turnSourceThreadId : context?.threadId;
-
-  const rawRequested = params.requestedChannel ?? "last";
-  const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
-  const requestedChannel =
-    requested === "last"
-      ? "last"
-      : requested && isDeliverableMessageChannel(requested)
-        ? requested
-        : undefined;
-
-  const rawExplicitTo =
-    typeof params.explicitTo === "string" && params.explicitTo.trim()
-      ? params.explicitTo.trim()
-      : undefined;
-
-  let channel = requestedChannel === "last" ? lastChannel : requestedChannel;
-  if (!channel && params.fallbackChannel && isDeliverableMessageChannel(params.fallbackChannel)) {
-    channel = params.fallbackChannel;
-  }
-
-  let explicitTo = rawExplicitTo;
-  const parsedExplicitTarget = parseExplicitTargetWithPlugin({
-    channel,
-    fallbackChannel: !channel ? lastChannel : undefined,
-    raw: rawExplicitTo,
-  });
-  if (parsedExplicitTarget?.to) {
-    explicitTo = parsedExplicitTarget.to;
-  }
-  const explicitThreadId =
-    params.explicitThreadId != null && params.explicitThreadId !== ""
-      ? params.explicitThreadId
-      : parsedExplicitTarget?.threadId;
-
-  let to = explicitTo;
-  if (!to && lastTo) {
-    if (channel && channel === lastChannel) {
-      to = lastTo;
-    } else if (params.allowMismatchedLastTo) {
-      to = lastTo;
-    }
-  }
-
-  const mode = params.mode ?? (explicitTo ? "explicit" : "implicit");
-  const accountId = channel && channel === lastChannel ? lastAccountId : undefined;
-  const threadId =
-    mode !== "heartbeat" && channel && channel === lastChannel ? lastThreadId : undefined;
-
-  const resolvedThreadId = explicitThreadId ?? threadId;
-  return {
-    channel,
-    to,
-    accountId,
-    threadId: resolvedThreadId,
-    threadIdExplicit: resolvedThreadId != null && explicitThreadId != null,
-    mode,
-    lastChannel,
-    lastTo,
-    lastAccountId,
-    lastThreadId,
-  };
-}
+export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
+import { resolveSessionDeliveryTarget } from "./targets-session.js";
 
 // Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
@@ -254,6 +124,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -277,11 +148,28 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  const resolvedTurnSource =
+    target === "last"
+      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      : undefined;
+
   const resolvedTarget = resolveSessionDeliveryTarget({
     entry,
     requestedChannel: target === "last" ? "last" : target,
     explicitTo: heartbeat?.to,
     mode: "heartbeat",
+    turnSourceChannel:
+      resolvedTurnSource?.channel && isDeliverableMessageChannel(resolvedTurnSource.channel)
+        ? resolvedTurnSource.channel
+        : undefined,
+    turnSourceTo: resolvedTurnSource?.to,
+    turnSourceAccountId: resolvedTurnSource?.accountId,
+    // Only pass threadId from an explicit turn source (e.g., restart sentinel's
+    // delivery context). Do NOT fall back to session-stored threadId here —
+    // heartbeat mode intentionally drops inherited thread IDs to avoid replying
+    // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
+    // carries the correct topic/thread ID when present.
+    turnSourceThreadId: params.turnSource?.threadId,
   });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();

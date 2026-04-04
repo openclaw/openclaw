@@ -1,3 +1,4 @@
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,
   DEFAULT_ACCOUNT_ID,
@@ -10,7 +11,7 @@ import {
 import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
-import { fetchTelegramChatId } from "./api-fetch.js";
+import { lookupTelegramChatId } from "./api-fetch.js";
 
 const channel = "telegram" as const;
 
@@ -46,6 +47,9 @@ export function parseTelegramAllowFromId(raw: string): string | null {
 export async function resolveTelegramAllowFromEntries(params: {
   entries: string[];
   credentialValue?: string;
+  apiRoot?: string;
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
 }) {
   return await Promise.all(
     params.entries.map(async (entry) => {
@@ -58,9 +62,12 @@ export async function resolveTelegramAllowFromEntries(params: {
         return { input: entry, resolved: false, id: null };
       }
       const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-      const id = await fetchTelegramChatId({
+      const id = await lookupTelegramChatId({
         token: params.credentialValue,
         chatId: username,
+        apiRoot: params.apiRoot,
+        proxyUrl: params.proxyUrl,
+        network: params.network,
       });
       return { input: entry, resolved: Boolean(id), id };
     }),
@@ -96,6 +103,9 @@ export async function promptTelegramAllowFromForAccount(params: {
       resolveTelegramAllowFromEntries({
         credentialValue: token,
         entries,
+        apiRoot: resolved.config.apiRoot,
+        proxyUrl: resolved.config.proxy,
+        network: resolved.config.network,
       }),
   });
   return patchChannelConfigForAccount({

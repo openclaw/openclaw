@@ -1,11 +1,12 @@
-import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
+import * as carbonGateway from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
-import { HttpsProxyAgent } from "https-proxy-agent";
+import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
-import WebSocket from "ws";
+import * as undici from "undici";
+import * as ws from "ws";
+import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
@@ -21,23 +22,24 @@ type DiscordGatewayFetch = (
 ) => Promise<DiscordGatewayMetadataResponse>;
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
+type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown }) => ws.WebSocket;
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,
 ): number {
   let intents =
-    GatewayIntents.Guilds |
-    GatewayIntents.GuildMessages |
-    GatewayIntents.MessageContent |
-    GatewayIntents.DirectMessages |
-    GatewayIntents.GuildMessageReactions |
-    GatewayIntents.DirectMessageReactions |
-    GatewayIntents.GuildVoiceStates;
+    carbonGateway.GatewayIntents.Guilds |
+    carbonGateway.GatewayIntents.GuildMessages |
+    carbonGateway.GatewayIntents.MessageContent |
+    carbonGateway.GatewayIntents.DirectMessages |
+    carbonGateway.GatewayIntents.GuildMessageReactions |
+    carbonGateway.GatewayIntents.DirectMessageReactions |
+    carbonGateway.GatewayIntents.GuildVoiceStates;
   if (intentsConfig?.presence) {
-    intents |= GatewayIntents.GuildPresences;
+    intents |= carbonGateway.GatewayIntents.GuildPresences;
   }
   if (intentsConfig?.guildMembers) {
-    intents |= GatewayIntents.GuildMembers;
+    intents |= carbonGateway.GatewayIntents.GuildMembers;
   }
   return intents;
 }
@@ -226,17 +228,26 @@ function createGatewayPlugin(params: {
   };
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
-  wsAgent?: HttpsProxyAgent<string>;
+  wsAgent?: InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>;
   runtime?: RuntimeEnv;
-}): GatewayPlugin {
-  class SafeGatewayPlugin extends GatewayPlugin {
+  testing?: {
+    registerClient?: (
+      plugin: carbonGateway.GatewayPlugin,
+      client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
+    ) => Promise<void>;
+    webSocketCtor?: DiscordGatewayWebSocketCtor;
+  };
+}): carbonGateway.GatewayPlugin {
+  class SafeGatewayPlugin extends carbonGateway.GatewayPlugin {
     private gatewayInfoUsedFallback = false;
 
     constructor() {
       super(params.options);
     }
 
-    override async registerClient(client: Parameters<GatewayPlugin["registerClient"]>[0]) {
+    override async registerClient(
+      client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
+    ) {
       if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
         const resolved = await fetchDiscordGatewayInfoWithTimeout({
           token: client.options.token,
@@ -251,6 +262,10 @@ function createGatewayPlugin(params: {
         this.gatewayInfo = resolved.info;
         this.gatewayInfoUsedFallback = resolved.usedFallback;
       }
+      if (params.testing?.registerClient) {
+        await params.testing.registerClient(this, client);
+        return;
+      }
       return super.registerClient(client);
     }
 
@@ -258,7 +273,8 @@ function createGatewayPlugin(params: {
       if (!params.wsAgent) {
         return super.createWebSocket(url);
       }
-      return new WebSocket(url, { agent: params.wsAgent });
+      const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
+      return new WebSocketCtor(url, { agent: params.wsAgent });
     }
   }
 
@@ -268,7 +284,17 @@ function createGatewayPlugin(params: {
 export function createDiscordGatewayPlugin(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-}): GatewayPlugin {
+  __testing?: {
+    HttpsProxyAgentCtor?: typeof httpsProxyAgent.HttpsProxyAgent;
+    ProxyAgentCtor?: typeof undici.ProxyAgent;
+    undiciFetch?: typeof undici.fetch;
+    webSocketCtor?: DiscordGatewayWebSocketCtor;
+    registerClient?: (
+      plugin: carbonGateway.GatewayPlugin,
+      client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
+    ) => Promise<void>;
+  };
+}): carbonGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
   const proxy = params.discordConfig?.proxy?.trim();
   const options = {
@@ -282,21 +308,37 @@ export function createDiscordGatewayPlugin(params: {
       options,
       fetchImpl: (input, init) => fetch(input, init as RequestInit),
       runtime: params.runtime,
+      testing: params.__testing
+        ? {
+            registerClient: params.__testing.registerClient,
+            webSocketCtor: params.__testing.webSocketCtor,
+          }
+        : undefined,
     });
   }
 
   try {
-    const wsAgent = new HttpsProxyAgent<string>(proxy);
-    const fetchAgent = new ProxyAgent(proxy);
+    validateDiscordProxyUrl(proxy);
+    const HttpsProxyAgentCtor =
+      params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
+    const ProxyAgentCtor = params.__testing?.ProxyAgentCtor ?? undici.ProxyAgent;
+    const wsAgent = new HttpsProxyAgentCtor<string>(proxy);
+    const fetchAgent = new ProxyAgentCtor(proxy);
 
     params.runtime.log?.("discord: gateway proxy enabled");
 
     return createGatewayPlugin({
       options,
-      fetchImpl: (input, init) => undiciFetch(input, init),
+      fetchImpl: (input, init) => (params.__testing?.undiciFetch ?? undici.fetch)(input, init),
       fetchInit: { dispatcher: fetchAgent },
       wsAgent,
       runtime: params.runtime,
+      testing: params.__testing
+        ? {
+            registerClient: params.__testing.registerClient,
+            webSocketCtor: params.__testing.webSocketCtor,
+          }
+        : undefined,
     });
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
@@ -304,6 +346,12 @@ export function createDiscordGatewayPlugin(params: {
       options,
       fetchImpl: (input, init) => fetch(input, init as RequestInit),
       runtime: params.runtime,
+      testing: params.__testing
+        ? {
+            registerClient: params.__testing.registerClient,
+            webSocketCtor: params.__testing.webSocketCtor,
+          }
+        : undefined,
     });
   }
 }

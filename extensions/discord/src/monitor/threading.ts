@@ -1,7 +1,11 @@
 import { ChannelType, type Client } from "@buape/carbon";
-import { Routes } from "discord-api-types/v10";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
-import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
+import { Routes, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
+import {
+  resolveChannelModelOverride,
+  type OpenClawConfig,
+  type ReplyToMode,
+} from "openclaw/plugin-sdk/config-runtime";
+import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
@@ -10,8 +14,10 @@ import type { DiscordMessageEvent } from "./listeners.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordEmbedText,
+  resolveDiscordForwardedMessagesTextFromSnapshots,
   resolveDiscordMessageChannelId,
 } from "./message-utils.js";
+import { generateThreadTitle } from "./thread-title.js";
 
 export type DiscordThreadChannel = {
   id: string;
@@ -24,6 +30,10 @@ export type DiscordThreadChannel = {
 export type DiscordThreadStarter = {
   text: string;
   author: string;
+  authorId?: string;
+  authorName?: string;
+  authorTag?: string;
+  memberRoleIds?: string[];
   timestamp?: number;
 };
 
@@ -31,6 +41,39 @@ type DiscordThreadParentInfo = {
   id?: string;
   name?: string;
   type?: ChannelType;
+};
+
+type DiscordThreadStarterRestEmbed = {
+  title?: string | null;
+  description?: string | null;
+};
+
+type DiscordThreadStarterRestSnapshotMessage = {
+  content?: string | null;
+  attachments?: APIAttachment[] | null;
+  embeds?: DiscordThreadStarterRestEmbed[] | null;
+  sticker_items?: APIStickerItem[] | null;
+};
+
+type DiscordThreadStarterRestAuthor = {
+  id?: string | null;
+  username?: string | null;
+  discriminator?: string | null;
+};
+
+type DiscordThreadStarterRestMember = {
+  nick?: string | null;
+  displayName?: string | null;
+  roles?: string[];
+};
+
+type DiscordThreadStarterRestMessage = {
+  content?: string | null;
+  embeds?: DiscordThreadStarterRestEmbed[] | null;
+  message_snapshots?: Array<{ message?: DiscordThreadStarterRestSnapshotMessage | null }> | null;
+  member?: DiscordThreadStarterRestMember | null;
+  author?: DiscordThreadStarterRestAuthor | null;
+  timestamp?: string | null;
 };
 
 // Cache entry with timestamp for TTL-based eviction
@@ -87,6 +130,10 @@ function isDiscordThreadType(type: ChannelType | undefined): boolean {
     type === ChannelType.PrivateThread ||
     type === ChannelType.AnnouncementThread
   );
+}
+
+function isDiscordForumParentType(parentType: ChannelType | undefined): boolean {
+  return parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
 }
 
 function resolveTrimmedDiscordMessageChannelId(params: {
@@ -177,54 +224,113 @@ export async function resolveDiscordThreadStarter(params: {
     return cached;
   }
   try {
-    const parentType = params.parentType;
-    const isForumParent =
-      parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
-    const messageChannelId = isForumParent ? params.channel.id : params.parentId;
+    const messageChannelId = resolveDiscordThreadStarterMessageChannelId(params);
     if (!messageChannelId) {
       return null;
     }
-    const starter = (await params.client.rest.get(
-      Routes.channelMessage(messageChannelId, params.channel.id),
-    )) as {
-      content?: string | null;
-      embeds?: Array<{ title?: string | null; description?: string | null }>;
-      member?: { nick?: string | null; displayName?: string | null };
-      author?: {
-        id?: string | null;
-        username?: string | null;
-        discriminator?: string | null;
-      };
-      timestamp?: string | null;
-    };
+    const starter = await fetchDiscordThreadStarterMessage({
+      client: params.client,
+      messageChannelId,
+      threadId: params.channel.id,
+    });
     if (!starter) {
       return null;
     }
-    const content = starter.content?.trim() ?? "";
-    const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
-    const text = content || embedText;
-    if (!text) {
+    const payload = buildDiscordThreadStarterPayload({
+      starter,
+      resolveTimestampMs: params.resolveTimestampMs,
+    });
+    if (!payload) {
       return null;
     }
-    const author =
-      starter.member?.nick ??
-      starter.member?.displayName ??
-      (starter.author
-        ? starter.author.discriminator && starter.author.discriminator !== "0"
-          ? `${starter.author.username ?? "Unknown"}#${starter.author.discriminator}`
-          : (starter.author.username ?? starter.author.id ?? "Unknown")
-        : "Unknown");
-    const timestamp = params.resolveTimestampMs(starter.timestamp);
-    const payload: DiscordThreadStarter = {
-      text,
-      author,
-      timestamp: timestamp ?? undefined,
-    };
     setCachedThreadStarter(cacheKey, payload, Date.now());
     return payload;
   } catch {
     return null;
   }
+}
+
+function resolveDiscordThreadStarterMessageChannelId(params: {
+  channel: DiscordThreadChannel;
+  parentId?: string;
+  parentType?: ChannelType;
+}): string | undefined {
+  return isDiscordForumParentType(params.parentType) ? params.channel.id : params.parentId;
+}
+
+async function fetchDiscordThreadStarterMessage(params: {
+  client: Client;
+  messageChannelId: string;
+  threadId: string;
+}): Promise<DiscordThreadStarterRestMessage | null> {
+  const starter = await params.client.rest.get(
+    Routes.channelMessage(params.messageChannelId, params.threadId),
+  );
+  return starter ? (starter as DiscordThreadStarterRestMessage) : null;
+}
+
+function buildDiscordThreadStarterPayload(params: {
+  starter: DiscordThreadStarterRestMessage;
+  resolveTimestampMs: (value?: string | null) => number | undefined;
+}): DiscordThreadStarter | null {
+  const text = resolveDiscordThreadStarterText(params.starter);
+  if (!text) {
+    return null;
+  }
+  return {
+    text,
+    ...resolveDiscordThreadStarterIdentity(params.starter),
+    timestamp: params.resolveTimestampMs(params.starter.timestamp) ?? undefined,
+  };
+}
+
+function resolveDiscordThreadStarterText(starter: DiscordThreadStarterRestMessage): string {
+  const content = starter.content?.trim() ?? "";
+  const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
+  const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(starter.message_snapshots);
+  return content || embedText || forwardedText;
+}
+
+function resolveDiscordThreadStarterIdentity(
+  starter: DiscordThreadStarterRestMessage,
+): Omit<DiscordThreadStarter, "text" | "timestamp"> {
+  const author = resolveDiscordThreadStarterAuthor(starter);
+  return {
+    author,
+    authorId: starter.author?.id ?? undefined,
+    authorName: starter.author?.username ?? undefined,
+    authorTag: resolveDiscordThreadStarterAuthorTag(starter.author),
+    memberRoleIds: resolveDiscordThreadStarterRoleIds(starter.member),
+  };
+}
+
+function resolveDiscordThreadStarterAuthor(starter: DiscordThreadStarterRestMessage): string {
+  return (
+    starter.member?.nick ??
+    starter.member?.displayName ??
+    resolveDiscordThreadStarterAuthorTag(starter.author) ??
+    starter.author?.username ??
+    starter.author?.id ??
+    "Unknown"
+  );
+}
+
+function resolveDiscordThreadStarterAuthorTag(
+  author: DiscordThreadStarterRestAuthor | null | undefined,
+): string | undefined {
+  if (!author?.username || !author.discriminator) {
+    return undefined;
+  }
+  if (author.discriminator !== "0") {
+    return `${author.username}#${author.discriminator}`;
+  }
+  return author.username;
+}
+
+function resolveDiscordThreadStarterRoleIds(
+  member: DiscordThreadStarterRestMember | null | undefined,
+): string[] | undefined {
+  return Array.isArray(member?.roles) ? member.roles.map((roleId) => String(roleId)) : undefined;
 }
 
 export function resolveDiscordReplyTarget(opts: {
@@ -317,12 +423,17 @@ type MaybeCreateDiscordAutoThreadParams = {
   client: Client;
   message: DiscordMessageEvent["message"];
   messageChannelId?: string;
+  channel?: string;
   isGuildMessage: boolean;
   channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
   channelType?: ChannelType;
+  channelName?: string;
+  channelDescription?: string;
   baseText: string;
   combinedBody: string;
+  cfg?: OpenClawConfig;
+  agentId?: string;
 };
 
 export async function resolveDiscordAutoThreadReplyPlan(
@@ -330,6 +441,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
     replyToMode: ReplyToMode;
     agentId: string;
     channel: string;
+    cfg?: OpenClawConfig;
   },
 ): Promise<DiscordAutoThreadReplyPlan> {
   const messageChannelId = resolveTrimmedDiscordMessageChannelId(params);
@@ -340,12 +452,17 @@ export async function resolveDiscordAutoThreadReplyPlan(
     client: params.client,
     message: params.message,
     messageChannelId: messageChannelId || undefined,
+    channel: params.channel,
     isGuildMessage: params.isGuildMessage,
     channelConfig: params.channelConfig,
     threadChannel: params.threadChannel,
     channelType: params.channelType,
+    channelName: params.channelName,
+    channelDescription: params.channelDescription,
     baseText: params.baseText,
     combinedBody: params.combinedBody,
+    cfg: params.cfg,
+    agentId: params.agentId,
   });
   const deliveryPlan = resolveDiscordReplyDeliveryPlan({
     replyTarget: originalReplyTarget,
@@ -392,10 +509,8 @@ export async function maybeCreateDiscordAutoThread(
     return undefined;
   }
   try {
-    const threadName = sanitizeDiscordThreadName(
-      params.baseText || params.combinedBody || "Thread",
-      params.message.id,
-    );
+    const rawThreadSource = params.baseText || params.combinedBody || "Thread";
+    const threadName = sanitizeDiscordThreadName(rawThreadSource, params.message.id);
 
     // Parse archive duration from config, default to 60 minutes
     const archiveDuration = params.channelConfig?.autoArchiveDuration
@@ -412,6 +527,33 @@ export async function maybeCreateDiscordAutoThread(
       },
     )) as { id?: string };
     const createdId = created?.id ? String(created.id) : "";
+    if (
+      createdId &&
+      params.channelConfig?.autoThreadName === "generated" &&
+      params.cfg &&
+      params.agentId
+    ) {
+      const modelRef = resolveDiscordThreadTitleModelRef({
+        cfg: params.cfg,
+        channel: params.channel,
+        agentId: params.agentId,
+        threadId: createdId,
+        messageChannelId,
+        channelName: params.channelName,
+      });
+      void maybeRenameDiscordAutoThread({
+        client: params.client,
+        threadId: createdId,
+        currentName: threadName,
+        fallbackId: params.message.id,
+        sourceText: rawThreadSource,
+        modelRef,
+        channelName: params.channelName,
+        channelDescription: params.channelDescription,
+        cfg: params.cfg,
+        agentId: params.agentId,
+      });
+    }
     return createdId || undefined;
   } catch (err) {
     logVerbose(
@@ -434,6 +576,74 @@ export async function maybeCreateDiscordAutoThread(
       // If the refetch also fails, fall through to return undefined.
     }
     return undefined;
+  }
+}
+
+function resolveDiscordThreadTitleModelRef(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  agentId: string;
+  threadId: string;
+  messageChannelId: string;
+  channelName?: string;
+}): string | undefined {
+  const channel = params.channel?.trim();
+  if (!channel) {
+    return undefined;
+  }
+  const parentSessionKey = buildAgentSessionKey({
+    agentId: params.agentId,
+    channel,
+    peer: { kind: "channel", id: params.messageChannelId },
+  });
+  const channelLabel = params.channelName?.trim();
+  const groupChannel = channelLabel ? `#${channelLabel}` : undefined;
+  const channelOverride = resolveChannelModelOverride({
+    cfg: params.cfg,
+    channel,
+    groupId: params.threadId,
+    groupChatType: "channel",
+    groupChannel,
+    groupSubject: groupChannel,
+    parentSessionKey,
+  });
+  return channelOverride?.model;
+}
+
+async function maybeRenameDiscordAutoThread(params: {
+  client: Client;
+  threadId: string;
+  currentName: string;
+  fallbackId: string;
+  sourceText: string;
+  modelRef?: string;
+  channelName?: string;
+  channelDescription?: string;
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  try {
+    const fallbackName = sanitizeDiscordThreadName("", params.fallbackId);
+    const generated = await generateThreadTitle({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      messageText: params.sourceText,
+      modelRef: params.modelRef,
+      channelName: params.channelName,
+      channelDescription: params.channelDescription,
+    });
+    if (!generated) {
+      return;
+    }
+    const nextName = sanitizeDiscordThreadName(generated, params.fallbackId);
+    if (!nextName || nextName === params.currentName || nextName === fallbackName) {
+      return;
+    }
+    await params.client.rest.patch(Routes.channel(params.threadId), {
+      body: { name: nextName },
+    });
+  } catch (err) {
+    logVerbose(`discord: autoThread rename failed for ${params.threadId}: ${String(err)}`);
   }
 }
 
@@ -461,4 +671,32 @@ export function resolveDiscordReplyDeliveryPlan(params: {
     allowReference,
   });
   return { deliverTarget, replyTarget, replyReference };
+}
+
+/**
+ * Extract text from forwarded message snapshots for thread starter resolution.
+ * Discord forwarded messages have empty `content` and store the original text
+ * in `message_snapshots[0].message.content`.
+ */
+function resolveStarterForwardedText(
+  snapshots?: Array<{
+    message?: {
+      content?: string | null;
+      attachments?: unknown[];
+      embeds?: Array<{ title?: string | null; description?: string | null }>;
+      sticker_items?: unknown[];
+    };
+  }>,
+): string {
+  if (!Array.isArray(snapshots) || snapshots.length === 0) {
+    return "";
+  }
+  const blocks: string[] = [];
+  for (const snapshot of snapshots) {
+    const msg = snapshot.message;
+    if (!msg) continue;
+    const text = msg.content?.trim() || resolveDiscordEmbedText(msg.embeds?.[0]) || "";
+    if (text) blocks.push(`[Forwarded message]\n${text}`);
+  }
+  return blocks.join("\n\n");
 }

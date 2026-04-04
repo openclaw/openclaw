@@ -1,5 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../runtime.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureConfigReady, __test__ } from "./config-guard.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -44,12 +44,7 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 }
 
 describe("ensureConfigReady", () => {
-  let ensureConfigReady: (params: {
-    runtime: RuntimeEnv;
-    commandPath?: string[];
-    suppressDoctorStdout?: boolean;
-  }) => Promise<void>;
-  let resetConfigGuardStateForTests: () => void;
+  const resetConfigGuardStateForTests = __test__.resetConfigGuardStateForTests;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
@@ -72,13 +67,6 @@ describe("ensureConfigReady", () => {
     });
   }
 
-  beforeAll(async () => {
-    ({
-      ensureConfigReady,
-      __test__: { resetConfigGuardStateForTests },
-    } = await import("./config-guard.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
@@ -93,6 +81,11 @@ describe("ensureConfigReady", () => {
     {
       name: "skips doctor flow for read-only fast path commands",
       commandPath: ["status"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for update status",
+      commandPath: ["update", "status"],
       expectedDoctorCalls: 0,
     },
     {
@@ -130,13 +123,23 @@ describe("ensureConfigReady", () => {
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
   });
 
+  it("allows an explicit invalid-config override", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    await ensureConfigReady({
+      runtime: runtime as never,
+      commandPath: ["plugins", "install"],
+      allowInvalid: true,
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("runs doctor migration flow only once per module instance", async () => {
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
 
     await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
-
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });
 

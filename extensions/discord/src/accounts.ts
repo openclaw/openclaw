@@ -1,6 +1,7 @@
 import {
   createAccountActionGate,
   createAccountListHelpers,
+  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
@@ -31,18 +32,22 @@ export function mergeDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.discord ?? {}) as DiscordAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveDiscordAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<DiscordAccountConfig>({
+    channelConfig: cfg.channels?.discord as DiscordAccountConfig | undefined,
+    accounts: cfg.channels?.discord?.accounts as
+      | Record<string, Partial<DiscordAccountConfig>>
+      | undefined,
+    accountId,
+  });
 }
 
 export function createDiscordActionGate(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): (key: keyof DiscordActionConfig, defaultValue?: boolean) => boolean {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
   return createAccountActionGate({
     baseActions: params.cfg.channels?.discord?.actions,
     accountActions: resolveDiscordAccountConfig(params.cfg, accountId)?.actions,
@@ -53,7 +58,9 @@ export function resolveDiscordAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedDiscordAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.discord?.enabled !== false;
   const merged = mergeDiscordAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;

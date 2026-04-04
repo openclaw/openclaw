@@ -1,20 +1,39 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
-const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
+const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
+vi.mock("./bot-message-context.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./bot-message-context.runtime.js")>(
+    "./bot-message-context.runtime.js",
+  );
   return {
     ...actual,
     ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
       ensureConfiguredBindingRouteReadyMock(...args),
-    resolveConfiguredBindingRoute: (...args: unknown[]) =>
-      resolveConfiguredBindingRouteMock(...args),
+  };
+});
+vi.mock("./bot-message-context.session.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
+    "./bot-message-context.session.runtime.js",
+  );
+  return {
+    ...actual,
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
+});
+vi.mock("./conversation-route.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./conversation-route.js")>("./conversation-route.js");
+  return {
+    ...actual,
+    resolveTelegramConversationRoute: (...args: unknown[]) =>
+      resolveTelegramConversationRouteMock(...args),
   };
 });
 
-import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
 function createConfiguredTelegramBinding() {
   return {
@@ -50,7 +69,7 @@ function createConfiguredTelegramBinding() {
 function createConfiguredTelegramRoute() {
   const configuredBinding = createConfiguredTelegramBinding();
   return {
-    bindingResolution: {
+    configuredBinding: {
       conversation: {
         channel: "telegram",
         accountId: "work",
@@ -113,8 +132,7 @@ function createConfiguredTelegramRoute() {
         agentId: configuredBinding.spec.agentId,
       },
     },
-    configuredBinding,
-    boundSessionKey: configuredBinding.record.targetSessionKey,
+    configuredBindingSessionKey: configuredBinding.record.targetSessionKey,
     route: {
       agentId: "codex",
       accountId: "work",
@@ -128,10 +146,16 @@ function createConfiguredTelegramRoute() {
 }
 
 describe("buildTelegramMessageContext ACP configured bindings", () => {
+  beforeAll(async () => {
+    ({ buildTelegramMessageContextForTest } =
+      await import("./bot-message-context.test-harness.js"));
+  });
+
   beforeEach(() => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredTelegramRoute());
+    recordInboundSessionMock.mockClear();
+    resolveTelegramConversationRouteMock.mockReset();
+    resolveTelegramConversationRouteMock.mockReturnValue(createConfiguredTelegramRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
   });
 
@@ -149,6 +173,9 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.route.sessionKey).toBe("agent:codex:acp:binding:telegram:work:abc123");
+    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      updateLastRoute: undefined,
+    });
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 
@@ -167,7 +194,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
@@ -190,7 +217,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
@@ -210,7 +237,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 });

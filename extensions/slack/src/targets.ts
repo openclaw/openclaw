@@ -6,7 +6,7 @@ import {
   type MessagingTarget,
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-targets";
 
 export type SlackTargetKind = MessagingTargetKind;
 
@@ -54,4 +54,28 @@ export function parseSlackTarget(
 export function resolveSlackChannelId(raw: string): string {
   const target = parseSlackTarget(raw, { defaultKind: "channel" });
   return requireTargetKind({ platform: "Slack", target, kind: "channel" });
+}
+
+export function normalizeSlackMessagingTarget(raw: string): string | undefined {
+  return parseSlackTarget(raw, { defaultKind: "channel" })?.normalized;
+}
+
+export function looksLikeSlackTargetId(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/^<@([A-Z0-9]+)>$/i.test(trimmed)) {
+    return true;
+  }
+  if (/^(user|channel):/i.test(trimmed)) {
+    return true;
+  }
+  if (/^slack:/i.test(trimmed)) {
+    return true;
+  }
+  if (/^[@#]/.test(trimmed)) {
+    return true;
+  }
+  return /^[CUWGD][A-Z0-9]{8,}$/i.test(trimmed);
 }

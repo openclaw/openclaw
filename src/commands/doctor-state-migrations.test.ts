@@ -304,10 +304,10 @@ describe("doctor legacy state migrations", () => {
   it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)),
-    ).toEqual(["telegram-default-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-default-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const target = path.join(oauthDir, "telegram-default-allowFrom.json");
@@ -318,11 +318,12 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
-  it("fans out legacy Telegram pairing allowFrom store to configured named accounts", async () => {
+  it("does not fan out legacy Telegram pairing allowFrom store to configured named accounts", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {
       channels: {
         telegram: {
+          defaultAccount: "bot2",
           accounts: {
             bot1: {},
             bot2: {},
@@ -331,22 +332,55 @@ describe("doctor legacy state migrations", () => {
       },
     };
     const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.pairingAllowFrom.hasLegacyTelegram).toBe(true);
-    expect(
-      detected.pairingAllowFrom.copyPlans.map((plan) => path.basename(plan.targetPath)).toSorted(),
-    ).toEqual(["telegram-bot1-allowFrom.json", "telegram-bot2-allowFrom.json"]);
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-bot2-allowFrom.json",
+    ]);
     expect(result.warnings).toEqual([]);
 
     const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
     const bot2Target = path.join(oauthDir, "telegram-bot2-allowFrom.json");
-    expect(fs.existsSync(bot1Target)).toBe(true);
+    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
+    expect(fs.existsSync(bot1Target)).toBe(false);
     expect(fs.existsSync(bot2Target)).toBe(true);
-    expect(fs.existsSync(path.join(oauthDir, "telegram-default-allowFrom.json"))).toBe(false);
-    expect(JSON.parse(fs.readFileSync(bot1Target, "utf-8"))).toEqual({
+    expect(fs.existsSync(defaultTarget)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bot2Target, "utf-8"))).toEqual({
       version: 1,
       allowFrom: ["123456"],
     });
-    expect(JSON.parse(fs.readFileSync(bot2Target, "utf-8"))).toEqual({
+  });
+
+  it("migrates legacy Telegram pairing allowFrom store to the default agent bound account", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "ops", default: true }],
+      },
+      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }],
+      channels: {
+        telegram: {
+          accounts: {
+            alerts: {},
+            backup: {},
+          },
+        },
+      },
+    };
+
+    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPlans.hasLegacy).toBe(true);
+    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
+      "telegram-alerts-allowFrom.json",
+    ]);
+    expect(result.warnings).toEqual([]);
+
+    const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");
+    const backupTarget = path.join(oauthDir, "telegram-backup-allowFrom.json");
+    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
+    expect(fs.existsSync(alertsTarget)).toBe(true);
+    expect(fs.existsSync(backupTarget)).toBe(false);
+    expect(fs.existsSync(defaultTarget)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(alertsTarget, "utf-8"))).toEqual({
       version: 1,
       allowFrom: ["123456"],
     });

@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   flush,
   getSlackClient,
@@ -10,7 +10,7 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-const { monitorSlackProvider } = await import("./monitor.js");
+let monitorSlackProvider: typeof import("./monitor.js").monitorSlackProvider;
 
 const slackTestState = getSlackTestState();
 
@@ -66,6 +66,14 @@ async function runMissingThreadScenario(params: {
   expect(slackTestState.sendMock).toHaveBeenCalledTimes(1);
   return slackTestState.sendMock.mock.calls[0]?.[2];
 }
+
+beforeEach(() => {
+  resetInboundDedupe();
+});
+
+beforeAll(async () => {
+  ({ monitorSlackProvider } = await import("./monitor.js"));
+});
 
 beforeEach(() => {
   resetInboundDedupe();

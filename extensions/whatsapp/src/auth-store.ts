@@ -6,32 +6,17 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { info, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import type { WebChannel } from "openclaw/plugin-sdk/text-runtime";
-import { jidToE164, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { resolveOAuthDir } from "./auth-store.runtime.js";
+import { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath } from "./creds-files.js";
+import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
+import { resolveUserPath, type WebChannel } from "./text-runtime.js";
+export { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath };
 
 export function resolveDefaultWebAuthDir(): string {
   return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
 
 export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
-
-export function resolveWebCredsPath(authDir: string): string {
-  return path.join(authDir, "creds.json");
-}
-
-export function resolveWebCredsBackupPath(authDir: string): string {
-  return path.join(authDir, "creds.json.bak");
-}
-
-export function hasWebCredsSync(authDir: string): boolean {
-  try {
-    const stats = fsSync.statSync(resolveWebCredsPath(authDir));
-    return stats.isFile() && stats.size > 1;
-  } catch {
-    return false;
-  }
-}
 
 export function readCredsJsonRaw(filePath: string): string | null {
   try {
@@ -154,15 +139,51 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
     if (!fsSync.existsSync(credsPath)) {
-      return { e164: null, jid: null } as const;
+      return { e164: null, jid: null, lid: null } as const;
     }
     const raw = fsSync.readFileSync(credsPath, "utf-8");
-    const parsed = JSON.parse(raw) as { me?: { id?: string } } | undefined;
-    const jid = parsed?.me?.id ?? null;
-    const e164 = jid ? jidToE164(jid, { authDir }) : null;
-    return { e164, jid } as const;
+    const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
+    const identity = resolveComparableIdentity(
+      {
+        jid: parsed?.me?.id ?? null,
+        lid: parsed?.me?.lid ?? null,
+      },
+      authDir,
+    );
+    return {
+      e164: identity.e164 ?? null,
+      jid: identity.jid ?? null,
+      lid: identity.lid ?? null,
+    } as const;
   } catch {
-    return { e164: null, jid: null } as const;
+    return { e164: null, jid: null, lid: null } as const;
+  }
+}
+
+export async function readWebSelfIdentity(
+  authDir: string = resolveDefaultWebAuthDir(),
+  fallback?: { id?: string | null; lid?: string | null } | null,
+): Promise<WhatsAppSelfIdentity> {
+  const resolvedAuthDir = resolveUserPath(authDir);
+  maybeRestoreCredsFromBackup(resolvedAuthDir);
+  try {
+    const raw = await fs.readFile(resolveWebCredsPath(resolvedAuthDir), "utf-8");
+    const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
+    return resolveComparableIdentity(
+      {
+        jid: parsed?.me?.id ?? null,
+        lid: parsed?.me?.lid ?? null,
+      },
+      resolvedAuthDir,
+    );
+  } catch {
+    return resolveComparableIdentity(
+      {
+        jid: fallback?.id ?? null,
+        lid: fallback?.lid ?? null,
+      },
+      resolvedAuthDir,
+    );
   }
 }
 
@@ -185,8 +206,14 @@ export function logWebSelfId(
   includeChannelPrefix = false,
 ) {
   // Human-friendly log of the currently linked personal web session.
-  const { e164, jid } = readWebSelfId(authDir);
-  const details = e164 || jid ? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}` : "unknown";
+  const { e164, jid, lid } = readWebSelfId(authDir);
+  const parts = [jid ? `jid ${jid}` : null, lid ? `lid ${lid}` : null].filter(
+    (value): value is string => Boolean(value),
+  );
+  const details =
+    e164 || parts.length > 0
+      ? `${e164 ?? "unknown"}${parts.length > 0 ? ` (${parts.join(", ")})` : ""}`
+      : "unknown";
   const prefix = includeChannelPrefix ? "Web Channel: " : "";
   runtime.log(info(`${prefix}${details}`));
 }

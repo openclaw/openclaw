@@ -1,21 +1,51 @@
+import path from "node:path";
 import { GrammyError } from "grammy";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
-import { retryAsync } from "openclaw/plugin-sdk/infra-runtime";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { shouldRetryTelegramTransportFallback, type TelegramTransport } from "../fetch.js";
+import type { TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
+import {
+  fetchRemoteMedia,
+  formatErrorMessage,
+  logVerbose,
+  resolveTelegramApiBase,
+  retryAsync,
+  saveMediaBuffer,
+  shouldRetryTelegramTransportFallback,
+  warn,
+} from "./delivery.resolve-media.runtime.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
-const TELEGRAM_MEDIA_SSRF_POLICY = {
-  // Telegram file downloads should trust api.telegram.org even when DNS/proxy
-  // resolution maps to private/internal ranges in restricted networks.
-  allowedHostnames: ["api.telegram.org"],
-  allowRfc2544BenchmarkRange: true,
-};
+const GrammyErrorCtor: typeof GrammyError | undefined =
+  typeof GrammyError === "function" ? GrammyError : undefined;
+
+function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateNetwork?: boolean) {
+  const hostnames = ["api.telegram.org"];
+  let allowedHostnames: string[] | undefined;
+  if (apiRoot) {
+    try {
+      const customHost = new URL(apiRoot).hostname;
+      if (customHost && !hostnames.includes(customHost)) {
+        hostnames.push(customHost);
+        // A configured custom Bot API host is an explicit operator override and
+        // may legitimately live on a private network (for example, self-hosted
+        // Bot API or an internal reverse proxy). Keep that host reachable while
+        // still enforcing resolved-IP checks for the default public host.
+        allowedHostnames = [customHost];
+      }
+    } catch (err) {
+      logVerbose(`telegram: invalid apiRoot URL "${apiRoot}": ${String(err)}`);
+    }
+  }
+  return {
+    // Restrict media downloads to the configured Telegram API hosts while still
+    // enforcing SSRF checks on the resolved and redirected targets.
+    hostnameAllowlist: hostnames,
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(dangerouslyAllowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    allowRfc2544BenchmarkRange: true,
+  };
+}
 
 /**
  * Returns true if the error is Telegram's "file is too big" error.
@@ -23,7 +53,7 @@ const TELEGRAM_MEDIA_SSRF_POLICY = {
  * Unlike network errors, this is a permanent error and should not be retried.
  */
 function isFileTooBigError(err: unknown): boolean {
-  if (err instanceof GrammyError) {
+  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
     return FILE_TOO_BIG_RE.test(err.description);
   }
   return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
@@ -42,24 +72,39 @@ function isRetryableGetFileError(err: unknown): boolean {
   return true;
 }
 
-function resolveMediaFileRef(msg: TelegramContext["message"]) {
-  return (
-    msg.photo?.[msg.photo.length - 1] ??
-    msg.video ??
-    msg.video_note ??
-    msg.document ??
-    msg.audio ??
-    msg.voice
-  );
+interface MediaMetadata {
+  fileRef?:
+    | NonNullable<TelegramContext["message"]["photo"]>[number]
+    | TelegramContext["message"]["video"]
+    | TelegramContext["message"]["video_note"]
+    | TelegramContext["message"]["document"]
+    | TelegramContext["message"]["audio"]
+    | TelegramContext["message"]["voice"];
+  fileName?: string;
+  mimeType?: string;
 }
 
-function resolveTelegramFileName(msg: TelegramContext["message"]): string | undefined {
-  return (
-    msg.document?.file_name ??
-    msg.audio?.file_name ??
-    msg.video?.file_name ??
-    msg.animation?.file_name
-  );
+function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
+  return {
+    fileRef:
+      msg.photo?.[msg.photo.length - 1] ??
+      msg.video ??
+      msg.video_note ??
+      msg.document ??
+      msg.audio ??
+      msg.voice,
+    fileName:
+      msg.document?.file_name ??
+      msg.audio?.file_name ??
+      msg.video?.file_name ??
+      msg.animation?.file_name,
+    mimeType:
+      msg.audio?.mime_type ??
+      msg.voice?.mime_type ??
+      msg.video?.mime_type ??
+      msg.document?.mime_type ??
+      msg.animation?.mime_type,
+  };
 }
 
 async function resolveTelegramFileWithRetry(
@@ -124,8 +169,15 @@ async function downloadAndSaveTelegramFile(params: {
   transport: TelegramTransport;
   maxBytes: number;
   telegramFileName?: string;
+  mimeType?: string;
+  apiRoot?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
 }) {
-  const url = `https://api.telegram.org/file/bot${params.token}/${params.filePath}`;
+  if (path.isAbsolute(params.filePath)) {
+    return { path: params.filePath, contentType: params.mimeType };
+  }
+  const apiBase = resolveTelegramApiBase(params.apiRoot);
+  const url = `${apiBase}/file/bot${params.token}/${params.filePath}`;
   const fetched = await fetchRemoteMedia({
     url,
     fetchImpl: params.transport.sourceFetch,
@@ -134,7 +186,7 @@ async function downloadAndSaveTelegramFile(params: {
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,
     readIdleTimeoutMs: TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS,
-    ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
+    ssrfPolicy: buildTelegramMediaSsrfPolicy(params.apiRoot, params.dangerouslyAllowPrivateNetwork),
   });
   const originalName = params.telegramFileName ?? fetched.fileName ?? params.filePath;
   return saveMediaBuffer(
@@ -152,6 +204,8 @@ async function resolveStickerMedia(params: {
   maxBytes: number;
   token: string;
   transport?: TelegramTransport;
+  apiRoot?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
 }): Promise<
   | {
       path: string;
@@ -192,6 +246,8 @@ async function resolveStickerMedia(params: {
       token,
       transport: resolvedTransport,
       maxBytes,
+      apiRoot: params.apiRoot,
+      dangerouslyAllowPrivateNetwork: params.dangerouslyAllowPrivateNetwork,
     });
 
     // Check sticker cache for existing description
@@ -242,17 +298,20 @@ async function resolveStickerMedia(params: {
   }
 }
 
-export async function resolveMedia(
-  ctx: TelegramContext,
-  maxBytes: number,
-  token: string,
-  transport?: TelegramTransport,
-): Promise<{
+export async function resolveMedia(params: {
+  ctx: TelegramContext;
+  maxBytes: number;
+  token: string;
+  transport?: TelegramTransport;
+  apiRoot?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
+}): Promise<{
   path: string;
   contentType?: string;
   placeholder: string;
   stickerMetadata?: StickerMetadata;
 } | null> {
+  const { ctx, maxBytes, token, transport, apiRoot, dangerouslyAllowPrivateNetwork } = params;
   const msg = ctx.message;
   const stickerResolved = await resolveStickerMedia({
     msg,
@@ -260,12 +319,15 @@ export async function resolveMedia(
     maxBytes,
     token,
     transport,
+    apiRoot,
+    dangerouslyAllowPrivateNetwork,
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
   }
 
-  const m = resolveMediaFileRef(msg);
+  const metadata = resolveMediaMetadata(msg);
+  const m = metadata.fileRef;
   if (!m?.file_id) {
     return null;
   }
@@ -282,7 +344,10 @@ export async function resolveMedia(
     token,
     transport: resolveRequiredTelegramTransport(transport),
     maxBytes,
-    telegramFileName: resolveTelegramFileName(msg),
+    telegramFileName: metadata.fileName,
+    mimeType: metadata.mimeType,
+    apiRoot,
+    dangerouslyAllowPrivateNetwork,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };

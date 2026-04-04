@@ -26,6 +26,7 @@ export {
   buildRemoteCommand,
   buildSshSandboxArgv,
   createRemoteShellSandboxFsBridge,
+  createWritableRenameTargetResolver,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
@@ -33,7 +34,10 @@ export {
   getSandboxBackendManager,
   registerSandboxBackend,
   requireSandboxBackendFactory,
+  resolveWritableRenameTargets,
+  resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,
+  sanitizeEnvVars,
   shellEscape,
   uploadDirectoryToSshTarget,
 } from "../agents/sandbox.js";

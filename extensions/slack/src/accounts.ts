@@ -3,7 +3,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   normalizeChatType,
-  resolveAccountEntry,
+  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
@@ -29,29 +29,26 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("sl
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): SlackAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.slack?.accounts, accountId);
-}
-
 export function mergeSlackAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): SlackAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.slack ?? {}) as SlackAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<SlackAccountConfig>({
+    channelConfig: cfg.channels?.slack as SlackAccountConfig | undefined,
+    accounts: cfg.channels?.slack?.accounts as
+      | Record<string, Partial<SlackAccountConfig>>
+      | undefined,
+    accountId,
+  });
 }
 
 export function resolveSlackAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedSlackAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.slack?.enabled !== false;
   const merged = mergeSlackAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;

@@ -1,6 +1,19 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SecretRef } from "../../config/types.secrets.js";
+
+export type OAuthProvider = string;
+export type ExternalOAuthManager = "codex-cli" | "minimax-cli";
+
+export type OAuthCredentials = {
+  access: string;
+  refresh: string;
+  expires: number;
+  provider?: OAuthProvider;
+  email?: string;
+  enterpriseUrl?: string;
+  projectId?: string;
+  accountId?: string;
+};
 
 export type ApiKeyCredential = {
   type: "api_key";
@@ -8,6 +21,7 @@ export type ApiKeyCredential = {
   key?: string;
   keyRef?: SecretRef;
   email?: string;
+  displayName?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
   metadata?: Record<string, string>;
 };
@@ -24,6 +38,7 @@ export type TokenCredential = {
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
+  displayName?: string;
 };
 
 export type OAuthCredential = OAuthCredentials & {
@@ -31,6 +46,12 @@ export type OAuthCredential = OAuthCredentials & {
   provider: string;
   clientId?: string;
   email?: string;
+  displayName?: string;
+  /**
+   * When set, another CLI owns refresh-token rotation for this credential.
+   * OpenClaw may re-read that external source, but must not refresh on its own.
+   */
+  managedBy?: ExternalOAuthManager;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
@@ -51,6 +72,8 @@ export type AuthProfileFailureReason =
 export type ProfileUsageStats = {
   lastUsed?: number;
   cooldownUntil?: number;
+  cooldownReason?: AuthProfileFailureReason;
+  cooldownModel?: string;
   disabledUntil?: number;
   disabledReason?: AuthProfileFailureReason;
   errorCount?: number;

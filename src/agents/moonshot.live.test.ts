@@ -1,17 +1,27 @@
 import { completeSimple, type Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
+  isLiveTestEnabled,
 } from "./live-test-helpers.js";
 
 const MOONSHOT_KEY = process.env.MOONSHOT_API_KEY ?? "";
 const MOONSHOT_BASE_URL = process.env.MOONSHOT_BASE_URL?.trim() || "https://api.moonshot.ai/v1";
 const MOONSHOT_MODEL = process.env.MOONSHOT_MODEL?.trim() || "kimi-k2.5";
-const LIVE = isTruthyEnvValue(process.env.MOONSHOT_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE = isLiveTestEnabled(["MOONSHOT_LIVE_TEST"]);
 
 const describeLive = LIVE && MOONSHOT_KEY ? describe : describe.skip;
+
+function forceMoonshotInstantMode(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  // Moonshot's official API exposes instant mode via thinking.type=disabled.
+  // Without this, tiny smoke probes can spend the full token budget in hidden
+  // reasoning_content and never emit visible assistant text.
+  (payload as Record<string, unknown>).thinking = { type: "disabled" };
+}
 
 describeLive("moonshot live", () => {
   it("returns assistant text", async () => {
@@ -33,7 +43,13 @@ describeLive("moonshot live", () => {
       {
         messages: createSingleUserPromptMessage(),
       },
-      { apiKey: MOONSHOT_KEY, maxTokens: 64 },
+      {
+        apiKey: MOONSHOT_KEY,
+        maxTokens: 64,
+        onPayload: (payload) => {
+          forceMoonshotInstantMode(payload);
+        },
+      },
     );
 
     const text = extractNonEmptyAssistantText(res.content);

@@ -107,14 +107,14 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
 }
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
+  describeMessageTool: ({ cfg, accountId }) => {
     const resolvedCfg = cfg as CoreConfig;
-    if (requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
+    if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
       return { actions: [], capabilities: [] };
     }
     const account = resolveMatrixAccount({
       cfg: resolvedCfg,
-      accountId: resolveDefaultMatrixAccountId(resolvedCfg),
+      accountId: accountId ?? resolveDefaultMatrixAccountId(resolvedCfg),
     });
     if (!account.enabled || !account.configured) {
       return { actions: [], capabilities: [] };
@@ -162,13 +162,23 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });
-      const mediaUrl = readStringParam(params, "media", { trim: false });
+      const mediaUrl =
+        readStringParam(params, "media", { trim: false }) ??
+        readStringParam(params, "mediaUrl", { trim: false }) ??
+        readStringParam(params, "filePath", { trim: false }) ??
+        readStringParam(params, "path", { trim: false });
       const content = readStringParam(params, "message", {
         required: !mediaUrl,
         allowEmpty: true,
       });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
+      const audioAsVoice =
+        typeof params.asVoice === "boolean"
+          ? params.asVoice
+          : typeof params.audioAsVoice === "boolean"
+            ? params.audioAsVoice
+            : undefined;
       return await dispatch({
         action: "sendMessage",
         to,
@@ -176,6 +186,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         mediaUrl: mediaUrl ?? undefined,
         replyToId: replyTo ?? undefined,
         threadId: threadId ?? undefined,
+        audioAsVoice,
       });
     }
 

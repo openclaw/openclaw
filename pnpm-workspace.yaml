@@ -4,6 +4,17 @@ packages:
   - packages/*
   - extensions/*
 
+minimumReleaseAge: 2880
+
+minimumReleaseAgeExclude:
+  - "openclaw"
+  - "@mariozechner/*"
+  - "@typescript/native-preview*"
+  - "@oxlint/*"
+  - "@oxfmt/*"
+  - "sqlite-vec"
+  - "sqlite-vec-*"
+
 onlyBuiltDependencies:
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
@@ -15,3 +26,7 @@ onlyBuiltDependencies:
   - node-llama-cpp
   - protobufjs
   - sharp
+
+ignoredBuiltDependencies:
+  - "@discordjs/opus"
+  - koffi

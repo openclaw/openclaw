@@ -4,7 +4,7 @@ import {
   createDedupeCache,
   createPersistentDedupe,
   readJsonFileWithFallback,
-} from "../runtime-api.js";
+} from "./dedup-runtime-api.js";
 
 // Persistent TTL: 24 hours — survives restarts & WebSocket reconnects.
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
@@ -21,7 +21,7 @@ const processingClaims = createDedupeCache({
 });
 
 function resolveStateDirFromEnv(env: NodeJS.ProcessEnv = process.env): string {
-  const stateOverride = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
   if (stateOverride) {
     return stateOverride;
   }

@@ -1,5 +1,5 @@
-import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import { LogService, noop } from "./logger.js";
 
 type MatrixDecryptIfNeededClient = {
@@ -51,6 +51,8 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   private readonly decryptedMessageDedupe = new Map<string, number>();
   private readonly decryptRetries = new Map<string, MatrixDecryptRetryState>();
   private readonly failedDecryptionsNotified = new Set<string>();
+  private activeRetryRuns = 0;
+  private readonly retryIdleResolvers = new Set<() => void>();
   private cryptoRetrySignalsBound = false;
 
   constructor(
@@ -136,6 +138,22 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   stop(): void {
     for (const retryKey of this.decryptRetries.keys()) {
       this.clearDecryptRetry(retryKey);
+    }
+  }
+
+  async drainPendingDecryptions(reason: string): Promise<void> {
+    for (let attempts = 0; attempts < MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS; attempts += 1) {
+      if (this.decryptRetries.size === 0) {
+        return;
+      }
+      this.retryPendingNow(reason);
+      await this.waitForActiveRetryRunsToFinish();
+      const hasPendingRetryTimers = Array.from(this.decryptRetries.values()).some(
+        (state) => state.timer || state.inFlight,
+      );
+      if (!hasPendingRetryTimers) {
+        return;
+      }
     }
   }
 
@@ -246,9 +264,12 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
 
     state.inFlight = true;
     state.timer = null;
+    this.activeRetryRuns += 1;
     const canDecrypt = typeof this.deps.client.decryptEventIfNeeded === "function";
     if (!canDecrypt) {
       this.clearDecryptRetry(retryKey);
+      this.activeRetryRuns = Math.max(0, this.activeRetryRuns - 1);
+      this.resolveRetryIdleIfNeeded();
       return;
     }
 
@@ -260,8 +281,13 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       // Retry with backoff until we hit the configured retry cap.
     } finally {
       state.inFlight = false;
+      this.activeRetryRuns = Math.max(0, this.activeRetryRuns - 1);
+      this.resolveRetryIdleIfNeeded();
     }
 
+    if (this.decryptRetries.get(retryKey) !== state) {
+      return;
+    }
     if (isDecryptionFailure(state.event)) {
       this.scheduleDecryptRetry(state);
       return;
@@ -303,5 +329,28 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
       }
       this.decryptedMessageDedupe.delete(oldest);
     }
+  }
+
+  private async waitForActiveRetryRunsToFinish(): Promise<void> {
+    if (this.activeRetryRuns === 0) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      this.retryIdleResolvers.add(resolve);
+      if (this.activeRetryRuns === 0) {
+        this.retryIdleResolvers.delete(resolve);
+        resolve();
+      }
+    });
+  }
+
+  private resolveRetryIdleIfNeeded(): void {
+    if (this.activeRetryRuns !== 0) {
+      return;
+    }
+    for (const resolve of this.retryIdleResolvers) {
+      resolve();
+    }
+    this.retryIdleResolvers.clear();
   }
 }

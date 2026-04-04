@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -92,8 +92,10 @@ vi.mock("ws", () => ({
   WebSocket: MockWebSocket,
 }));
 
-vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-auth-store.js")>();
+vi.mock("../infra/device-auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/device-auth-store.js")>(
+    "../infra/device-auth-store.js",
+  );
   return {
     ...actual,
     loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
@@ -102,16 +104,23 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../logger.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logger.js")>();
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
   return {
     ...actual,
     logDebug: (...args: unknown[]) => logDebugMock(...args),
   };
 });
 
-const { GatewayClient } = await import("./client.js");
-type GatewayClientInstance = InstanceType<typeof GatewayClient>;
+type GatewayClientModule = typeof import("./client.js");
+type GatewayClientInstance = InstanceType<GatewayClientModule["GatewayClient"]>;
+
+let GatewayClient: GatewayClientModule["GatewayClient"];
+
+async function loadGatewayClientModule() {
+  vi.resetModules();
+  ({ GatewayClient } = await import("./client.js"));
+}
 
 function getLatestWs(): MockWebSocket {
   const ws = wsInstances.at(-1);
@@ -153,12 +162,22 @@ function expectSecurityConnectError(
   }
 }
 
+beforeAll(async () => {
+  await loadGatewayClientModule();
+});
+
 describe("GatewayClient security checks", () => {
   const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
 
   beforeEach(() => {
     envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     wsInstances.length = 0;
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {

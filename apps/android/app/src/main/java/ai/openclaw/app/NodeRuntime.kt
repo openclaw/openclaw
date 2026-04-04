@@ -16,6 +16,8 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.GatewayTlsProbeFailure
+import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.*
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
@@ -24,7 +26,6 @@ import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +35,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -46,7 +46,14 @@ import java.util.concurrent.atomic.AtomicLong
 class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
 ) {
+  data class GatewayConnectAuth(
+    val token: String?,
+    val bootstrapToken: String?,
+    val password: String?,
+  )
+
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val deviceAuthStore = DeviceAuthStore(prefs)
@@ -141,6 +148,7 @@ class NodeRuntime(
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
     readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    smsSearchPossible = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.hasTelephonyFeature() },
     callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
@@ -166,6 +174,8 @@ class NodeRuntime(
     locationEnabled = { locationMode.value != LocationMode.Off },
     sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
     readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    smsFeatureEnabled = { BuildConfig.OPENCLAW_ENABLE_SMS },
+    smsTelephonyAvailable = { sms.hasTelephonyFeature() },
     callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
@@ -182,6 +192,7 @@ class NodeRuntime(
   data class GatewayTrustPrompt(
     val endpoint: GatewayEndpoint,
     val fingerprintSha256: String,
+    val auth: GatewayConnectAuth,
   )
 
   private val _isConnected = MutableStateFlow(false)
@@ -195,7 +206,12 @@ class NodeRuntime(
   private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
 
-  private val _mainSessionKey = MutableStateFlow("main")
+  private fun resolveNodeMainSessionKey(agentId: String? = gatewayDefaultAgentId): String {
+    val deviceId = identityStore.loadOrCreate().deviceId
+    return buildNodeMainSessionKey(deviceId, agentId)
+  }
+
+  private val _mainSessionKey = MutableStateFlow(resolveNodeMainSessionKey())
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val cameraHudSeq = AtomicLong(0)
@@ -243,7 +259,7 @@ class NodeRuntime(
         _serverName.value = name
         _remoteAddress.value = remote
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        applyMainSessionKey(mainSessionKey)
+        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainSessionKey))
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
@@ -259,9 +275,6 @@ class NodeRuntime(
         _serverName.value = null
         _remoteAddress.value = null
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        if (!isCanonicalMainSessionKey(_mainSessionKey.value)) {
-          _mainSessionKey.value = "main"
-        }
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -320,9 +333,11 @@ class NodeRuntime(
       session = operatorSession,
       json = json,
       supportsChatSubscribe = false,
-    )
+    ).also {
+      it.applyMainSessionKey(_mainSessionKey.value)
+    }
   private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
-    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // Reuse the existing TalkMode speech engine for native Android TTS playback
     // without enabling the legacy talk capture loop.
     TalkModeManager(
       context = appContext,
@@ -330,6 +345,8 @@ class NodeRuntime(
       session = operatorSession,
       supportsChatSubscribe = false,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     ).also { speaker ->
       speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
     }
@@ -401,16 +418,20 @@ class NodeRuntime(
       session = operatorSession,
       supportsChatSubscribe = true,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     )
   }
 
-  private fun applyMainSessionKey(candidate: String?) {
-    val trimmed = normalizeMainKey(candidate) ?: return
-    if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
-    if (_mainSessionKey.value == trimmed) return
-    _mainSessionKey.value = trimmed
-    talkMode.setMainSessionKey(trimmed)
-    chat.applyMainSessionKey(trimmed)
+  private fun syncMainSessionKey(agentId: String?) {
+    val resolvedKey = resolveNodeMainSessionKey(agentId)
+    // Always push the resolved session key into TalkMode, even when the
+    // state flow value is unchanged, so lazy TalkMode instances do not
+    // stay on the default "main" session key.
+    talkMode.setMainSessionKey(resolvedKey)
+    if (_mainSessionKey.value == resolvedKey) return
+    _mainSessionKey.value = resolvedKey
+    chat.applyMainSessionKey(resolvedKey)
     updateHomeCanvasState()
   }
 
@@ -533,6 +554,17 @@ class NodeRuntime(
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
+  val notificationForwardingMode: StateFlow<NotificationPackageFilterMode> =
+    prefs.notificationForwardingMode
+  val notificationForwardingPackages: StateFlow<Set<String>> = prefs.notificationForwardingPackages
+  val notificationForwardingQuietHoursEnabled: StateFlow<Boolean> =
+    prefs.notificationForwardingQuietHoursEnabled
+  val notificationForwardingQuietStart: StateFlow<String> = prefs.notificationForwardingQuietStart
+  val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
+  val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
+    prefs.notificationForwardingMaxEventsPerMinute
+  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   private var didAutoConnect = false
 
@@ -685,6 +717,34 @@ class NodeRuntime(
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
+  fun setNotificationForwardingEnabled(value: Boolean) {
+    prefs.setNotificationForwardingEnabled(value)
+  }
+
+  fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
+    prefs.setNotificationForwardingMode(mode)
+  }
+
+  fun setNotificationForwardingPackages(packages: List<String>) {
+    prefs.setNotificationForwardingPackages(packages)
+  }
+
+  fun setNotificationForwardingQuietHours(
+    enabled: Boolean,
+    start: String,
+    end: String,
+  ): Boolean {
+    return prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  }
+
+  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
+    prefs.setNotificationForwardingMaxEventsPerMinute(value)
+  }
+
+  fun setNotificationForwardingSessionKey(value: String?) {
+    prefs.setNotificationForwardingSessionKey(value)
+  }
+
   fun setVoiceScreenActive(active: Boolean) {
     if (!active) {
       stopActiveVoiceSession()
@@ -732,41 +792,69 @@ class NodeRuntime(
       }
     operatorStatusText = "Connecting…"
     updateStatus()
-    val token = prefs.loadGatewayToken()
-    val bootstrapToken = prefs.loadGatewayBootstrapToken()
-    val password = prefs.loadGatewayPassword()
+    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
+  }
+
+  private fun connectWithAuth(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    reconnect: Boolean = false,
+  ) {
     val tls = connectionManager.resolveTlsParams(endpoint)
-    operatorSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildOperatorConnectOptions(),
-      tls,
-    )
+    val connectOperator =
+      shouldConnectOperatorSession(
+        auth.token,
+        auth.bootstrapToken,
+        auth.password,
+        loadStoredRoleDeviceToken("operator"),
+      )
+    if (!connectOperator) {
+      operatorConnected = false
+      operatorStatusText = "Offline"
+      operatorSession.disconnect()
+      updateStatus()
+    } else {
+      operatorSession.connect(
+        endpoint,
+        auth.token,
+        auth.bootstrapToken,
+        auth.password,
+        connectionManager.buildOperatorConnectOptions(),
+        tls,
+      )
+    }
     nodeSession.connect(
       endpoint,
-      token,
-      bootstrapToken,
-      password,
+      auth.token,
+      auth.bootstrapToken,
+      auth.password,
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    operatorSession.reconnect()
-    nodeSession.reconnect()
+    if (reconnect && connectOperator) {
+      operatorSession.reconnect()
+    }
+    if (reconnect) {
+      nodeSession.reconnect()
+    }
   }
 
-  fun connect(endpoint: GatewayEndpoint) {
+  private fun beginConnect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
       // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
-        val fp = probeGatewayTlsFingerprint(endpoint.host, endpoint.port) ?: run {
-          _statusText.value = "Failed: can't read TLS fingerprint"
+        val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
+        val fp = tlsProbe.fingerprintSha256 ?: run {
+          _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
           return@launch
         }
-        _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp)
+        _pendingGatewayTrust.value =
+          GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp, auth = auth)
       }
       return
     }
@@ -775,37 +863,48 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    val token = prefs.loadGatewayToken()
-    val bootstrapToken = prefs.loadGatewayBootstrapToken()
-    val password = prefs.loadGatewayPassword()
-    operatorSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildOperatorConnectOptions(),
-      tls,
-    )
-    nodeSession.connect(
-      endpoint,
-      token,
-      bootstrapToken,
-      password,
-      connectionManager.buildNodeConnectOptions(),
-      tls,
-    )
+    connectWithAuth(endpoint = endpoint, auth = auth)
+  }
+
+  fun connect(endpoint: GatewayEndpoint) {
+    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth())
+  }
+
+  fun connect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
+    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
+  }
+
+  internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth {
+    return explicitAuth
+      ?: GatewayConnectAuth(
+        token = prefs.loadGatewayToken(),
+        bootstrapToken = prefs.loadGatewayBootstrapToken(),
+        password = prefs.loadGatewayPassword(),
+      )
   }
 
   fun acceptGatewayTrustPrompt() {
     val prompt = _pendingGatewayTrust.value ?: return
     _pendingGatewayTrust.value = null
     prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
-    connect(prompt.endpoint)
+    beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
   }
 
   fun declineGatewayTrustPrompt() {
     _pendingGatewayTrust.value = null
     _statusText.value = "Offline"
+  }
+
+  private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String {
+    return when (failure) {
+      GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
+        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
+        "Failed: couldn't reach the secure gateway endpoint for this host."
+    }
   }
 
   private fun hasRecordAudioPermission(): Boolean {
@@ -823,6 +922,11 @@ class NodeRuntime(
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
+  }
+
+  private fun loadStoredRoleDeviceToken(role: String): String? {
+    val deviceId = identityStore.loadOrCreate().deviceId
+    return deviceAuthStore.loadToken(deviceId, role)
   }
 
   fun disconnect() {
@@ -904,6 +1008,10 @@ class NodeRuntime(
     }
   }
 
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
+    return a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
+  }
+
   fun loadChat(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
     chat.load(key)
@@ -933,6 +1041,14 @@ class NodeRuntime(
     chat.sendMessage(message = message, thinkingLevel = thinking, attachments = attachments)
   }
 
+  suspend fun sendChatAwaitAcceptance(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
+    return chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
+  }
+
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
@@ -956,9 +1072,7 @@ class NodeRuntime(
       val config = root?.get("config").asObjectOrNull()
       val ui = config?.get("ui").asObjectOrNull()
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      val sessionCfg = config?.get("session").asObjectOrNull()
-      val mainKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull())
-      applyMainSessionKey(mainKey)
+      syncMainSessionKey(gatewayDefaultAgentId)
 
       val parsed = parseHexColorArgb(raw)
       _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
@@ -991,7 +1105,7 @@ class NodeRuntime(
 
       gatewayDefaultAgentId = defaultAgentId.ifEmpty { null }
       gatewayAgents = agents
-      applyMainSessionKey(mainKey)
+      syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId)
       updateHomeCanvasState()
     } catch (_: Throwable) {
       // ignore
@@ -1150,6 +1264,20 @@ class NodeRuntime(
     }
   }
 
+}
+
+internal fun shouldConnectOperatorSession(
+  token: String?,
+  bootstrapToken: String?,
+  password: String?,
+  storedOperatorToken: String?,
+): Boolean {
+  return (
+    !token.isNullOrBlank() ||
+      !bootstrapToken.isNullOrBlank() ||
+      !password.isNullOrBlank() ||
+      !storedOperatorToken.isNullOrBlank()
+    )
 }
 
 private enum class HomeCanvasGatewayState {

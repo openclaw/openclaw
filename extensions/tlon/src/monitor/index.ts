@@ -27,6 +27,7 @@ import {
   applyTlonSettingsOverrides,
   buildTlonSettingsMigrations,
   mergeUniqueStrings,
+  shouldMigrateTlonSetting,
 } from "./settings-helpers.js";
 import {
   extractMessageText,
@@ -35,6 +36,7 @@ import {
   isBotMentioned,
   stripBotMention,
   isDmAllowed,
+  isGroupInviteAllowed,
   isSummarizationRequest,
   resolveAuthorizedMessageText,
   type ParsedCite,
@@ -179,13 +181,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
     for (const { key, fileValue, settingsValue } of migrations) {
-      // Only migrate if file has a value and settings store doesn't
-      const hasFileValue = Array.isArray(fileValue) ? fileValue.length > 0 : fileValue != null;
-      const hasSettingsValue = Array.isArray(settingsValue)
-        ? settingsValue.length > 0
-        : settingsValue != null;
-
-      if (hasFileValue && !hasSettingsValue) {
+      if (shouldMigrateTlonSetting(fileValue, settingsValue)) {
         try {
           await api!.poke({
             app: "settings",
@@ -1084,69 +1080,22 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         // during transitions. The authorization check handles access control.
       }
 
-      // Update DM allowlist
-      if (newSettings.dmAllowlist !== undefined) {
-        effectiveDmAllowlist = newSettings.dmAllowlist;
-        runtime.log?.(`[tlon] Settings: dmAllowlist updated to ${effectiveDmAllowlist.join(", ")}`);
-      }
-
-      // Update model signature setting
-      if (newSettings.showModelSig !== undefined) {
-        effectiveShowModelSig = newSettings.showModelSig;
-        runtime.log?.(`[tlon] Settings: showModelSig = ${effectiveShowModelSig}`);
-      }
-
-      // Update auto-accept DM invites setting
-      if (newSettings.autoAcceptDmInvites !== undefined) {
-        effectiveAutoAcceptDmInvites = newSettings.autoAcceptDmInvites;
-        runtime.log?.(`[tlon] Settings: autoAcceptDmInvites = ${effectiveAutoAcceptDmInvites}`);
-      }
-
-      // Update auto-accept group invites setting
-      if (newSettings.autoAcceptGroupInvites !== undefined) {
-        effectiveAutoAcceptGroupInvites = newSettings.autoAcceptGroupInvites;
-        runtime.log?.(
-          `[tlon] Settings: autoAcceptGroupInvites = ${effectiveAutoAcceptGroupInvites}`,
-        );
-      }
-
-      // Update group invite allowlist
-      if (newSettings.groupInviteAllowlist !== undefined) {
-        effectiveGroupInviteAllowlist = newSettings.groupInviteAllowlist;
-        runtime.log?.(
-          `[tlon] Settings: groupInviteAllowlist updated to ${effectiveGroupInviteAllowlist.join(", ")}`,
-        );
-      }
-
-      if (newSettings.defaultAuthorizedShips !== undefined) {
-        runtime.log?.(
-          `[tlon] Settings: defaultAuthorizedShips updated to ${(newSettings.defaultAuthorizedShips || []).join(", ")}`,
-        );
-      }
-
-      // Update auto-discover channels
-      if (newSettings.autoDiscoverChannels !== undefined) {
-        effectiveAutoDiscoverChannels = newSettings.autoDiscoverChannels;
-        runtime.log?.(`[tlon] Settings: autoDiscoverChannels = ${effectiveAutoDiscoverChannels}`);
-      }
-
-      // Update owner ship
-      if (newSettings.ownerShip !== undefined) {
-        effectiveOwnerShip = newSettings.ownerShip
-          ? normalizeShip(newSettings.ownerShip)
-          : account.ownerShip
-            ? normalizeShip(account.ownerShip)
-            : null;
-        runtime.log?.(`[tlon] Settings: ownerShip = ${effectiveOwnerShip}`);
-      }
-
-      // Update pending approvals
-      if (newSettings.pendingApprovals !== undefined) {
-        pendingApprovals = newSettings.pendingApprovals;
-        runtime.log?.(
-          `[tlon] Settings: pendingApprovals updated (${pendingApprovals.length} items)`,
-        );
-      }
+      // Recompute effective settings from the latest snapshot so deletions
+      // cleanly fall back to file config and empty arrays remain authoritative.
+      ({
+        effectiveDmAllowlist,
+        effectiveShowModelSig,
+        effectiveAutoAcceptDmInvites,
+        effectiveAutoAcceptGroupInvites,
+        effectiveGroupInviteAllowlist,
+        effectiveAutoDiscoverChannels,
+        effectiveOwnerShip,
+        pendingApprovals,
+      } = applyTlonSettingsOverrides({
+        account,
+        currentSettings: newSettings,
+        log: (message) => runtime.log?.(message),
+      }));
     });
 
     try {
@@ -1300,8 +1249,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           const inviterShip = validInvite.from;
-          const normalizedInviter = normalizeShip(inviterShip);
-
           // Owner invites are always accepted
           if (isOwner(inviterShip)) {
             try {
@@ -1337,12 +1284,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           }
 
           // Check if inviter is on allowlist
-          const isAllowed =
-            effectiveGroupInviteAllowlist.length > 0
-              ? effectiveGroupInviteAllowlist
-                  .map((s) => normalizeShip(s))
-                  .some((s) => s === normalizedInviter)
-              : false; // Fail-safe: empty allowlist means deny
+          const isAllowed = isGroupInviteAllowed(inviterShip, effectiveGroupInviteAllowlist);
 
           if (!isAllowed) {
             // If owner is configured, queue approval

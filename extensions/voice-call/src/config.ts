@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
 import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
 
@@ -63,21 +63,6 @@ export const PlivoConfigSchema = z
   })
   .strict();
 export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
-
-// -----------------------------------------------------------------------------
-// STT/TTS Configuration
-// -----------------------------------------------------------------------------
-
-export const SttConfigSchema = z
-  .object({
-    /** STT provider (currently only OpenAI supported) */
-    provider: z.literal("openai").default("openai"),
-    /** Whisper model to use */
-    model: z.string().min(1).default("whisper-1"),
-  })
-  .strict()
-  .default({ provider: "openai", model: "whisper-1" });
-export type SttConfig = z.infer<typeof SttConfigSchema>;
 
 export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema };
 export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
@@ -196,25 +181,70 @@ export const OutboundConfigSchema = z
 export type OutboundConfig = z.infer<typeof OutboundConfigSchema>;
 
 // -----------------------------------------------------------------------------
-// Streaming Configuration (OpenAI Realtime STT)
+// Realtime Voice Configuration
+// -----------------------------------------------------------------------------
+
+export const RealtimeToolSchema = z
+  .object({
+    type: z.literal("function"),
+    name: z.string().min(1),
+    description: z.string(),
+    parameters: z.object({
+      type: z.literal("object"),
+      properties: z.record(z.string(), z.unknown()),
+      required: z.array(z.string()).optional(),
+    }),
+  })
+  .strict();
+export type RealtimeToolConfig = z.infer<typeof RealtimeToolSchema>;
+
+export const VoiceCallRealtimeProvidersConfigSchema = z
+  .record(z.string(), z.record(z.string(), z.unknown()))
+  .default({});
+export type VoiceCallRealtimeProvidersConfig = z.infer<
+  typeof VoiceCallRealtimeProvidersConfigSchema
+>;
+
+export const VoiceCallStreamingProvidersConfigSchema = z
+  .record(z.string(), z.record(z.string(), z.unknown()))
+  .default({});
+export type VoiceCallStreamingProvidersConfig = z.infer<
+  typeof VoiceCallStreamingProvidersConfigSchema
+>;
+
+export const VoiceCallRealtimeConfigSchema = z
+  .object({
+    /** Enable realtime voice-to-voice mode. */
+    enabled: z.boolean().default(false),
+    /** Provider id from registered realtime voice providers. */
+    provider: z.string().min(1).optional(),
+    /** Optional override for the local WebSocket route path. */
+    streamPath: z.string().min(1).optional(),
+    /** System instructions passed to the realtime provider. */
+    instructions: z.string().optional(),
+    /** Tool definitions exposed to the realtime provider. */
+    tools: z.array(RealtimeToolSchema).default([]),
+    /** Provider-owned raw config blobs keyed by provider id. */
+    providers: VoiceCallRealtimeProvidersConfigSchema,
+  })
+  .strict()
+  .default({ enabled: false, tools: [], providers: {} });
+export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
+
+// -----------------------------------------------------------------------------
+// Streaming Configuration (Realtime Transcription)
 // -----------------------------------------------------------------------------
 
 export const VoiceCallStreamingConfigSchema = z
   .object({
     /** Enable real-time audio streaming (requires WebSocket support) */
     enabled: z.boolean().default(false),
-    /** STT provider for real-time transcription */
-    sttProvider: z.enum(["openai-realtime"]).default("openai-realtime"),
-    /** OpenAI API key for Realtime API (uses OPENAI_API_KEY env if not set) */
-    openaiApiKey: z.string().min(1).optional(),
-    /** OpenAI transcription model (default: gpt-4o-transcribe) */
-    sttModel: z.string().min(1).default("gpt-4o-transcribe"),
-    /** VAD silence duration in ms before considering speech ended */
-    silenceDurationMs: z.number().int().positive().default(800),
-    /** VAD threshold 0-1 (higher = less sensitive) */
-    vadThreshold: z.number().min(0).max(1).default(0.5),
+    /** Provider id from registered realtime transcription providers. */
+    provider: z.string().min(1).optional(),
     /** WebSocket path for media stream connections */
     streamPath: z.string().min(1).default("/voice/stream"),
+    /** Provider-owned raw config blobs keyed by provider id. */
+    providers: VoiceCallStreamingProvidersConfigSchema,
     /**
      * Close unauthenticated media stream sockets if no valid `start` frame arrives in time.
      * Protects against pre-auth idle connection hold attacks.
@@ -230,11 +260,8 @@ export const VoiceCallStreamingConfigSchema = z
   .strict()
   .default({
     enabled: false,
-    sttProvider: "openai-realtime",
-    sttModel: "gpt-4o-transcribe",
-    silenceDurationMs: 800,
-    vadThreshold: 0.5,
     streamPath: "/voice/stream",
+    providers: {},
     preStartTimeoutMs: 5000,
     maxPendingConnections: 32,
     maxPendingConnectionsPerIp: 4,
@@ -319,14 +346,14 @@ export const VoiceCallConfigSchema = z
     /** Real-time audio streaming configuration */
     streaming: VoiceCallStreamingConfigSchema,
 
+    /** Realtime voice-to-voice configuration */
+    realtime: VoiceCallRealtimeConfigSchema,
+
     /** Public webhook URL override (if set, bypasses tunnel auto-detection) */
     publicUrl: z.string().url().optional(),
 
     /** Skip webhook signature verification (development only, NOT for production) */
     skipSignatureVerification: z.boolean().default(false),
-
-    /** STT configuration */
-    stt: SttConfigSchema,
 
     /** TTS override (deep-merges with core messages.tts) */
     tts: TtsConfigSchema,
@@ -334,8 +361,8 @@ export const VoiceCallConfigSchema = z
     /** Store path for call logs */
     store: z.string().optional(),
 
-    /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
-    responseModel: z.string().default("openai/gpt-4o-mini"),
+    /** Optional model override for generating voice responses. */
+    responseModel: z.string().optional(),
 
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),
@@ -364,6 +391,29 @@ function cloneDefaultVoiceCallConfig(): VoiceCallConfig {
   return structuredClone(DEFAULT_VOICE_CALL_CONFIG);
 }
 
+function normalizeWebhookLikePath(pathname: string): string {
+  const trimmed = pathname.trim();
+  if (!trimmed) {
+    return "/";
+  }
+  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  if (prefixed === "/") {
+    return prefixed;
+  }
+  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
+}
+
+function defaultRealtimeStreamPathForServePath(servePath: string): string {
+  const normalized = normalizeWebhookLikePath(servePath);
+  if (normalized.endsWith("/webhook")) {
+    return `${normalized.slice(0, -"/webhook".length)}/stream/realtime`;
+  }
+  if (normalized === "/") {
+    return "/voice/stream/realtime";
+  }
+  return `${normalized}/stream/realtime`;
+}
+
 function normalizeVoiceCallTtsConfig(
   defaults: VoiceCallTtsConfig,
   overrides: DeepPartial<NonNullable<VoiceCallTtsConfig>> | undefined,
@@ -375,14 +425,36 @@ function normalizeVoiceCallTtsConfig(
   return TtsConfigSchema.parse(deepMergeDefined(defaults ?? {}, overrides ?? {}));
 }
 
+function sanitizeVoiceCallProviderConfigs(
+  value: Record<string, Record<string, unknown> | undefined> | undefined,
+): Record<string, Record<string, unknown>> {
+  if (!value) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
+    ),
+  );
+}
+
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
+  const serve = { ...defaults.serve, ...config.serve };
+  const streamingProvider = config.streaming?.provider;
+  const streamingProviders = sanitizeVoiceCallProviderConfigs(
+    config.streaming?.providers ?? defaults.streaming.providers,
+  );
+  const realtimeProvider = config.realtime?.provider ?? defaults.realtime.provider;
+  const realtimeProviders = sanitizeVoiceCallProviderConfigs(
+    config.realtime?.providers ?? defaults.realtime.providers,
+  );
   return {
     ...defaults,
     ...config,
     allowFrom: config.allowFrom ?? defaults.allowFrom,
     outbound: { ...defaults.outbound, ...config.outbound },
-    serve: { ...defaults.serve, ...config.serve },
+    serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
     tunnel: { ...defaults.tunnel, ...config.tunnel },
     webhookSecurity: {
@@ -392,8 +464,23 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
       trustedProxyIPs:
         config.webhookSecurity?.trustedProxyIPs ?? defaults.webhookSecurity.trustedProxyIPs,
     },
-    streaming: { ...defaults.streaming, ...config.streaming },
-    stt: { ...defaults.stt, ...config.stt },
+    streaming: {
+      ...defaults.streaming,
+      ...config.streaming,
+      provider: streamingProvider,
+      providers: streamingProviders,
+    },
+    realtime: {
+      ...defaults.realtime,
+      ...config.realtime,
+      provider: realtimeProvider,
+      streamPath:
+        config.realtime?.streamPath ??
+        defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
+      tools:
+        (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
+      providers: realtimeProviders,
+    },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
 }
@@ -514,6 +601,24 @@ export function validateProviderConfig(config: VoiceCallConfig): {
         "plugins.entries.voice-call.config.plivo.authToken is required (or set PLIVO_AUTH_TOKEN env)",
       );
     }
+  }
+
+  if (config.realtime.enabled && config.inboundPolicy === "disabled") {
+    errors.push(
+      'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
+    );
+  }
+
+  if (config.realtime.enabled && config.streaming.enabled) {
+    errors.push(
+      "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
+    );
+  }
+
+  if (config.realtime.enabled && config.provider && config.provider !== "twilio") {
+    errors.push(
+      'plugins.entries.voice-call.config.provider must be "twilio" when realtime.enabled is true',
+    );
   }
 
   return { valid: errors.length === 0, errors };

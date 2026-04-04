@@ -65,18 +65,14 @@ Notes:
     entries: {
       firecrawl: {
         enabled: true,
-      },
-    },
-  },
-  tools: {
-    web: {
-      fetch: {
-        firecrawl: {
-          apiKey: "FIRECRAWL_API_KEY_HERE",
-          baseUrl: "https://api.firecrawl.dev",
-          onlyMainContent: true,
-          maxAgeMs: 172800000,
-          timeoutSeconds: 60,
+        config: {
+          webFetch: {
+            apiKey: "FIRECRAWL_API_KEY_HERE",
+            baseUrl: "https://api.firecrawl.dev",
+            onlyMainContent: true,
+            maxAgeMs: 172800000,
+            timeoutSeconds: 60,
+          },
         },
       },
     },
@@ -87,10 +83,11 @@ Notes:
 Notes:
 
 - `firecrawl.enabled` defaults to `true` unless explicitly set to `false`.
-- Firecrawl fallback attempts run only when an API key is available (`tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`).
+- Firecrawl fallback attempts run only when an API key is available (`plugins.entries.firecrawl.config.webFetch.apiKey` or `FIRECRAWL_API_KEY`).
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
+- Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 
-`firecrawl_scrape` reuses the same `tools.web.fetch.firecrawl.*` settings and env vars.
+`firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars.
 
 ## Firecrawl plugin tools
 
@@ -137,4 +134,8 @@ than basic-only scraping.
 2. Firecrawl (if configured)
 3. Basic HTML cleanup (last fallback)
 
-See [Web tools](/tools/web) for the full web tool setup.
+## Related
+
+- [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Web Fetch](/tools/web-fetch) -- web_fetch tool with Firecrawl fallback
+- [Tavily](/tools/tavily) -- search + extract tools

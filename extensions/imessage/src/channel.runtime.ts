@@ -1,14 +1,14 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
-import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "../runtime-api.js";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
 import type { ResolvedIMessageAccount } from "./accounts.js";
+import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "./channel-api.js";
+import type { ChannelPlugin } from "./channel-api.js";
 import { monitorIMessageProvider } from "./monitor.js";
+import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { probeIMessage } from "./probe.js";
-import { getIMessageRuntime } from "./runtime.js";
+import { sendMessageIMessage } from "./send.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 
-type IMessageSendFn = ReturnType<
-  typeof getIMessageRuntime
->["channel"]["imessage"]["sendMessageIMessage"];
+type IMessageSendFn = typeof sendMessageIMessage;
 
 export async function sendIMessageOutbound(params: {
   cfg: Parameters<typeof import("./accounts.js").resolveIMessageAccount>[0]["cfg"];
@@ -21,8 +21,9 @@ export async function sendIMessageOutbound(params: {
   replyToId?: string;
 }) {
   const send =
-    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage") ??
-    getIMessageRuntime().channel.imessage.sendMessageIMessage;
+    resolveOutboundSendDep<IMessageSendFn>(params.deps, "imessage", {
+      legacyKeys: IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+    }) ?? sendMessageIMessage;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
     resolveChannelLimitMb: ({ cfg, accountId }) =>
@@ -41,20 +42,23 @@ export async function sendIMessageOutbound(params: {
 }
 
 export async function notifyIMessageApproval(id: string): Promise<void> {
-  await getIMessageRuntime().channel.imessage.sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
+  await sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
 }
 
-export async function probeIMessageAccount(timeoutMs?: number) {
-  return await probeIMessage(timeoutMs);
+export async function probeIMessageAccount(params?: {
+  timeoutMs?: number;
+  cliPath?: string;
+  dbPath?: string;
+}) {
+  return await probeIMessage(params?.timeoutMs, {
+    cliPath: params?.cliPath,
+    dbPath: params?.dbPath,
+  });
 }
 
 export async function startIMessageGatewayAccount(
   ctx: Parameters<
-    NonNullable<
-      NonNullable<
-        import("../runtime-api.js").ChannelPlugin<ResolvedIMessageAccount>["gateway"]
-      >["startAccount"]
-    >
+    NonNullable<NonNullable<ChannelPlugin<ResolvedIMessageAccount>["gateway"]>["startAccount"]>
   >[0],
 ) {
   const account = ctx.account;

@@ -1,10 +1,13 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { InteractiveReply } from "../interactive/payload.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { TypingController } from "./reply/typing.js";
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  /** Source assistant message index from the upstream stream, when available. */
+  assistantMessageIndex?: number;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
@@ -28,6 +31,8 @@ export type GetReplyOptions = {
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */
   images?: ImageContent[];
+  /** Original inline/offloaded attachment order for inbound images. */
+  imageOrder?: PromptImageOrderEntry[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
   onReplyStart?: () => Promise<void> | void;
@@ -51,6 +56,10 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
+  /** Called synchronously when a block reply is logically emitted, before async
+   * delivery drains. Useful for channels that need to rotate preview state at
+   * block boundaries without waiting for transport acks. */
+  onBlockReplyQueued?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
@@ -91,6 +100,29 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Marks this payload as a compaction status notice (start/end).
+   *  Should be excluded from TTS transcript accumulation so compaction
+   *  status lines are not synthesised into the spoken assistant reply. */
+  isCompactionNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
+
+export type ReplyPayloadMetadata = {
+  assistantMessageIndex?: number;
+};
+
+const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();
+
+export function setReplyPayloadMetadata<T extends object>(
+  payload: T,
+  metadata: ReplyPayloadMetadata,
+): T {
+  const previous = replyPayloadMetadata.get(payload);
+  replyPayloadMetadata.set(payload, { ...previous, ...metadata });
+  return payload;
+}
+
+export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
+  return replyPayloadMetadata.get(payload);
+}

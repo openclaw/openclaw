@@ -1,13 +1,14 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { registerDaemonCli } from "./daemon-cli.js";
 
-const callGateway = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+const probeGatewayStatus = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
 }));
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
+const serviceStage = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
@@ -33,10 +34,31 @@ const buildGatewayInstallPlan = vi.fn(
   }),
 );
 
-const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mocks = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn(),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  };
+  return { runtimeLogs, defaultRuntime };
+});
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts),
+const { runtimeLogs } = mocks;
+
+vi.mock("./daemon-cli/probe.js", () => ({
+  probeGatewayStatus: (opts: unknown) => probeGatewayStatus(opts),
 }));
 
 vi.mock("../gateway/probe-auth.js", () => ({
@@ -48,14 +70,16 @@ vi.mock("../daemon/program-args.js", () => ({
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
 }));
 
-vi.mock("../daemon/service.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../daemon/service.js")>();
+vi.mock("../daemon/service.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js");
   return {
     ...actual,
     resolveGatewayService: () => ({
       label: "LaunchAgent",
       loadedText: "loaded",
       notLoadedText: "not loaded",
+      stage: serviceStage,
       install: serviceInstall,
       uninstall: serviceUninstall,
       stop: serviceStop,
@@ -81,8 +105,9 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
 
-vi.mock("../runtime.js", () => ({
-  defaultRuntime,
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
@@ -98,7 +123,6 @@ vi.mock("./progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
 
-const { registerDaemonCli } = await import("./daemon-cli.js");
 let daemonProgram: Command;
 
 function createDaemonProgram() {
@@ -142,20 +166,22 @@ describe("daemon-cli coverage", () => {
   });
 
   it("probes gateway status by default", async () => {
-    resetRuntimeCapture();
-    callGateway.mockClear();
+    runtimeLogs.length = 0;
+    probeGatewayStatus.mockClear();
 
     await runDaemonCommand(["daemon", "status"]);
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
+    expect(probeGatewayStatus).toHaveBeenCalledTimes(1);
+    expect(probeGatewayStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
   });
 
   it("derives probe URL from service args + env (json)", async () => {
-    resetRuntimeCapture();
-    callGateway.mockClear();
+    runtimeLogs.length = 0;
+    probeGatewayStatus.mockClear();
     inspectPortUsage.mockClear();
 
     serviceReadCommand.mockResolvedValueOnce({
@@ -171,10 +197,9 @@ describe("daemon-cli coverage", () => {
 
     await runDaemonCommand(["daemon", "status", "--json"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(probeGatewayStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:19001",
-        method: "status",
       }),
     );
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);
@@ -204,7 +229,7 @@ describe("daemon-cli coverage", () => {
   });
 
   it("installs the daemon (json output)", async () => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceInstall.mockClear();
 
@@ -230,7 +255,7 @@ describe("daemon-cli coverage", () => {
   });
 
   it("starts and stops daemon (json output)", async () => {
-    resetRuntimeCapture();
+    runtimeLogs.length = 0;
     serviceRestart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);

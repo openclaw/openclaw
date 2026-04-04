@@ -1,19 +1,27 @@
 import {
-  assertOkOrThrowHttpError,
   describeImageWithModel,
   describeImagesWithModel,
-  normalizeBaseUrl,
-  postJsonRequest,
   type AudioTranscriptionRequest,
   type AudioTranscriptionResult,
   type MediaUnderstandingProvider,
   type VideoDescriptionRequest,
   type VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
-import { normalizeGoogleModelId, parseGeminiAuth } from "./runtime-api.js";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  resolveProviderHttpRequestConfig,
+  type ProviderRequestTransportOverrides,
+} from "openclaw/plugin-sdk/provider-http";
+import {
+  DEFAULT_GOOGLE_API_BASE_URL,
+  normalizeGoogleApiBaseUrl,
+  normalizeGoogleModelId,
+  parseGeminiAuth,
+} from "./runtime-api.js";
 
-export const DEFAULT_GOOGLE_AUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-export const DEFAULT_GOOGLE_VIDEO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+export const DEFAULT_GOOGLE_AUDIO_BASE_URL = DEFAULT_GOOGLE_API_BASE_URL;
+export const DEFAULT_GOOGLE_VIDEO_BASE_URL = DEFAULT_GOOGLE_API_BASE_URL;
 const DEFAULT_GOOGLE_AUDIO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_VIDEO_MODEL = "gemini-3-flash-preview";
 const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
@@ -25,6 +33,7 @@ async function generateGeminiInlineDataText(params: {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   prompt?: string;
   timeoutMs: number;
@@ -37,8 +46,6 @@ async function generateGeminiInlineDataText(params: {
   missingTextError: string;
 }): Promise<{ text: string; model: string }> {
   const fetchFn = params.fetchFn ?? fetch;
-  const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
-  const allowPrivate = Boolean(params.baseUrl?.trim());
   const model = (() => {
     const trimmed = params.model?.trim();
     if (!trimmed) {
@@ -46,15 +53,20 @@ async function generateGeminiInlineDataText(params: {
     }
     return normalizeGoogleModelId(trimmed);
   })();
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+    resolveProviderHttpRequestConfig({
+      baseUrl: normalizeGoogleApiBaseUrl(params.baseUrl ?? params.defaultBaseUrl),
+      defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
+      allowPrivateNetwork: Boolean(params.baseUrl?.trim()),
+      headers: params.headers,
+      request: params.request,
+      defaultHeaders: parseGeminiAuth(params.apiKey).headers,
+      provider: "google",
+      api: "google-generative-ai",
+      capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
+      transport: "media-understanding",
+    });
   const url = `${baseUrl}/models/${model}:generateContent`;
-
-  const authHeaders = parseGeminiAuth(params.apiKey);
-  const headers = new Headers(params.headers);
-  for (const [key, value] of Object.entries(authHeaders.headers)) {
-    if (!headers.has(key)) {
-      headers.set(key, value);
-    }
-  }
 
   const prompt = (() => {
     const trimmed = params.prompt?.trim();
@@ -84,7 +96,8 @@ async function generateGeminiInlineDataText(params: {
     body,
     timeoutMs: params.timeoutMs,
     fetchFn,
-    allowPrivateNetwork: allowPrivate,
+    allowPrivateNetwork,
+    dispatcherPolicy,
   });
 
   try {

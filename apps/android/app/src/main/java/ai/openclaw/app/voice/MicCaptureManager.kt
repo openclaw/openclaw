@@ -14,11 +14,13 @@ import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -52,6 +54,7 @@ class MicCaptureManager(
     private const val speechMinSessionMs = 30_000L
     private const val speechCompleteSilenceMs = 1_500L
     private const val speechPossibleSilenceMs = 900L
+    private const val transcriptIdleFlushMs = 1_600L
     private const val maxConversationEntries = 40
     private const val pendingRunTimeoutMs = 45_000L
   }
@@ -87,8 +90,7 @@ class MicCaptureManager(
   val isSending: StateFlow<Boolean> = _isSending
 
   private val messageQueue = ArrayDeque<String>()
-  private val sessionSegments = mutableListOf<String>()
-  private var lastFinalSegment: String? = null
+  private var flushedPartialTranscript: String? = null
   private var pendingRunId: String? = null
   private var pendingAssistantEntryId: String? = null
   private var gatewayConnected = false
@@ -96,13 +98,30 @@ class MicCaptureManager(
   private var recognizer: SpeechRecognizer? = null
   private var restartJob: Job? = null
   private var drainJob: Job? = null
+  private var transcriptFlushJob: Job? = null
   private var pendingRunTimeoutJob: Job? = null
   private var stopRequested = false
+  private val ttsPauseLock = Any()
+  private var ttsPauseDepth = 0
+  private var resumeMicAfterTts = false
 
   fun setMicEnabled(enabled: Boolean) {
     if (_micEnabled.value == enabled) return
     _micEnabled.value = enabled
     if (enabled) {
+      val pausedForTts =
+        synchronized(ttsPauseLock) {
+          if (ttsPauseDepth > 0) {
+            resumeMicAfterTts = true
+            true
+          } else {
+            false
+          }
+        }
+      if (pausedForTts) {
+        _statusText.value = if (_isSending.value) "Speaking · waiting for reply" else "Speaking…"
+        return
+      }
       start()
       sendQueuedIfIdle()
     } else {
@@ -115,15 +134,66 @@ class MicCaptureManager(
         stop()
         // Capture any partial transcript that didn't get a final result from the recognizer
         val partial = _liveTranscript.value?.trim().orEmpty()
-        if (partial.isNotEmpty() && sessionSegments.isEmpty()) {
-          sessionSegments.add(partial)
+        if (partial.isNotEmpty()) {
+          queueRecognizedMessage(partial)
         }
-        flushSessionToQueue()
         drainJob = null
         _micCooldown.value = false
         sendQueuedIfIdle()
       }
     }
+  }
+
+  suspend fun pauseForTts() {
+    val shouldPause =
+      synchronized(ttsPauseLock) {
+        ttsPauseDepth += 1
+        if (ttsPauseDepth > 1) return@synchronized false
+        resumeMicAfterTts = _micEnabled.value
+        val active = resumeMicAfterTts || recognizer != null || _isListening.value
+        if (!active) return@synchronized false
+        stopRequested = true
+        restartJob?.cancel()
+        restartJob = null
+        transcriptFlushJob?.cancel()
+        transcriptFlushJob = null
+        _isListening.value = false
+        _inputLevel.value = 0f
+        _liveTranscript.value = null
+        _statusText.value = if (_isSending.value) "Speaking · waiting for reply" else "Speaking…"
+        true
+      }
+    if (!shouldPause) return
+    withContext(Dispatchers.Main) {
+      recognizer?.cancel()
+      recognizer?.destroy()
+      recognizer = null
+    }
+  }
+
+  suspend fun resumeAfterTts() {
+    val shouldResume =
+      synchronized(ttsPauseLock) {
+        if (ttsPauseDepth == 0) return@synchronized false
+        ttsPauseDepth -= 1
+        if (ttsPauseDepth > 0) return@synchronized false
+        val resume = resumeMicAfterTts && _micEnabled.value
+        resumeMicAfterTts = false
+        if (!resume) {
+          _statusText.value =
+            when {
+              _micEnabled.value && _isSending.value -> "Listening · sending queued voice"
+              _micEnabled.value -> "Listening"
+              _isSending.value -> "Mic off · sending…"
+              else -> "Mic off"
+            }
+        }
+        resume
+      }
+    if (!shouldResume) return
+    stopRequested = false
+    start()
+    sendQueuedIfIdle()
   }
 
   fun onGatewayConnectionChanged(connected: Boolean) {
@@ -132,6 +202,11 @@ class MicCaptureManager(
       sendQueuedIfIdle()
       return
     }
+    pendingRunTimeoutJob?.cancel()
+    pendingRunTimeoutJob = null
+    pendingRunId = null
+    pendingAssistantEntryId = null
+    _isSending.value = false
     if (messageQueue.isNotEmpty()) {
       _statusText.value = queuedWaitingStatus()
     }
@@ -210,6 +285,8 @@ class MicCaptureManager(
     stopRequested = true
     restartJob?.cancel()
     restartJob = null
+    transcriptFlushJob?.cancel()
+    transcriptFlushJob = null
     _isListening.value = false
     _statusText.value = if (_isSending.value) "Mic off · sending…" else "Mic off"
     _inputLevel.value = 0f
@@ -263,23 +340,30 @@ class MicCaptureManager(
       }
   }
 
-  private fun flushSessionToQueue() {
-    // Add sentence-ending punctuation between recognizer segments to avoid run-on text
-    val message = sessionSegments.joinToString(". ") { segment ->
-      val trimmed = segment.trimEnd()
-      if (trimmed.isNotEmpty() && trimmed.last() in ".!?,;:") trimmed else trimmed
-    }.trim().let { if (it.isNotEmpty() && it.last() !in ".!?") "$it." else it }
-    sessionSegments.clear()
+  private fun queueRecognizedMessage(text: String) {
+    val message = text.trim()
     _liveTranscript.value = null
-    lastFinalSegment = null
     if (message.isEmpty()) return
-
     appendConversation(
       role = VoiceConversationRole.User,
       text = message,
     )
     messageQueue.addLast(message)
     publishQueue()
+  }
+
+  private fun scheduleTranscriptFlush(expectedText: String) {
+    transcriptFlushJob?.cancel()
+    transcriptFlushJob =
+      scope.launch {
+        delay(transcriptIdleFlushMs)
+        if (!_micEnabled.value || _isSending.value) return@launch
+        val current = _liveTranscript.value?.trim().orEmpty()
+        if (current.isEmpty() || current != expectedText) return@launch
+        flushedPartialTranscript = current
+        queueRecognizedMessage(current)
+        sendQueuedIfIdle()
+      }
   }
 
   private fun publishQueue() {
@@ -436,19 +520,12 @@ class MicCaptureManager(
     }
   }
 
-  private fun onFinalTranscript(text: String) {
-    val trimmed = text.trim()
-    if (trimmed.isEmpty()) return
-    _liveTranscript.value = trimmed
-    if (lastFinalSegment == trimmed) return
-    lastFinalSegment = trimmed
-    sessionSegments.add(trimmed)
-  }
-
   private fun disableMic(status: String) {
     stopRequested = true
     restartJob?.cancel()
     restartJob = null
+    transcriptFlushJob?.cancel()
+    transcriptFlushJob = null
     _micEnabled.value = false
     _isListening.value = false
     _inputLevel.value = 0f
@@ -546,11 +623,18 @@ class MicCaptureManager(
       }
 
       override fun onResults(results: Bundle?) {
+        transcriptFlushJob?.cancel()
+        transcriptFlushJob = null
         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().firstOrNull()
         if (!text.isNullOrBlank()) {
-          onFinalTranscript(text)
-          // Don't auto-send on silence — accumulate transcript.
-          // Send happens when mic is toggled off (setMicEnabled(false)).
+          val trimmed = text.trim()
+          if (trimmed != flushedPartialTranscript) {
+            queueRecognizedMessage(trimmed)
+            sendQueuedIfIdle()
+          } else {
+            flushedPartialTranscript = null
+            _liveTranscript.value = null
+          }
         }
         scheduleRestart()
       }
@@ -558,7 +642,9 @@ class MicCaptureManager(
       override fun onPartialResults(partialResults: Bundle?) {
         val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().firstOrNull()
         if (!text.isNullOrBlank()) {
-          _liveTranscript.value = text.trim()
+          val trimmed = text.trim()
+          _liveTranscript.value = trimmed
+          scheduleTranscriptFlush(trimmed)
         }
       }
 

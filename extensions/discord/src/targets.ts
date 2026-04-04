@@ -1,4 +1,3 @@
-import type { DirectoryConfigParams } from "openclaw/plugin-sdk/channel-runtime";
 import {
   buildMessagingTarget,
   parseMentionPrefixOrAtUserTarget,
@@ -6,7 +5,9 @@ import {
   type MessagingTarget,
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
-} from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-targets";
+import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
+import { resolveDiscordAccount } from "./accounts.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
 import { listDiscordDirectoryPeersLive } from "./directory-live.js";
 
@@ -100,8 +101,12 @@ export async function resolveDiscordTarget(
     if (match && match.kind === "user") {
       // Extract user ID from the directory entry (format: "user:<id>")
       const userId = match.id.replace(/^user:/, "");
-      rememberDiscordDirectoryUser({
+      const resolvedAccountId = resolveDiscordAccount({
+        cfg: options.cfg,
         accountId: options.accountId,
+      }).accountId;
+      rememberDiscordDirectoryUser({
+        accountId: resolvedAccountId,
         userId,
         handles: [trimmed, match.name, match.handle],
       });

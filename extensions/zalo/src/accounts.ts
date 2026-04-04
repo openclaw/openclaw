@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveZaloToken } from "./token.js";
@@ -10,22 +13,15 @@ const { listAccountIds: listZaloAccountIds, resolveDefaultAccountId: resolveDefa
   createAccountListHelpers("zalo");
 export { listZaloAccountIds, resolveDefaultZaloAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): ZaloAccountConfig | undefined {
-  const accounts = (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as ZaloAccountConfig | undefined;
-}
-
 function mergeZaloAccountConfig(cfg: OpenClawConfig, accountId: string): ZaloAccountConfig {
-  const raw = (cfg.channels?.zalo ?? {}) as ZaloConfig;
-  const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<ZaloAccountConfig>({
+    channelConfig: cfg.channels?.zalo as ZaloAccountConfig | undefined,
+    accounts: (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts as
+      | Record<string, Partial<ZaloAccountConfig>>
+      | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+  });
 }
 
 export function resolveZaloAccount(params: {
@@ -33,7 +29,9 @@ export function resolveZaloAccount(params: {
   accountId?: string | null;
   allowUnresolvedSecretRef?: boolean;
 }): ResolvedZaloAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? (params.cfg.channels?.zalo as ZaloConfig | undefined)?.defaultAccount,
+  );
   const baseEnabled = (params.cfg.channels?.zalo as ZaloConfig | undefined)?.enabled !== false;
   const merged = mergeZaloAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;

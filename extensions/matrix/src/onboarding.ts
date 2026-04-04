@@ -1,5 +1,8 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { type ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+import {
+  type ChannelSetupDmPolicy,
+  type ChannelSetupWizardAdapter,
+} from "openclaw/plugin-sdk/setup";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
@@ -9,10 +12,10 @@ import {
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
 import {
-  resolveMatrixEnvAuthReadiness,
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
 } from "./matrix/client.js";
+import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import {
   resolveMatrixConfigFieldPath,
   resolveMatrixConfigPath,
@@ -24,6 +27,7 @@ import type { DmPolicy } from "./runtime-api.js";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  hasConfiguredSecretInput,
   isPrivateOrLoopbackHost,
   mergeAllowFromEntries,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -33,58 +37,9 @@ import {
   type RuntimeEnv,
   type WizardPrompter,
 } from "./runtime-api.js";
-import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
-
-type MatrixOnboardingStatus = {
-  channel: typeof channel;
-  configured: boolean;
-  statusLines: string[];
-  selectionHint?: string;
-  quickstartScore?: number;
-};
-
-type MatrixAccountOverrides = Partial<Record<typeof channel, string>>;
-
-type MatrixOnboardingConfigureContext = {
-  cfg: CoreConfig;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  options?: unknown;
-  forceAllowFrom: boolean;
-  accountOverrides: MatrixAccountOverrides;
-  shouldPromptAccountIds: boolean;
-};
-
-type MatrixOnboardingInteractiveContext = MatrixOnboardingConfigureContext & {
-  configured: boolean;
-  label?: string;
-};
-
-type MatrixOnboardingAdapter = {
-  channel: typeof channel;
-  getStatus: (ctx: {
-    cfg: CoreConfig;
-    options?: unknown;
-    accountOverrides: MatrixAccountOverrides;
-  }) => Promise<MatrixOnboardingStatus>;
-  configure: (
-    ctx: MatrixOnboardingConfigureContext,
-  ) => Promise<{ cfg: CoreConfig; accountId?: string }>;
-  configureInteractive?: (
-    ctx: MatrixOnboardingInteractiveContext,
-  ) => Promise<{ cfg: CoreConfig; accountId?: string } | "skip">;
-  afterConfigWritten?: (ctx: {
-    previousCfg: CoreConfig;
-    cfg: CoreConfig;
-    accountId: string;
-    runtime: RuntimeEnv;
-  }) => Promise<void> | void;
-  dmPolicy?: ChannelSetupDmPolicy;
-  disable?: (cfg: CoreConfig) => CoreConfig;
-};
 
 function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): string {
   return normalizeAccountId(
@@ -385,23 +340,23 @@ async function runMatrixConfigure(params: {
     allowPrivateNetwork,
   });
 
-  let accessToken = existing.accessToken ?? "";
-  let password = typeof existing.password === "string" ? existing.password : "";
+  let accessToken = existing.accessToken;
+  let password = existing.password;
   let userId = existing.userId ?? "";
 
-  if (accessToken || password) {
+  if (hasConfiguredSecretInput(accessToken) || hasConfiguredSecretInput(password)) {
     const keep = await params.prompter.confirm({
       message: "Matrix credentials already configured. Keep them?",
       initialValue: true,
     });
     if (!keep) {
-      accessToken = "";
-      password = "";
+      accessToken = undefined;
+      password = undefined;
       userId = "";
     }
   }
 
-  if (!accessToken && !password) {
+  if (!hasConfiguredSecretInput(accessToken) && !hasConfiguredSecretInput(password)) {
     const authMode = await params.prompter.select({
       message: "Matrix auth method",
       options: [
@@ -417,6 +372,7 @@ async function runMatrixConfigure(params: {
           validate: (value) => (value?.trim() ? undefined : "Required"),
         }),
       ).trim();
+      password = undefined;
       userId = "";
     } else {
       userId = String(
@@ -444,6 +400,7 @@ async function runMatrixConfigure(params: {
           validate: (value) => (value?.trim() ? undefined : "Required"),
         }),
       ).trim();
+      accessToken = undefined;
     }
   }
 
@@ -466,8 +423,8 @@ async function runMatrixConfigure(params: {
       ? { allowPrivateNetwork: allowPrivateNetwork ? true : null }
       : {}),
     userId: userId || null,
-    accessToken: accessToken || null,
-    password: password || null,
+    accessToken: accessToken ?? null,
+    password: password ?? null,
     deviceName: deviceName || null,
     encryption: enableEncryption,
   });
@@ -554,7 +511,7 @@ async function runMatrixConfigure(params: {
   return { cfg: next, accountId };
 }
 
-export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
+export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
   channel,
   getStatus: async ({ cfg, accountOverrides }) => {
     const resolvedCfg = cfg as CoreConfig;
@@ -564,7 +521,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
         channel,
         configured: false,
         statusLines: ['Matrix: set "channels.matrix.defaultAccount" to select a named account'],
-        selectionHint: !sdkReady ? "install matrix-js-sdk" : "set defaultAccount",
+        selectionHint: !sdkReady ? "install Matrix deps" : "set defaultAccount",
       };
     }
     const account = resolveMatrixAccount({
@@ -578,7 +535,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
       statusLines: [
         `Matrix: ${configured ? "configured" : "needs homeserver + access token or password"}`,
       ],
-      selectionHint: !sdkReady ? "install matrix-js-sdk" : configured ? "configured" : "needs auth",
+      selectionHint: !sdkReady ? "install Matrix deps" : configured ? "configured" : "needs auth",
     };
   },
   configure: async ({
@@ -641,6 +598,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
     });
   },
   afterConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
+    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
     await runMatrixSetupBootstrapAfterConfigWrite({
       previousCfg: previousCfg as CoreConfig,
       cfg: cfg as CoreConfig,

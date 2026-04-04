@@ -12,31 +12,55 @@ function idsByPrefix(prefixes: readonly string[]): string[] {
     .toSorted();
 }
 
-const COMMAND_SECRET_TARGETS = {
-  memory: [
-    "agents.defaults.memorySearch.remote.apiKey",
-    "agents.list[].memorySearch.remote.apiKey",
-  ],
-  qrRemote: ["gateway.remote.token", "gateway.remote.password"],
-  channels: idsByPrefix(["channels."]),
-  models: idsByPrefix(["models.providers."]),
-  agentRuntime: idsByPrefix([
-    "channels.",
-    "models.providers.",
-    "agents.defaults.memorySearch.remote.",
-    "agents.list[].memorySearch.remote.",
-    "skills.entries.",
-    "messages.tts.",
-    "tools.web.search",
-    "tools.web.fetch.firecrawl.",
-  ]),
-  status: idsByPrefix([
-    "channels.",
-    "agents.defaults.memorySearch.remote.",
-    "agents.list[].memorySearch.remote.",
-  ]),
-  securityAudit: idsByPrefix(["channels.", "gateway.auth.", "gateway.remote."]),
-} as const;
+function idsByPredicate(predicate: (id: string) => boolean): string[] {
+  return listSecretTargetRegistryEntries()
+    .map((entry) => entry.id)
+    .filter(predicate)
+    .toSorted();
+}
+
+type CommandSecretTargets = {
+  qrRemote: string[];
+  channels: string[];
+  models: string[];
+  agentRuntime: string[];
+  status: string[];
+  securityAudit: string[];
+};
+
+let cachedCommandSecretTargets: CommandSecretTargets | undefined;
+
+function buildCommandSecretTargets(): CommandSecretTargets {
+  const webPluginSecretTargets = idsByPredicate((id) =>
+    /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(id),
+  );
+
+  return {
+    qrRemote: ["gateway.remote.token", "gateway.remote.password"],
+    channels: idsByPrefix(["channels."]),
+    models: idsByPrefix(["models.providers."]),
+    agentRuntime: idsByPrefix([
+      "channels.",
+      "models.providers.",
+      "agents.defaults.memorySearch.remote.",
+      "agents.list[].memorySearch.remote.",
+      "skills.entries.",
+      "messages.tts.",
+      "tools.web.search",
+    ]).concat(webPluginSecretTargets),
+    status: idsByPrefix([
+      "channels.",
+      "agents.defaults.memorySearch.remote.",
+      "agents.list[].memorySearch.remote.",
+    ]),
+    securityAudit: idsByPrefix(["channels.", "gateway.auth.", "gateway.remote."]),
+  };
+}
+
+function getCommandSecretTargets(): CommandSecretTargets {
+  cachedCommandSecretTargets ??= buildCommandSecretTargets();
+  return cachedCommandSecretTargets;
+}
 
 function toTargetIdSet(values: readonly string[]): Set<string> {
   return new Set(values);
@@ -48,11 +72,12 @@ function normalizeScopedChannelId(value?: string | null): string | undefined {
 }
 
 function selectChannelTargetIds(channel?: string): Set<string> {
+  const commandSecretTargets = getCommandSecretTargets();
   if (!channel) {
-    return toTargetIdSet(COMMAND_SECRET_TARGETS.channels);
+    return toTargetIdSet(commandSecretTargets.channels);
   }
   return toTargetIdSet(
-    COMMAND_SECRET_TARGETS.channels.filter((id) => id.startsWith(`channels.${channel}.`)),
+    commandSecretTargets.channels.filter((id) => id.startsWith(`channels.${channel}.`)),
   );
 }
 
@@ -101,30 +126,26 @@ export function getScopedChannelsCommandSecretTargets(params: {
   return { targetIds, allowedPaths };
 }
 
-export function getMemoryCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.memory);
-}
-
 export function getQrRemoteCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.qrRemote);
+  return toTargetIdSet(getCommandSecretTargets().qrRemote);
 }
 
 export function getChannelsCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.channels);
+  return toTargetIdSet(getCommandSecretTargets().channels);
 }
 
 export function getModelsCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.models);
+  return toTargetIdSet(getCommandSecretTargets().models);
 }
 
 export function getAgentRuntimeCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.agentRuntime);
+  return toTargetIdSet(getCommandSecretTargets().agentRuntime);
 }
 
 export function getStatusCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.status);
+  return toTargetIdSet(getCommandSecretTargets().status);
 }
 
 export function getSecurityAuditCommandSecretTargetIds(): Set<string> {
-  return toTargetIdSet(COMMAND_SECRET_TARGETS.securityAudit);
+  return toTargetIdSet(getCommandSecretTargets().securityAudit);
 }

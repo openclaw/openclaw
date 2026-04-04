@@ -1,17 +1,14 @@
 import { BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES } from "../plugins/bundled-provider-auth-env-vars.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
-  chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
   voyage: ["VOYAGE_API_KEY"],
-  groq: ["GROQ_API_KEY"],
-  deepgram: ["DEEPGRAM_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
-  litellm: ["LITELLM_API_KEY"],
+  "anthropic-openai": ["ANTHROPIC_API_KEY"],
+  "qwen-dashscope": ["DASHSCOPE_API_KEY"],
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
   anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
-  chutes: ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"],
   "minimax-cn": ["MINIMAX_API_KEY"],
 } as const;
 
@@ -40,6 +37,13 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   ...PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
 };
+
+export function getProviderEnvVars(providerId: string): string[] {
+  const envVars = Object.hasOwn(PROVIDER_ENV_VARS, providerId)
+    ? PROVIDER_ENV_VARS[providerId]
+    : undefined;
+  return Array.isArray(envVars) ? [...envVars] : [];
+}
 
 const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY"] as const;
 

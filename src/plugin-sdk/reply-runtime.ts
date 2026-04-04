@@ -1,31 +1,57 @@
 // Shared agent/reply runtime helpers for channel plugins. Keep channel plugins
 // off direct src/auto-reply imports by routing common reply primitives here.
 
-export * from "../auto-reply/chunk.js";
-export * from "../auto-reply/command-auth.js";
-export * from "../auto-reply/command-detection.js";
-export * from "../auto-reply/commands-registry.js";
-export * from "../auto-reply/dispatch.js";
-export * from "../auto-reply/group-activation.js";
-export * from "../auto-reply/heartbeat.js";
-export * from "../auto-reply/heartbeat-reply-payload.js";
-export * from "../auto-reply/inbound-debounce.js";
-export * from "../auto-reply/reply.js";
-export * from "../auto-reply/tokens.js";
-export * from "../auto-reply/envelope.js";
-export * from "../auto-reply/reply/history.js";
-export * from "../auto-reply/reply/abort.js";
-export * from "../auto-reply/reply/btw-command.js";
-export * from "../auto-reply/reply/commands-models.js";
-export * from "../auto-reply/reply/inbound-dedupe.js";
-export * from "../auto-reply/reply/inbound-context.js";
-export * from "../auto-reply/reply/mentions.js";
-export * from "../auto-reply/reply/reply-dispatcher.js";
-export * from "../auto-reply/reply/reply-reference.js";
-export * from "../auto-reply/reply/provider-dispatcher.js";
-export * from "../auto-reply/reply/model-selection.js";
-export * from "../auto-reply/reply/commands-info.js";
-export * from "../auto-reply/skill-commands.js";
-export * from "../auto-reply/status.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export {
+  chunkMarkdownText,
+  chunkMarkdownTextWithMode,
+  chunkText,
+  chunkTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
+export type { ChunkMode } from "../auto-reply/chunk.js";
+export {
+  dispatchInboundMessage,
+  dispatchInboundMessageWithBufferedDispatcher,
+  dispatchInboundMessageWithDispatcher,
+} from "../auto-reply/dispatch.js";
+export {
+  normalizeGroupActivation,
+  parseActivationCommand,
+} from "../auto-reply/group-activation.js";
+export {
+  HEARTBEAT_PROMPT,
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  resolveHeartbeatPrompt,
+  stripHeartbeatToken,
+} from "../auto-reply/heartbeat.js";
+export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
+export { getReplyFromConfig } from "../auto-reply/reply.js";
+export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+export { isAbortRequestText } from "../auto-reply/reply/abort.js";
+export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
+export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+export { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+export {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "../auto-reply/inbound-debounce.js";
+export {
+  dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithDispatcher,
+} from "../auto-reply/reply/provider-dispatcher.js";
+export {
+  createReplyDispatcher,
+  createReplyDispatcherWithTyping,
+} from "../auto-reply/reply/reply-dispatcher.js";
+export type {
+  ReplyDispatcher,
+  ReplyDispatcherOptions,
+  ReplyDispatcherWithTypingOptions,
+} from "../auto-reply/reply/reply-dispatcher.js";
+export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
+export type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext } from "../auto-reply/types.js";
 export type { FinalizedMsgContext, MsgContext } from "../auto-reply/templating.js";
+export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
+export type { ConversationLabelParams } from "../auto-reply/reply/conversation-label-generator.js";

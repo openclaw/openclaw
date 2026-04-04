@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
-import { shouldBuildBundledCluster } from "./scripts/lib/optional-bundled-clusters.mjs";
+import {
+  listBundledPluginBuildEntries,
+  listBundledPluginRuntimeDependencies,
+} from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -80,61 +83,8 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   };
 }
 
-function listBundledPluginBuildEntries(): Record<string, string> {
-  const extensionsRoot = path.join(process.cwd(), "extensions");
-  const entries: Record<string, string> = {};
-
-  for (const dirent of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
-    if (!dirent.isDirectory()) {
-      continue;
-    }
-    if (!shouldBuildBundledCluster(dirent.name, process.env)) {
-      continue;
-    }
-
-    const pluginDir = path.join(extensionsRoot, dirent.name);
-    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-
-    const packageJsonPath = path.join(pluginDir, "package.json");
-    let packageEntries: string[] = [];
-    if (fs.existsSync(packageJsonPath)) {
-      try {
-        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-          openclaw?: { extensions?: unknown; setupEntry?: unknown };
-        };
-        packageEntries = Array.isArray(packageJson.openclaw?.extensions)
-          ? packageJson.openclaw.extensions.filter(
-              (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-            )
-          : [];
-        const setupEntry =
-          typeof packageJson.openclaw?.setupEntry === "string" &&
-          packageJson.openclaw.setupEntry.trim().length > 0
-            ? packageJson.openclaw.setupEntry
-            : undefined;
-        if (setupEntry) {
-          packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
-        }
-      } catch {
-        packageEntries = [];
-      }
-    }
-
-    const sourceEntries = packageEntries.length > 0 ? packageEntries : ["./index.ts"];
-    for (const entry of sourceEntries) {
-      const normalizedEntry = entry.replace(/^\.\//, "");
-      const entryKey = `extensions/${dirent.name}/${normalizedEntry.replace(/\.[^.]+$/u, "")}`;
-      entries[entryKey] = path.join("extensions", dirent.name, normalizedEntry);
-    }
-  }
-
-  return entries;
-}
-
 const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -162,6 +112,9 @@ function buildBundledHookEntries(): Record<string, string> {
 }
 
 const bundledHookEntries = buildBundledHookEntries();
+const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
+const bundledPluginFile = (pluginId: string, relativePath: string) =>
+  `${bundledPluginRoot(pluginId)}/${relativePath}`;
 
 function buildCoreDistEntries(): Record<string, string> {
   return {
@@ -169,15 +122,20 @@ function buildCoreDistEntries(): Record<string, string> {
     entry: "src/entry.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
+    // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
+    // dist/ trees do not strand already-running gateways on stale hashed chunks.
+    "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
+    "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
+    "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    "telegram/audit": "extensions/telegram/src/audit.ts",
-    "telegram/token": "extensions/telegram/src/token.ts",
-    "line/accounts": "src/line/accounts.ts",
-    "line/send": "src/line/send.ts",
-    "line/template-messages": "src/line/template-messages.ts",
+    "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
+    "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
+    "mcp/plugin-tools-serve": "src/mcp/plugin-tools-serve.ts",
   };
 }
 
@@ -186,6 +144,8 @@ const coreDistEntries = buildCoreDistEntries();
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
+    // Internal compat artifact for the root-alias.cjs lazy loader.
+    "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
         `plugin-sdk/${entry}`,
@@ -203,7 +163,12 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: ["@lancedb/lancedb"],
+      neverBundle: [
+        "@lancedb/lancedb",
+        "@matrix-org/matrix-sdk-crypto-nodejs",
+        "matrix-js-sdk",
+        ...bundledPluginRuntimeDependencies,
+      ],
     },
   }),
 ]);

@@ -5,14 +5,19 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { applyXaiModelCompat, DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-models";
 import {
+  buildPassthroughGeminiSanitizingReplayPolicy,
+  DEFAULT_CONTEXT_TOKENS,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  composeProviderStreamWrappers,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
+import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
 
@@ -73,10 +78,6 @@ function isOpenRouterCacheTtlModel(modelId: string): boolean {
   return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
-function isXaiOpenRouterModel(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("x-ai/");
-}
-
 export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
@@ -128,31 +129,28 @@ export default definePluginEntry({
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);
       },
-      capabilities: {
-        openAiCompatTurnValidation: false,
-        geminiThoughtSignatureSanitization: true,
-        geminiThoughtSignatureModelHints: ["gemini"],
-      },
-      normalizeResolvedModel: ({ modelId, model }) =>
-        isXaiOpenRouterModel(modelId) ? applyXaiModelCompat(model) : undefined,
+      buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+      resolveReasoningOutputMode: () => "native",
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
-        let streamFn = ctx.streamFn;
         const providerRouting =
           ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
             ? (ctx.extraParams.provider as Record<string, unknown>)
             : undefined;
-        if (providerRouting) {
-          streamFn = injectOpenRouterRouting(streamFn, providerRouting);
-        }
         const skipReasoningInjection =
           ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId);
         const openRouterThinkingLevel = skipReasoningInjection ? undefined : ctx.thinkingLevel;
-        streamFn = createOpenRouterWrapper(streamFn, openRouterThinkingLevel);
-        streamFn = createOpenRouterSystemCacheWrapper(streamFn);
-        return streamFn;
+        return composeProviderStreamWrappers(
+          ctx.streamFn,
+          providerRouting
+            ? (streamFn) => injectOpenRouterRouting(streamFn, providerRouting)
+            : undefined,
+          (streamFn) => createOpenRouterWrapper(streamFn, openRouterThinkingLevel),
+          (streamFn) => createOpenRouterSystemCacheWrapper(streamFn),
+        );
       },
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
+    api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
   },
 });

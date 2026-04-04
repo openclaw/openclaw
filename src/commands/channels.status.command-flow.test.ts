@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { channelsStatusCommand } from "./channels/status.js";
+
+const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 
 const callGateway = vi.fn();
 const resolveCommandSecretRefsViaGateway = vi.fn();
@@ -36,8 +40,6 @@ vi.mock("../cli/progress.js", () => ({
   withProgress: (opts: unknown, run: () => Promise<unknown>) => withProgress(opts, run),
 }));
 
-const { channelsStatusCommand } = await import("./channels/status.js");
-
 function createTokenOnlyPlugin() {
   return {
     id: "discord",
@@ -51,7 +53,7 @@ function createTokenOnlyPlugin() {
     capabilities: { chatTypes: ["direct"] },
     config: {
       listAccountIds: () => ["default"],
-      defaultAccountId: () => "default",
+      defaultAccountId: resolveDefaultAccountId,
       inspectAccount: (cfg: { secretResolved?: boolean }) =>
         cfg.secretResolved
           ? {

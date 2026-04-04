@@ -1,10 +1,15 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 
-const callGateway = vi.fn();
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+}));
+
+const { callGateway } = mocks;
 
 vi.mock("../gateway/call.js", () => ({
-  callGateway,
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../secrets/runtime-web-tools.js", () => ({
@@ -16,12 +21,6 @@ vi.mock("../utils/message-channel.js", () => ({
   GATEWAY_CLIENT_NAMES: { CLI: "cli" },
 }));
 
-let resolveCommandSecretRefsViaGateway: typeof import("./command-secret-gateway.js").resolveCommandSecretRefsViaGateway;
-
-beforeAll(async () => {
-  ({ resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js"));
-});
-
 beforeEach(() => {
   callGateway.mockReset();
 });
@@ -32,7 +31,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       talk: {
         apiKey: { source: "env", provider: "default", id: envKey },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
+  }
+
+  function readLegacyTalkApiKey(config: OpenClawConfig): unknown {
+    return (config.talk as Record<string, unknown> | undefined)?.apiKey;
   }
 
   async function withEnvValue(
@@ -74,7 +77,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     result: Awaited<ReturnType<typeof resolveTalkApiKey>>,
     envKey: string,
   ) {
-    expect(result.resolvedConfig.talk?.apiKey).toEqual({
+    expect(readLegacyTalkApiKey(result.resolvedConfig)).toEqual({
       source: "env",
       provider: "default",
       id: envKey,
@@ -97,7 +100,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       talk: {
         apiKey: "plain", // pragma: allowlist secret
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     const result = await resolveCommandSecretRefsViaGateway({
       config,
       commandName: "memory status",
@@ -169,7 +172,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         },
       }),
     );
-    expect(result.resolvedConfig.talk?.apiKey).toBe("sk-live");
+    expect(readLegacyTalkApiKey(result.resolvedConfig)).toBe("sk-live");
   });
 
   it("enforces unresolved checks only for allowed paths when provided", async () => {
@@ -223,7 +226,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
             talk: {
               apiKey: { source: "env", provider: "default", id: envKey },
             },
-          } as OpenClawConfig,
+          } as unknown as OpenClawConfig,
           commandName: "memory status",
           targetIds: new Set(["talk.apiKey"]),
         }),
@@ -252,12 +255,12 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               default: { source: "env" },
             },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         commandName: "memory status",
         targetIds: new Set(["talk.apiKey"]),
       });
 
-      expect(result.resolvedConfig.talk?.apiKey).toBe("local-fallback-key");
+      expect(readLegacyTalkApiKey(result.resolvedConfig)).toBe("local-fallback-key");
       expect(
         result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
       ).toBe(true);
@@ -279,53 +282,76 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
-          tools: {
-            web: {
-              search: {
-                provider: "gemini",
-                gemini: {
-                  apiKey: { source: "env", provider: "default", id: envKey },
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: { source: "env", provider: "default", id: envKey },
+                  },
                 },
               },
             },
           },
-        } as OpenClawConfig,
+          tools: {
+            web: {
+              search: {
+                provider: "gemini",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
         commandName: "agent",
-        targetIds: new Set(["tools.web.search.gemini.apiKey"]),
+        targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
       });
 
-      expect(result.resolvedConfig.tools?.web?.search?.gemini?.apiKey).toBe(
-        "gemini-local-fallback-key",
+      const googleWebSearchConfig = result.resolvedConfig.plugins?.entries?.google?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined;
+      expect(googleWebSearchConfig?.webSearch?.apiKey).toBe("gemini-local-fallback-key");
+      expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
+        "resolved_local",
       );
-      expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   }, 300_000);
 
-  it("falls back to local resolution for Firecrawl SecretRefs when gateway is unavailable", async () => {
+  it("falls back to local resolution for web fetch provider SecretRefs when gateway is unavailable", async () => {
     const envKey = "WEB_FETCH_FIRECRAWL_API_KEY_LOCAL_FALLBACK";
     await withEnvValue(envKey, "firecrawl-local-fallback-key", async () => {
       callGateway.mockRejectedValueOnce(new Error("gateway closed"));
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
-          tools: {
-            web: {
-              fetch: {
-                firecrawl: {
-                  apiKey: { source: "env", provider: "default", id: envKey },
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: { source: "env", provider: "default", id: envKey },
+                  },
                 },
               },
             },
           },
-        } as OpenClawConfig,
+          tools: {
+            web: {
+              fetch: {
+                provider: "firecrawl",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
         commandName: "agent",
-        targetIds: new Set(["tools.web.fetch.firecrawl.apiKey"]),
+        targetIds: new Set(["plugins.entries.firecrawl.config.webFetch.apiKey"]),
       });
 
-      expect(result.resolvedConfig.tools?.web?.fetch?.firecrawl?.apiKey).toBe(
-        "firecrawl-local-fallback-key",
+      const firecrawlConfig = result.resolvedConfig.plugins?.entries?.firecrawl?.config as
+        | { webFetch?: { apiKey?: unknown } }
+        | undefined;
+      expect(firecrawlConfig?.webFetch?.apiKey).toBe("firecrawl-local-fallback-key");
+      expect(result.targetStatesByPath["plugins.entries.firecrawl.config.webFetch.apiKey"]).toBe(
+        "resolved_local",
       );
-      expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
       expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   });
@@ -338,22 +364,39 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           web: {
             search: {
               enabled: false,
-              gemini: {
-                apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_DISABLED_KEY" },
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_DISABLED_KEY",
+                  },
+                },
               },
             },
           },
         },
       } as OpenClawConfig,
       commandName: "agent",
-      targetIds: new Set(["tools.web.search.gemini.apiKey"]),
+      targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
     });
 
     expect(result.hadUnresolvedTargets).toBe(false);
-    expect(result.targetStatesByPath["tools.web.search.gemini.apiKey"]).toBe("inactive_surface");
+    expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
+      "inactive_surface",
+    );
     expect(
       result.diagnostics.some((entry) =>
-        entry.includes("tools.web.search.gemini.apiKey: tools.web.search is disabled."),
+        entry.includes(
+          "plugins.entries.google.config.webSearch.apiKey: tools.web.search is disabled.",
+        ),
       ),
     ).toBe(true);
   });
@@ -393,7 +436,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           talk: {
             apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         commandName: "memory status",
         targetIds: new Set(["talk.apiKey"]),
       }),
@@ -515,7 +558,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         commandName: "status",
         mode: "read_only_status",
       });
-      expect(result.resolvedConfig.talk?.apiKey).toBeUndefined();
+      expect(readLegacyTalkApiKey(result.resolvedConfig)).toBeUndefined();
       expect(result.hadUnresolvedTargets).toBe(true);
       expect(result.targetStatesByPath["talk.apiKey"]).toBe("unresolved");
       expect(
@@ -539,7 +582,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         targetIds: new Set(["talk.apiKey"]),
         mode: "summary",
       });
-      expect(result.resolvedConfig.talk?.apiKey).toBeUndefined();
+      expect(readLegacyTalkApiKey(result.resolvedConfig)).toBeUndefined();
       expect(result.hadUnresolvedTargets).toBe(true);
       expect(result.targetStatesByPath["talk.apiKey"]).toBe("unresolved");
     });
@@ -557,7 +600,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         commandName: "status",
         mode: "read_only_status",
       });
-      expect(result.resolvedConfig.talk?.apiKey).toBe("recovered-locally");
+      expect(readLegacyTalkApiKey(result.resolvedConfig)).toBe("recovered-locally");
       expect(result.hadUnresolvedTargets).toBe(false);
       expect(result.targetStatesByPath["talk.apiKey"]).toBe("resolved_local");
       expect(
@@ -599,12 +642,12 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               },
             },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         commandName: "message send",
         targetIds: new Set(["talk.apiKey", "talk.providers.*.apiKey"]),
       });
 
-      expect(result.resolvedConfig.talk?.apiKey).toBe("resolved-by-gateway");
+      expect(readLegacyTalkApiKey(result.resolvedConfig)).toBe("resolved-by-gateway");
       expect(result.resolvedConfig.talk?.providers?.elevenlabs?.apiKey).toBe("recovered-locally");
       expect(result.hadUnresolvedTargets).toBe(false);
       expect(result.targetStatesByPath["talk.apiKey"]).toBe("resolved_gateway");
@@ -643,13 +686,13 @@ describe("resolveCommandSecretRefsViaGateway", () => {
               password: { source: "env", provider: "default", id: gatewayEnvKey },
             },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         commandName: "status",
         targetIds: new Set(["talk.apiKey"]),
         mode: "read_only_status",
       });
 
-      expect(result.resolvedConfig.talk?.apiKey).toBe("target-only");
+      expect(readLegacyTalkApiKey(result.resolvedConfig)).toBe("target-only");
       expect(result.hadUnresolvedTargets).toBe(false);
       expect(result.targetStatesByPath["talk.apiKey"]).toBe("resolved_local");
     } finally {
@@ -678,13 +721,13 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           talk: {
             apiKey: { source: "env", provider: "default", id: envKey },
           },
-        } as OpenClawConfig,
+        } as unknown as OpenClawConfig,
         commandName: "channels resolve",
         targetIds: new Set(["talk.apiKey"]),
         mode: "read_only_operational",
       });
 
-      expect(result.resolvedConfig.talk?.apiKey).toBeUndefined();
+      expect(readLegacyTalkApiKey(result.resolvedConfig)).toBeUndefined();
       expect(result.hadUnresolvedTargets).toBe(true);
       expect(result.targetStatesByPath["talk.apiKey"]).toBe("unresolved");
       expect(

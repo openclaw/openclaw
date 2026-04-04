@@ -1,21 +1,26 @@
+import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
   composeSystemPromptWithHookContext,
-  isOllamaCompatProvider,
+  decodeHtmlEntitiesInObject,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
-  resolveOllamaCompatNumCtxEnabled,
+  resolveEmbeddedAgentStreamFn,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  shouldInjectOllamaCompatNumCtx,
-  decodeHtmlEntitiesInObject,
-  wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
+  wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -216,6 +221,92 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession(undefined)).toBe("full");
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
+  });
+});
+
+describe("resolveEmbeddedAgentStreamFn", () => {
+  it("injects authStorage api keys into provider-owned stream functions", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+      authStorage: {
+        getApiKey: vi.fn(async () => "demo-runtime-key"),
+      },
+    });
+
+    await expect(
+      streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {}),
+    ).resolves.toMatchObject({
+      apiKey: "demo-runtime-key",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("strips the internal cache boundary before provider-owned stream calls", async () => {
+    const providerStreamFn = vi.fn(async (_model, context) => context);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+    });
+
+    await expect(
+      streamFn(
+        { provider: "demo-provider", id: "demo-model" } as never,
+        {
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        } as never,
+        {},
+      ),
+    ).resolves.toMatchObject({
+      systemPrompt: "Stable prefix\nDynamic suffix",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("keeps explicit custom currentStreamFn values unchanged", () => {
+    const currentStreamFn = vi.fn();
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    expect(streamFn).toBe(currentStreamFn);
   });
 });
 
@@ -779,6 +870,552 @@ describe("wrapStreamFnTrimToolCallNames", () => {
   });
 });
 
+describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
+  it("drops malformed assistant tool calls from outbound context before provider replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "toolCall", name: "read", arguments: {} }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+    expect(seenContext.messages).not.toBe(messages);
+  });
+
+  it("preserves outbound context when all assistant tool calls are valid", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toBe(messages);
+  });
+
+  it("preserves sessions_spawn attachment payloads on replay", async () => {
+    const attachmentContent = "INLINE_ATTACHMENT_PAYLOAD";
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolUse",
+            id: "call_1",
+            name: "  SESSIONS_SPAWN  ",
+            input: {
+              task: "inspect attachment",
+              attachments: [{ name: "snapshot.txt", content: attachmentContent }],
+            },
+          },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["sessions_spawn"]),
+    );
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<Record<string, unknown>> }>;
+    };
+    const toolCall = seenContext.messages[0]?.content?.[0] as {
+      name?: string;
+      input?: { attachments?: Array<{ content?: string }> };
+    };
+    expect(toolCall.name).toBe("sessions_spawn");
+    expect(toolCall.input?.attachments?.[0]?.content).toBe(attachmentContent);
+  });
+
+  it("preserves allowlisted tool names that contain punctuation", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "admin.export", input: { scope: "all" } }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["admin.export"]),
+    );
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toBe(messages);
+  });
+
+  it("normalizes provider-prefixed replayed tool names before provider replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "functions.read", input: { path: "." } }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
+  });
+
+  it("canonicalizes mixed-case allowlisted tool names on replay", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "readfile", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["ReadFile"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("ReadFile");
+  });
+
+  it("recovers blank replayed tool names from their ids", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "functionswrite4", name: "   ", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["write"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
+  });
+
+  it("recovers mangled replayed tool names before dropping the call", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "functionsread3", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ content?: Array<{ name?: string }> }>;
+    };
+    expect(seenContext.messages[0]?.content?.[0]?.name).toBe("read");
+  });
+
+  it("drops orphaned tool results after replay sanitization removes a tool-call turn", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", name: "read", arguments: {} }],
+        stopReason: "error",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_missing",
+        toolName: "read",
+        content: [{ type: "text", text: "stale result" }],
+        isError: false,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string }>;
+    };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("drops replayed tool calls that are no longer allowlisted", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "write", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "write",
+        content: [{ type: "text", text: "stale result" }],
+        isError: false,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string }>;
+    };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+  it("drops replayed tool names that are no longer allowlisted", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "unknown_tool", input: { path: "." } }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "unknown_tool",
+        content: [{ type: "text", text: "stale result" }],
+        isError: false,
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([]);
+  });
+
+  it("drops ambiguous mangled replay names instead of guessing a tool", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "functions.exec2", arguments: {} }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
+      baseFn as never,
+      new Set(["exec", "exec2"]),
+    );
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([]);
+  });
+
+  it("preserves matching tool results for retained errored assistant turns", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "toolCall", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "kept result" }],
+        isError: false,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]));
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "kept result" }],
+        isError: false,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("revalidates turn ordering after dropping an assistant replay turn", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+      },
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "toolCall", name: "read", arguments: {} }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+    });
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string; content?: unknown[] }>;
+    };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "first" },
+          { type: "text", text: "second" },
+        ],
+      },
+    ]);
+  });
+
+  it("drops orphaned Anthropic user tool_result blocks after replay sanitization", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "partial response" },
+          { type: "toolUse", name: "read", input: { path: "." } },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "call_1", content: [{ type: "text", text: "stale" }] },
+          { type: "text", text: "retry" },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+    });
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string; content?: unknown[] }>;
+    };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial response" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "retry" }],
+      },
+    ]);
+  });
+
+  it("drops orphaned Anthropic user tool_result blocks after dropping an assistant replay turn", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+      },
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "toolUse", name: "read", input: { path: "." } }],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "toolResult", toolUseId: "call_1", content: [{ type: "text", text: "stale" }] },
+          { type: "text", text: "second" },
+        ],
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+    });
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as {
+      messages: Array<{ role?: string; content?: unknown[] }>;
+    };
+    expect(seenContext.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "first" },
+          { type: "text", text: "second" },
+        ],
+      },
+    ]);
+  });
+});
+
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   async function invokeWrappedStream(baseFn: (...args: never[]) => unknown) {
     return await invokeWrappedTestStream(
@@ -833,6 +1470,128 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
     expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
     expect(result).toBe(finalMessage);
+  });
+
+  it("repairs tool arguments when malformed tool-call preamble appears before JSON", async () => {
+    const partialToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const endMessageToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "write", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '.functions.write:8  \n{"path":"/tmp/report.txt"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(result).toBe(finalMessage);
+  });
+  it("preserves anthropic-compatible tool arguments when the streamed JSON is already valid", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const endMessageToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const finalToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const endMessage = { role: "assistant", content: [endMessageToolCall] };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "}",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+            message: endMessage,
+          },
+        ],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+    const result = await stream.result();
+
+    expect(partialToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(streamedToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(endMessageToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(finalToolCall.arguments).toEqual({ path: "/tmp/report.txt" });
+    expect(result).toBe(finalMessage);
+  });
+
+  it("does not repair tool arguments when leading text is not tool-call metadata", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: 'please use {"path":"/tmp/report.txt"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toEqual({});
   });
 
   it("keeps incomplete partial JSON unchanged until a complete object exists", async () => {
@@ -937,6 +1696,45 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
   });
+
+  it("clears a cached repair when a later delta adds a single oversized trailing suffix", async () => {
+    const partialToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: '{"path":"/tmp/report.txt"}',
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "oops",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({});
+    expect(streamedToolCall.arguments).toEqual({});
+  });
 });
 
 describe("isOllamaCompatProvider", () => {
@@ -1001,29 +1799,6 @@ describe("isOllamaCompatProvider", () => {
   });
 });
 
-describe("resolveOllamaBaseUrlForRun", () => {
-  it("prefers provider baseUrl over model baseUrl", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-        providerBaseUrl: "http://provider-host:11434",
-      }),
-    ).toBe("http://provider-host:11434");
-  });
-
-  it("falls back to model baseUrl when provider baseUrl is missing", () => {
-    expect(
-      resolveOllamaBaseUrlForRun({
-        modelBaseUrl: "http://model-host:11434",
-      }),
-    ).toBe("http://model-host:11434");
-  });
-
-  it("falls back to native default when neither baseUrl is configured", () => {
-    expect(resolveOllamaBaseUrlForRun({})).toBe("http://127.0.0.1:11434");
-  });
-});
-
 describe("wrapOllamaCompatNumCtx", () => {
   it("injects num_ctx and preserves downstream onPayload hooks", () => {
     let payloadSeen: Record<string, unknown> | undefined;
@@ -1041,6 +1816,151 @@ describe("wrapOllamaCompatNumCtx", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
     expect(downstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("deserializes assistant tool_call arguments for Ollama OpenAI-compatible payloads", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: '{"path":"/tmp/test.txt"}',
+                },
+              },
+            ],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+    const toolCall = (messageRecord?.tool_calls as Array<Record<string, unknown>> | undefined)?.[0];
+
+    expect(toolCall?.function).toEqual({
+      name: "read",
+      arguments: { path: "/tmp/test.txt" },
+    });
+  });
+
+  it("deserializes assistant function_call arguments for Ollama OpenAI-compatible payloads", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            function_call: {
+              name: "exec",
+              arguments: '{"command":"pwd"}',
+            },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+
+    expect(messageRecord?.function_call).toEqual({
+      name: "exec",
+      arguments: { command: "pwd" },
+    });
+  });
+
+  it("preserves unsafe integers when deserializing assistant tool_call arguments", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "read",
+                  arguments: '{"path":9223372036854775807,"nested":{"thread":1234567890123456789}}',
+                },
+              },
+            ],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+    const toolCall = (messageRecord?.tool_calls as Array<Record<string, unknown>> | undefined)?.[0];
+
+    expect(toolCall?.function).toEqual({
+      name: "read",
+      arguments: {
+        path: "9223372036854775807",
+        nested: { thread: "1234567890123456789" },
+      },
+    });
+  });
+
+  it("preserves unsafe integers when deserializing assistant function_call arguments", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        messages: [
+          {
+            role: "assistant",
+            function_call: {
+              name: "exec",
+              arguments: '{"thread":9223372036854775807}',
+            },
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 8192);
+    void wrapped({} as never, {} as never, undefined as never);
+
+    const messageRecord = (
+      payloadSeen?.messages as Array<Record<string, unknown>> | undefined
+    )?.[0];
+
+    expect(messageRecord?.function_call).toEqual({
+      name: "exec",
+      arguments: { thread: "9223372036854775807" },
+    });
   });
 });
 
@@ -1166,7 +2086,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1178,11 +2098,11 @@ describe("buildAfterTurnRuntimeContext", () => {
 
     expect(legacy).toMatchObject({
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
     });
   });
 
-  it("passes primary model through even when compaction.model is set (override resolved in compactDirect)", () => {
+  it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {
         sessionKey: "agent:main:session:abc",
@@ -1202,7 +2122,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1212,11 +2132,14 @@ describe("buildAfterTurnRuntimeContext", () => {
       agentDir: "/tmp/agent",
     });
 
-    // buildAfterTurnLegacyCompactionParams no longer resolves the override;
-    // compactEmbeddedPiSessionDirect does it centrally for both auto + manual paths.
+    // buildEmbeddedCompactionRuntimeContext now resolves the override eagerly
+    // so that context engines (including third-party ones) receive the correct
+    // compaction model in the runtime context.
     expect(legacy).toMatchObject({
-      provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4-5",
+      // Auth profile dropped because provider changed from openai-codex to openrouter
+      authProfileId: undefined,
     });
   });
   it("includes resolved auth profile fields for context-engine afterTurn compaction", () => {
@@ -1231,7 +2154,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         skillsSnapshot: undefined,
         senderIsOwner: true,
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",
@@ -1244,7 +2167,7 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(legacy).toMatchObject({
       authProfileId: "openai:p1",
       provider: "openai-codex",
-      model: "gpt-5.3-codex",
+      model: "gpt-5.4",
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
     });
@@ -1266,7 +2189,7 @@ describe("buildAfterTurnRuntimeContext", () => {
         senderIsOwner: true,
         senderId: "user-123",
         provider: "openai-codex",
-        modelId: "gpt-5.3-codex",
+        modelId: "gpt-5.4",
         thinkLevel: "off",
         reasoningLevel: "on",
         extraSystemPrompt: "extra",

@@ -16,6 +16,10 @@ For model selection rules, see [/concepts/models](/concepts/models).
 - Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
+- Fallback runtime rules, cooldown probes, and session-override persistence are
+  documented in [/concepts/model-failover](/concepts/model-failover).
+- `models.providers.*.models[].contextWindow` is native model metadata;
+  `models.providers.*.models[].contextTokens` is the effective runtime cap.
 - Provider plugins can inject model catalogs via `registerProvider({ catalog })`;
   OpenClaw merges that output into `models.providers` before writing
   `models.json`.
@@ -106,9 +110,8 @@ Current bundled examples:
   policy, binary-thinking/live-model policy, and usage auth + quota fetching
 - `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
-  `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
+  `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `qwen-portal`: plugin-owned catalog, OAuth login, and OAuth refresh
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
@@ -148,7 +151,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 - OpenAI priority processing can be enabled via `agents.defaults.models["openai/<model>"].params.serviceTier`
-- OpenAI fast mode can be enabled per model via `agents.defaults.models["<provider>/<model>"].params.fastMode`
+- `/fast` and `params.fastMode` map direct `openai/*` Responses requests to `service_tier=priority` on `api.openai.com`
+- Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
 - `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because the live OpenAI API rejects it; Spark is treated as Codex-only
 
 ```json5
@@ -164,8 +168,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
-- Direct API-key models support the shared `/fast` toggle and `params.fastMode`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Policy note: setup-token support is technical compatibility; Anthropic has blocked some subscription usage outside Claude Code in the past. Verify current Anthropic terms and decide based on your risk tolerance.
+- Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
+- Billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and subscription-auth traffic now requires **Extra Usage** billed separately from the subscription.
 - Recommendation: Anthropic API key auth is the safer, recommended path over subscription setup-token auth.
 
 ```json5
@@ -182,8 +186,10 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
-- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`
+- `params.serviceTier` is also forwarded on native Codex Responses requests (`chatgpt.com/backend-api`)
+- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
 - `openai-codex/gpt-5.3-codex-spark` remains available when the Codex OAuth catalog exposes it; entitlement-dependent
+- `openai-codex/gpt-5.4` keeps native `contextWindow = 1050000` and a default runtime `contextTokens = 272000`; override the runtime cap with `models.providers.openai-codex.models[].contextTokens`
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
 
 ```json5
@@ -191,6 +197,24 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
 }
 ```
+
+```json5
+{
+  models: {
+    providers: {
+      "openai-codex": {
+        models: [{ id: "gpt-5.4", contextTokens: 160000 }],
+      },
+    },
+  },
+}
+```
+
+### Other subscription-style hosted options
+
+- [Qwen / Model Studio](/providers/qwen_modelstudio): Alibaba Cloud Standard pay-as-you-go and Coding Plan subscription endpoints
+- [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
+- [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
 ### OpenCode
 
@@ -248,7 +272,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --kilocode-api-key <key>`
 - Base URL: `https://api.kilo.ai/api/gateway/`
-- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
+- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.7 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
@@ -264,6 +288,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
+- StepFun: `stepfun` / `stepfun-plan` (`STEPFUN_API_KEY`)
+- Example models: `stepfun/step-3.5-flash`, `stepfun-plan/step-3.5-flash-2603`
 - Together: `together` (`TOGETHER_API_KEY`)
 - Venice: `venice` (`VENICE_API_KEY`)
 - Xiaomi: `xiaomi` (`XIAOMI_API_KEY`)
@@ -347,22 +373,6 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
   },
 }
 ```
-
-### Qwen OAuth (free tier)
-
-Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
-The bundled provider plugin is enabled by default, so just log in:
-
-```bash
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-Model refs:
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-See [/providers/qwen](/providers/qwen) for setup details and notes.
 
 ### Volcano Engine (Doubao)
 
@@ -555,8 +565,8 @@ Example (OpenAI‑compatible):
 {
   agents: {
     defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
-      models: { "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" } },
+      model: { primary: "lmstudio/my-local-model" },
+      models: { "lmstudio/my-local-model": { alias: "Local" } },
     },
   },
   models: {
@@ -567,8 +577,8 @@ Example (OpenAI‑compatible):
         api: "openai-completions",
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -605,3 +615,10 @@ openclaw models list
 ```
 
 See also: [/gateway/configuration](/gateway/configuration) for full configuration examples.
+
+## Related
+
+- [Models](/concepts/models) — model configuration and aliases
+- [Model Failover](/concepts/model-failover) — fallback chains and retry behavior
+- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — model config keys
+- [Providers](/providers) — per-provider setup guides

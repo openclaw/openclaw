@@ -1,12 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  makeWASocket,
-  useMultiFileAuthState,
-} from "@whiskeysockets/baileys";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
@@ -21,6 +14,13 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
+import {
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  makeWASocket,
+  useMultiFileAuthState,
+} from "./session.runtime.js";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {
@@ -32,6 +32,8 @@ export {
   WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./auth-store.js";
+
+const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 
 // Per-authDir queues so multi-account creds saves don't block each other.
 const credsSaveQueues = new Map<string, Promise<void>>();
@@ -142,7 +144,7 @@ export async function createWaSocket(
         }
         if (connection === "close") {
           const status = getStatusCode(lastDisconnect?.error);
-          if (status === DisconnectReason.loggedOut) {
+          if (status === LOGGED_OUT_STATUS) {
             console.error(
               danger(
                 `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,

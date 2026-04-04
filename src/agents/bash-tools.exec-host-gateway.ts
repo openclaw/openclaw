@@ -1,14 +1,21 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
-  addAllowlistEntry,
+  addDurableCommandApproval,
   type ExecAsk,
+  resolveExecApprovalAllowedDecisions,
   type ExecSecurity,
   buildEnforcedShellCommand,
   evaluateShellAllowlist,
-  recordAllowlistUse,
+  hasDurableExecApproval,
+  persistAllowAlwaysPatterns,
+  recordAllowlistMatchesUse,
+  resolveApprovalAuditCandidatePath,
   requiresExecApproval,
-  resolveAllowAlwaysPatterns,
 } from "../infra/exec-approvals.js";
+import {
+  describeInterpreterInlineEval,
+  detectInterpreterInlineEvalArgv,
+} from "../infra/exec-inline-eval.js";
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
@@ -20,6 +27,7 @@ import {
 } from "./bash-tools.exec-approval-request.js";
 import {
   buildDefaultExecApprovalRequestArgs,
+  buildHeadlessExecApprovalDeniedMessage,
   buildExecApprovalFollowupTarget,
   buildExecApprovalPendingToolResult,
   createExecApprovalDecisionState,
@@ -27,6 +35,7 @@ import {
   resolveApprovalDecisionOrUndefined,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
+  shouldResolveExecApprovalUnavailableInline,
 } from "./bash-tools.exec-host-shared.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -48,6 +57,8 @@ export type ProcessGatewayAllowlistParams = {
   ask: ExecAsk;
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
+  strictInlineEval?: boolean;
+  trigger?: string;
   agentId?: string;
   sessionKey?: string;
   turnSourceChannel?: string;
@@ -65,6 +76,7 @@ export type ProcessGatewayAllowlistParams = {
 
 export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
+  allowWithoutEnforcedCommand?: boolean;
   pendingResult?: AgentToolResult<ExecToolDetails>;
 };
 
@@ -91,7 +103,29 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  const durableApprovalSatisfied = hasDurableExecApproval({
+    analysisOk,
+    segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+    allowlist: approvals.allowlist,
+    commandText: params.command,
+  });
+  const inlineEvalHit =
+    params.strictInlineEval === true
+      ? (allowlistEval.segments
+          .map((segment) =>
+            detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
+          )
+          .find((entry) => entry !== null) ?? null)
+      : null;
+  if (inlineEvalHit) {
+    params.warnings.push(
+      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+        inlineEvalHit,
+      )}.`,
+    );
+  }
   let enforcedCommand: string | undefined;
+  let allowlistPlanUnavailableReason: string | null = null;
   if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
     const enforced = buildEnforcedShellCommand({
       command: params.command,
@@ -99,45 +133,56 @@ export async function processGatewayAllowlist(
       platform: process.platform,
     });
     if (!enforced.ok || !enforced.command) {
-      throw new Error(`exec denied: allowlist execution plan unavailable (${enforced.reason})`);
+      allowlistPlanUnavailableReason = enforced.reason ?? "unsupported platform";
+    } else {
+      enforcedCommand = enforced.command;
     }
-    enforcedCommand = enforced.command;
   }
   const obfuscation = detectCommandObfuscation(params.command);
   if (obfuscation.detected) {
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
   }
-  const recordMatchedAllowlistUse = (resolvedPath?: string) => {
-    if (allowlistMatches.length === 0) {
-      return;
-    }
-    const seen = new Set<string>();
-    for (const match of allowlistMatches) {
-      if (seen.has(match.pattern)) {
-        continue;
-      }
-      seen.add(match.pattern);
-      recordAllowlistUse(approvals.file, params.agentId, match, params.command, resolvedPath);
-    }
-  };
+  const recordMatchedAllowlistUse = (resolvedPath?: string) =>
+    recordAllowlistMatchesUse({
+      approvals: approvals.file,
+      agentId: params.agentId,
+      matches: allowlistMatches,
+      command: params.command,
+      resolvedPath,
+    });
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
     segment.argv.some((token) => token.startsWith("<<")),
   );
   const requiresHeredocApproval =
     hostSecurity === "allowlist" && analysisOk && allowlistSatisfied && hasHeredocSegment;
+  const requiresInlineEvalApproval = inlineEvalHit !== null;
+  const requiresAllowlistPlanApproval =
+    hostSecurity === "allowlist" &&
+    analysisOk &&
+    allowlistSatisfied &&
+    !enforcedCommand &&
+    allowlistPlanUnavailableReason !== null;
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
       security: hostSecurity,
       analysisOk,
       allowlistSatisfied,
+      durableApprovalSatisfied,
     }) ||
+    requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
+    requiresInlineEvalApproval ||
     obfuscation.detected;
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires explicit approval in allowlist mode.",
+    );
+  }
+  if (requiresAllowlistPlanApproval) {
+    params.warnings.push(
+      `Warning: allowlist auto-execution is unavailable on ${process.platform}; explicit approval is required.`,
     );
   }
 
@@ -162,7 +207,10 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
-        resolvedPath: allowlistEval.segments[0]?.resolution?.resolvedPath,
+        resolvedPath: resolveApprovalAuditCandidatePath(
+          allowlistEval.segments[0]?.resolution ?? null,
+          params.workdir,
+        ),
         ...buildExecApprovalTurnSourceContext(params),
       });
     const {
@@ -178,12 +226,51 @@ export async function processGatewayAllowlist(
       ...requestArgs,
       register: registerGatewayApproval,
     });
-    const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
+    if (
+      shouldResolveExecApprovalUnavailableInline({
+        trigger: params.trigger,
+        unavailableReason,
+        preResolvedDecision,
+      })
+    ) {
+      const { approvedByAsk, deniedReason } = createExecApprovalDecisionState({
+        decision: preResolvedDecision,
+        askFallback,
+        obfuscationDetected: obfuscation.detected,
+      });
+
+      if (deniedReason || !approvedByAsk) {
+        throw new Error(
+          buildHeadlessExecApprovalDeniedMessage({
+            trigger: params.trigger,
+            host: "gateway",
+            security: hostSecurity,
+            ask: hostAsk,
+            askFallback,
+          }),
+        );
+      }
+
+      recordMatchedAllowlistUse(
+        resolveApprovalAuditCandidatePath(
+          allowlistEval.segments[0]?.resolution ?? null,
+          params.workdir,
+        ),
+      );
+      return {
+        execCommandOverride: enforcedCommand,
+        allowWithoutEnforcedCommand: enforcedCommand === undefined,
+      };
+    }
+    const resolvedPath = resolveApprovalAuditCandidatePath(
+      allowlistEval.segments[0]?.resolution ?? null,
+      params.workdir,
+    );
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const followupTarget = buildExecApprovalFollowupTarget({
       approvalId,
-      sessionKey: params.notifySessionKey,
+      sessionKey: params.notifySessionKey ?? params.sessionKey,
       turnSourceChannel: params.turnSourceChannel,
       turnSourceTo: params.turnSourceTo,
       turnSourceAccountId: params.turnSourceAccountId,
@@ -226,22 +313,28 @@ export async function processGatewayAllowlist(
         approvedByAsk = true;
       } else if (decision === "allow-always") {
         approvedByAsk = true;
-        if (hostSecurity === "allowlist") {
-          const patterns = resolveAllowAlwaysPatterns({
+        if (!requiresInlineEvalApproval) {
+          const patterns = persistAllowAlwaysPatterns({
+            approvals: approvals.file,
+            agentId: params.agentId,
             segments: allowlistEval.segments,
             cwd: params.workdir,
             env: params.env,
             platform: process.platform,
+            strictInlineEval: params.strictInlineEval === true,
           });
-          for (const pattern of patterns) {
-            if (pattern) {
-              addAllowlistEntry(approvals.file, params.agentId, pattern);
-            }
+          if (patterns.length === 0) {
+            addDurableCommandApproval(approvals.file, params.agentId, params.command);
           }
         }
       }
 
-      if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
+      if (
+        hostSecurity === "allowlist" &&
+        (!analysisOk || !allowlistSatisfied) &&
+        !approvedByAsk &&
+        !durableApprovalSatisfied
+      ) {
         deniedReason = deniedReason ?? "allowlist-miss";
       }
 
@@ -271,7 +364,7 @@ export async function processGatewayAllowlist(
           notifyOnExit: false,
           notifyOnExitEmptySuccess: false,
           scopeKey: params.scopeKey,
-          sessionKey: params.notifySessionKey,
+          sessionKey: params.notifySessionKey ?? params.sessionKey,
           timeoutSec: effectiveTimeout,
         });
       } catch {
@@ -307,6 +400,7 @@ export async function processGatewayAllowlist(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
+        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: hostAsk }),
       }),
     };
   }
@@ -315,7 +409,12 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
+  recordMatchedAllowlistUse(
+    resolveApprovalAuditCandidatePath(
+      allowlistEval.segments[0]?.resolution ?? null,
+      params.workdir,
+    ),
+  );
 
   return { execCommandOverride: enforcedCommand };
 }

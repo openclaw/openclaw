@@ -11,11 +11,19 @@ import {
 export const ZAI_DEFAULT_MODEL_REF = `zai/${ZAI_DEFAULT_MODEL_ID}`;
 
 const ZAI_DEFAULT_MODELS = [
+  buildZaiModelDefinition({ id: "glm-5.1" }),
   buildZaiModelDefinition({ id: "glm-5" }),
   buildZaiModelDefinition({ id: "glm-5-turbo" }),
+  buildZaiModelDefinition({ id: "glm-5v-turbo" }),
   buildZaiModelDefinition({ id: "glm-4.7" }),
   buildZaiModelDefinition({ id: "glm-4.7-flash" }),
   buildZaiModelDefinition({ id: "glm-4.7-flashx" }),
+  buildZaiModelDefinition({ id: "glm-4.6" }),
+  buildZaiModelDefinition({ id: "glm-4.6v" }),
+  buildZaiModelDefinition({ id: "glm-4.5" }),
+  buildZaiModelDefinition({ id: "glm-4.5-air" }),
+  buildZaiModelDefinition({ id: "glm-4.5-flash" }),
+  buildZaiModelDefinition({ id: "glm-4.5v" }),
 ];
 
 function resolveZaiPresetBaseUrl(cfg: OpenClawConfig, endpoint?: string): string {

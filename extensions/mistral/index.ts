@@ -1,55 +1,100 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
+import { applyMistralModelCompat, MISTRAL_MODEL_COMPAT_PATCH } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildMistralProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "mistral";
+const MISTRAL_MODEL_HINTS = [
+  "mistral",
+  "mistralai",
+  "mixtral",
+  "codestral",
+  "pixtral",
+  "devstral",
+  "ministral",
+] as const;
 
-export default definePluginEntry({
+function isMistralModelHint(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return MISTRAL_MODEL_HINTS.some(
+    (hint) =>
+      normalized === hint ||
+      normalized.startsWith(`${hint}/`) ||
+      normalized.startsWith(`${hint}-`) ||
+      normalized.startsWith(`${hint}:`),
+  );
+}
+
+function shouldContributeMistralCompat(params: {
+  modelId: string;
+  model: { api?: unknown; baseUrl?: unknown; provider?: unknown; compat?: unknown };
+}): boolean {
+  if (params.model.api !== "openai-completions") {
+    return false;
+  }
+
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: typeof params.model.provider === "string" ? params.model.provider : undefined,
+    api: "openai-completions",
+    baseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
+    capability: "llm",
+    transport: "stream",
+    modelId: params.modelId,
+    compat:
+      params.model.compat && typeof params.model.compat === "object"
+        ? (params.model.compat as { supportsStore?: boolean })
+        : undefined,
+  });
+
+  return (
+    capabilities.knownProviderFamily === "mistral" ||
+    capabilities.endpointClass === "mistral-public" ||
+    isMistralModelHint(params.modelId)
+  );
+}
+
+function buildMistralReplayPolicy() {
+  return {
+    sanitizeToolCallIds: true,
+    toolCallIdMode: "strict9" as const,
+  };
+}
+
+export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "Mistral Provider",
   description: "Bundled Mistral provider plugin",
-  register(api) {
-    api.registerProvider({
-      id: PROVIDER_ID,
-      label: "Mistral",
-      docsPath: "/providers/models",
-      envVars: ["MISTRAL_API_KEY"],
-      auth: [
-        createProviderApiKeyAuthMethod({
-          providerId: PROVIDER_ID,
-          methodId: "api-key",
-          label: "Mistral API key",
-          hint: "API key",
-          optionKey: "mistralApiKey",
-          flagName: "--mistral-api-key",
-          envVar: "MISTRAL_API_KEY",
-          promptMessage: "Enter Mistral API key",
-          defaultModel: MISTRAL_DEFAULT_MODEL_REF,
-          expectedProviders: ["mistral"],
-          applyConfig: (cfg) => applyMistralConfig(cfg),
-          wizard: {
-            choiceId: "mistral-api-key",
-            choiceLabel: "Mistral API key",
-            groupId: "mistral",
-            groupLabel: "Mistral AI",
-            groupHint: "API key",
-          },
-        }),
-      ],
-      capabilities: {
-        transcriptToolCallIdMode: "strict9",
-        transcriptToolCallIdModelHints: [
-          "mistral",
-          "mixtral",
-          "codestral",
-          "pixtral",
-          "devstral",
-          "ministral",
-          "mistralai",
-        ],
+  provider: {
+    label: "Mistral",
+    docsPath: "/providers/models",
+    auth: [
+      {
+        methodId: "api-key",
+        label: "Mistral API key",
+        hint: "API key",
+        optionKey: "mistralApiKey",
+        flagName: "--mistral-api-key",
+        envVar: "MISTRAL_API_KEY",
+        promptMessage: "Enter Mistral API key",
+        defaultModel: MISTRAL_DEFAULT_MODEL_REF,
+        applyConfig: (cfg) => applyMistralConfig(cfg),
+        wizard: {
+          groupLabel: "Mistral AI",
+        },
       },
-    });
+    ],
+    catalog: {
+      buildProvider: buildMistralProvider,
+      allowExplicitBaseUrl: true,
+    },
+    normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
+    contributeResolvedModelCompat: ({ modelId, model }) =>
+      shouldContributeMistralCompat({ modelId, model }) ? MISTRAL_MODEL_COMPAT_PATCH : undefined,
+    buildReplayPolicy: () => buildMistralReplayPolicy(),
+  },
+  register(api) {
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
   },
 });

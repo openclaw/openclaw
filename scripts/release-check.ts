@@ -9,7 +9,9 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
+import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
@@ -21,14 +23,22 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
+  ...listBundledPluginPackArtifacts(),
+  ...listStaticExtensionAssetOutputs(),
+  "scripts/npm-runner.mjs",
+  "scripts/postinstall-bundled-plugins.mjs",
+  "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
   "dist/build-info.json",
+  "dist/channel-catalog.json",
+  "dist/control-ui/index.html",
 ];
-const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
+const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/", "docs/.generated/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. Keep enough headroom for the current pack while
-// failing fast if duplicate/shim content sneaks back into the release artifact.
-const npmPackUnpackedSizeBudgetBytes = 160 * 1024 * 1024;
+// startup/doctor OOM reports. Keep enough headroom for the current pack with
+// restored bundled upgrade surfaces and Control UI assets while still catching
+// regressions quickly.
+const npmPackUnpackedSizeBudgetBytes = 191 * 1024 * 1024;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
@@ -54,16 +64,93 @@ function collectBundledExtensions(): BundledExtension[] {
   });
 }
 
+function collectRuntimeDependencySpecs(packageJson: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}): Map<string, string> {
+  return new Map([
+    ...Object.entries(packageJson.dependencies ?? {}),
+    ...Object.entries(packageJson.optionalDependencies ?? {}),
+  ]);
+}
+
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  if (manifestErrors.length > 0) {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+  const rootRuntimeDeps = collectRuntimeDependencySpecs(rootPackage);
+  const rootMirrorErrors = collectBundledExtensionRootDependencyMirrorErrors(
+    extensions,
+    rootRuntimeDeps,
+  );
+  const errors = [...manifestErrors, ...rootMirrorErrors];
+  if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
-    for (const error of manifestErrors) {
+    for (const error of errors) {
       console.error(`  - ${error}`);
     }
     process.exit(1);
   }
+}
+
+export function collectBundledExtensionRootDependencyMirrorErrors(
+  extensions: BundledExtension[],
+  rootRuntimeDeps: ReadonlyMap<string, string>,
+): string[] {
+  const errors: string[] = [];
+
+  for (const extension of extensions) {
+    const rawReleaseChecks = extension.packageJson.openclaw?.releaseChecks;
+    const allowlist = (rawReleaseChecks as { rootDependencyMirrorAllowlist?: unknown } | undefined)
+      ?.rootDependencyMirrorAllowlist;
+
+    if (allowlist === undefined) {
+      continue;
+    }
+    if (!Array.isArray(allowlist)) {
+      errors.push(
+        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array`,
+      );
+      continue;
+    }
+
+    const extensionRuntimeDeps = collectRuntimeDependencySpecs(extension.packageJson);
+
+    for (const entry of allowlist) {
+      if (typeof entry !== "string" || entry.trim().length === 0) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entries must be non-empty strings`,
+        );
+        continue;
+      }
+
+      const extensionSpec = extensionRuntimeDeps.get(entry);
+      if (!extensionSpec) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
+        );
+      }
+      const rootSpec = rootRuntimeDeps.get(entry);
+      if (!rootSpec) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
+        );
+      }
+      if (!extensionSpec || !rootSpec) {
+        continue;
+      }
+      if (extensionSpec !== rootSpec) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must match root runtime dependency version (extension '${extensionSpec}', root '${rootSpec}')`,
+        );
+      }
+    }
+  }
+
+  return errors;
 }
 
 function runPackDry(): PackResult[] {
@@ -75,6 +162,18 @@ function runPackDry(): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
+export function collectMissingPackPaths(paths: Iterable<string>): string[] {
+  const available = new Set(paths);
+  return requiredPathGroups
+    .flatMap((group) => {
+      if (Array.isArray(group)) {
+        return group.some((path) => available.has(path)) ? [] : [group.join(" or ")];
+      }
+      return available.has(group) ? [] : [group];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   const isAllowedBundledPluginNodeModulesPath = (path: string) =>
     /^dist\/extensions\/[^/]+\/node_modules\//.test(path);
@@ -84,7 +183,7 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         (/node_modules\//.test(path) && !isAllowedBundledPluginNodeModulesPath(path)),
     )
-    .toSorted();
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function formatMiB(bytes: number): string {
@@ -228,6 +327,7 @@ const requiredPluginSdkExports = [
   "resolveChannelMediaMaxBytes",
   "warnMissingProviderGroupPolicyFallbackOnce",
   "emptyPluginConfigSchema",
+  "onDiagnosticEvent",
   "normalizePluginHttpPath",
   "registerPluginHttpRoute",
   "DEFAULT_ACCOUNT_ID",
@@ -301,7 +401,7 @@ async function main() {
       }
       return paths.has(group) ? [] : [group];
     })
-    .toSorted();
+    .toSorted((left, right) => left.localeCompare(right));
   const forbidden = collectForbiddenPackPaths(paths);
   const sizeErrors = collectPackUnpackedSizeErrors(results);
 
@@ -310,6 +410,18 @@ async function main() {
       console.error("release-check: missing files in npm pack:");
       for (const path of missing) {
         console.error(`  - ${path}`);
+      }
+      if (
+        missing.some(
+          (path) =>
+            path === "dist/build-info.json" ||
+            path === "dist/control-ui/index.html" ||
+            path.startsWith("dist/"),
+        )
+      ) {
+        console.error(
+          "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
+        );
       }
     }
     if (forbidden.length > 0) {

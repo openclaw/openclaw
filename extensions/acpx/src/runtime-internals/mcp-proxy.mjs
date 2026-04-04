@@ -1,21 +1,46 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
 
-function splitCommandLine(value) {
+const WINDOWS_EXECUTABLE_PATH_RE =
+  /^(?<command>(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]).*?\.(?:exe|com))(?=\s|$)(?:\s+(?<rest>.*))?$/i;
+
+function splitCommandParts(value, platform = process.platform) {
   const parts = [];
   let current = "";
   let quote = null;
   let escaping = false;
 
-  for (const ch of value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const ch = value[index];
+    const next = value[index + 1];
     if (escaping) {
       current += ch;
       escaping = false;
       continue;
     }
-    if (ch === "\\" && quote !== "'") {
+    if (ch === "\\") {
+      if (quote === "'") {
+        current += ch;
+        continue;
+      }
+      if (platform === "win32") {
+        if (quote === '"') {
+          if (next === '"' || next === "\\") {
+            escaping = true;
+            continue;
+          }
+          current += ch;
+          continue;
+        }
+        if (!quote) {
+          current += ch;
+          continue;
+        }
+      }
       escaping = true;
       continue;
     }
@@ -50,6 +75,37 @@ function splitCommandLine(value) {
   if (current.length > 0) {
     parts.push(current);
   }
+  if (parts.length === 0) {
+    return [];
+  }
+  return parts;
+}
+
+function splitWindowsExecutableCommand(value, platform = process.platform) {
+  if (platform !== "win32") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.startsWith('"') || trimmed.startsWith("'")) {
+    return null;
+  }
+  const match = trimmed.match(WINDOWS_EXECUTABLE_PATH_RE);
+  if (!match?.groups?.command) {
+    return null;
+  }
+  const rest = match.groups.rest?.trim() ?? "";
+  return {
+    command: match.groups.command,
+    args: rest ? splitCommandParts(rest, platform) : [],
+  };
+}
+
+export function splitCommandLine(value, platform = process.platform) {
+  const windowsCommand = splitWindowsExecutableCommand(value, platform);
+  if (windowsCommand) {
+    return windowsCommand;
+  }
+  const parts = splitCommandParts(value, platform);
   if (parts.length === 0) {
     throw new Error("Invalid agent command: empty command");
   }
@@ -116,36 +172,50 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
-const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
-const target = splitCommandLine(targetCommand);
-const child = spawn(target.command, target.args, {
-  stdio: ["pipe", "pipe", "inherit"],
-  env: process.env,
-});
-
-if (!child.stdin || !child.stdout) {
-  throw new Error("Failed to create MCP proxy stdio pipes");
+function isMainModule() {
+  const mainPath = process.argv[1];
+  if (!mainPath) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
 }
 
-const input = createInterface({ input: process.stdin });
-input.on("line", (line) => {
-  child.stdin.write(`${rewriteLine(line, mcpServers)}\n`);
-});
-input.on("close", () => {
-  child.stdin.end();
-});
+function main() {
+  const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
+  const target = splitCommandLine(targetCommand);
+  const child = spawn(target.command, target.args, {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: process.env,
+  });
 
-child.stdout.pipe(process.stdout);
-
-child.on("error", (error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
-
-child.on("close", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
+  if (!child.stdin || !child.stdout) {
+    throw new Error("Failed to create MCP proxy stdio pipes");
   }
-  process.exit(code ?? 0);
-});
+
+  const input = createInterface({ input: process.stdin });
+  input.on("line", (line) => {
+    child.stdin.write(`${rewriteLine(line, mcpServers)}\n`);
+  });
+  input.on("close", () => {
+    child.stdin.end();
+  });
+
+  child.stdout.pipe(process.stdout);
+
+  child.on("error", (error) => {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  });
+
+  child.on("close", (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+if (isMainModule()) {
+  main();
+}

@@ -56,6 +56,27 @@ describe("resolveDefaultMattermostAccountId", () => {
 });
 
 describe("resolveMattermostReplyToMode", () => {
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+              replyToMode: "all",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg });
+    expect(account.accountId).toBe("alerts");
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("all");
+  });
+
   it("uses the configured mode for channel and group messages", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -86,5 +107,32 @@ describe("resolveMattermostReplyToMode", () => {
   it("defaults to off when replyToMode is unset", () => {
     const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
+  });
+
+  it("preserves shared commands config when an account overrides one commands field", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            commands: {
+              native: true,
+            },
+            accounts: {
+              work: {
+                commands: {
+                  callbackPath: "/hooks/work",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.config.commands).toEqual({
+      native: true,
+      callbackPath: "/hooks/work",
+    });
   });
 });

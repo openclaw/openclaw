@@ -1,6 +1,15 @@
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+  resolveChannelApprovalAdapter,
+  resolveChannelApprovalCapability,
+} from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 
 export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string }
@@ -8,18 +17,16 @@ export type ExecApprovalInitiatingSurfaceState =
   | { kind: "unsupported"; channel: string; channelLabel: string };
 
 function labelForChannel(channel?: string): string {
-  switch (channel) {
-    case "discord":
-      return "Discord";
-    case "telegram":
-      return "Telegram";
-    case "tui":
-      return "terminal UI";
-    case INTERNAL_MESSAGE_CHANNEL:
-      return "Web UI";
-    default:
-      return channel ? channel[0]?.toUpperCase() + channel.slice(1) : "this platform";
+  if (channel === "tui") {
+    return "terminal UI";
   }
+  if (channel === INTERNAL_MESSAGE_CHANNEL) {
+    return "Web UI";
+  }
+  return (
+    getChannelPlugin(channel ?? "")?.meta.label ??
+    (channel ? channel[0]?.toUpperCase() + channel.slice(1) : "this platform")
+  );
 }
 
 export function resolveExecApprovalInitiatingSurfaceState(params: {
@@ -34,18 +41,25 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  const state = getChannelPlugin(channel)?.execApprovals?.getInitiatingSurfaceState?.({
+  const state = resolveChannelApprovalCapability(
+    getChannelPlugin(channel),
+  )?.getActionAvailabilityState?.({
     cfg,
     accountId: params.accountId,
+    action: "approve",
   });
   if (state) {
     return { ...state, channel, channelLabel };
+  }
+  if (isDeliverableMessageChannel(channel)) {
+    return { kind: "enabled", channel, channelLabel };
   }
   return { kind: "unsupported", channel, channelLabel };
 }
 
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   return listChannelPlugins().some(
-    (plugin) => plugin.execApprovals?.hasConfiguredDmRoute?.({ cfg }) ?? false,
+    (plugin) =>
+      resolveChannelApprovalAdapter(plugin)?.delivery?.hasConfiguredDmRoute?.({ cfg }) ?? false,
   );
 }

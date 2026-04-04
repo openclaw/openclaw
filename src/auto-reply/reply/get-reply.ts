@@ -9,25 +9,54 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
-import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
-import { resolveDefaultModel } from "./directive-handling.js";
+import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
-import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
-import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
+
+type ResetCommandAction = "new" | "reset";
+
+let sessionResetModelRuntimePromise: Promise<
+  typeof import("./session-reset-model.runtime.js")
+> | null = null;
+let stageSandboxMediaRuntimePromise: Promise<
+  typeof import("./stage-sandbox-media.runtime.js")
+> | null = null;
+
+function loadSessionResetModelRuntime() {
+  sessionResetModelRuntimePromise ??= import("./session-reset-model.runtime.js");
+  return sessionResetModelRuntimePromise;
+}
+
+function loadStageSandboxMediaRuntime() {
+  stageSandboxMediaRuntimePromise ??= import("./stage-sandbox-media.runtime.js");
+  return stageSandboxMediaRuntimePromise;
+}
+
+let hookRunnerGlobalPromise: Promise<typeof import("../../plugins/hook-runner-global.js")> | null =
+  null;
+let originRoutingPromise: Promise<typeof import("./origin-routing.js")> | null = null;
+
+function loadHookRunnerGlobal() {
+  hookRunnerGlobalPromise ??= import("../../plugins/hook-runner-global.js");
+  return hookRunnerGlobalPromise;
+}
+
+function loadOriginRouting() {
+  originRoutingPromise ??= import("./origin-routing.js");
+  return originRoutingPromise;
+}
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -54,13 +83,62 @@ function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): st
   return channel.filter((name) => agentSet.has(name));
 }
 
+function hasInboundMedia(ctx: MsgContext): boolean {
+  return Boolean(
+    ctx.StickerMediaIncluded ||
+    ctx.Sticker ||
+    ctx.MediaPath?.trim() ||
+    ctx.MediaUrl?.trim() ||
+    ctx.MediaPaths?.some((value) => value?.trim()) ||
+    ctx.MediaUrls?.some((value) => value?.trim()) ||
+    ctx.MediaTypes?.length,
+  );
+}
+
+function hasLinkCandidate(ctx: MsgContext): boolean {
+  const message = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body;
+  if (!message) {
+    return false;
+  }
+  return /\bhttps?:\/\/\S+/i.test(message);
+}
+
+async function applyMediaUnderstandingIfNeeded(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  activeModel: { provider: string; model: string };
+}): Promise<boolean> {
+  if (!hasInboundMedia(params.ctx)) {
+    return false;
+  }
+  const { applyMediaUnderstanding } = await import("../../media-understanding/apply.runtime.js");
+  await applyMediaUnderstanding(params);
+  return true;
+}
+
+async function applyLinkUnderstandingIfNeeded(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+}): Promise<boolean> {
+  if (!hasLinkCandidate(params.ctx)) {
+    return false;
+  }
+  const { applyLinkUnderstanding } = await import("../../link-understanding/apply.runtime.js");
+  await applyLinkUnderstanding(params);
+  return true;
+}
+
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
-  const cfg = configOverride ?? loadConfig();
+  const cfg =
+    configOverride == null
+      ? loadConfig()
+      : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
@@ -126,13 +204,13 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
-    await applyMediaUnderstanding({
+    await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
-    await applyLinkUnderstanding({
+    await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
@@ -173,21 +251,24 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
 
-  await applyResetModelOverride({
-    cfg,
-    agentId,
-    resetTriggered,
-    bodyStripped,
-    sessionCtx,
-    ctx: finalized,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-  });
+  if (resetTriggered && bodyStripped?.trim()) {
+    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+    await applyResetModelOverride({
+      cfg,
+      agentId,
+      resetTriggered,
+      bodyStripped,
+      sessionCtx,
+      ctx: finalized,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+    });
+  }
 
   const channelModelOverride = resolveChannelModelOverride({
     cfg,
@@ -200,6 +281,7 @@ export async function getReplyFromConfig(
         : undefined) ??
       finalized.Provider,
     groupId: groupResolution?.id ?? sessionEntry.groupId,
+    groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
     groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
     groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
     parentSessionKey: sessionCtx.ParentSessionKey,
@@ -289,6 +371,7 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
+    const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
     const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
@@ -350,13 +433,42 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
-  await stageSandboxMedia({
-    ctx,
-    sessionCtx,
-    cfg,
-    sessionKey,
-    workspaceDir,
-  });
+  // Allow plugins to intercept and return a synthetic reply before the LLM runs.
+  const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_agent_reply")) {
+    const { resolveOriginMessageProvider } = await loadOriginRouting();
+    const hookMessageProvider = resolveOriginMessageProvider({
+      originatingChannel: sessionCtx.OriginatingChannel,
+      provider: sessionCtx.Provider,
+    });
+    const hookResult = await hookRunner.runBeforeAgentReply(
+      { cleanedBody },
+      {
+        agentId,
+        sessionKey: agentSessionKey,
+        sessionId,
+        workspaceDir,
+        messageProvider: hookMessageProvider,
+        trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+        channelId: hookMessageProvider,
+      },
+    );
+    if (hookResult?.handled) {
+      return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+    }
+  }
+
+  if (sessionKey && hasInboundMedia(ctx)) {
+    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+    await stageSandboxMedia({
+      ctx,
+      sessionCtx,
+      cfg,
+      sessionKey,
+      workspaceDir,
+    });
+  }
 
   return runPreparedReply({
     ctx,

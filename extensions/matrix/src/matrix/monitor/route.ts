@@ -1,3 +1,4 @@
+import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import {
   getSessionBindingService,
   resolveAgentIdFromSessionKey,
@@ -5,6 +6,7 @@ import {
   type PluginRuntime,
 } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
+import { resolveMatrixThreadSessionKeys } from "./threads.js";
 
 type MatrixResolvedRoute = ReturnType<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>;
 
@@ -14,13 +16,13 @@ export function resolveMatrixInboundRoute(params: {
   roomId: string;
   senderId: string;
   isDirectMessage: boolean;
-  messageId: string;
-  threadRootId?: string;
+  threadId?: string;
   eventTs?: number;
   resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
 }): {
   route: MatrixResolvedRoute;
   configuredBinding: ReturnType<typeof resolveConfiguredAcpBindingRecord>;
+  runtimeBindingId: string | null;
 } {
   const baseRoute = params.resolveAgentRoute({
     cfg: params.cfg,
@@ -39,12 +41,8 @@ export function resolveMatrixInboundRoute(params: {
         }
       : undefined,
   });
-  const bindingConversationId =
-    params.threadRootId && params.threadRootId !== params.messageId
-      ? params.threadRootId
-      : params.roomId;
-  const bindingParentConversationId =
-    bindingConversationId === params.roomId ? undefined : params.roomId;
+  const bindingConversationId = params.threadId ?? params.roomId;
+  const bindingParentConversationId = params.threadId ? params.roomId : undefined;
   const sessionBindingService = getSessionBindingService();
   const runtimeBinding = sessionBindingService.resolveByConversation({
     channel: "matrix",
@@ -54,18 +52,20 @@ export function resolveMatrixInboundRoute(params: {
   });
   const boundSessionKey = runtimeBinding?.targetSessionKey?.trim();
 
-  if (runtimeBinding) {
-    sessionBindingService.touch(runtimeBinding.bindingId, params.eventTs);
-  }
   if (runtimeBinding && boundSessionKey) {
     return {
       route: {
         ...baseRoute,
         sessionKey: boundSessionKey,
         agentId: resolveAgentIdFromSessionKey(boundSessionKey) || baseRoute.agentId,
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: boundSessionKey,
+          mainSessionKey: baseRoute.mainSessionKey,
+        }),
         matchedBy: "binding.channel",
       },
       configuredBinding: null,
+      runtimeBindingId: runtimeBinding.bindingId,
     };
   }
 
@@ -81,19 +81,48 @@ export function resolveMatrixInboundRoute(params: {
       : null;
   const configuredSessionKey = configuredBinding?.record.targetSessionKey?.trim();
 
-  return {
-    route:
-      configuredBinding && configuredSessionKey
-        ? {
-            ...baseRoute,
+  const effectiveRoute =
+    configuredBinding && configuredSessionKey
+      ? {
+          ...baseRoute,
+          sessionKey: configuredSessionKey,
+          agentId:
+            resolveAgentIdFromSessionKey(configuredSessionKey) ||
+            configuredBinding.spec.agentId ||
+            baseRoute.agentId,
+          lastRoutePolicy: deriveLastRoutePolicy({
             sessionKey: configuredSessionKey,
-            agentId:
-              resolveAgentIdFromSessionKey(configuredSessionKey) ||
-              configuredBinding.spec.agentId ||
-              baseRoute.agentId,
-            matchedBy: "binding.channel",
-          }
-        : baseRoute,
+            mainSessionKey: baseRoute.mainSessionKey,
+          }),
+          matchedBy: "binding.channel" as const,
+        }
+      : baseRoute;
+
+  // When no binding overrides the session key, isolate threads into their own sessions.
+  if (!configuredBinding && !configuredSessionKey && params.threadId) {
+    const threadKeys = resolveMatrixThreadSessionKeys({
+      baseSessionKey: effectiveRoute.sessionKey,
+      threadId: params.threadId,
+      parentSessionKey: effectiveRoute.sessionKey,
+    });
+    return {
+      route: {
+        ...effectiveRoute,
+        sessionKey: threadKeys.sessionKey,
+        mainSessionKey: threadKeys.parentSessionKey ?? effectiveRoute.sessionKey,
+        lastRoutePolicy: deriveLastRoutePolicy({
+          sessionKey: threadKeys.sessionKey,
+          mainSessionKey: threadKeys.parentSessionKey ?? effectiveRoute.sessionKey,
+        }),
+      },
+      configuredBinding,
+      runtimeBindingId: null,
+    };
+  }
+
+  return {
+    route: effectiveRoute,
     configuredBinding,
+    runtimeBindingId: null,
   };
 }

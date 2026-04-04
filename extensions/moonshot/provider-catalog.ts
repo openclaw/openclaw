@@ -1,9 +1,11 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
 export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
-const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
-const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
+const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 262144;
+const MOONSHOT_DEFAULT_MAX_TOKENS = 262144;
 const MOONSHOT_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -11,20 +13,88 @@ const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const MOONSHOT_MODEL_CATALOG = [
+  {
+    id: "kimi-k2.5",
+    name: "Kimi K2.5",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: MOONSHOT_DEFAULT_COST,
+    contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  },
+  {
+    id: "kimi-k2-thinking",
+    name: "Kimi K2 Thinking",
+    reasoning: true,
+    input: ["text"],
+    cost: MOONSHOT_DEFAULT_COST,
+    contextWindow: 262144,
+    maxTokens: 262144,
+  },
+  {
+    id: "kimi-k2-thinking-turbo",
+    name: "Kimi K2 Thinking Turbo",
+    reasoning: true,
+    input: ["text"],
+    cost: MOONSHOT_DEFAULT_COST,
+    contextWindow: 262144,
+    maxTokens: 262144,
+  },
+  {
+    id: "kimi-k2-turbo",
+    name: "Kimi K2 Turbo",
+    reasoning: false,
+    input: ["text"],
+    cost: MOONSHOT_DEFAULT_COST,
+    contextWindow: 256000,
+    maxTokens: 16384,
+  },
+] as const;
+
+export function isNativeMoonshotBaseUrl(baseUrl: string | undefined): boolean {
+  return resolveProviderRequestCapabilities({
+    provider: "moonshot",
+    api: "openai-completions",
+    baseUrl,
+    capability: "llm",
+    transport: "stream",
+  }).supportsNativeStreamingUsageCompat;
+}
+
+function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return provider;
+  }
+
+  let changed = false;
+  const models = provider.models.map((model) => {
+    if (model.compat?.supportsUsageInStreaming !== undefined) {
+      return model;
+    }
+    changed = true;
+    return {
+      ...model,
+      compat: {
+        ...model.compat,
+        supportsUsageInStreaming: true,
+      },
+    };
+  });
+
+  return changed ? { ...provider, models } : provider;
+}
+
+export function applyMoonshotNativeStreamingUsageCompat(
+  provider: ModelProviderConfig,
+): ModelProviderConfig {
+  return isNativeMoonshotBaseUrl(provider.baseUrl) ? withStreamingUsageCompat(provider) : provider;
+}
+
 export function buildMoonshotProvider(): ModelProviderConfig {
   return {
     baseUrl: MOONSHOT_BASE_URL,
     api: "openai-completions",
-    models: [
-      {
-        id: MOONSHOT_DEFAULT_MODEL_ID,
-        name: "Kimi K2.5",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: MOONSHOT_DEFAULT_COST,
-        contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
-      },
-    ],
+    models: MOONSHOT_MODEL_CATALOG.map((model) => ({ ...model, input: [...model.input] })),
   };
 }

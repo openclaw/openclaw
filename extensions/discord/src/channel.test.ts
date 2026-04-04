@@ -1,40 +1,43 @@
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-  OpenClawConfig,
-  PluginRuntime,
-} from "openclaw/plugin-sdk/discord";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import { discordPlugin } from "./channel.js";
-import { setDiscordRuntime } from "./runtime.js";
+import type { OpenClawConfig } from "./runtime-api.js";
+let discordPlugin: typeof import("./channel.js").discordPlugin;
+let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
 const auditDiscordChannelPermissionsMock = vi.hoisted(() => vi.fn());
+const collectDiscordAuditChannelIdsMock = vi.hoisted(() =>
+  vi.fn(() => ({ channelIds: [], unresolvedChannels: 0 })),
+);
+const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("./probe.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./probe.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
   return {
-    ...actual,
+    sleepWithAbort: sleepWithAbortMock,
+  };
+});
+
+vi.mock("./probe.js", () => {
+  return {
     probeDiscord: probeDiscordMock,
   };
 });
 
-vi.mock("./monitor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor.js")>();
+vi.mock("./monitor/provider.runtime.js", () => {
   return {
-    ...actual,
     monitorDiscordProvider: monitorDiscordProviderMock,
   };
 });
 
-vi.mock("./audit.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./audit.js")>();
+vi.mock("./audit.js", () => {
   return {
-    ...actual,
     auditDiscordChannelPermissions: auditDiscordChannelPermissionsMock,
+    collectDiscordAuditChannelIds: collectDiscordAuditChannelIdsMock,
   };
 });
 
@@ -49,49 +52,90 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createStartAccountCtx(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  runtime: ReturnType<typeof createRuntimeEnv>;
-}): ChannelGatewayContext<ResolvedDiscordAccount> {
-  const account = discordPlugin.config.resolveAccount(
-    params.cfg,
-    params.accountId,
-  ) as ResolvedDiscordAccount;
-  const snapshot: ChannelAccountSnapshot = {
-    accountId: params.accountId,
-    configured: true,
-    enabled: true,
-    running: false,
-  };
-  return {
-    accountId: params.accountId,
-    account,
-    cfg: params.cfg,
-    runtime: params.runtime,
-    abortSignal: new AbortController().signal,
-    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => snapshot,
-    setStatus: vi.fn(),
-  };
+function resolveAccount(cfg: OpenClawConfig, accountId = "default"): ResolvedDiscordAccount {
+  return discordPlugin.config.resolveAccount(cfg, accountId) as ResolvedDiscordAccount;
+}
+
+function startDiscordAccount(cfg: OpenClawConfig, accountId = "default") {
+  return discordPlugin.gateway!.startAccount!(
+    createStartAccountContext({
+      account: resolveAccount(cfg, accountId),
+      cfg,
+    }),
+  );
+}
+
+function installDiscordRuntime(discord: Record<string, unknown>) {
+  setDiscordRuntime({
+    channel: {
+      discord,
+    },
+    logging: {
+      shouldLogVerbose: () => false,
+    },
+  } as unknown as PluginRuntime);
 }
 
 afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   auditDiscordChannelPermissionsMock.mockReset();
+  collectDiscordAuditChannelIdsMock.mockReset();
+  collectDiscordAuditChannelIdsMock.mockReturnValue({
+    channelIds: [],
+    unresolvedChannels: 0,
+  });
+  sleepWithAbortMock.mockReset();
+  sleepWithAbortMock.mockResolvedValue(undefined);
+});
+
+beforeEach(async () => {
+  vi.useRealTimers();
+  installDiscordRuntime({});
+});
+
+beforeAll(async () => {
+  ({ discordPlugin } = await import("./channel.js"));
+  ({ setDiscordRuntime } = await import("./runtime.js"));
 });
 
 describe("discordPlugin outbound", () => {
-  it("forwards mediaLocalRoots to sendMessageDiscord", async () => {
-    const sendMessageDiscord = vi.fn(async () => ({ messageId: "m1" }));
-    setDiscordRuntime({
-      channel: {
+  it("avoids local require calls for bundled-only sibling modules", async () => {
+    const source = await readFile(
+      resolve(process.cwd(), "extensions/discord/src/channel.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain('require("./ui.js")');
+    expect(source).not.toContain('require("./channel-actions.js")');
+  });
+
+  it("honors per-account replyToMode overrides", () => {
+    const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
+    if (!resolveReplyToMode) {
+      throw new Error("Expected discordPlugin.threading.resolveReplyToMode to be defined");
+    }
+
+    const cfg = {
+      channels: {
         discord: {
-          sendMessageDiscord,
+          replyToMode: "all",
+          token: "discord-token",
+          accounts: {
+            work: {
+              token: "discord-token-work",
+              replyToMode: "first",
+            },
+          },
         },
       },
-    } as unknown as PluginRuntime);
+    } as OpenClawConfig;
+
+    expect(resolveReplyToMode({ cfg, accountId: "work" })).toBe("first");
+    expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
+  });
+
+  it("forwards mediaLocalRoots to sendMessageDiscord", async () => {
+    const sendMessageDiscord = vi.fn(async () => ({ messageId: "m1" }));
 
     const result = await discordPlugin.outbound!.sendMedia!({
       cfg: {} as OpenClawConfig,
@@ -100,6 +144,9 @@ describe("discordPlugin outbound", () => {
       mediaUrl: "/tmp/image.png",
       mediaLocalRoots: ["/tmp/agent-root"],
       accountId: "work",
+      deps: {
+        discord: sendMessageDiscord,
+      },
     });
 
     expect(sendMessageDiscord).toHaveBeenCalledWith(
@@ -117,16 +164,9 @@ describe("discordPlugin outbound", () => {
     const runtimeProbeDiscord = vi.fn(async () => {
       throw new Error("runtime Discord probe should not be used");
     });
-    setDiscordRuntime({
-      channel: {
-        discord: {
-          probeDiscord: runtimeProbeDiscord,
-        },
-      },
-      logging: {
-        shouldLogVerbose: () => false,
-      },
-    } as unknown as PluginRuntime);
+    installDiscordRuntime({
+      probeDiscord: runtimeProbeDiscord,
+    });
     probeDiscordMock.mockResolvedValue({
       ok: true,
       bot: { username: "Bob" },
@@ -141,7 +181,7 @@ describe("discordPlugin outbound", () => {
     });
 
     const cfg = createCfg();
-    const account = discordPlugin.config.resolveAccount(cfg, "default");
+    const account = resolveAccount(cfg);
 
     await discordPlugin.status!.probeAccount!({
       account,
@@ -162,17 +202,10 @@ describe("discordPlugin outbound", () => {
     const runtimeMonitorDiscordProvider = vi.fn(async () => {
       throw new Error("runtime Discord monitor should not be used");
     });
-    setDiscordRuntime({
-      channel: {
-        discord: {
-          probeDiscord: runtimeProbeDiscord,
-          monitorDiscordProvider: runtimeMonitorDiscordProvider,
-        },
-      },
-      logging: {
-        shouldLogVerbose: () => false,
-      },
-    } as unknown as PluginRuntime);
+    installDiscordRuntime({
+      probeDiscord: runtimeProbeDiscord,
+      monitorDiscordProvider: runtimeMonitorDiscordProvider,
+    });
     probeDiscordMock.mockResolvedValue({
       ok: true,
       bot: { username: "Bob" },
@@ -188,13 +221,7 @@ describe("discordPlugin outbound", () => {
     monitorDiscordProviderMock.mockResolvedValue(undefined);
 
     const cfg = createCfg();
-    await discordPlugin.gateway!.startAccount!(
-      createStartAccountCtx({
-        cfg,
-        accountId: "default",
-        runtime: createRuntimeEnv(),
-      }),
-    );
+    await startDiscordAccount(cfg);
 
     expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 2500, {
       includeApplication: true,
@@ -205,8 +232,114 @@ describe("discordPlugin outbound", () => {
         accountId: "default",
       }),
     );
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
+  });
+
+  it("stagger starts later accounts in multi-bot setups", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "Cherry" },
+      application: {
+        intents: {
+          messageContent: "limited",
+          guildMembers: "disabled",
+          presence: "disabled",
+        },
+      },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            // "alpha" sorts before "zeta" so alpha is index 0, zeta is index 1
+            alpha: { token: "Bot alpha-token", enabled: true },
+            zeta: { token: "Bot zeta-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First account (index 0) — no delay
+    await startDiscordAccount(cfg, "alpha");
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+    // Second account (index 1) — 10s delay
+    await startDiscordAccount(cfg, "zeta");
+    expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, expect.any(Object));
+  });
+});
+
+describe("discordPlugin bindings", () => {
+  it("preserves user-prefixed current conversation ids for DM binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "user:123456789012345678",
+    });
+
+    expect(result).toEqual({
+      conversationId: "user:123456789012345678",
+    });
+  });
+
+  it("preserves channel-prefixed current conversation ids for channel binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "channel:987654321098765432",
+    });
+
+    expect(result).toEqual({
+      conversationId: "channel:987654321098765432",
+    });
+  });
+
+  it("preserves channel-prefixed parent ids for thread binds", () => {
+    const result = discordPlugin.bindings?.resolveCommandConversation?.({
+      accountId: "default",
+      originatingTo: "channel:thread-42",
+      threadId: "thread-42",
+      threadParentId: "parent-9",
+    });
+
+    expect(result).toEqual({
+      conversationId: "thread-42",
+      parentConversationId: "channel:parent-9",
+    });
+  });
+});
+
+describe("discordPlugin security", () => {
+  it("normalizes dm allowlist entries with trimmed prefixes and mentions", () => {
+    const resolveDmPolicy = discordPlugin.security?.resolveDmPolicy;
+    if (!resolveDmPolicy) {
+      throw new Error("resolveDmPolicy unavailable");
+    }
+
+    const cfg = {
+      channels: {
+        discord: {
+          token: "discord-token",
+          dm: { policy: "allowlist", allowFrom: ["  discord:<@!123456789>  "] },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveDmPolicy({
+      cfg,
+      account: discordPlugin.config.resolveAccount(cfg, "default") as ResolvedDiscordAccount,
+    });
+    if (!result) {
+      throw new Error("discord resolveDmPolicy returned null");
+    }
+
+    expect(result.policy).toBe("allowlist");
+    expect(result.allowFrom).toEqual(["  discord:<@!123456789>  "]);
+    expect(result.normalizeEntry?.("  discord:<@!123456789>  ")).toBe("123456789");
+    expect(result.normalizeEntry?.("  user:987654321  ")).toBe("987654321");
   });
 });
 

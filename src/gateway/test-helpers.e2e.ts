@@ -2,6 +2,8 @@ import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import {
   type DeviceIdentity,
   loadOrCreateDeviceIdentity,
@@ -28,6 +30,7 @@ export async function getFreeGatewayPort(): Promise<number> {
 export async function connectGatewayClient(params: {
   url: string;
   token?: string;
+  deviceToken?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
@@ -41,11 +44,12 @@ export async function connectGatewayClient(params: {
   instanceId?: string;
   deviceIdentity?: DeviceIdentity;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
-  connectDelayMs?: number;
+  connectChallengeTimeoutMs?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
 }) {
   const role = params.role ?? "operator";
+  const scopes = params.scopes ?? (role === "node" ? [] : undefined);
   const platform = params.platform ?? process.platform;
   const identityRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   const deviceIdentity =
@@ -76,7 +80,8 @@ export async function connectGatewayClient(params: {
     const client = new GatewayClient({
       url: params.url,
       token: params.token,
-      connectDelayMs: params.connectDelayMs ?? 0,
+      deviceToken: params.deviceToken,
+      connectChallengeTimeoutMs: params.connectChallengeTimeoutMs ?? 0,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
@@ -84,7 +89,7 @@ export async function connectGatewayClient(params: {
       deviceFamily: params.deviceFamily,
       mode: params.mode ?? GATEWAY_CLIENT_MODES.TEST,
       role,
-      scopes: params.scopes,
+      scopes,
       caps: params.caps,
       commands: params.commands,
       instanceId: params.instanceId,
@@ -233,6 +238,9 @@ export async function startGatewayWithClient(params: {
 }) {
   await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
   process.env.OPENCLAW_CONFIG_PATH = params.configPath;
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+  clearSessionStoreCacheForTest();
 
   const port = await getFreeGatewayPort();
   const server = await startGatewayServer(port, {

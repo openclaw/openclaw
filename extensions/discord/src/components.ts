@@ -20,14 +20,18 @@ import {
   TextInput,
   Thumbnail,
   UserSelectMenu,
-  parseCustomId,
-  type ComponentParserResult,
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, MessageFlags, TextInputStyle } from "discord-api-types/v10";
+import {
+  buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl,
+  buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
+  parseDiscordModalCustomIdForCarbon as parseDiscordModalCustomIdForCarbonImpl,
+} from "./component-custom-id.js";
+// Some test-only module graphs partially mock `@buape/carbon` and can drop `Modal`.
+// Keep dynamic form definitions loadable instead of crashing unrelated suites.
+const ModalBase: typeof Modal = (Modal ?? class {}) as typeof Modal;
 
-export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
-export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
@@ -47,6 +51,8 @@ export type DiscordComponentButtonSpec = {
   style?: DiscordComponentButtonStyle;
   url?: string;
   callbackData?: string;
+  /** Internal use only: bypass dynamic component ids with a fixed custom id. */
+  internalCustomId?: string;
   emoji?: {
     name: string;
     id?: string;
@@ -211,6 +217,16 @@ export type DiscordComponentBuildResult = {
   entries: DiscordComponentEntry[];
   modals: DiscordModalEntry[];
 };
+export {
+  DISCORD_COMPONENT_CUSTOM_ID_KEY,
+  DISCORD_MODAL_CUSTOM_ID_KEY,
+  buildDiscordComponentCustomId,
+  buildDiscordModalCustomId,
+  parseDiscordComponentCustomId,
+  parseDiscordComponentCustomIdForCarbon,
+  parseDiscordModalCustomId,
+  parseDiscordModalCustomIdForCarbon,
+} from "./component-custom-id.js";
 export { buildDiscordInteractiveComponents } from "./shared-interactive.js";
 
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
@@ -618,74 +634,6 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
   };
 }
 
-export function buildDiscordComponentCustomId(params: {
-  componentId: string;
-  modalId?: string;
-}): string {
-  const base = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:cid=${params.componentId}`;
-  return params.modalId ? `${base};mid=${params.modalId}` : base;
-}
-
-export function buildDiscordModalCustomId(modalId: string): string {
-  return `${DISCORD_MODAL_CUSTOM_ID_KEY}:mid=${modalId}`;
-}
-
-export function parseDiscordComponentCustomId(
-  id: string,
-): { componentId: string; modalId?: string } | null {
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
-    return null;
-  }
-  const componentId = parsed.data.cid;
-  if (typeof componentId !== "string" || !componentId.trim()) {
-    return null;
-  }
-  const modalId = parsed.data.mid;
-  return {
-    componentId,
-    modalId: typeof modalId === "string" && modalId.trim() ? modalId : undefined,
-  };
-}
-
-export function parseDiscordModalCustomId(id: string): string | null {
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
-    return null;
-  }
-  const modalId = parsed.data.mid;
-  if (typeof modalId !== "string" || !modalId.trim()) {
-    return null;
-  }
-  return modalId;
-}
-
-function isDiscordComponentWildcardRegistrationId(id: string): boolean {
-  return /^__openclaw_discord_component_[a-z_]+_wildcard__$/.test(id);
-}
-
-export function parseDiscordComponentCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
-    return { key: "*", data: {} };
-  }
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
-    return parsed;
-  }
-  return { key: "*", data: parsed.data };
-}
-
-export function parseDiscordModalCustomIdForCarbon(id: string): ComponentParserResult {
-  if (id === "*" || isDiscordComponentWildcardRegistrationId(id)) {
-    return { key: "*", data: {} };
-  }
-  const parsed = parseCustomId(id);
-  if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
-    return parsed;
-  }
-  return { key: "*", data: parsed.data };
-}
-
 function buildTextDisplays(text?: string, texts?: string[]): TextDisplay[] {
   if (texts && texts.length > 0) {
     return texts.map((entry) => new TextDisplay(entry));
@@ -715,16 +663,27 @@ function createButtonComponent(params: {
     return { component: new DynamicLinkButton() };
   }
   const componentId = params.componentId ?? createShortId("btn_");
-  const customId = buildDiscordComponentCustomId({
-    componentId,
-    modalId: params.modalId,
-  });
+  const internalCustomId =
+    typeof params.spec.internalCustomId === "string" && params.spec.internalCustomId.trim()
+      ? params.spec.internalCustomId.trim()
+      : undefined;
+  const customId =
+    internalCustomId ??
+    buildDiscordComponentCustomIdImpl({
+      componentId,
+      modalId: params.modalId,
+    });
   class DynamicButton extends Button {
     label = params.spec.label;
     customId = customId;
     style = style;
     emoji = params.spec.emoji;
     disabled = params.spec.disabled ?? false;
+  }
+  if (internalCustomId) {
+    return {
+      component: new DynamicButton(),
+    };
   }
   return {
     component: new DynamicButton(),
@@ -753,7 +712,7 @@ function createSelectComponent(params: {
 } {
   const type = (params.spec.type ?? "string").toLowerCase() as DiscordComponentSelectType;
   const componentId = params.componentId ?? createShortId("sel_");
-  const customId = buildDiscordComponentCustomId({ componentId });
+  const customId = buildDiscordComponentCustomIdImpl({ componentId });
   if (type === "string") {
     const options = params.spec.options ?? [];
     if (options.length === 0) {
@@ -1126,16 +1085,16 @@ export function buildDiscordComponentMessageFlags(
   return hasV2 ? MessageFlags.IsComponentsV2 : undefined;
 }
 
-export class DiscordFormModal extends Modal {
+export class DiscordFormModal extends ModalBase {
   title: string;
   customId: string;
   components: Array<Label | TextDisplay>;
-  customIdParser = parseDiscordModalCustomIdForCarbon;
+  customIdParser = parseDiscordModalCustomIdForCarbonImpl;
 
   constructor(params: { modalId: string; title: string; fields: DiscordModalFieldDefinition[] }) {
     super();
     this.title = params.title;
-    this.customId = buildDiscordModalCustomId(params.modalId);
+    this.customId = buildDiscordModalCustomIdImpl(params.modalId);
     this.components = params.fields.map((field) => {
       const component = createModalFieldComponent(field);
       class DynamicLabel extends Label {

@@ -70,6 +70,81 @@ describe("resolveMatrixAccount", () => {
     expect(account.configured).toBe(true);
   });
 
+  it("treats SecretRef access-token config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: { source: "file", provider: "matrix-file", id: "value" },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-token",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
+  it("treats accounts.default SecretRef access-token config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              accessToken: { source: "file", provider: "matrix-file", id: "value" },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-token",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
+  it("treats accounts.default SecretRef password config as configured", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              password: { source: "file", provider: "matrix-file", id: "value" },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "matrix-file": {
+            source: "file",
+            path: "/tmp/matrix-password",
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.configured).toBe(true);
+  });
+
   it("requires userId + password when no access token is set", () => {
     const cfg: CoreConfig = {
       channels: {
@@ -143,6 +218,29 @@ describe("resolveMatrixAccount", () => {
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("ops");
   });
 
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          homeserver: "https://matrix.example.org",
+          accessToken: "default-token",
+          accounts: {
+            ops: {
+              homeserver: "https://ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.accountId).toBe("ops");
+    expect(account.homeserver).toBe("https://ops.example.org");
+    expect(account.configured).toBe(true);
+  });
+
   it("includes env-backed named accounts in plugin account enumeration", () => {
     const keys = getMatrixScopedEnvVarNames("team-ops");
     process.env[keys.homeserver] = "https://matrix.example.org";
@@ -183,6 +281,46 @@ describe("resolveMatrixAccount", () => {
 
     expect(listMatrixAccountIds(cfg)).toEqual(["default", "team-ops"]);
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("default");
+  });
+
+  it("includes a top-level configured default account alongside named accounts", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "default-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    };
+
+    expect(listMatrixAccountIds(cfg)).toEqual(["default", "ops"]);
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("default");
+  });
+
+  it("does not materialize a default account from shared top-level defaults alone", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          name: "Shared Defaults",
+          enabled: true,
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    };
+
+    expect(listMatrixAccountIds(cfg)).toEqual(["ops"]);
+    expect(resolveDefaultMatrixAccountId(cfg)).toBe("ops");
   });
 
   it('uses the synthetic "default" account when multiple named accounts need explicit selection', () => {
@@ -234,6 +372,27 @@ describe("resolveMatrixAccount", () => {
     ).toEqual(["@alerts:example.org", "@main:example.org"]);
   });
 
+  it("honors injected env when detecting configured bot accounts", () => {
+    const env = {
+      MATRIX_HOMESERVER: "https://matrix.example.org",
+      MATRIX_USER_ID: "@main:example.org",
+      MATRIX_ACCESS_TOKEN: "main-token",
+      MATRIX_ALERTS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_ALERTS_USER_ID: "@alerts:example.org",
+      MATRIX_ALERTS_ACCESS_TOKEN: "alerts-token",
+    } as NodeJS.ProcessEnv;
+
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {},
+      },
+    };
+
+    expect(
+      Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "ops", env })).toSorted(),
+    ).toEqual(["@alerts:example.org", "@main:example.org"]);
+  });
+
   it("falls back to stored credentials when an access-token-only account omits userId", () => {
     loadMatrixCredentialsMock.mockImplementation(
       (env?: NodeJS.ProcessEnv, accountId?: string | null) =>
@@ -266,5 +425,393 @@ describe("resolveMatrixAccount", () => {
     expect(Array.from(resolveConfiguredMatrixBotUserIds({ cfg, accountId: "default" }))).toEqual([
       "@ops:example.org",
     ]);
+  });
+
+  it("preserves shared nested dm and actions config when an account overrides one field", () => {
+    const account = resolveMatrixAccount({
+      cfg: {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            accessToken: "main-token",
+            dm: {
+              enabled: true,
+              policy: "pairing",
+            },
+            actions: {
+              reactions: true,
+              messages: true,
+            },
+            accounts: {
+              ops: {
+                accessToken: "ops-token",
+                dm: {
+                  allowFrom: ["@ops:example.org"],
+                },
+                actions: {
+                  messages: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "ops",
+    });
+
+    expect(account.config.dm).toEqual({
+      enabled: true,
+      policy: "pairing",
+      allowFrom: ["@ops:example.org"],
+    });
+    expect(account.config.actions).toEqual({
+      reactions: true,
+      messages: false,
+    });
+  });
+
+  it("filters channel-level groups by room account in multi-account setups", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!axis-room:example.org": {
+              allow: true,
+              account: "axis",
+            },
+            "!unassigned-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "default-token",
+            },
+            axis: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "axis-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.groups).toEqual({
+      "!default-room:example.org": {
+        allow: true,
+        account: "default",
+      },
+      "!unassigned-room:example.org": {
+        allow: true,
+      },
+    });
+    expect(resolveMatrixAccount({ cfg, accountId: "axis" }).config.groups).toEqual({
+      "!axis-room:example.org": {
+        allow: true,
+        account: "axis",
+      },
+      "!unassigned-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("filters channel-level groups when the default account is configured at the top level", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "default-token",
+          groups: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!ops-room:example.org": {
+              allow: true,
+              account: "ops",
+            },
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.groups).toEqual({
+      "!default-room:example.org": {
+        allow: true,
+        account: "default",
+      },
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toEqual({
+      "!ops-room:example.org": {
+        allow: true,
+        account: "ops",
+      },
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("filters legacy channel-level rooms by room account in multi-account setups", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          rooms: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!axis-room:example.org": {
+              allow: true,
+              account: "axis",
+            },
+            "!unassigned-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            default: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "default-token",
+            },
+            axis: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "axis-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.rooms).toEqual({
+      "!default-room:example.org": {
+        allow: true,
+        account: "default",
+      },
+      "!unassigned-room:example.org": {
+        allow: true,
+      },
+    });
+    expect(resolveMatrixAccount({ cfg, accountId: "axis" }).config.rooms).toEqual({
+      "!axis-room:example.org": {
+        allow: true,
+        account: "axis",
+      },
+      "!unassigned-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("filters legacy channel-level rooms when the default account is configured at the top level", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "default-token",
+          rooms: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!ops-room:example.org": {
+              allow: true,
+              account: "ops",
+            },
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.rooms).toEqual({
+      "!default-room:example.org": {
+        allow: true,
+        account: "default",
+      },
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toEqual({
+      "!ops-room:example.org": {
+        allow: true,
+        account: "ops",
+      },
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("honors injected env when scoping room entries in multi-account setups", () => {
+    const env = {
+      MATRIX_HOMESERVER: "https://matrix.example.org",
+      MATRIX_ACCESS_TOKEN: "default-token",
+      MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    } as NodeJS.ProcessEnv;
+
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!ops-room:example.org": {
+              allow: true,
+              account: "ops",
+            },
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops", env }).config.groups).toEqual({
+      "!ops-room:example.org": {
+        allow: true,
+        account: "ops",
+      },
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("keeps scoped groups bound to their account even when only one account is active", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toEqual({
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("keeps scoped legacy rooms bound to their account even when only one account is active", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          rooms: {
+            "!default-room:example.org": {
+              allow: true,
+              account: "default",
+            },
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toEqual({
+      "!shared-room:example.org": {
+        allow: true,
+      },
+    });
+  });
+
+  it("lets an account clear inherited groups with an explicit empty map", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          groups: {
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+              groups: {},
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toBeUndefined();
+  });
+
+  it("lets an account clear inherited legacy rooms with an explicit empty map", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          rooms: {
+            "!shared-room:example.org": {
+              allow: true,
+            },
+          },
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+              rooms: {},
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toBeUndefined();
   });
 });

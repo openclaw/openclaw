@@ -8,12 +8,13 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
 import { isLoopbackAddress } from "../net.js";
-import { getHandshakeTimeoutMs } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
+import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
 import {
   attachGatewayWsMessageHandler,
@@ -61,11 +62,13 @@ const sanitizeLogValue = (value: string | undefined): string | undefined => {
 export type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
+  preauthConnectionBudget: PreauthConnectionBudget;
   port: number;
   gatewayHost?: string;
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
   resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
@@ -94,11 +97,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
   const {
     wss,
     clients,
+    preauthConnectionBudget,
     port,
     gatewayHost,
     canvasHostEnabled,
     canvasHostServerPort,
     resolvedAuth,
+    getResolvedAuth = () => resolvedAuth,
     rateLimiter,
     browserRateLimiter,
     gatewayMethods,
@@ -119,6 +124,17 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const connId = randomUUID();
     const remoteAddr = (socket as WebSocket & { _socket?: { remoteAddress?: string } })._socket
       ?.remoteAddress;
+    const preauthBudgetKey = (
+      socket as WebSocket & {
+        __openclawPreauthBudgetClaimed?: boolean;
+        __openclawPreauthBudgetKey?: string;
+      }
+    ).__openclawPreauthBudgetKey;
+    (
+      socket as WebSocket & {
+        __openclawPreauthBudgetClaimed?: boolean;
+      }
+    ).__openclawPreauthBudgetClaimed = true;
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);
@@ -140,6 +156,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     logWs("in", "open", { connId, remoteAddr });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
+    let holdsPreauthBudget = true;
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
     let lastFrameType: string | undefined;
@@ -153,6 +170,14 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (meta && Object.keys(meta).length > 0) {
         closeMeta = { ...closeMeta, ...meta };
       }
+    };
+
+    const releasePreauthBudget = () => {
+      if (!holdsPreauthBudget) {
+        return;
+      }
+      holdsPreauthBudget = false;
+      preauthConnectionBudget.release(preauthBudgetKey);
     };
 
     const setLastFrameMeta = (meta: { type?: string; method?: string; id?: string }) => {
@@ -184,6 +209,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
       closed = true;
       clearTimeout(handshakeTimer);
+      releasePreauthBudget();
       if (client) {
         clients.delete(client);
       }
@@ -265,7 +291,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
-    const handshakeTimeoutMs = getHandshakeTimeoutMs();
+    const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
     const handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";
@@ -289,7 +315,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       requestUserAgent,
       canvasHostUrl,
       connectNonce,
-      resolvedAuth,
+      getResolvedAuth,
       rateLimiter,
       browserRateLimiter,
       gatewayMethods,
@@ -302,6 +328,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
+        releasePreauthBudget();
         client = next;
         clients.add(next);
       },

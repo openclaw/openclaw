@@ -197,7 +197,7 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 `Legacy Matrix encrypted state was detected, but the Matrix plugin helper is unavailable. Install or repair @openclaw/matrix so OpenClaw can inspect the old rust crypto store before upgrading.`
 
 - Meaning: OpenClaw found old encrypted Matrix state, but it could not load the helper entrypoint from the Matrix plugin that normally inspects that store.
-- What to do: reinstall or repair the Matrix plugin (`openclaw plugins install @openclaw/matrix`, or `openclaw plugins install ./extensions/matrix` for a repo checkout), then rerun `openclaw doctor --fix` or restart the gateway.
+- What to do: reinstall or repair the Matrix plugin (`openclaw plugins install @openclaw/matrix`, or `openclaw plugins install ./path/to/local/matrix-plugin` for a repo checkout), then rerun `openclaw doctor --fix` or restart the gateway.
 
 `Matrix plugin helper path is unsafe: ... Reinstall @openclaw/matrix and try again.`
 
@@ -275,7 +275,10 @@ If the old store reports room keys that were never backed up, OpenClaw warns ins
 - Meaning: the stored key does not match the active Matrix backup.
 - What to do: rerun `openclaw matrix verify device "<your-recovery-key>"` with the correct key.
 
-If you accept losing unrecoverable old encrypted history, you can instead reset the current backup baseline with `openclaw matrix verify backup reset --yes`.
+If you accept losing unrecoverable old encrypted history, you can instead reset the
+current backup baseline with `openclaw matrix verify backup reset --yes`. When the
+stored backup secret is broken, that reset may also recreate secret storage so the
+new backup key can load correctly after restart.
 
 `Backup trust chain is not verified on this device. Re-run 'openclaw matrix verify device <key>'.`
 
@@ -312,7 +315,7 @@ If you accept losing unrecoverable old encrypted history, you can instead reset 
 `Matrix is installed from a custom path that no longer exists: ...`
 
 - Meaning: your plugin install record points at a local path that is gone.
-- What to do: reinstall with `openclaw plugins install @openclaw/matrix`, or if you are running from a repo checkout, `openclaw plugins install ./extensions/matrix`.
+- What to do: reinstall with `openclaw plugins install @openclaw/matrix`, or if you are running from a repo checkout, `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 ## If encrypted history still does not come back
 

@@ -1,17 +1,24 @@
 import {
-  buildOauthProviderAuthResult,
   definePluginEntry,
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
-} from "openclaw/plugin-sdk/minimax-portal-auth";
+} from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
-  createProviderApiKeyAuthMethod,
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildHybridAnthropicOrOpenAIReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
+import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
+import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
+import {
+  buildMinimaxImageGenerationProvider,
+  buildMinimaxPortalImageGenerationProvider,
+} from "./image-generation-provider.js";
 import {
   minimaxMediaUnderstandingProvider,
   minimaxPortalMediaUnderstandingProvider,
@@ -23,9 +30,15 @@ import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-cat
 const API_PROVIDER_ID = "minimax";
 const PORTAL_PROVIDER_ID = "minimax-portal";
 const PROVIDER_LABEL = "MiniMax";
-const DEFAULT_MODEL = "MiniMax-M2.7";
+const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
+
+function resolveMinimaxReasoningOutputMode(): "native" {
+  // Keep MiniMax on native reasoning mode. Tagged enforcement previously
+  // suppressed normal assistant replies on this Anthropic-compatible surface.
+  return "native";
+}
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
   return region === "cn" ? DEFAULT_BASE_URL_CN : DEFAULT_BASE_URL_GLOBAL;
@@ -37,11 +50,6 @@ function apiModelRef(modelId: string): string {
 
 function portalModelRef(modelId: string): string {
   return `${PORTAL_PROVIDER_ID}/${modelId}`;
-}
-
-function isModernMiniMaxModel(modelId: string): boolean {
-  const lower = modelId.trim().toLowerCase();
-  return lower.startsWith("minimax-m2.7") || lower.startsWith("minimax-m2.5");
 }
 
 function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string }) {
@@ -135,13 +143,6 @@ function createOAuthHandler(region: MiniMaxRegion) {
                 [portalModelRef("MiniMax-M2.7-highspeed")]: {
                   alias: "minimax-m2.7-highspeed",
                 },
-                [portalModelRef("MiniMax-M2.5")]: { alias: "minimax-m2.5" },
-                [portalModelRef("MiniMax-M2.5-highspeed")]: {
-                  alias: "minimax-m2.5-highspeed",
-                },
-                [portalModelRef("MiniMax-M2.5-Lightning")]: {
-                  alias: "minimax-m2.5-lightning",
-                },
               },
             },
           },
@@ -172,6 +173,7 @@ export default definePluginEntry({
     api.registerProvider({
       id: API_PROVIDER_ID,
       label: PROVIDER_LABEL,
+      hookAliases: ["minimax-cn"],
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_API_KEY"],
       auth: [
@@ -234,14 +236,25 @@ export default definePluginEntry({
         });
         return apiKey ? { token: apiKey } : null;
       },
-      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
+      buildReplayPolicy: (ctx) =>
+        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
+          anthropicModelDropThinkingBlocks: true,
+        }),
+      wrapStreamFn: (ctx) =>
+        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
+      isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
       fetchUsageSnapshot: async (ctx) =>
         await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     });
 
+    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
+
     api.registerProvider({
       id: PORTAL_PROVIDER_ID,
       label: PROVIDER_LABEL,
+      hookAliases: ["minimax-portal-cn"],
       docsPath: "/providers/minimax",
       envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
       catalog: {
@@ -279,9 +292,16 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
-      isModernModelRef: ({ modelId }) => isModernMiniMaxModel(modelId),
+      buildReplayPolicy: (ctx) =>
+        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
+          anthropicModelDropThinkingBlocks: true,
+        }),
+      wrapStreamFn: (ctx) =>
+        createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
+      resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
+      isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
     });
-    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
-    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
+    api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
+    api.registerImageGenerationProvider(buildMinimaxPortalImageGenerationProvider());
   },
 });

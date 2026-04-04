@@ -1,6 +1,40 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SkillStatusReport } from "../types.ts";
 
+export type ClawHubSearchResult = {
+  score: number;
+  slug: string;
+  displayName: string;
+  summary?: string;
+  version?: string;
+  updatedAt?: number;
+};
+
+export type ClawHubSkillDetail = {
+  skill: {
+    slug: string;
+    displayName: string;
+    summary?: string;
+    tags?: Record<string, string>;
+    createdAt: number;
+    updatedAt: number;
+  } | null;
+  latestVersion?: {
+    version: string;
+    createdAt: number;
+    changelog?: string;
+  } | null;
+  metadata?: {
+    os?: string[] | null;
+    systems?: string[] | null;
+  } | null;
+  owner?: {
+    handle?: string | null;
+    displayName?: string | null;
+    image?: string | null;
+  } | null;
+};
+
 export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -10,6 +44,16 @@ export type SkillsState = {
   skillsBusyKey: string | null;
   skillEdits: Record<string, string>;
   skillMessages: SkillMessageMap;
+  clawhubSearchQuery: string;
+  clawhubSearchResults: ClawHubSearchResult[] | null;
+  clawhubSearchLoading: boolean;
+  clawhubSearchError: string | null;
+  clawhubDetail: ClawHubSkillDetail | null;
+  clawhubDetailSlug: string | null;
+  clawhubDetailLoading: boolean;
+  clawhubDetailError: string | null;
+  clawhubInstallSlug: string | null;
+  clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
 };
 
 export type SkillMessage = {
@@ -41,6 +85,14 @@ function getErrorMessage(err: unknown) {
     return err.message;
   }
   return String(err);
+}
+
+export function setClawHubSearchQuery(state: SkillsState, query: string) {
+  state.clawhubSearchQuery = query;
+  state.clawhubInstallMessage = null;
+  state.clawhubSearchResults = null;
+  state.clawhubSearchError = null;
+  state.clawhubSearchLoading = false;
 }
 
 export async function loadSkills(state: SkillsState, options?: LoadSkillsOptions) {
@@ -108,7 +160,7 @@ export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
     await loadSkills(state);
     setSkillMessage(state, skillKey, {
       kind: "success",
-      message: "API key saved",
+      message: `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
     });
   } catch (err) {
     const message = getErrorMessage(err);
@@ -127,6 +179,7 @@ export async function installSkill(
   skillKey: string,
   name: string,
   installId: string,
+  dangerouslyForceUnsafeInstall = false,
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -137,6 +190,7 @@ export async function installSkill(
     const result = await state.client.request<{ message?: string }>("skills.install", {
       name,
       installId,
+      dangerouslyForceUnsafeInstall,
       timeoutMs: 120000,
     });
     await loadSkills(state);
@@ -153,5 +207,91 @@ export async function installSkill(
     });
   } finally {
     state.skillsBusyKey = null;
+  }
+}
+
+export async function searchClawHub(state: SkillsState, query: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (!query.trim()) {
+    state.clawhubSearchResults = null;
+    state.clawhubSearchError = null;
+    state.clawhubSearchLoading = false;
+    return;
+  }
+  // Clear stale entries as soon as a new search begins so the UI cannot act on
+  // results that no longer match the current query while the next request is in flight.
+  state.clawhubSearchResults = null;
+  state.clawhubSearchLoading = true;
+  state.clawhubSearchError = null;
+  try {
+    const res = await state.client.request<{ results: ClawHubSearchResult[] }>("skills.search", {
+      query,
+      limit: 20,
+    });
+    if (query !== state.clawhubSearchQuery) {
+      return;
+    }
+    state.clawhubSearchResults = res?.results ?? [];
+  } catch (err) {
+    if (query !== state.clawhubSearchQuery) {
+      return;
+    }
+    state.clawhubSearchError = getErrorMessage(err);
+  } finally {
+    if (query === state.clawhubSearchQuery) {
+      state.clawhubSearchLoading = false;
+    }
+  }
+}
+
+export async function loadClawHubDetail(state: SkillsState, slug: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.clawhubDetailSlug = slug;
+  state.clawhubDetailLoading = true;
+  state.clawhubDetailError = null;
+  state.clawhubDetail = null;
+  try {
+    const res = await state.client.request<ClawHubSkillDetail>("skills.detail", { slug });
+    if (slug !== state.clawhubDetailSlug) {
+      return;
+    }
+    state.clawhubDetail = res ?? null;
+  } catch (err) {
+    if (slug !== state.clawhubDetailSlug) {
+      return;
+    }
+    state.clawhubDetailError = getErrorMessage(err);
+  } finally {
+    if (slug === state.clawhubDetailSlug) {
+      state.clawhubDetailLoading = false;
+    }
+  }
+}
+
+export function closeClawHubDetail(state: SkillsState) {
+  state.clawhubDetailSlug = null;
+  state.clawhubDetail = null;
+  state.clawhubDetailError = null;
+  state.clawhubDetailLoading = false;
+}
+
+export async function installFromClawHub(state: SkillsState, slug: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  state.clawhubInstallSlug = slug;
+  state.clawhubInstallMessage = null;
+  try {
+    await state.client.request("skills.install", { source: "clawhub", slug });
+    await loadSkills(state);
+    state.clawhubInstallMessage = { kind: "success", text: `Installed ${slug}` };
+  } catch (err) {
+    state.clawhubInstallMessage = { kind: "error", text: getErrorMessage(err) };
+  } finally {
+    state.clawhubInstallSlug = null;
   }
 }

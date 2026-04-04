@@ -10,7 +10,7 @@ const NOTIFY_MAX_SEEN_AGE_MS = 24 * 60 * 60 * 1000;
 type NotifySubscription = {
   to: string;
   accountId?: string;
-  messageThreadId?: number;
+  messageThreadId?: string | number;
   mode: "persistent" | "once";
   addedAtMs: number;
 };
@@ -101,9 +101,11 @@ function normalizeNotifyState(raw: unknown): NotifyStateFile {
         ? record.accountId.trim()
         : undefined;
     const messageThreadId =
-      typeof record.messageThreadId === "number" && Number.isFinite(record.messageThreadId)
-        ? Math.trunc(record.messageThreadId)
-        : undefined;
+      typeof record.messageThreadId === "string"
+        ? record.messageThreadId.trim() || undefined
+        : typeof record.messageThreadId === "number" && Number.isFinite(record.messageThreadId)
+          ? Math.trunc(record.messageThreadId)
+          : undefined;
     const mode = record.mode === "once" ? "once" : "persistent";
     const addedAtMs =
       typeof record.addedAtMs === "number" && Number.isFinite(record.addedAtMs)
@@ -150,7 +152,7 @@ async function writeNotifyState(filePath: string, state: NotifyStateFile): Promi
 function notifySubscriberKey(subscriber: {
   to: string;
   accountId?: string;
-  messageThreadId?: number;
+  messageThreadId?: string | number;
 }): string {
   return [subscriber.to, subscriber.accountId ?? "", subscriber.messageThreadId ?? ""].join("|");
 }
@@ -158,7 +160,7 @@ function notifySubscriberKey(subscriber: {
 type NotifyTarget = {
   to: string;
   accountId?: string;
-  messageThreadId?: number;
+  messageThreadId?: string | number;
 };
 
 function resolveNotifyTarget(ctx: {
@@ -166,7 +168,7 @@ function resolveNotifyTarget(ctx: {
   from?: string;
   to?: string;
   accountId?: string;
-  messageThreadId?: number;
+  messageThreadId?: string | number;
 }): NotifyTarget | null {
   const to = ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
   if (!to) {
@@ -252,17 +254,23 @@ async function notifySubscriber(params: {
   subscriber: NotifySubscription;
   text: string;
 }): Promise<boolean> {
-  const send = params.api.runtime?.channel?.telegram?.sendMessageTelegram;
+  const adapter = await params.api.runtime.channel.outbound.loadAdapter("telegram");
+  const send = adapter?.sendText;
   if (!send) {
-    params.api.logger.warn("device-pair: telegram runtime unavailable for pairing notifications");
+    params.api.logger.warn(
+      "device-pair: telegram outbound adapter unavailable for pairing notifications",
+    );
     return false;
   }
 
   try {
-    await send(params.subscriber.to, params.text, {
+    await send({
+      cfg: params.api.config,
+      to: params.subscriber.to,
+      text: params.text,
       ...(params.subscriber.accountId ? { accountId: params.subscriber.accountId } : {}),
       ...(params.subscriber.messageThreadId != null
-        ? { messageThreadId: params.subscriber.messageThreadId }
+        ? { threadId: params.subscriber.messageThreadId }
         : {}),
     });
     return true;
@@ -347,7 +355,7 @@ export async function armPairNotifyOnce(params: {
     from?: string;
     to?: string;
     accountId?: string;
-    messageThreadId?: number;
+    messageThreadId?: string | number;
   };
 }): Promise<boolean> {
   if (params.ctx.channel !== "telegram") {
@@ -381,7 +389,7 @@ export async function handleNotifyCommand(params: {
     from?: string;
     to?: string;
     accountId?: string;
-    messageThreadId?: number;
+    messageThreadId?: string | number;
   };
   action: string;
 }): Promise<{ text: string }> {

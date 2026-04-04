@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
+import { CHAT_CHANNEL_ORDER } from "../channels/ids.js";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -51,3 +51,9 @@ export function resolveCliChannelOptions(): string[] {
 export function formatCliChannelOptions(extra: string[] = []): string {
   return [...extra, ...resolveCliChannelOptions()].join("|");
 }
+
+export const __testing = {
+  resetPrecomputedChannelOptionsForTests(): void {
+    precomputedChannelOptions = undefined;
+  },
+};

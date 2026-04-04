@@ -1,5 +1,5 @@
-// Narrow plugin-sdk surface for the bundled googlechat plugin.
-// Keep this list additive and scoped to symbols used under extensions/googlechat.
+// Private helper surface for the bundled googlechat plugin.
+// Keep this list additive and scoped to the bundled Google Chat surface.
 
 import { resolveChannelGroupRequireMention } from "./channel-policy.js";
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
@@ -22,9 +22,13 @@ export {
 } from "../channels/plugins/directory-config-helpers.js";
 export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
-export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
+export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { fetchRemoteMedia } from "../media/fetch.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
+export { loadWebMedia } from "./web-media.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,

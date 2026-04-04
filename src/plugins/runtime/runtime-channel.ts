@@ -35,6 +35,11 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import {
+  setChannelConversationBindingIdleTimeoutBySessionKey,
+  setChannelConversationBindingMaxAgeBySessionKey,
+} from "../../channels/plugins/conversation-bindings.js";
+import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
   resolveChannelGroupPolicy,
@@ -48,25 +53,6 @@ import {
   updateLastRoute,
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  listLineAccountIds,
-  normalizeAccountId as normalizeLineAccountId,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../line/accounts.js";
-import { monitorLineProvider } from "../../line/monitor.js";
-import { probeLineBot } from "../../line/probe.js";
-import {
-  createQuickReplyItems,
-  pushFlexMessage,
-  pushLocationMessage,
-  pushMessageLine,
-  pushMessagesLine,
-  pushTemplateMessage,
-  pushTextMessageWithQuickReplies,
-  sendMessageLine,
-} from "../../line/send.js";
-import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -76,34 +62,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
-import { createRuntimeDiscord } from "./runtime-discord.js";
-import { createRuntimeIMessage } from "./runtime-imessage.js";
-import { createRuntimeMatrix } from "./runtime-matrix.js";
-import { createRuntimeSignal } from "./runtime-signal.js";
-import { createRuntimeSlack } from "./runtime-slack.js";
-import { createRuntimeTelegram } from "./runtime-telegram.js";
-import { createRuntimeWhatsApp } from "./runtime-whatsapp.js";
 import type { PluginRuntime } from "./types.js";
-
-function defineCachedValue<T extends object, K extends PropertyKey>(
-  target: T,
-  key: K,
-  create: () => unknown,
-): void {
-  let cached: unknown;
-  let ready = false;
-  Object.defineProperty(target, key, {
-    configurable: true,
-    enumerable: true,
-    get() {
-      if (!ready) {
-        cached = create();
-        ready = true;
-      }
-      return cached;
-    },
-  });
-}
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
   const channelRuntime = {
@@ -188,41 +147,26 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       shouldComputeCommandAuthorized,
       shouldHandleTextCommands,
     },
-    line: {
-      listLineAccountIds,
-      resolveDefaultLineAccountId,
-      resolveLineAccount,
-      normalizeAccountId: normalizeLineAccountId,
-      probeLineBot,
-      sendMessageLine,
-      pushMessageLine,
-      pushMessagesLine,
-      pushFlexMessage,
-      pushTemplateMessage,
-      pushLocationMessage,
-      pushTextMessageWithQuickReplies,
-      createQuickReplyItems,
-      buildTemplateMessageFromPayload,
-      monitorLineProvider,
+    outbound: {
+      loadAdapter: loadChannelOutboundAdapter,
     },
-  } satisfies Omit<
-    PluginRuntime["channel"],
-    "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
-  > &
-    Partial<
-      Pick<
-        PluginRuntime["channel"],
-        "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
-      >
-    >;
-
-  defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
-  defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
-  defineCachedValue(channelRuntime, "telegram", createRuntimeTelegram);
-  defineCachedValue(channelRuntime, "matrix", createRuntimeMatrix);
-  defineCachedValue(channelRuntime, "signal", createRuntimeSignal);
-  defineCachedValue(channelRuntime, "imessage", createRuntimeIMessage);
-  defineCachedValue(channelRuntime, "whatsapp", createRuntimeWhatsApp);
+    threadBindings: {
+      setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
+        setChannelConversationBindingIdleTimeoutBySessionKey({
+          channelId,
+          targetSessionKey,
+          accountId,
+          idleTimeoutMs,
+        }),
+      setMaxAgeBySessionKey: ({ channelId, targetSessionKey, accountId, maxAgeMs }) =>
+        setChannelConversationBindingMaxAgeBySessionKey({
+          channelId,
+          targetSessionKey,
+          accountId,
+          maxAgeMs,
+        }),
+    },
+  } satisfies PluginRuntime["channel"];
 
   return channelRuntime as PluginRuntime["channel"];
 }

@@ -3,17 +3,17 @@ import {
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
+  mergeAllowFromEntries,
+  patchChannelConfigForAccount,
   parseSetupEntriesAllowingWildcard,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
-  setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import type {
   ChannelSetupAdapter,
-  ChannelSetupDmPolicy,
   ChannelSetupWizard,
   ChannelSetupWizardTextInput,
 } from "openclaw/plugin-sdk/setup";
@@ -106,18 +106,49 @@ export async function promptIMessageAllowFrom(params: {
   });
 }
 
-export const imessageDmPolicy: ChannelSetupDmPolicy = {
+export const imessageDmPolicy = {
   label: "iMessage",
   channel,
   policyKey: "channels.imessage.dmPolicy",
   allowFromKey: "channels.imessage.allowFrom",
-  getCurrent: (cfg: OpenClawConfig) => cfg.channels?.imessage?.dmPolicy ?? "pairing",
-  setPolicy: (cfg: OpenClawConfig, policy) =>
-    setChannelDmPolicyWithAllowFrom({
+  resolveConfigKeys: (_cfg: OpenClawConfig, accountId?: string) => {
+    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(_cfg);
+    return targetAccountId !== "default"
+      ? {
+          policyKey: `channels.imessage.accounts.${targetAccountId}.dmPolicy`,
+          allowFromKey: `channels.imessage.accounts.${targetAccountId}.allowFrom`,
+        }
+      : {
+          policyKey: "channels.imessage.dmPolicy",
+          allowFromKey: "channels.imessage.allowFrom",
+        };
+  },
+  getCurrent: (cfg: OpenClawConfig, accountId?: string) => {
+    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(cfg);
+    return resolveIMessageAccount({ cfg, accountId: targetAccountId }).config.dmPolicy ?? "pairing";
+  },
+  setPolicy: (
+    cfg: OpenClawConfig,
+    policy: "pairing" | "allowlist" | "open" | "disabled",
+    accountId?: string,
+  ) => {
+    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(cfg);
+    return patchChannelConfigForAccount({
       cfg,
       channel,
-      dmPolicy: policy,
-    }),
+      accountId: targetAccountId,
+      patch:
+        policy === "open"
+          ? {
+              dmPolicy: "open",
+              allowFrom: mergeAllowFromEntries(
+                resolveIMessageAccount({ cfg, accountId: targetAccountId }).config.allowFrom,
+                ["*"],
+              ),
+            }
+          : { dmPolicy: policy },
+    });
+  },
   promptAllowFrom: promptIMessageAllowFrom,
 };
 
@@ -161,17 +192,8 @@ export const imessageSetupStatusBase = {
   unconfiguredHint: "imsg missing",
   configuredScore: 1,
   unconfiguredScore: 0,
-  resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-    listIMessageAccountIds(cfg).some((accountId) => {
-      const account = resolveIMessageAccount({ cfg, accountId });
-      return Boolean(
-        account.config.cliPath ||
-        account.config.dbPath ||
-        account.config.allowFrom ||
-        account.config.service ||
-        account.config.region,
-      );
-    }),
+  resolveConfigured: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
+    resolveIMessageAccount({ cfg, accountId }).configured,
 };
 
 export function createIMessageSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {

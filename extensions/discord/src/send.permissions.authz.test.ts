@@ -1,11 +1,6 @@
 import type { RequestClient } from "@buape/carbon";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import { describe, expect, it, vi } from "vitest";
-import {
-  fetchMemberGuildPermissionsDiscord,
-  hasAllGuildPermissionsDiscord,
-  hasAnyGuildPermissionDiscord,
-} from "./send.permissions.js";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockRest = vi.hoisted(() => ({
   get: vi.fn(),
@@ -14,6 +9,10 @@ const mockRest = vi.hoisted(() => ({
 vi.mock("./client.js", () => ({
   resolveDiscordRest: () => mockRest as unknown as RequestClient,
 }));
+
+let fetchMemberGuildPermissionsDiscord: typeof import("./send.permissions.js").fetchMemberGuildPermissionsDiscord;
+let hasAllGuildPermissionsDiscord: typeof import("./send.permissions.js").hasAllGuildPermissionsDiscord;
+let hasAnyGuildPermissionDiscord: typeof import("./send.permissions.js").hasAnyGuildPermissionDiscord;
 
 type RouteMockParams = {
   guildId?: string;
@@ -44,6 +43,18 @@ function mockGuildMemberRoutes(params: RouteMockParams): void {
 }
 
 describe("discord guild permission authorization", () => {
+  beforeAll(async () => {
+    ({
+      fetchMemberGuildPermissionsDiscord,
+      hasAllGuildPermissionsDiscord,
+      hasAnyGuildPermissionDiscord,
+    } = await import("./send.permissions.js"));
+  });
+
+  beforeEach(() => {
+    mockRest.get.mockReset();
+  });
+
   describe("fetchMemberGuildPermissionsDiscord", () => {
     it("returns null when user is not a guild member", async () => {
       mockRest.get.mockRejectedValueOnce(new Error("404 Member not found"));

@@ -218,6 +218,19 @@ For actions/directory reads, user token can be preferred when configured. For wr
   - if encoded option values exceed Slack limits, the flow falls back to buttons
 - For long option payloads, Slash command argument menus use a confirm dialog before dispatching a selected value.
 
+Default slash command settings:
+
+- `enabled: false`
+- `name: "openclaw"`
+- `sessionPrefix: "slack:slash"`
+- `ephemeral: true`
+
+Slash sessions use isolated keys:
+
+- `agent:<agentId>:slack:slash:<userId>`
+
+and still route command execution against the target conversation session (`CommandTargetSessionKey`).
+
 ## Interactive replies
 
 Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
@@ -266,19 +279,6 @@ Notes:
 - This is Slack-specific UI. Other channels do not translate Slack Block Kit directives into their own button systems.
 - The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
 - If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
-
-Default slash command settings:
-
-- `enabled: false`
-- `name: "openclaw"`
-- `sessionPrefix: "slack:slash"`
-- `ephemeral: true`
-
-Slash sessions use isolated keys:
-
-- `agent:<agentId>:slack:slash:<userId>`
-
-and still route command execution against the target conversation session (`CommandTargetSessionKey`).
 
 ## Threading, sessions, and reply tags
 
@@ -344,6 +344,8 @@ Available action groups in current Slack tooling:
 | memberInfo | enabled |
 | emojiList  | enabled |
 
+Current Slack message actions include `send`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`.
+
 ## Events and operational behavior
 
 - Message edits/deletes/thread broadcasts are mapped into system events.
@@ -352,6 +354,7 @@ Available action groups in current Slack tooling:
 - Assistant thread status updates (for "is typing..." indicators in threads) use `assistant.threads.setStatus` and require bot scope `assistant:write`.
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
+- Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
 - Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
@@ -389,7 +392,7 @@ Notes:
 ## Manifest and scope checklist
 
 <AccordionGroup>
-  <Accordion title="Slack app manifest example">
+  <Accordion title="Slack app manifest example" defaultOpen>
 
 ```json
 {
@@ -400,7 +403,7 @@ Notes:
   "features": {
     "bot_user": {
       "display_name": "OpenClaw",
-      "always_online": false
+      "always_online": true
     },
     "app_home": {
       "messages_tab_enabled": true,
@@ -417,27 +420,28 @@ Notes:
   "oauth_config": {
     "scopes": {
       "bot": [
-        "chat:write",
+        "app_mentions:read",
+        "assistant:write",
         "channels:history",
         "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
         "groups:history",
+        "groups:read",
         "im:history",
         "im:read",
         "im:write",
         "mpim:history",
         "mpim:read",
         "mpim:write",
-        "users:read",
-        "app_mentions:read",
-        "assistant:write",
-        "reactions:read",
-        "reactions:write",
         "pins:read",
         "pins:write",
-        "emoji:read",
-        "commands",
-        "files:read",
-        "files:write"
+        "reactions:read",
+        "reactions:write",
+        "users:read"
       ]
     }
   },
@@ -446,17 +450,17 @@ Notes:
     "event_subscriptions": {
       "bot_events": [
         "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
         "message.channels",
         "message.groups",
         "message.im",
         "message.mpim",
-        "reaction_added",
-        "reaction_removed",
-        "member_joined_channel",
-        "member_left_channel",
-        "channel_rename",
         "pin_added",
-        "pin_removed"
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     }
   }
@@ -478,6 +482,55 @@ Notes:
 
   </Accordion>
 </AccordionGroup>
+
+## Exec approvals in Slack
+
+Exec approval prompts can route natively through Slack using interactive buttons and interactions, instead of falling back to the Web UI or terminal. Approver authorization is enforced: only users identified as approvers can approve or deny requests through Slack.
+
+This uses the same shared approval button surface as other channels. When `interactivity` is enabled in your Slack app settings, approval prompts render as Block Kit buttons directly in the conversation.
+
+Config path:
+
+- `channels.slack.execApprovals.enabled`
+- `channels.slack.execApprovals.approvers` (optional; falls back to `commands.ownerAllowFrom` when possible)
+- `channels.slack.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
+- `agentFilter`, `sessionFilter`
+
+Slack auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one
+approver resolves. Set `enabled: false` to disable Slack as a native approval client explicitly.
+Set `enabled: true` to force native approvals on when approvers resolve.
+
+Default behavior with no explicit Slack exec approval config:
+
+```json5
+{
+  commands: {
+    ownerAllowFrom: ["slack:U12345678"],
+  },
+}
+```
+
+Explicit Slack-native config is only needed when you want to override approvers, add filters, or
+opt into origin-chat delivery:
+
+```json5
+{
+  channels: {
+    slack: {
+      execApprovals: {
+        enabled: true,
+        approvers: ["U12345678"],
+        target: "both",
+      },
+    },
+  },
+}
+```
+
+Shared `approvals.exec` forwarding is separate. Use it only when approval prompts must also route
+to other chats or explicit out-of-band targets.
+
+Same-chat `/approve` also works in Slack channels and DMs that already support commands. See [Exec approvals](/tools/exec-approvals) for the full approval forwarding model.
 
 ## Troubleshooting
 
@@ -597,6 +650,8 @@ Primary reference:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
+- [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
 - [Troubleshooting](/channels/troubleshooting)
 - [Configuration](/gateway/configuration)

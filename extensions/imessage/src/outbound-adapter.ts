@@ -1,13 +1,19 @@
 import {
-  createScopedChannelMediaMaxBytesResolver,
   createDirectTextMediaOutbound,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { resolveOutboundSendDep, type OutboundSendDeps } from "openclaw/plugin-sdk/channel-runtime";
+  createScopedChannelMediaMaxBytesResolver,
+} from "openclaw/plugin-sdk/media-runtime";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/outbound-runtime";
+import { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { sendMessageIMessage } from "./send.js";
 
 function resolveIMessageSender(deps: OutboundSendDeps | undefined) {
   return (
-    resolveOutboundSendDep<typeof sendMessageIMessage>(deps, "imessage") ?? sendMessageIMessage
+    resolveOutboundSendDep<typeof sendMessageIMessage>(deps, "imessage", {
+      legacyKeys: IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+    }) ?? sendMessageIMessage
   );
 }
 

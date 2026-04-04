@@ -1,72 +1,26 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withBundledPluginVitestCompat } from "./bundled-compat.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import type { PluginLoadOptions } from "./loader.js";
 import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-} from "./bundled-compat.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
-import { createPluginLoaderLogger } from "./logger.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { ProviderPlugin } from "./types.js";
+  loadPluginManifestRegistry,
+  type PluginManifestRecord,
+  type PluginManifestRegistry,
+} from "./manifest-registry.js";
 
-const log = createSubsystemLogger("plugins");
-
-function hasExplicitPluginConfig(config: PluginLoadOptions["config"]): boolean {
-  const plugins = config?.plugins;
-  if (!plugins) {
-    return false;
-  }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  return false;
-}
-
-function withBundledProviderVitestCompat(params: {
+export function withBundledProviderVitestCompat(params: {
   config: PluginLoadOptions["config"];
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
 }): PluginLoadOptions["config"] {
-  const env = params.env ?? process.env;
-  if (!env.VITEST || hasExplicitPluginConfig(params.config) || params.pluginIds.length === 0) {
-    return params.config;
-  }
-
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      enabled: true,
-      allow: [...params.pluginIds],
-      slots: {
-        ...params.config?.plugins?.slots,
-        memory: "none",
-      },
-    },
-  };
+  return withBundledPluginVitestCompat(params);
 }
 
-function resolveBundledProviderCompatPluginIds(params: {
+export function resolveBundledProviderCompatPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  onlyPluginIds?: string[];
+  onlyPluginIds?: readonly string[];
 }): string[] {
   const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
   const registry = loadPluginManifestRegistry({
@@ -85,27 +39,147 @@ function resolveBundledProviderCompatPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveEnabledProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: readonly string[];
+}): string[] {
+  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.providers.length > 0 &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
+        resolveEffectivePluginActivationState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).activated,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export const __testing = {
+  resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
   withBundledProviderVitestCompat,
 } as const;
+
+type ModelSupportMatchKind = "pattern" | "prefix";
+
+function resolveManifestRegistry(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
+}): PluginManifestRegistry {
+  return (
+    params.manifestRegistry ??
+    loadPluginManifestRegistry({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    })
+  );
+}
+
+function stripModelProfileSuffix(value: string): string {
+  const trimmed = value.trim();
+  const at = trimmed.indexOf("@");
+  return at <= 0 ? trimmed : trimmed.slice(0, at).trim();
+}
+
+function splitExplicitModelRef(rawModel: string): { provider?: string; modelId: string } | null {
+  const trimmed = rawModel.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const slash = trimmed.indexOf("/");
+  if (slash === -1) {
+    const modelId = stripModelProfileSuffix(trimmed);
+    return modelId ? { modelId } : null;
+  }
+  const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const modelId = stripModelProfileSuffix(trimmed.slice(slash + 1));
+  if (!provider || !modelId) {
+    return null;
+  }
+  return { provider, modelId };
+}
+
+function resolveModelSupportMatchKind(
+  plugin: PluginManifestRecord,
+  modelId: string,
+): ModelSupportMatchKind | undefined {
+  const patterns = plugin.modelSupport?.modelPatterns ?? [];
+  for (const patternSource of patterns) {
+    try {
+      if (new RegExp(patternSource, "u").test(modelId)) {
+        return "pattern";
+      }
+    } catch {
+      continue;
+    }
+  }
+  const prefixes = plugin.modelSupport?.modelPrefixes ?? [];
+  for (const prefix of prefixes) {
+    if (modelId.startsWith(prefix)) {
+      return "prefix";
+    }
+  }
+  return undefined;
+}
+
+function dedupeSortedPluginIds(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolvePreferredManifestPluginIds(
+  registry: PluginManifestRegistry,
+  matchedPluginIds: readonly string[],
+): string[] | undefined {
+  if (matchedPluginIds.length === 0) {
+    return undefined;
+  }
+  const uniquePluginIds = dedupeSortedPluginIds(matchedPluginIds);
+  if (uniquePluginIds.length <= 1) {
+    return uniquePluginIds;
+  }
+  const nonBundledPluginIds = uniquePluginIds.filter((pluginId) => {
+    const plugin = registry.plugins.find((entry) => entry.id === pluginId);
+    return plugin?.origin !== "bundled";
+  });
+  if (nonBundledPluginIds.length === 1) {
+    return nonBundledPluginIds;
+  }
+  if (nonBundledPluginIds.length > 1) {
+    return undefined;
+  }
+  return undefined;
+}
 
 export function resolveOwningPluginIdsForProvider(params: {
   provider: string;
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] | undefined {
   const normalizedProvider = normalizeProviderId(params.provider);
   if (!normalizedProvider) {
     return undefined;
   }
 
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const registry = resolveManifestRegistry(params);
   const pluginIds = registry.plugins
     .filter((plugin) =>
       plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedProvider),
@@ -113,6 +187,65 @@ export function resolveOwningPluginIdsForProvider(params: {
     .map((plugin) => plugin.id);
 
   return pluginIds.length > 0 ? pluginIds : undefined;
+}
+
+export function resolveOwningPluginIdsForModelRef(params: {
+  model: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
+}): string[] | undefined {
+  const parsed = splitExplicitModelRef(params.model);
+  if (!parsed) {
+    return undefined;
+  }
+
+  if (parsed.provider) {
+    return resolveOwningPluginIdsForProvider({
+      provider: parsed.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      manifestRegistry: params.manifestRegistry,
+    });
+  }
+
+  const registry = resolveManifestRegistry(params);
+  const matchedByPattern = registry.plugins
+    .filter((plugin) => resolveModelSupportMatchKind(plugin, parsed.modelId) === "pattern")
+    .map((plugin) => plugin.id);
+  const preferredPatternPluginIds = resolvePreferredManifestPluginIds(registry, matchedByPattern);
+  if (preferredPatternPluginIds) {
+    return preferredPatternPluginIds;
+  }
+
+  const matchedByPrefix = registry.plugins
+    .filter((plugin) => resolveModelSupportMatchKind(plugin, parsed.modelId) === "prefix")
+    .map((plugin) => plugin.id);
+  return resolvePreferredManifestPluginIds(registry, matchedByPrefix);
+}
+
+export function resolveOwningPluginIdsForModelRefs(params: {
+  models: readonly string[];
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
+}): string[] {
+  const registry = resolveManifestRegistry(params);
+  return dedupeSortedPluginIds(
+    params.models.flatMap(
+      (model) =>
+        resolveOwningPluginIdsForModelRef({
+          model,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          manifestRegistry: registry,
+        }) ?? [],
+    ),
+  );
 }
 
 export function resolveNonBundledProviderPluginIds(params: {
@@ -131,69 +264,42 @@ export function resolveNonBundledProviderPluginIds(params: {
       (plugin) =>
         plugin.origin !== "bundled" &&
         plugin.providers.length > 0 &&
-        resolveEffectiveEnableState({
+        resolveEffectivePluginActivationState({
           id: plugin.id,
           origin: plugin.origin,
           config: normalizedConfig,
           rootConfig: params.config,
-        }).enabled,
+        }).activated,
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function resolvePluginProviders(params: {
+export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
-  /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: PluginLoadOptions["env"];
-  bundledProviderAllowlistCompat?: boolean;
-  bundledProviderVitestCompat?: boolean;
-  onlyPluginIds?: string[];
-  activate?: boolean;
-  cache?: boolean;
-}): ProviderPlugin[] {
-  const bundledProviderCompatPluginIds =
-    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
-      ? resolveBundledProviderCompatPluginIds({
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          onlyPluginIds: params.onlyPluginIds,
-        })
-      : [];
-  const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
-    ? withBundledPluginAllowlistCompat({
-        config: params.config,
-        pluginIds: bundledProviderCompatPluginIds,
-      })
-    : params.config;
-  const maybeVitestCompat = params.bundledProviderVitestCompat
-    ? withBundledProviderVitestCompat({
-        config: maybeAllowlistCompat,
-        pluginIds: bundledProviderCompatPluginIds,
-        env: params.env,
-      })
-    : maybeAllowlistCompat;
-  const config =
-    params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
-      ? withBundledPluginEnablementCompat({
-          config: maybeVitestCompat,
-          pluginIds: bundledProviderCompatPluginIds,
-        })
-      : maybeVitestCompat;
-  const registry = loadOpenClawPlugins({
-    config,
+}): string[] {
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    onlyPluginIds: params.onlyPluginIds,
-    cache: params.cache ?? false,
-    activate: params.activate ?? false,
-    logger: createPluginLoaderLogger(log),
   });
-
-  return registry.providers.map((entry) => ({
-    ...entry.provider,
-    pluginId: entry.pluginId,
-  }));
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const enabledProviderPluginIds = registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.providers.length > 0 &&
+        resolveEffectivePluginActivationState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).activated,
+    )
+    .map((plugin) => plugin.id);
+  const bundledCompatPluginIds = resolveBundledProviderCompatPluginIds(params);
+  return [...new Set([...enabledProviderPluginIds, ...bundledCompatPluginIds])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
 }

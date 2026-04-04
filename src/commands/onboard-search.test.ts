@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -11,6 +11,22 @@ const runtime: RuntimeEnv = {
     throw new Error(`unexpected exit ${code}`);
   }) as RuntimeEnv["exit"],
 };
+
+const SEARCH_PROVIDER_ENV_VARS = [
+  "BRAVE_API_KEY",
+  "FIRECRAWL_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "KIMI_API_KEY",
+  "MOONSHOT_API_KEY",
+  "OPENROUTER_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "TAVILY_API_KEY",
+  "XAI_API_KEY",
+] as const;
+
+let originalSearchProviderEnv: Partial<Record<(typeof SEARCH_PROVIDER_ENV_VARS)[number], string>> =
+  {};
 
 function createPrompter(params: { selectValue?: string; textValue?: string }): {
   prompter: WizardPrompter;
@@ -41,7 +57,17 @@ function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConf
         search: {
           provider: "perplexity",
           ...(enabled === undefined ? {} : { enabled }),
-          perplexity: { apiKey },
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        perplexity: {
+          config: {
+            webSearch: {
+              apiKey,
+            },
+          },
         },
       },
     },
@@ -55,6 +81,45 @@ function pluginWebSearchApiKey(config: OpenClawConfig, pluginId: string): unknow
       | undefined
   )?.[pluginId];
   return entry?.config?.webSearch?.apiKey;
+}
+
+function createDisabledFirecrawlConfig(apiKey?: string): OpenClawConfig {
+  return {
+    tools: {
+      web: {
+        search: {
+          provider: "firecrawl",
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        firecrawl: {
+          enabled: false,
+          ...(apiKey
+            ? {
+                config: {
+                  webSearch: {
+                    apiKey,
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+    },
+  };
+}
+
+function readFirecrawlPluginApiKey(config: OpenClawConfig): string | undefined {
+  const pluginConfig = config.plugins?.entries?.firecrawl?.config as
+    | {
+        webSearch?: {
+          apiKey?: string;
+        };
+      }
+    | undefined;
+  return pluginConfig?.webSearch?.apiKey;
 }
 
 async function runBlankPerplexityKeyEntry(
@@ -82,6 +147,26 @@ async function runQuickstartPerplexitySetup(
 }
 
 describe("setupSearch", () => {
+  beforeEach(() => {
+    originalSearchProviderEnv = Object.fromEntries(
+      SEARCH_PROVIDER_ENV_VARS.map((key) => [key, process.env[key]]),
+    );
+    for (const key of SEARCH_PROVIDER_ENV_VARS) {
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of SEARCH_PROVIDER_ENV_VARS) {
+      const value = originalSearchProviderEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
   it("returns config unchanged when user skips", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "__skip__" });
@@ -126,6 +211,11 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "google")).toBe("AIza-test");
     expect(result.plugins?.entries?.google?.enabled).toBe(true);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Google Gemini API key",
+      }),
+    );
   });
 
   it("sets provider and key for firecrawl and enables the plugin", async () => {
@@ -141,6 +231,19 @@ describe("setupSearch", () => {
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
   });
 
+  it("re-enables firecrawl and persists its plugin config when selected from disabled state", async () => {
+    const cfg = createDisabledFirecrawlConfig();
+    const { prompter } = createPrompter({
+      selectValue: "firecrawl",
+      textValue: "fc-disabled-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(readFirecrawlPluginApiKey(result)).toBe("fc-disabled-key");
+  });
+
   it("sets provider and key for grok", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
@@ -150,7 +253,8 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("grok");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.grok?.apiKey).toBe("xai-test");
+    expect(pluginWebSearchApiKey(result, "xai")).toBe("xai-test");
+    expect(result.plugins?.entries?.xai?.enabled).toBe(true);
   });
 
   it("sets provider and key for kimi", async () => {
@@ -191,7 +295,7 @@ describe("setupSearch", () => {
       const result = await setupSearch(cfg, runtime, prompter);
       expect(result.tools?.web?.search?.provider).toBe("brave");
       expect(result.tools?.web?.search?.enabled).toBeUndefined();
-      const missingNote = notes.find((n) => n.message.includes("No API key stored"));
+      const missingNote = notes.find((n) => n.message.includes("No Brave Search API key stored"));
       expect(missingNote).toBeDefined();
     } finally {
       if (original === undefined) {
@@ -206,7 +310,7 @@ describe("setupSearch", () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
@@ -215,7 +319,7 @@ describe("setupSearch", () => {
       "existing-key", // pragma: allowlist secret
       false,
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
   });
 
@@ -293,6 +397,20 @@ describe("setupSearch", () => {
     }
   });
 
+  it("uses provider-specific credential copy for kimi in onboarding", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "kimi",
+      textValue: "",
+    });
+    await setupSearch(cfg, runtime, prompter);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Moonshot / Kimi API key",
+      }),
+    );
+  });
+
   it("quickstart skips key prompt when env var is available", async () => {
     const orig = process.env.BRAVE_API_KEY;
     process.env.BRAVE_API_KEY = "env-brave-key"; // pragma: allowlist secret
@@ -310,6 +428,59 @@ describe("setupSearch", () => {
         delete process.env.BRAVE_API_KEY;
       } else {
         process.env.BRAVE_API_KEY = orig;
+      }
+    }
+  });
+
+  it("quickstart detects an existing firecrawl key even when the plugin is disabled", async () => {
+    const cfg = createDisabledFirecrawlConfig("fc-configured-key");
+    const { prompter } = createPrompter({ selectValue: "firecrawl" });
+    const result = await setupSearch(cfg, runtime, prompter, {
+      quickstartDefaults: true,
+    });
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(readFirecrawlPluginApiKey(result)).toBe("fc-configured-key");
+  });
+
+  it("preserves disabled firecrawl plugin state and allowlist when web search stays disabled", async () => {
+    const original = process.env.FIRECRAWL_API_KEY;
+    process.env.FIRECRAWL_API_KEY = "env-firecrawl-key"; // pragma: allowlist secret
+    const cfg: OpenClawConfig = {
+      tools: {
+        web: {
+          search: {
+            provider: "firecrawl",
+            enabled: false,
+          },
+        },
+      },
+      plugins: {
+        allow: ["google"],
+        entries: {
+          firecrawl: {
+            enabled: false,
+          },
+        },
+      },
+    };
+    try {
+      const { prompter } = createPrompter({ selectValue: "firecrawl" });
+      const result = await setupSearch(cfg, runtime, prompter, {
+        quickstartDefaults: true,
+      });
+      expect(prompter.text).not.toHaveBeenCalled();
+      expect(result.tools?.web?.search?.provider).toBe("firecrawl");
+      expect(result.tools?.web?.search?.enabled).toBe(false);
+      expect(result.plugins?.entries?.firecrawl?.enabled).toBe(false);
+      expect(result.plugins?.allow).toEqual(["google"]);
+    } finally {
+      if (original === undefined) {
+        delete process.env.FIRECRAWL_API_KEY;
+      } else {
+        process.env.FIRECRAWL_API_KEY = original;
       }
     }
   });
@@ -429,16 +600,16 @@ describe("setupSearch", () => {
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-plain");
   });
 
-  it("exports all 7 providers in SEARCH_PROVIDER_OPTIONS", () => {
+  it("exports all 7 providers in alphabetical order", () => {
+    const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.id);
     expect(SEARCH_PROVIDER_OPTIONS).toHaveLength(7);
-    const values = SEARCH_PROVIDER_OPTIONS.map((e) => e.value);
     expect(values).toEqual([
       "brave",
+      "firecrawl",
       "gemini",
       "grok",
       "kimi",
       "perplexity",
-      "firecrawl",
       "tavily",
     ]);
   });

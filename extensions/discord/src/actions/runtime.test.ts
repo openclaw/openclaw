@@ -1,6 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
+import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import {
@@ -46,6 +47,7 @@ const discordSendMocks = {
   removeOwnReactionsDiscord: vi.fn(async () => ({ removed: ["👍"] })),
   removeReactionDiscord: vi.fn(async () => ({})),
   searchMessagesDiscord: vi.fn(async () => ({})),
+  sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
   sendPollDiscord: vi.fn(async () => ({})),
   sendStickerDiscord: vi.fn(async () => ({})),
@@ -71,6 +73,7 @@ const {
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   searchMessagesDiscord,
+  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendVoiceMessageDiscord,
@@ -86,6 +89,7 @@ const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderatio
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearPresences();
   Object.assign(
     discordMessagingActionRuntime,
     originalDiscordMessagingActionRuntime,
@@ -127,6 +131,36 @@ describe("handleDiscordMessagingAction", () => {
       return;
     }
     expect(reactMessageDiscord).toHaveBeenCalledWith("C1", "M1", "✅", {});
+  });
+
+  it("uses configured defaultAccount when cfg is provided and accountId is omitted", async () => {
+    await handleDiscordMessagingAction(
+      "react",
+      {
+        channelId: "C1",
+        messageId: "M1",
+        emoji: "✅",
+      },
+      enableAllActions,
+      undefined,
+      {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            accounts: {
+              work: { token: "token-work" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    );
+
+    expect(reactMessageDiscord).toHaveBeenCalledWith(
+      "C1",
+      "M1",
+      "✅",
+      expect.objectContaining({ accountId: "work" }),
+    );
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -366,6 +400,55 @@ describe("handleDiscordMessagingAction", () => {
     );
   });
 
+  it("ignores empty components objects for regular media sends", async () => {
+    sendMessageDiscord.mockClear();
+    sendDiscordComponentMessage.mockClear();
+
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: "/tmp/image.png",
+        components: {},
+      },
+      enableAllActions,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+
+    expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+  });
+
+  it("forwards the optional filename into sendMessageDiscord", async () => {
+    sendMessageDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: "/tmp/generated-image",
+        filename: "image.png",
+      },
+      enableAllActions,
+    );
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/generated-image",
+        filename: "image.png",
+      }),
+    );
+  });
+
   it("rejects voice messages that include content", async () => {
     await expect(
       handleDiscordMessagingAction(
@@ -402,6 +485,52 @@ describe("handleDiscordMessagingAction", () => {
         appliedTags: undefined,
       },
       {},
+    );
+  });
+});
+
+describe("handleDiscordGuildAction", () => {
+  it("uses configured defaultAccount for omitted memberInfo presence lookup", async () => {
+    setPresence("work", "U1", {
+      user: { id: "U1" },
+      guild_id: "G1",
+      status: "online",
+      activities: [],
+      client_status: {},
+    } as never);
+
+    discordGuildActionRuntime.fetchMemberInfoDiscord = vi.fn(async () => ({
+      user: { id: "U1" },
+    })) as never;
+
+    const result = await handleDiscordGuildAction(
+      "memberInfo",
+      {
+        guildId: "G1",
+        userId: "U1",
+      },
+      enableAllActions,
+      {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            accounts: {
+              work: { token: "token-work" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    );
+
+    expect(discordGuildActionRuntime.fetchMemberInfoDiscord).toHaveBeenCalledWith("G1", "U1", {
+      accountId: "work",
+    });
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        ok: true,
+        status: "online",
+        activities: [],
+      }),
     );
   });
 });

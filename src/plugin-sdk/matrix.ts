@@ -1,5 +1,5 @@
-// Narrow plugin-sdk surface for the bundled matrix plugin.
-// Keep this list additive and scoped to symbols used under extensions/matrix.
+// Private helper surface for the bundled matrix plugin.
+// Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -11,7 +11,7 @@ export {
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext, ReplyPayload } from "../auto-reply/types.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   compileAllowlist,
@@ -27,8 +27,6 @@ export {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "../channels/allowlists/resolve-utils.js";
-export { ensureConfiguredAcpBindingReady } from "../acp/persistent-bindings.lifecycle.js";
-export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export type { NormalizedLocation } from "../channels/location.js";
 export { formatLocationText, toLocationContext } from "../channels/location.js";
@@ -39,6 +37,7 @@ export {
   buildChannelKeyCandidates,
   resolveChannelEntryMatch,
 } from "../channels/plugins/channel-config.js";
+export { getChatChannelMeta } from "./channel-plugin-common.js";
 export { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 export {
   deleteAccountFromConfigSection,
@@ -46,6 +45,7 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,
@@ -85,9 +85,10 @@ export {
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "../../extensions/matrix/thread-bindings-runtime.js";
+} from "./matrix-thread-bindings.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export type { OpenClawConfig } from "../config/config.js";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -96,6 +97,7 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 export type {
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   GroupToolPolicyConfig,
@@ -112,7 +114,6 @@ export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
 export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-export { maybeCreateMatrixMigrationSnapshot } from "../infra/matrix-migration-snapshot.js";
 export {
   getSessionBindingService,
   registerSessionBindingAdapter,
@@ -150,22 +151,33 @@ export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { runPluginCommandWithTimeout } from "./run-command.js";
 export { createLoggerBackedRuntime, resolveRuntimeEnv } from "./runtime.js";
-export { dispatchReplyFromConfigWithSettledDispatcher } from "./inbound-reply-dispatch.js";
 export {
+  buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
+export {
+  findMatrixAccountEntry,
+  resolveConfiguredMatrixAccountIds,
+  resolveMatrixChannelConfig,
+} from "./matrix-helper.js";
 export {
   resolveMatrixAccountStorageRoot,
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
   resolveMatrixLegacyFlatStoragePaths,
-} from "../../extensions/matrix/helper-api.js";
-export { getMatrixScopedEnvVarNames } from "../../extensions/matrix/helper-api.js";
+} from "./matrix-helper.js";
+export { resolveMatrixAccountStringValues } from "./matrix-runtime-surface.js";
+export { getMatrixScopedEnvVarNames } from "./matrix-helper.js";
 export {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
-} from "../../extensions/matrix/helper-api.js";
+} from "./matrix-helper.js";
+export {
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+} from "./matrix-surface.js";
+export { setMatrixRuntime } from "./matrix-runtime-surface.js";
 
 const matrixSetup = createOptionalChannelSetupSurface({
   channel: "matrix",

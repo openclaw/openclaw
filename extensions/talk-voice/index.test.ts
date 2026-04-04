@@ -1,11 +1,11 @@
+import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginCommandDefinition } from "../../test/helpers/extensions/plugin-command.js";
-import { createPluginRuntimeMock } from "../../test/helpers/extensions/plugin-runtime-mock.js";
+import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
 
 function createHarness(config: Record<string, unknown>) {
   let command: OpenClawPluginCommandDefinition | undefined;
-  const runtime = createPluginRuntimeMock({
+  const runtime = {
     config: {
       loadConfig: vi.fn(() => config),
       writeConfigFile: vi.fn().mockResolvedValue(undefined),
@@ -13,7 +13,7 @@ function createHarness(config: Record<string, unknown>) {
     tts: {
       listVoices: vi.fn(),
     },
-  });
+  } as unknown as PluginRuntime;
   const api = {
     runtime,
     registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
@@ -27,12 +27,17 @@ function createHarness(config: Record<string, unknown>) {
   return { command, runtime };
 }
 
-function createCommandContext(args: string, channel: string = "discord") {
+function createCommandContext(
+  args: string,
+  channel: string = "discord",
+  gatewayClientScopes?: string[],
+) {
   return {
     args,
     channel,
     channelId: channel,
     isAuthorizedSender: true,
+    gatewayClientScopes,
     commandBody: args ? `/voice ${args}` : "/voice",
     config: {},
     requestConversationBinding: vi.fn(),
@@ -42,6 +47,24 @@ function createCommandContext(args: string, channel: string = "discord") {
 }
 
 describe("talk-voice plugin", () => {
+  function createElevenlabsVoiceSetHarness(channel = "webchat", scopes?: string[]) {
+    const { command, runtime } = createHarness({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            apiKey: "sk-eleven",
+          },
+        },
+      },
+    });
+    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
+    return {
+      runtime,
+      run: async () => await command.handler(createCommandContext("set Claudia", channel, scopes)),
+    };
+  }
+
   it("reports active provider status", async () => {
     const { command } = createHarness({
       talk: {
@@ -156,7 +179,9 @@ describe("talk-voice plugin", () => {
     });
     vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
 
-    const result = await command.handler(createCommandContext("set Claudia"));
+    const result = await command.handler(
+      createCommandContext("set Claudia", "webchat", ["operator.admin"]),
+    );
 
     expect(runtime.config.writeConfigFile).toHaveBeenCalledWith({
       talk: {
@@ -186,7 +211,7 @@ describe("talk-voice plugin", () => {
     });
     vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "en-US-AvaNeural", name: "Ava" }]);
 
-    await command.handler(createCommandContext("set Ava"));
+    await command.handler(createCommandContext("set Ava", "webchat", ["operator.admin"]));
 
     expect(runtime.config.writeConfigFile).toHaveBeenCalledWith({
       talk: {
@@ -198,6 +223,54 @@ describe("talk-voice plugin", () => {
         },
       },
     });
+  });
+
+  it("rejects /voice set from gateway client with only operator.write scope", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("webchat", ["operator.write"]);
+    const result = await run();
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects /voice set from non-webchat gateway callers missing operator.admin", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram", ["operator.write"]);
+    const result = await run();
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows /voice set from gateway client with operator.admin scope", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("webchat", ["operator.admin"]);
+    const result = await run();
+
+    expect(runtime.config.writeConfigFile).toHaveBeenCalled();
+    expect(result.text).toContain("voice-a");
+  });
+
+  it("rejects /voice set from webchat channel with no scopes (TUI/internal)", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness();
+    const result = await run();
+
+    expect(result.text).toContain("requires operator.admin");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows /voice set from non-gateway channels without operator.admin", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram");
+    const result = await run();
+
+    expect(runtime.config.writeConfigFile).toHaveBeenCalled();
+    expect(result.text).toContain("voice-a");
+  });
+
+  it("allows /voice set when operator.admin is present on a non-webchat channel", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram", ["operator.admin"]);
+    const result = await run();
+
+    expect(runtime.config.writeConfigFile).toHaveBeenCalled();
+    expect(result.text).toContain("voice-a");
   });
 
   it("returns provider lookup errors cleanly", async () => {

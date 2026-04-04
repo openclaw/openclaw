@@ -1,13 +1,12 @@
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-runtime";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import type { ChannelOutboundAdapter } from "../runtime-api.js";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { createMSTeamsPollStoreFs } from "./polls.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getMSTeamsRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
@@ -23,11 +22,15 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         ((to, text) => sendMessageMSTeams({ cfg, to, text }));
       return await send(to, text);
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, deps }) => {
+    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, mediaReadFile, deps }) => {
       type SendFn = (
         to: string,
         text: string,
-        opts?: { mediaUrl?: string; mediaLocalRoots?: readonly string[] },
+        opts?: {
+          mediaUrl?: string;
+          mediaLocalRoots?: readonly string[];
+          mediaReadFile?: (filePath: string) => Promise<Buffer>;
+        },
       ) => Promise<{ messageId: string; conversationId: string }>;
       const send =
         resolveOutboundSendDep<SendFn>(deps, "msteams") ??
@@ -38,8 +41,9 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
             text,
             mediaUrl: opts?.mediaUrl,
             mediaLocalRoots: opts?.mediaLocalRoots,
+            mediaReadFile: opts?.mediaReadFile,
           }));
-      return await send(to, text, { mediaUrl, mediaLocalRoots });
+      return await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile });
     },
     sendPoll: async ({ cfg, to, poll }) => {
       const maxSelections = poll.maxSelections ?? 1;

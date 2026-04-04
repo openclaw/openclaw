@@ -7,7 +7,7 @@ import type { TtsAutoMode } from "../types.tts.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionChannelId = ChannelId | "webchat";
+export type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
@@ -63,6 +63,13 @@ export type AcpSessionRuntimeOptions = {
   timeoutSeconds?: number;
   /** Backend-specific option bag mapped through session/set_config_option. */
   backendExtras?: Record<string, string>;
+};
+
+export type CliSessionBinding = {
+  sessionId: string;
+  authProfileId?: string;
+  extraSystemPromptHash?: string;
+  mcpConfigHash?: string;
 };
 
 export type SessionEntry = {
@@ -164,7 +171,9 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  memoryFlushContextHash?: string;
   cliSessionIds?: Record<string, string>;
+  cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;

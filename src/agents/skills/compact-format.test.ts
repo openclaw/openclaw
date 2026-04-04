@@ -1,6 +1,9 @@
 import os from "node:os";
-import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
+import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
+import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type { SkillEntry } from "./types.js";
 import {
   formatSkillsCompact,
@@ -9,14 +12,13 @@ import {
 } from "./workspace.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  return {
+  return createCanonicalFixtureSkill({
     name,
     description: desc,
     filePath,
     baseDir: `/skills/${name}`,
     source: "workspace",
-    disableModelInvocation: false,
-  };
+  });
 }
 
 function makeEntry(skill: Skill): SkillEntry {
@@ -36,11 +38,21 @@ function buildPrompt(
           ...(limits.maxCount !== undefined && { maxSkillsInPrompt: limits.maxCount }),
         },
       },
-    } as any,
+    } satisfies OpenClawConfig,
   });
 }
 
 describe("formatSkillsCompact", () => {
+  it("keeps the full-format XML output aligned with the upstream formatter", () => {
+    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
+    const skills = [
+      makeSkill("weather", "Get weather <data> & forecasts"),
+      makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
+      hidden,
+    ];
+    expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
+  });
+
   it("returns empty string for no skills", () => {
     expect(formatSkillsCompact([])).toBe("");
   });

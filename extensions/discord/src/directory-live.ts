@@ -1,5 +1,7 @@
-import type { DirectoryConfigParams } from "openclaw/plugin-sdk/channel-runtime";
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-runtime";
+import type {
+  ChannelDirectoryEntry,
+  DirectoryConfigParams,
+} from "openclaw/plugin-sdk/directory-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { fetchDiscord } from "./api.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
@@ -10,7 +12,7 @@ type DiscordGuild = { id: string; name: string };
 type DiscordUser = { id: string; username: string; global_name?: string; bot?: boolean };
 type DiscordMember = { user: DiscordUser; nick?: string | null };
 type DiscordChannel = { id: string; name?: string | null };
-type DiscordDirectoryAccess = { token: string; query: string };
+type DiscordDirectoryAccess = { token: string; query: string; accountId: string };
 
 function normalizeQuery(value?: string | null): string {
   return value?.trim().toLowerCase() ?? "";
@@ -28,7 +30,7 @@ function resolveDiscordDirectoryAccess(
   if (!token) {
     return null;
   }
-  return { token, query: normalizeQuery(params.query) };
+  return { token, query: normalizeQuery(params.query), accountId: account.accountId };
 }
 
 async function listDiscordGuilds(token: string): Promise<DiscordGuild[]> {
@@ -43,7 +45,7 @@ export async function listDiscordDirectoryGroupsLive(
   if (!access) {
     return [];
   }
-  const { token, query } = access;
+  const { token, query, accountId } = access;
   const guilds = await listDiscordGuilds(token);
   const rows: ChannelDirectoryEntry[] = [];
 
@@ -80,7 +82,7 @@ export async function listDiscordDirectoryPeersLive(
   if (!access) {
     return [];
   }
-  const { token, query } = access;
+  const { token, query, accountId } = access;
   if (!query) {
     return [];
   }
@@ -104,7 +106,7 @@ export async function listDiscordDirectoryPeersLive(
         continue;
       }
       rememberDiscordDirectoryUser({
-        accountId: params.accountId,
+        accountId,
         userId: user.id,
         handles: [
           user.username,

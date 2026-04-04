@@ -10,8 +10,9 @@ import {
 } from "./test-helpers/pi-tools-fs-helpers.js";
 import { withUnsafeMountedSandboxHarness } from "./test-helpers/unsafe-mounted-sandbox.js";
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
 
@@ -91,8 +92,8 @@ describe("tools.fs.workspaceOnly", () => {
         workspaceDir: sandboxRoot,
         config: {
           tools: {
-            allow: ["read", "exec"],
-            exec: { applyPatch: { enabled: true } },
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: {} },
           },
         } as OpenClawConfig,
       });
@@ -113,8 +114,8 @@ describe("tools.fs.workspaceOnly", () => {
         workspaceDir: sandboxRoot,
         config: {
           tools: {
-            allow: ["read", "exec"],
-            exec: { applyPatch: { enabled: true, workspaceOnly: false } },
+            allow: ["read", "write", "exec"],
+            exec: { applyPatch: { workspaceOnly: false } },
           },
         } as OpenClawConfig,
       });

@@ -161,7 +161,7 @@
 }
 
 .topnav-shell .dashboard-header__breadcrumb-current {
-  color: var(--text-strong);
+  color: var(--accent);
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
@@ -208,7 +208,7 @@
   min-height: 38px;
   padding: 0 14px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
   font-size: 13px;
@@ -256,7 +256,7 @@
   gap: 2px;
   padding: 3px;
   border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
 }
 
@@ -268,7 +268,7 @@
   justify-content: center;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -374,7 +374,7 @@
 }
 
 .sidebar-shell__footer {
-  padding: 12px 8px 0;
+  padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
@@ -389,7 +389,7 @@
   width: 32px;
   height: 32px;
   flex-shrink: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
 }
 
@@ -440,7 +440,7 @@
   justify-content: center;
   background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   cursor: pointer;
   transition:
     background var(--duration-fast) ease,
@@ -507,8 +507,8 @@
   min-height: 28px;
   background: transparent;
   border: none;
-  border-radius: 10px;
-  color: var(--muted);
+  border-radius: var(--radius-md);
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
   cursor: pointer;
   text-align: left;
   transition:
@@ -558,7 +558,7 @@
   gap: 8px;
   min-height: 40px;
   padding: 0 9px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -653,7 +653,7 @@
   min-height: 44px;
   padding: 0;
   margin: 0 auto;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   border-color: transparent;
   box-shadow: none;
 }
@@ -681,7 +681,7 @@
   top: 10px;
   bottom: 10px;
   width: 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 86%, transparent);
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
 }
@@ -712,7 +712,7 @@
 .sidebar--collapsed .sidebar-brand__logo {
   width: 34px;
   height: 34px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   box-shadow:
     0 10px 20px color-mix(in srgb, black 20%, transparent),
     inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
@@ -734,7 +734,7 @@
   gap: 10px;
   min-height: 40px;
   padding: 0 12px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
 }
@@ -795,7 +795,7 @@
   min-height: 44px;
   padding: 0;
   justify-content: center;
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
 }
 
 .sidebar--collapsed .sidebar-version__status {
@@ -910,7 +910,7 @@
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
-  color: var(--text-strong);
+  color: var(--accent);
 }
 
 .page-sub {
@@ -924,6 +924,97 @@
 .page-meta {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.dreaming-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dreaming-header-controls__modes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+}
+
+.dreaming-header-controls__mode {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  max-width: 90px;
+  overflow: hidden;
+  transition:
+    max-width var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.dreaming-header-controls__mode:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--text);
+  max-width: 290px;
+}
+
+.dreaming-header-controls__mode:focus:not(:disabled) {
+  max-width: 290px;
+}
+
+.dreaming-header-controls__mode:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.dreaming-header-controls__mode--active {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 70%, var(--bg-elevated));
+  color: var(--text-strong);
+}
+
+.dreaming-header-controls__mode-label {
+  flex-shrink: 0;
+}
+
+.dreaming-header-controls__mode-detail {
+  max-width: 0;
+  opacity: 0;
+  margin-left: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 10px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
+  transition:
+    max-width var(--duration-fast) ease,
+    margin-left var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
+}
+
+.dreaming-header-controls__mode:hover:not(:disabled) .dreaming-header-controls__mode-detail,
+.dreaming-header-controls__mode:focus:not(:disabled) .dreaming-header-controls__mode-detail {
+  max-width: 220px;
+  margin-left: 6px;
+  opacity: 0.95;
 }
 
 /* Chat view header adjustments */

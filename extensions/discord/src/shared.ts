@@ -1,4 +1,7 @@
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
@@ -7,13 +10,9 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import {
-  createScopedChannelConfigAdapter,
-  buildChannelConfigSchema,
-  DiscordConfigSchema,
-  getChatChannelMeta,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
+import { DiscordChannelConfigSchema } from "./config-schema.js";
+import { discordDoctor } from "./doctor.js";
 import { createDiscordSetupWizardProxy } from "./setup-core.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
@@ -29,8 +28,8 @@ export const discordSetupWizard = createDiscordSetupWizardProxy(
 export const discordConfigAdapter = createScopedChannelConfigAdapter<ResolvedDiscordAccount>({
   sectionKey: DISCORD_CHANNEL,
   listAccountIds: listDiscordAccountIds,
-  resolveAccount: (cfg, accountId) => resolveDiscordAccount({ cfg, accountId }),
-  inspectAccount: (cfg, accountId) => inspectDiscordAccount({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveDiscordAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectDiscordAccount),
   defaultAccountId: resolveDefaultDiscordAccountId,
   clearBaseFields: ["token", "name"],
   resolveAllowFrom: (account: ResolvedDiscordAccount) => account.config.dm?.allowFrom,
@@ -46,6 +45,8 @@ export function createDiscordPluginBase(params: {
   | "meta"
   | "setupWizard"
   | "capabilities"
+  | "commands"
+  | "doctor"
   | "streaming"
   | "reload"
   | "configSchema"
@@ -64,21 +65,29 @@ export function createDiscordPluginBase(params: {
       media: true,
       nativeCommands: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: true,
+      resolveNativeCommandName: ({ commandKey, defaultName }) =>
+        commandKey === "tts" ? "voice" : defaultName,
+    },
+    doctor: discordDoctor,
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
     reload: { configPrefixes: ["channels.discord"] },
-    configSchema: buildChannelConfigSchema(DiscordConfigSchema),
+    configSchema: DiscordChannelConfigSchema,
     config: {
       ...discordConfigAdapter,
       isConfigured: (account) => Boolean(account.token?.trim()),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: Boolean(account.token?.trim()),
-        tokenSource: account.tokenSource,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+          configured: Boolean(account.token?.trim()),
+          extra: {
+            tokenSource: account.tokenSource,
+          },
+        }),
     },
     setup: params.setup,
   }) as Pick<
@@ -87,6 +96,8 @@ export function createDiscordPluginBase(params: {
     | "meta"
     | "setupWizard"
     | "capabilities"
+    | "commands"
+    | "doctor"
     | "streaming"
     | "reload"
     | "configSchema"

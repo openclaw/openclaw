@@ -1,194 +1,210 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
+import { BUNDLED_WEB_SEARCH_PLUGIN_IDS } from "./bundled-web-search-ids.js";
+import { hasBundledWebSearchCredential } from "./bundled-web-search-registry.js";
 import {
+  listBundledWebSearchPluginIds,
   listBundledWebSearchProviders,
+  resolveBundledWebSearchPluginId,
   resolveBundledWebSearchPluginIds,
 } from "./bundled-web-search.js";
-import { webSearchProviderContractRegistry } from "./contracts/registry.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
-describe("bundled web search metadata", () => {
-  function toComparableEntry(params: {
-    pluginId: string;
-    provider: {
-      id: string;
-      label: string;
-      hint: string;
-      envVars: string[];
-      placeholder: string;
-      signupUrl: string;
-      docsUrl?: string;
-      autoDetectOrder?: number;
-      credentialPath: string;
-      inactiveSecretPaths?: string[];
-      getConfiguredCredentialValue?: unknown;
-      setConfiguredCredentialValue?: unknown;
-      applySelectionConfig?: unknown;
-      resolveRuntimeMetadata?: unknown;
-    };
-  }) {
-    return {
-      pluginId: params.pluginId,
-      id: params.provider.id,
-      label: params.provider.label,
-      hint: params.provider.hint,
-      envVars: params.provider.envVars,
-      placeholder: params.provider.placeholder,
-      signupUrl: params.provider.signupUrl,
-      docsUrl: params.provider.docsUrl,
-      autoDetectOrder: params.provider.autoDetectOrder,
-      credentialPath: params.provider.credentialPath,
-      inactiveSecretPaths: params.provider.inactiveSecretPaths,
-      hasConfiguredCredentialAccessors:
-        typeof params.provider.getConfiguredCredentialValue === "function" &&
-        typeof params.provider.setConfiguredCredentialValue === "function",
-      hasApplySelectionConfig: typeof params.provider.applySelectionConfig === "function",
-      hasResolveRuntimeMetadata: typeof params.provider.resolveRuntimeMetadata === "function",
-    };
-  }
+vi.mock("./manifest-registry.js", () => ({
+  loadPluginManifestRegistry: vi.fn(),
+}));
 
-  function sortComparableEntries<
-    T extends {
-      autoDetectOrder?: number;
-      id: string;
-      pluginId: string;
-    },
-  >(entries: T[]): T[] {
-    return [...entries].toSorted((left, right) => {
-      const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-      return (
-        leftOrder - rightOrder ||
-        left.id.localeCompare(right.id) ||
-        left.pluginId.localeCompare(right.pluginId)
-      );
+vi.mock("./bundled-capability-runtime.js", () => ({
+  loadBundledCapabilityRuntimeRegistry: vi.fn(),
+}));
+
+const resolveBundledPluginWebSearchProvidersMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./web-search-providers.js", () => ({
+  resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
+}));
+
+function createMockedBundledWebSearchProvider(params: {
+  pluginId: string;
+  providerId: string;
+  configuredCredential?: unknown;
+  scopedCredential?: unknown;
+  envVars?: string[];
+}) {
+  return {
+    pluginId: params.pluginId,
+    id: params.providerId,
+    label: params.providerId,
+    hint: `${params.providerId} provider`,
+    envVars: params.envVars ?? [],
+    placeholder: `${params.providerId}-key`,
+    signupUrl: `https://example.com/${params.providerId}`,
+    autoDetectOrder: 10,
+    credentialPath: `plugins.entries.${params.pluginId}.config.webSearch.apiKey`,
+    getCredentialValue: () => params.scopedCredential,
+    getConfiguredCredentialValue: () => params.configuredCredential,
+    setCredentialValue: () => {},
+    createTool: () => ({
+      description: params.providerId,
+      parameters: {},
+      execute: async () => ({}),
+    }),
+  };
+}
+
+describe("bundled web search helpers", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(loadPluginManifestRegistry).mockReturnValue({
+      plugins: [
+        { id: "xai", origin: "bundled" },
+        { id: "google", origin: "bundled" },
+        { id: "noise", origin: "bundled" },
+        { id: "external-google", origin: "workspace" },
+      ] as never[],
+      diagnostics: [],
     });
-  }
-
-  it("keeps bundled web search compat ids aligned with bundled manifests", () => {
-    expect(resolveBundledWebSearchPluginIds({})).toEqual([
-      "brave",
-      "firecrawl",
-      "google",
-      "moonshot",
-      "perplexity",
-      "tavily",
-      "xai",
-    ]);
+    vi.mocked(loadBundledCapabilityRuntimeRegistry).mockReturnValue({
+      webSearchProviders: [
+        {
+          pluginId: "xai",
+          provider: createMockedBundledWebSearchProvider({
+            pluginId: "xai",
+            providerId: "grok",
+          }),
+        },
+        {
+          pluginId: "google",
+          provider: createMockedBundledWebSearchProvider({
+            pluginId: "google",
+            providerId: "gemini",
+          }),
+        },
+      ],
+    } as never);
   });
 
-  it("keeps fast-path bundled provider metadata aligned with bundled plugin contracts", async () => {
-    const fastPathProviders = listBundledWebSearchProviders();
-
+  it("filters bundled manifest entries down to known bundled web search plugins", () => {
     expect(
-      sortComparableEntries(
-        fastPathProviders.map((provider) =>
-          toComparableEntry({
-            pluginId: provider.pluginId,
-            provider,
-          }),
-        ),
-      ),
-    ).toEqual(
-      sortComparableEntries(
-        webSearchProviderContractRegistry.map(({ pluginId, provider }) =>
-          toComparableEntry({
-            pluginId,
-            provider,
-          }),
-        ),
-      ),
-    );
-
-    for (const fastPathProvider of fastPathProviders) {
-      const contractEntry = webSearchProviderContractRegistry.find(
-        (entry) =>
-          entry.pluginId === fastPathProvider.pluginId && entry.provider.id === fastPathProvider.id,
-      );
-      expect(contractEntry).toBeDefined();
-      const contractProvider = contractEntry!.provider;
-
-      const fastSearchConfig: Record<string, unknown> = {};
-      const contractSearchConfig: Record<string, unknown> = {};
-      fastPathProvider.setCredentialValue(fastSearchConfig, "test-key");
-      contractProvider.setCredentialValue(contractSearchConfig, "test-key");
-      expect(fastSearchConfig).toEqual(contractSearchConfig);
-      expect(fastPathProvider.getCredentialValue(fastSearchConfig)).toEqual(
-        contractProvider.getCredentialValue(contractSearchConfig),
-      );
-
-      const fastConfig = {} as OpenClawConfig;
-      const contractConfig = {} as OpenClawConfig;
-      fastPathProvider.setConfiguredCredentialValue?.(fastConfig, "test-key");
-      contractProvider.setConfiguredCredentialValue?.(contractConfig, "test-key");
-      expect(fastConfig).toEqual(contractConfig);
-      expect(fastPathProvider.getConfiguredCredentialValue?.(fastConfig)).toEqual(
-        contractProvider.getConfiguredCredentialValue?.(contractConfig),
-      );
-
-      if (fastPathProvider.applySelectionConfig || contractProvider.applySelectionConfig) {
-        expect(fastPathProvider.applySelectionConfig?.({} as OpenClawConfig)).toEqual(
-          contractProvider.applySelectionConfig?.({} as OpenClawConfig),
-        );
-      }
-
-      if (fastPathProvider.resolveRuntimeMetadata || contractProvider.resolveRuntimeMetadata) {
-        const metadataCases = [
-          {
-            searchConfig: fastSearchConfig,
-            resolvedCredential: {
-              value: "pplx-test",
-              source: "secretRef" as const,
-              fallbackEnvVar: undefined,
-            },
+      resolveBundledWebSearchPluginIds({
+        config: {
+          plugins: {
+            allow: ["google", "xai"],
           },
-          {
-            searchConfig: fastSearchConfig,
-            resolvedCredential: {
-              value: undefined,
-              source: "env" as const,
-              fallbackEnvVar: "OPENROUTER_API_KEY",
-            },
-          },
-          {
-            searchConfig: {
-              ...fastSearchConfig,
-              perplexity: {
-                ...(fastSearchConfig.perplexity as Record<string, unknown> | undefined),
-                model: "custom-model",
-              },
-            },
-            resolvedCredential: {
-              value: "pplx-test",
-              source: "secretRef" as const,
-              fallbackEnvVar: undefined,
-            },
-          },
-        ];
+        },
+        workspaceDir: "/tmp/workspace",
+        env: { OPENCLAW_HOME: "/tmp/openclaw-home" },
+      }),
+    ).toEqual(["google", "xai"]);
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          allow: ["google", "xai"],
+        },
+      },
+      workspaceDir: "/tmp/workspace",
+      env: { OPENCLAW_HOME: "/tmp/openclaw-home" },
+    });
+  });
 
-        for (const testCase of metadataCases) {
-          expect(
-            await fastPathProvider.resolveRuntimeMetadata?.({
-              config: fastConfig,
-              searchConfig: testCase.searchConfig,
-              runtimeMetadata: {
-                diagnostics: [],
-                providerSource: "configured",
-              },
-              resolvedCredential: testCase.resolvedCredential,
-            }),
-          ).toEqual(
-            await contractProvider.resolveRuntimeMetadata?.({
-              config: contractConfig,
-              searchConfig: testCase.searchConfig,
-              runtimeMetadata: {
-                diagnostics: [],
-                providerSource: "configured",
-              },
-              resolvedCredential: testCase.resolvedCredential,
-            }),
-          );
-        }
-      }
-    }
+  it("returns a copy of the bundled plugin id fast-path list", () => {
+    const listed = listBundledWebSearchPluginIds();
+    expect(listed).toEqual([...BUNDLED_WEB_SEARCH_PLUGIN_IDS]);
+    expect(listed).not.toBe(BUNDLED_WEB_SEARCH_PLUGIN_IDS);
+  });
+
+  it("maps bundled provider ids back to their owning plugins", () => {
+    expect(resolveBundledWebSearchPluginId(" gemini ")).toBe("google");
+    expect(resolveBundledWebSearchPluginId("missing")).toBeUndefined();
+  });
+
+  it("loads bundled provider entries through the capability runtime registry once", () => {
+    expect(listBundledWebSearchProviders()).toEqual([
+      expect.objectContaining({ pluginId: "xai", id: "grok" }),
+      expect.objectContaining({ pluginId: "google", id: "gemini" }),
+    ]);
+    expect(listBundledWebSearchProviders()).toEqual([
+      expect.objectContaining({ pluginId: "xai", id: "grok" }),
+      expect.objectContaining({ pluginId: "google", id: "gemini" }),
+    ]);
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledWith({
+      pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+      pluginSdkResolution: "dist",
+    });
+  });
+});
+
+describe("hasBundledWebSearchCredential", () => {
+  const baseCfg = {
+    agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+    browser: { enabled: false },
+    tools: { web: { fetch: { enabled: false } } },
+  } satisfies OpenClawConfig;
+
+  beforeEach(() => {
+    resolveBundledPluginWebSearchProvidersMock.mockReset();
+  });
+
+  it.each([
+    {
+      name: "detects configured plugin credentials",
+      providers: [
+        createMockedBundledWebSearchProvider({
+          pluginId: "google",
+          providerId: "gemini",
+          configuredCredential: "AIza-test",
+        }),
+      ],
+      config: baseCfg,
+      env: {},
+    },
+    {
+      name: "detects scoped tool credentials",
+      providers: [
+        createMockedBundledWebSearchProvider({
+          pluginId: "google",
+          providerId: "gemini",
+          scopedCredential: "AIza-test",
+        }),
+      ],
+      config: baseCfg,
+      env: {},
+      searchConfig: { provider: "gemini" },
+    },
+    {
+      name: "detects env credentials",
+      providers: [
+        createMockedBundledWebSearchProvider({
+          pluginId: "xai",
+          providerId: "grok",
+          envVars: ["XAI_API_KEY"],
+        }),
+      ],
+      config: baseCfg,
+      env: { XAI_API_KEY: "xai-test" },
+    },
+  ] as const)("$name", ({ providers, config, env, searchConfig }) => {
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue(providers);
+
+    expect(hasBundledWebSearchCredential({ config, env, searchConfig })).toBe(true);
+    expect(resolveBundledPluginWebSearchProvidersMock).toHaveBeenCalledWith({
+      config,
+      env,
+      bundledAllowlistCompat: true,
+    });
+  });
+
+  it("returns false when no bundled provider exposes a configured credential", () => {
+    resolveBundledPluginWebSearchProvidersMock.mockReturnValue([
+      createMockedBundledWebSearchProvider({
+        pluginId: "google",
+        providerId: "gemini",
+        envVars: ["GEMINI_API_KEY"],
+      }),
+    ]);
+
+    expect(hasBundledWebSearchCredential({ config: baseCfg, env: {} })).toBe(false);
   });
 });

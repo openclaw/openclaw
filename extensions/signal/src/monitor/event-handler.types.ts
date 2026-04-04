@@ -4,7 +4,7 @@ import type {
   GroupPolicy,
   SignalReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SignalSender } from "../identity.js";
@@ -37,7 +37,11 @@ export type SignalDataMessage = {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { text?: string | null } | null;
+  quote?: {
+    text?: string | null;
+    author?: string | null;
+    authorUuid?: string | null;
+  } | null;
   reaction?: SignalReactionMessage | null;
 };
 

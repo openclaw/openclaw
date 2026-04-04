@@ -1,11 +1,11 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
+import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NativeCommandSpec } from "../../../../src/auto-reply/commands-registry.js";
-import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { DiscordAccountConfig } from "../../../../src/config/types.discord.js";
-import * as pluginCommandsModule from "../../../../src/plugins/commands.js";
-import { createDiscordNativeCommand } from "./native-command.js";
+import { __testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
 import {
   createMockCommandInteraction,
   type MockCommandInteraction,
@@ -39,7 +39,7 @@ function createConfig(): OpenClawConfig {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },
@@ -68,13 +68,17 @@ function createCommand(cfg: OpenClawConfig, discordConfig?: DiscordAccountConfig
 }
 
 function createDispatchSpy() {
-  return vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({
+  const dispatchSpy = vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({
     counts: {
       final: 1,
       block: 0,
       tool: 0,
     },
   } as never);
+  nativeCommandTesting.setDispatchReplyWithDispatcher(
+    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+  );
+  return dispatchSpy;
 }
 
 async function runGuildSlashCommand(params?: {
@@ -110,6 +114,9 @@ function expectUnauthorizedReply(interaction: MockCommandInteraction) {
 describe("Discord native slash commands with commands.allowFrom", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    nativeCommandTesting.setDispatchReplyWithDispatcher(
+      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+    );
   });
 
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
@@ -167,6 +174,36 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectUnauthorizedReply(interaction);
   });
 
+  it("authorizes guild slash commands when commands.allowFrom.discord contains a matching guild: entry", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          allowFrom: {
+            discord: ["guild:345678901234567890"],
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands when commands.allowFrom.discord has a guild: entry that does not match", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          allowFrom: {
+            discord: ["guild:000000000000000000"],
+          },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
   it("uses the root discord maxLinesPerMessage when runtime discordConfig omits it", async () => {
     const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
     const { interaction } = await runGuildSlashCommand({
@@ -185,7 +222,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },

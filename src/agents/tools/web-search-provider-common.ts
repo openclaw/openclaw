@@ -30,21 +30,7 @@ type UnsupportedWebSearchFilterName =
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
-
-const SEARCH_CACHE_KEY = Symbol.for("openclaw.web-search.cache");
-
-function getSharedSearchCache(): Map<string, CacheEntry<Record<string, unknown>>> {
-  const root = globalThis as Record<PropertyKey, unknown>;
-  const existing = root[SEARCH_CACHE_KEY];
-  if (existing instanceof Map) {
-    return existing as Map<string, CacheEntry<Record<string, unknown>>>;
-  }
-  const next = new Map<string, CacheEntry<Record<string, unknown>>>();
-  root[SEARCH_CACHE_KEY] = next;
-  return next;
-}
-
-export const SEARCH_CACHE = getSharedSearchCache();
+export const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
@@ -89,6 +75,47 @@ export async function withTrustedWebSearchEndpoint<T>(
       timeoutSeconds: params.timeoutSeconds,
     },
     async ({ response }) => run(response),
+  );
+}
+
+export async function postTrustedWebToolsJson<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    apiKey: string;
+    body: Record<string, unknown>;
+    errorLabel: string;
+    maxErrorBytes?: number;
+    extraHeaders?: Record<string, string>;
+  },
+  parseResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  return withTrustedWebToolsEndpoint(
+    {
+      url: params.url,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          ...params.extraHeaders,
+          Accept: "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(params.body),
+      },
+    },
+    async ({ response }) => {
+      if (!response.ok) {
+        const detail = await readResponseText(response, {
+          maxBytes: params.maxErrorBytes ?? 64_000,
+        });
+        throw new Error(
+          `${params.errorLabel} API error (${response.status}): ${detail.text || response.statusText}`,
+        );
+      }
+      return await parseResponse(response);
+    },
   );
 }
 
@@ -165,6 +192,50 @@ export function normalizeToIsoDate(value: string): string | undefined {
     return isValidIsoDate(iso) ? iso : undefined;
   }
   return undefined;
+}
+
+export function parseIsoDateRange(params: {
+  rawDateAfter?: string;
+  rawDateBefore?: string;
+  invalidDateAfterMessage: string;
+  invalidDateBeforeMessage: string;
+  invalidDateRangeMessage: string;
+  docs?: string;
+}):
+  | { dateAfter?: string; dateBefore?: string }
+  | {
+      error: "invalid_date" | "invalid_date_range";
+      message: string;
+      docs: string;
+    } {
+  const docs = params.docs ?? "https://docs.openclaw.ai/tools/web";
+  const dateAfter = params.rawDateAfter ? normalizeToIsoDate(params.rawDateAfter) : undefined;
+  if (params.rawDateAfter && !dateAfter) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateAfterMessage,
+      docs,
+    };
+  }
+
+  const dateBefore = params.rawDateBefore ? normalizeToIsoDate(params.rawDateBefore) : undefined;
+  if (params.rawDateBefore && !dateBefore) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateBeforeMessage,
+      docs,
+    };
+  }
+
+  if (dateAfter && dateBefore && dateAfter > dateBefore) {
+    return {
+      error: "invalid_date_range",
+      message: params.invalidDateRangeMessage,
+      docs,
+    };
+  }
+
+  return { dateAfter, dateBefore };
 }
 
 export function normalizeFreshness(

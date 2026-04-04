@@ -8,8 +8,9 @@ import {
   type IRooms,
   type ISyncResponse,
   type IStoredClientOpts,
-} from "matrix-js-sdk";
-import { writeJsonFileAtomically } from "../../runtime-api.js";
+} from "matrix-js-sdk/lib/matrix.js";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
 
 const STORE_VERSION = 1;
@@ -21,23 +22,6 @@ type PersistedMatrixSyncStore = {
   clientOptions?: IStoredClientOpts;
   cleanShutdown?: boolean;
 };
-
-function createAsyncLock() {
-  let lock: Promise<void> = Promise.resolve();
-  return async function withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const previous = lock;
-    let release: (() => void) | undefined;
-    lock = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await fn();
-    } finally {
-      release?.();
-    }
-  };
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

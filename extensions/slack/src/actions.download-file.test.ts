@@ -1,5 +1,5 @@
 import type { WebClient } from "@slack/web-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveSlackMedia = vi.fn();
 
@@ -7,7 +7,7 @@ vi.mock("./monitor/media.js", () => ({
   resolveSlackMedia: (...args: Parameters<typeof resolveSlackMedia>) => resolveSlackMedia(...args),
 }));
 
-const { downloadSlackFile } = await import("./actions.js");
+let downloadSlackFile: typeof import("./actions.js").downloadSlackFile;
 
 function createClient() {
   return {
@@ -68,6 +68,10 @@ function mockSuccessfulMediaDownload(client: ReturnType<typeof createClient>) {
 }
 
 describe("downloadSlackFile", () => {
+  beforeAll(async () => {
+    ({ downloadSlackFile } = await import("./actions.js"));
+  });
+
   beforeEach(() => {
     resolveSlackMedia.mockReset();
   });

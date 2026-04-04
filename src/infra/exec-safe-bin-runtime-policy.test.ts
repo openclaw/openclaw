@@ -17,6 +17,12 @@ describe("exec safe-bin runtime policy", () => {
     { bin: "node", expected: true },
     { bin: "node20", expected: true },
     { bin: "/usr/local/bin/node20", expected: true },
+    { bin: "awk", expected: true },
+    { bin: "/opt/homebrew/bin/gawk", expected: true },
+    { bin: "mawk", expected: true },
+    { bin: "nawk", expected: true },
+    { bin: "sed", expected: true },
+    { bin: "gsed", expected: true },
     { bin: "ruby3.2", expected: true },
     { bin: "bash", expected: true },
     { bin: "busybox", expected: true },
@@ -33,8 +39,14 @@ describe("exec safe-bin runtime policy", () => {
 
   it("lists interpreter-like bins from a mixed set", () => {
     expect(
-      listInterpreterLikeSafeBins(["jq", " C:\\Tools\\Python3.EXE ", "myfilter", "/usr/bin/node"]),
-    ).toEqual(["node", "python3"]);
+      listInterpreterLikeSafeBins([
+        "jq",
+        " C:\\Tools\\Python3.EXE ",
+        "myfilter",
+        "/usr/bin/node",
+        "/opt/homebrew/bin/gawk",
+      ]),
+    ).toEqual(["gawk", "node", "python3"]);
   });
 
   it("merges and normalizes safe-bin profile fixtures", () => {

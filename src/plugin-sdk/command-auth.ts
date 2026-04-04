@@ -1,5 +1,121 @@
+import { getBundledChannelContractSurfaceModule } from "../channels/plugins/contract-surfaces.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+export {
+  createPreCryptoDirectDmAuthorizer,
+  resolveInboundDirectDmAccessWithRuntime,
+  type DirectDmCommandAuthorizationRuntime,
+  type ResolvedInboundDirectDmAccess,
+} from "./direct-dm.js";
+
+export {
+  hasControlCommand,
+  hasInlineCommandTokens,
+  isControlCommandMessage,
+  shouldComputeCommandAuthorized,
+} from "../auto-reply/command-detection.js";
+export {
+  buildCommandText,
+  buildCommandTextFromArgs,
+  findCommandByNativeName,
+  getCommandDetection,
+  isCommandEnabled,
+  isCommandMessage,
+  isNativeCommandSurface,
+  listChatCommands,
+  listChatCommandsForConfig,
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+  maybeResolveTextAlias,
+  normalizeCommandBody,
+  parseCommandArgs,
+  resolveCommandArgChoices,
+  resolveCommandArgMenu,
+  resolveTextCommand,
+  serializeCommandArgs,
+  shouldHandleTextCommands,
+} from "../auto-reply/commands-registry.js";
+export type {
+  ChatCommandDefinition,
+  CommandArgChoiceContext,
+  CommandArgDefinition,
+  CommandArgMenuSpec,
+  CommandArgValues,
+  CommandArgs,
+  CommandDetection,
+  CommandNormalizeOptions,
+  CommandScope,
+  NativeCommandSpec,
+  ResolvedCommandArgChoice,
+  ShouldHandleTextCommandsParams,
+} from "../auto-reply/commands-registry.js";
+export type { CommandArgsParsing } from "../auto-reply/commands-registry.types.js";
+export {
+  resolveCommandAuthorizedFromAuthorizers,
+  resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
+  type CommandAuthorizer,
+  type CommandGatingModeWhenAccessGroupsOff,
+} from "../channels/command-gating.js";
+export {
+  resolveNativeCommandSessionTargets,
+  type ResolveNativeCommandSessionTargetsParams,
+} from "../channels/native-command-session-targets.js";
+export {
+  resolveCommandAuthorization,
+  type CommandAuthorization,
+} from "../auto-reply/command-auth.js";
+export {
+  listReservedChatSlashCommandNames,
+  listSkillCommandsForAgents,
+  listSkillCommandsForWorkspace,
+  resolveSkillCommandInvocation,
+} from "../auto-reply/skill-commands.js";
+export type { SkillCommandSpec } from "../agents/skills.js";
+export {
+  buildModelsProviderData,
+  formatModelsAvailableHeader,
+  resolveModelsCommandReply,
+} from "../auto-reply/reply/commands-models.js";
+export type { ModelsProviderData } from "../auto-reply/reply/commands-models.js";
+export { resolveStoredModelOverride } from "../auto-reply/reply/model-selection.js";
+export type { StoredModelOverride } from "../auto-reply/reply/model-selection.js";
+export {
+  buildCommandsMessage,
+  buildCommandsMessagePaginated,
+  buildHelpMessage,
+} from "../auto-reply/status.js";
+
+type TelegramCommandUiContract = {
+  buildCommandsPaginationKeyboard: (
+    currentPage: number,
+    totalPages: number,
+    agentId?: string,
+  ) => Array<Array<{ text: string; callback_data: string }>>;
+};
+
+function loadTelegramCommandUiContract(): TelegramCommandUiContract {
+  const contract = getBundledChannelContractSurfaceModule<TelegramCommandUiContract>({
+    pluginId: "telegram",
+    preferredBasename: "contract-api.ts",
+  });
+  if (!contract) {
+    throw new Error("telegram command ui contract surface is unavailable");
+  }
+  return contract;
+}
+
+export function buildCommandsPaginationKeyboard(
+  currentPage: number,
+  totalPages: number,
+  agentId?: string,
+): Array<Array<{ text: string; callback_data: string }>> {
+  return loadTelegramCommandUiContract().buildCommandsPaginationKeyboard(
+    currentPage,
+    totalPages,
+    agentId,
+  );
+}
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;

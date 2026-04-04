@@ -6,12 +6,7 @@ import type {
   ResetScope,
 } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  DEFAULT_GATEWAY_PORT,
-  readConfigFileSnapshot,
-  resolveGatewayPort,
-  writeConfigFile,
-} from "../config/config.js";
+import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import {
   buildPluginCompatibilityNotices,
@@ -23,6 +18,57 @@ import { resolveUserPath } from "../utils.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
+
+async function resolveAuthChoiceModelSelectionPolicy(params: {
+  authChoice: string;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  resolvePreferredProviderForAuthChoice: (params: {
+    choice: string;
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  }) => Promise<string | undefined>;
+}): Promise<{
+  preferredProvider?: string;
+  promptWhenAuthChoiceProvided: boolean;
+  allowKeepCurrent: boolean;
+}> {
+  const preferredProvider = await params.resolvePreferredProviderForAuthChoice({
+    choice: params.authChoice,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+
+  const { resolvePluginProviders, resolveProviderPluginChoice } =
+    await import("../plugins/provider-auth-choice.runtime.js");
+  const providers = resolvePluginProviders({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
+  const resolvedChoice = resolveProviderPluginChoice({
+    providers,
+    choice: params.authChoice,
+  });
+  const matchedProvider =
+    resolvedChoice?.provider ??
+    (preferredProvider
+      ? providers.find((provider) => provider.id.trim() === preferredProvider.trim())
+      : undefined);
+  const setupPolicy =
+    resolvedChoice?.wizard?.modelSelection ?? matchedProvider?.wizard?.setup?.modelSelection;
+
+  return {
+    preferredProvider,
+    promptWhenAuthChoiceProvided: setupPolicy?.promptWhenAuthChoiceProvided === true,
+    allowKeepCurrent: setupPolicy?.allowKeepCurrent ?? true,
+  };
+}
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -85,7 +131,11 @@ export async function runSetupWizard(
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
+  let baseConfig: OpenClawConfig = snapshot.valid
+    ? snapshot.exists
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {}
+    : {};
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");
@@ -295,7 +345,7 @@ export async function runSetupWizard(
           "Direct to chat channels.",
         ]
       : [
-          `Gateway port: ${DEFAULT_GATEWAY_PORT}`,
+          `Gateway port: ${quickstartGateway.port}`,
           "Gateway bind: Loopback (127.0.0.1)",
           "Gateway auth: Token (default)",
           "Tailscale exposure: Off",
@@ -306,7 +356,7 @@ export async function runSetupWizard(
 
   const localPort = resolveGatewayPort(baseConfig);
   const localUrl = `ws://127.0.0.1:${localPort}`;
-  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
   try {
     const resolvedGatewayToken = await resolveSetupSecretInputString({
       config: baseConfig,
@@ -326,8 +376,7 @@ export async function runSetupWizard(
       "Gateway auth",
     );
   }
-  let localGatewayPassword =
-    process.env.OPENCLAW_GATEWAY_PASSWORD ?? process.env.CLAWDBOT_GATEWAY_PASSWORD;
+  let localGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
   try {
     const resolvedGatewayPassword = await resolveSetupSecretInputString({
       config: baseConfig,
@@ -482,21 +531,26 @@ export async function runSetupWizard(
     }
   }
 
+  const authChoiceModelSelectionPolicy =
+    authChoice === "custom-api-key"
+      ? undefined
+      : await resolveAuthChoiceModelSelectionPolicy({
+          authChoice,
+          config: nextConfig,
+          workspaceDir,
+          resolvePreferredProviderForAuthChoice,
+        });
   const shouldPromptModelSelection =
-    authChoice !== "custom-api-key" && (authChoiceFromPrompt || authChoice === "ollama");
+    authChoice !== "custom-api-key" &&
+    (authChoiceFromPrompt || authChoiceModelSelectionPolicy?.promptWhenAuthChoiceProvided === true);
   if (shouldPromptModelSelection) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,
-      // For ollama, don't allow "keep current" since we may need to download the selected model
-      allowKeep: authChoice !== "ollama",
+      allowKeep: authChoiceModelSelectionPolicy?.allowKeepCurrent ?? true,
       ignoreAllowlist: true,
       includeProviderPluginSetups: true,
-      preferredProvider: await resolvePreferredProviderForAuthChoice({
-        choice: authChoice,
-        config: nextConfig,
-        workspaceDir,
-      }),
+      preferredProvider: authChoiceModelSelectionPolicy?.preferredProvider,
       workspaceDir,
       runtime,
     });
@@ -567,6 +621,16 @@ export async function runSetupWizard(
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
     nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+  }
+
+  // Plugin configuration (sandbox backends, tool plugins, etc.)
+  if (flow !== "quickstart") {
+    const { setupPluginConfig } = await import("./setup.plugin-config.js");
+    nextConfig = await setupPluginConfig({
+      config: nextConfig,
+      prompter,
+      workspaceDir,
+    });
   }
 
   // Setup hooks (session memory on /new)

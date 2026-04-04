@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendBlueBubblesMedia } from "./media-send.js";
+import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 import { setBlueBubblesRuntime } from "./runtime.js";
 
 const sendBlueBubblesAttachmentMock = vi.hoisted(() => vi.fn());
@@ -19,7 +19,7 @@ vi.mock("./send.js", () => ({
   sendMessageBlueBubbles: sendMessageBlueBubblesMock,
 }));
 
-vi.mock("./monitor.js", () => ({
+vi.mock("./monitor-reply-cache.js", () => ({
   resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdMock,
 }));
 
@@ -211,6 +211,30 @@ describe("sendBlueBubblesMedia local-path hardening", () => {
         filename: "allowed.txt",
       },
     });
+  });
+
+  it("rejects remote-host file:// media paths", async () => {
+    const allowedRoot = await makeTempDir();
+
+    await expectRejectedLocalMedia({
+      cfg: createConfig({ mediaLocalRoots: [allowedRoot] }),
+      mediaPath: "file://attacker/share/evil.txt",
+      error: /Invalid file:\/\/ URL/i,
+    });
+  });
+
+  it("rejects remote-host file:// mediaLocalRoots entries", async () => {
+    const { filePath: allowedFile } = await makeTempFile("allowed.txt", "allowed");
+
+    await expect(
+      sendBlueBubblesMedia({
+        cfg: createConfig({ mediaLocalRoots: ["file://attacker/share"] }),
+        to: "chat:123",
+        mediaPath: allowedFile,
+      }),
+    ).rejects.toThrow(/Invalid file:\/\/ URL in mediaLocalRoots/i);
+
+    expect(sendBlueBubblesAttachmentMock).not.toHaveBeenCalled();
   });
 
   it("uses account-specific mediaLocalRoots over top-level roots", async () => {

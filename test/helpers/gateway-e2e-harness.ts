@@ -312,7 +312,7 @@ async function connectStatusClient(
 
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${inst.port}`,
-      connectDelayMs: 0,
+      connectChallengeTimeoutMs: 0,
       token: inst.gatewayToken,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: `status-${inst.name}`,

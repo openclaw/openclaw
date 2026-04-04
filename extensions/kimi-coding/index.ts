@@ -1,11 +1,21 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
+import { createKimiToolCallMarkupWrapper } from "./stream.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildKimiReplayPolicy() {
+  return {
+    preserveSignatures: false,
+  };
+}
 
 export default definePluginEntry({
   id: PLUGIN_ID,
@@ -22,7 +32,7 @@ export default definePluginEntry({
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: "Kimi API key (subscription)",
+          label: "Kimi Code API key (subscription)",
           hint: "Kimi K2.5 + Kimi",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
@@ -38,10 +48,10 @@ export default definePluginEntry({
           noteTitle: "Kimi",
           wizard: {
             choiceId: "kimi-code-api-key",
-            choiceLabel: "Kimi API key (subscription)",
+            choiceLabel: "Kimi Code API key (subscription)",
             groupId: "moonshot",
             groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5 + Kimi",
+            groupHint: "Kimi K2.5",
           },
         }),
       ],
@@ -76,9 +86,8 @@ export default definePluginEntry({
           };
         },
       },
-      capabilities: {
-        preserveAnthropicThinkingSignatures: false,
-      },
+      buildReplayPolicy: () => buildKimiReplayPolicy(),
+      wrapStreamFn: (ctx) => createKimiToolCallMarkupWrapper(ctx.streamFn),
     });
   },
 });

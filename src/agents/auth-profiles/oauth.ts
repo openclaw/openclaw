@@ -7,26 +7,46 @@ import {
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
+import {
+  formatProviderAuthProfileApiKeyWithPlugin,
+  refreshProviderOAuthCredentialWithPlugin,
+} from "../../plugins/provider-runtime.runtime.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
+import {
+  areOAuthCredentialsEquivalent,
+  readManagedExternalCliCredential,
+} from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
+import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
-const OAUTH_PROVIDER_IDS = new Set<string>(getOAuthProviders().map((provider) => provider.id));
-
-let providerRuntimePromise:
-  | Promise<typeof import("../../plugins/provider-runtime.runtime.js")>
-  | undefined;
-
-function loadProviderRuntime() {
-  providerRuntimePromise ??= import("../../plugins/provider-runtime.runtime.js");
-  return providerRuntimePromise;
+function listOAuthProviderIds(): string[] {
+  if (typeof getOAuthProviders !== "function") {
+    return [];
+  }
+  const providers = getOAuthProviders();
+  if (!Array.isArray(providers)) {
+    return [];
+  }
+  return providers
+    .map((provider) =>
+      provider &&
+      typeof provider === "object" &&
+      "id" in provider &&
+      typeof provider.id === "string"
+        ? provider.id
+        : undefined,
+    )
+    .filter((providerId): providerId is string => typeof providerId === "string");
 }
+
+const OAUTH_PROVIDER_IDS = new Set<string>(listOAuthProviderIds());
 
 const isOAuthProvider = (provider: string): provider is OAuthProvider =>
   OAUTH_PROVIDER_IDS.has(provider);
@@ -66,8 +86,7 @@ function isProfileConfigCompatible(params: {
 }
 
 async function buildOAuthApiKey(provider: string, credentials: OAuthCredential): Promise<string> {
-  const { formatProviderAuthProfileApiKeyWithPlugin } = await loadProviderRuntime();
-  const formatted = formatProviderAuthProfileApiKeyWithPlugin({
+  const formatted = await formatProviderAuthProfileApiKeyWithPlugin({
     provider,
     context: credentials,
   });
@@ -165,15 +184,46 @@ async function refreshOAuthTokenWithLock(params: {
       };
     }
 
-    const { refreshProviderOAuthCredentialWithPlugin } = await loadProviderRuntime();
+    const externallyManaged = readManagedExternalCliCredential({
+      profileId: params.profileId,
+      credential: cred,
+    });
+    if (externallyManaged) {
+      if (!areOAuthCredentialsEquivalent(cred, externallyManaged)) {
+        store.profiles[params.profileId] = externallyManaged;
+        saveAuthProfileStore(store, params.agentDir);
+      }
+      if (Date.now() < externallyManaged.expires) {
+        return {
+          apiKey: await buildOAuthApiKey(externallyManaged.provider, externallyManaged),
+          newCredentials: externallyManaged,
+        };
+      }
+      throw new Error(
+        `${externallyManaged.managedBy} credential is expired; refresh it in the external CLI and retry.`,
+      );
+    }
+    if (cred.managedBy) {
+      throw new Error(
+        `${cred.managedBy} credential is unavailable; re-authenticate in the external CLI and retry.`,
+      );
+    }
+
     const pluginRefreshed = await refreshProviderOAuthCredentialWithPlugin({
       provider: cred.provider,
       context: cred,
     });
     if (pluginRefreshed) {
+      const refreshedCredentials: OAuthCredential = {
+        ...cred,
+        ...pluginRefreshed,
+        type: "oauth",
+      };
+      store.profiles[params.profileId] = refreshedCredentials;
+      saveAuthProfileStore(store, params.agentDir);
       return {
-        apiKey: await buildOAuthApiKey(cred.provider, pluginRefreshed),
-        newCredentials: pluginRefreshed,
+        apiKey: await buildOAuthApiKey(cred.provider, refreshedCredentials),
+        newCredentials: refreshedCredentials,
       };
     }
 
@@ -189,6 +239,9 @@ async function refreshOAuthTokenWithLock(params: {
         : await (async () => {
             const oauthProvider = resolveOAuthProvider(cred.provider);
             if (!oauthProvider) {
+              return null;
+            }
+            if (typeof getOAuthApiKey !== "function") {
               return null;
             }
             return await getOAuthApiKey(oauthProvider, oauthCreds);
@@ -323,6 +376,12 @@ export async function resolveApiKeyForProfile(
   const refResolveCache: SecretRefResolveCache = {};
   const configForRefResolution = cfg ?? loadConfig();
   const refDefaults = configForRefResolution.secrets?.defaults;
+  assertNoOAuthSecretRefPolicyViolations({
+    store,
+    cfg: configForRefResolution,
+    profileIds: [profileId],
+    context: `auth profile ${profileId}`,
+  });
 
   if (cred.type === "api_key") {
     const key = await resolveProfileSecretString({

@@ -1,39 +1,51 @@
 import type { Bot } from "grammy";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "openclaw/plugin-sdk/agent-runtime";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+  logAckFailure,
+  logTypingFailure,
+  removeAckReactionAfterReply,
+} from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { removeAckReactionAfterReply } from "openclaw/plugin-sdk/channel-runtime";
-import { logAckFailure, logTypingFailure } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/config-runtime";
 import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
+  TelegramDirectConfig,
 } from "openclaw/plugin-sdk/config-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+  resolveAgentDir,
+  resolveDefaultModelForAgent,
+} from "./bot-message-dispatch.agent.runtime.js";
+import {
+  generateTopicLabel,
+  loadSessionStore,
+  resolveMarkdownTableMode,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+  getAgentScopedMediaLocalRoots,
+  resolveAutoTopicLabelConfig,
+  resolveChunkMode,
+} from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.js";
-import { deliverReplies } from "./bot/delivery.js";
+import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import {
+  buildTelegramErrorScopeKey,
+  isSilentErrorPolicy,
+  resolveTelegramErrorPolicy,
+  shouldSuppressTelegramError,
+} from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
@@ -41,6 +53,7 @@ import {
   createLaneDeliveryStateTracker,
   createLaneTextDeliverer,
   type DraftLaneState,
+  type LaneDeliveryResult,
   type LaneName,
   type LanePreviewLifecycle,
 } from "./lane-delivery.js";
@@ -120,14 +133,17 @@ function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId: string;
+  telegramDeps: TelegramBotDeps;
 }): TelegramReasoningLevel {
-  const { cfg, sessionKey, agentId } = params;
+  const { cfg, sessionKey, agentId, telegramDeps } = params;
   if (!sessionKey) {
     return "off";
   }
   try {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
+    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+      skipCache: true,
+    });
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const level = entry?.reasoningLevel;
     if (level === "on" || level === "stream") {
@@ -156,6 +172,8 @@ export const dispatchTelegramMessage = async ({
     msg,
     chatId,
     isGroup,
+    groupConfig,
+    topicConfig,
     threadSpec,
     historyKey,
     historyLimit,
@@ -188,6 +206,7 @@ export const dispatchTelegramMessage = async ({
     cfg,
     sessionKey: ctxPayload.SessionKey,
     agentId: route.agentId,
+    telegramDeps,
   });
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
@@ -207,7 +226,7 @@ export const dispatchTelegramMessage = async ({
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
-      ? createTelegramDraftStream({
+      ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
@@ -469,16 +488,32 @@ export const dispatchTelegramMessage = async ({
     return { ...payload, text };
   };
   const sendPayload = async (payload: ReplyPayload) => {
-    const result = await deliverReplies({
+    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       ...deliveryBaseOptions,
       replies: [payload],
       onVoiceRecording: sendRecordVoice,
       silent: silentErrorReplies && payload.isError === true,
+      mediaLoader: telegramDeps.loadWebMedia,
     });
     if (result.delivered) {
       deliveryState.markDelivered();
     }
     return result.delivered;
+  };
+  const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
+    if (result.kind !== "preview-finalized") {
+      return;
+    }
+    (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
+      sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
+      chatId: deliveryBaseOptions.chatId,
+      accountId: deliveryBaseOptions.accountId,
+      content: result.delivery.content,
+      success: true,
+      messageId: result.delivery.messageId,
+      isGroup: deliveryBaseOptions.mirrorIsGroup,
+      groupId: deliveryBaseOptions.mirrorGroupId,
+    });
   };
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
@@ -493,7 +528,7 @@ export const dispatchTelegramMessage = async ({
       await lane.stream?.stop();
     },
     editPreview: async ({ messageId, text, previewButtons }) => {
-      await editMessageTelegram(chatId, messageId, text, {
+      await (telegramDeps.editMessageTelegram ?? editMessageTelegram)(chatId, messageId, text, {
         api: bot.api,
         cfg,
         accountId: route.accountId,
@@ -513,11 +548,39 @@ export const dispatchTelegramMessage = async ({
   let queuedFinal = false;
   let hadErrorReplyFailureOrSkip = false;
 
+  // Determine if this is the first turn in session (for auto-topic-label).
+  const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
+
+  let isFirstTurnInSession = false;
+  if (isDmTopic) {
+    try {
+      const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
+        agentId: route.agentId,
+      });
+      const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+        skipCache: true,
+      });
+      const sessionKey = ctxPayload.SessionKey;
+      if (sessionKey) {
+        const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+        isFirstTurnInSession = !entry?.systemSent;
+      } else {
+        logVerbose("auto-topic-label: SessionKey is absent, skipping first-turn detection");
+      }
+    } catch (err) {
+      logVerbose(
+        `auto-topic-label: session store error: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   if (statusReactionController) {
     void statusReactionController.setThinking();
   }
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, ...replyPipeline } = (
+    telegramDeps.createChannelReplyPipeline ?? createChannelReplyPipeline
+  )({
     cfg,
     agentId: route.agentId,
     channel: "telegram",
@@ -612,8 +675,11 @@ export const dispatchTelegramMessage = async ({
               previewButtons,
               allowPreviewUpdateForNonFinal: segment.lane === "reasoning",
             });
+            if (info.kind === "final") {
+              emitPreviewFinalizedHook(result);
+            }
             if (segment.lane === "reasoning") {
-              if (result !== "skipped") {
+              if (result.kind !== "skipped") {
                 reasoningStepState.noteReasoningDelivered();
                 await flushBufferedFinalAnswer();
               }
@@ -668,6 +734,28 @@ export const dispatchTelegramMessage = async ({
           }
         },
         onError: (err, info) => {
+          const errorPolicy = resolveTelegramErrorPolicy({
+            accountConfig: telegramCfg,
+            groupConfig,
+            topicConfig,
+          });
+          if (isSilentErrorPolicy(errorPolicy.policy)) {
+            return;
+          }
+          if (
+            errorPolicy.policy === "once" &&
+            shouldSuppressTelegramError({
+              scopeKey: buildTelegramErrorScopeKey({
+                accountId: route.accountId,
+                chatId,
+                threadId: threadSpec.id,
+              }),
+              cooldownMs: errorPolicy.cooldownMs,
+              errorMessage: String(err),
+            })
+          ) {
+            return;
+          }
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
@@ -816,10 +904,11 @@ export const dispatchTelegramMessage = async ({
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
-    const result = await deliverReplies({
+    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
       silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
+      mediaLoader: telegramDeps.loadWebMedia,
     });
     sentFallback = result.delivered;
   }
@@ -837,6 +926,46 @@ export const dispatchTelegramMessage = async ({
     return;
   }
 
+  // Fire-and-forget: auto-rename DM topic on first message.
+  if (isDmTopic && isFirstTurnInSession) {
+    const userMessage = (ctxPayload.RawBody ?? ctxPayload.Body ?? "").slice(0, 500);
+    if (userMessage.trim()) {
+      const agentDir = resolveAgentDir(cfg, route.agentId);
+      const directConfig = !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined;
+      const directAutoTopicLabel = directConfig?.autoTopicLabel;
+      const accountAutoTopicLabel = telegramCfg?.autoTopicLabel;
+      const autoTopicConfig = resolveAutoTopicLabelConfig(
+        directAutoTopicLabel,
+        accountAutoTopicLabel,
+      );
+      if (autoTopicConfig) {
+        const topicThreadId = threadSpec.id!;
+        void (async () => {
+          try {
+            const label = await generateTopicLabel({
+              userMessage,
+              prompt: autoTopicConfig.prompt,
+              cfg,
+              agentId: route.agentId,
+              agentDir,
+            });
+            if (!label) {
+              logVerbose("auto-topic-label: LLM returned empty label");
+              return;
+            }
+            logVerbose(`auto-topic-label: generated label (len=${label.length})`);
+            await bot.api.editForumTopic(chatId, topicThreadId, { name: label });
+            logVerbose(`auto-topic-label: renamed topic ${chatId}/${topicThreadId}`);
+          } catch (err) {
+            logVerbose(
+              `auto-topic-label: failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        })();
+      }
+    }
+  }
+
   if (statusReactionController) {
     void statusReactionController.setDone().catch((err) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
@@ -846,7 +975,8 @@ export const dispatchTelegramMessage = async ({
       removeAfterReply: removeAckAfterReply,
       ackReactionPromise,
       ackReactionValue: ackReactionPromise ? "ack" : null,
-      remove: () => reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve(),
+      remove: () =>
+        (reactionApi?.(chatId, msg.message_id ?? 0, []) ?? Promise.resolve()).then(() => {}),
       onError: (err) => {
         if (!msg.message_id) {
           return;

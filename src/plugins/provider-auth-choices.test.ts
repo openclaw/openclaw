@@ -7,85 +7,220 @@ vi.mock("./manifest-registry.js", () => ({
 }));
 
 import {
+  resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
 } from "./provider-auth-choices.js";
 
+function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
+  return {
+    id,
+    providerAuthChoices,
+  };
+}
+
+function createProviderAuthChoice(overrides: Record<string, unknown>) {
+  return overrides;
+}
+
+function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
+  loadPluginManifestRegistry.mockReturnValue({
+    plugins,
+  });
+}
+
+function expectResolvedProviderAuthChoices(params: {
+  expectedFlattened: Array<Record<string, unknown>>;
+  resolvedProviderIds?: Record<string, string | undefined>;
+  deprecatedChoiceIds?: Record<string, string | undefined>;
+}) {
+  expect(resolveManifestProviderAuthChoices()).toEqual(params.expectedFlattened);
+  Object.entries(params.resolvedProviderIds ?? {}).forEach(([choiceId, providerId]) => {
+    expect(resolveManifestProviderAuthChoice(choiceId)?.providerId).toBe(providerId);
+  });
+  Object.entries(params.deprecatedChoiceIds ?? {}).forEach(([choiceId, expectedChoiceId]) => {
+    expect(resolveManifestDeprecatedProviderAuthChoice(choiceId)?.choiceId).toBe(expectedChoiceId);
+  });
+}
+
+function setSingleManifestProviderAuthChoices(
+  pluginId: string,
+  providerAuthChoices: Array<Record<string, unknown>>,
+) {
+  setManifestPlugins([createManifestPlugin(pluginId, providerAuthChoices)]);
+}
+
 describe("provider auth choice manifest helpers", () => {
   it("flattens manifest auth choices", () => {
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          providerAuthChoices: [
-            {
-              provider: "openai",
-              method: "api-key",
-              choiceId: "openai-api-key",
-              choiceLabel: "OpenAI API key",
-              optionKey: "openaiApiKey",
-              cliFlag: "--openai-api-key",
-              cliOption: "--openai-api-key <key>",
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(resolveManifestProviderAuthChoices()).toEqual([
-      {
-        pluginId: "openai",
-        providerId: "openai",
-        methodId: "api-key",
+    setSingleManifestProviderAuthChoices("openai", [
+      createProviderAuthChoice({
+        provider: "openai",
+        method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        onboardingScopes: ["text-inference"],
         optionKey: "openaiApiKey",
         cliFlag: "--openai-api-key",
         cliOption: "--openai-api-key <key>",
-      },
+      }),
     ]);
-    expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
-  });
 
-  it("deduplicates flag metadata by option key + flag", () => {
-    loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
+    expectResolvedProviderAuthChoices({
+      expectedFlattened: [
         {
-          id: "moonshot",
-          providerAuthChoices: [
-            {
-              provider: "moonshot",
-              method: "api-key",
-              choiceId: "moonshot-api-key",
-              choiceLabel: "Kimi API key (.ai)",
-              optionKey: "moonshotApiKey",
-              cliFlag: "--moonshot-api-key",
-              cliOption: "--moonshot-api-key <key>",
-              cliDescription: "Moonshot API key",
-            },
-            {
-              provider: "moonshot",
-              method: "api-key-cn",
-              choiceId: "moonshot-api-key-cn",
-              choiceLabel: "Kimi API key (.cn)",
-              optionKey: "moonshotApiKey",
-              cliFlag: "--moonshot-api-key",
-              cliOption: "--moonshot-api-key <key>",
-              cliDescription: "Moonshot API key",
-            },
-          ],
+          pluginId: "openai",
+          providerId: "openai",
+          methodId: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+          onboardingScopes: ["text-inference"],
+          optionKey: "openaiApiKey",
+          cliFlag: "--openai-api-key",
+          cliOption: "--openai-api-key <key>",
         },
       ],
+      resolvedProviderIds: { "openai-api-key": "openai" },
     });
+  });
 
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+  it.each([
+    {
+      name: "deduplicates flag metadata by option key + flag",
+      plugins: [
+        createManifestPlugin("moonshot", [
+          createProviderAuthChoice({
+            provider: "moonshot",
+            method: "api-key",
+            choiceId: "moonshot-api-key",
+            choiceLabel: "Kimi API key (.ai)",
+            optionKey: "moonshotApiKey",
+            cliFlag: "--moonshot-api-key",
+            cliOption: "--moonshot-api-key <key>",
+            cliDescription: "Moonshot API key",
+          }),
+          createProviderAuthChoice({
+            provider: "moonshot",
+            method: "api-key-cn",
+            choiceId: "moonshot-api-key-cn",
+            choiceLabel: "Kimi API key (.cn)",
+            optionKey: "moonshotApiKey",
+            cliFlag: "--moonshot-api-key",
+            cliOption: "--moonshot-api-key <key>",
+            cliDescription: "Moonshot API key",
+          }),
+        ]),
+      ],
+      run: () =>
+        expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+          {
+            optionKey: "moonshotApiKey",
+            authChoice: "moonshot-api-key",
+            cliFlag: "--moonshot-api-key",
+            cliOption: "--moonshot-api-key <key>",
+            description: "Moonshot API key",
+          },
+        ]),
+    },
+    {
+      name: "resolves deprecated auth-choice aliases through manifest metadata",
+      plugins: [
+        createManifestPlugin("minimax", [
+          createProviderAuthChoice({
+            provider: "minimax",
+            method: "api-global",
+            choiceId: "minimax-global-api",
+            deprecatedChoiceIds: ["minimax", "minimax-api"],
+          }),
+        ]),
+      ],
+      run: () =>
+        expectResolvedProviderAuthChoices({
+          expectedFlattened: [
+            {
+              pluginId: "minimax",
+              providerId: "minimax",
+              methodId: "api-global",
+              choiceId: "minimax-global-api",
+              choiceLabel: "minimax-global-api",
+              deprecatedChoiceIds: ["minimax", "minimax-api"],
+            },
+          ],
+          deprecatedChoiceIds: {
+            minimax: "minimax-global-api",
+            "minimax-api": "minimax-global-api",
+            openai: undefined,
+          },
+        }),
+    },
+  ])("$name", ({ plugins, run }) => {
+    setManifestPlugins(plugins);
+    run();
+  });
+
+  it("can exclude untrusted workspace plugin auth choices during onboarding resolution", () => {
+    setManifestPlugins([
       {
-        optionKey: "moonshotApiKey",
-        authChoice: "moonshot-api-key",
-        cliFlag: "--moonshot-api-key",
-        cliOption: "--moonshot-api-key <key>",
-        description: "Moonshot API key",
+        id: "openai",
+        origin: "bundled",
+        providers: ["openai"],
+        providerAuthChoices: [
+          {
+            provider: "openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+      {
+        id: "evil-openai-hijack",
+        origin: "workspace",
+        providers: ["evil-openai"],
+        providerAuthChoices: [
+          {
+            provider: "evil-openai",
+            method: "api-key",
+            choiceId: "openai-api-key",
+            choiceLabel: "OpenAI API key",
+            optionKey: "openaiApiKey",
+            cliFlag: "--openai-api-key",
+            cliOption: "--openai-api-key <key>",
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      resolveManifestProviderAuthChoices({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        pluginId: "openai",
+        providerId: "openai",
+        choiceId: "openai-api-key",
+      }),
+    ]);
+    expect(
+      resolveManifestProviderAuthChoice("openai-api-key", {
+        includeUntrustedWorkspacePlugins: false,
+      })?.providerId,
+    ).toBe("openai");
+    expect(
+      resolveManifestProviderOnboardAuthFlags({
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).toEqual([
+      {
+        optionKey: "openaiApiKey",
+        authChoice: "openai-api-key",
+        cliFlag: "--openai-api-key",
+        cliOption: "--openai-api-key <key>",
+        description: "OpenAI API key",
       },
     ]);
   });

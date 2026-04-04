@@ -1,5 +1,5 @@
-import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-support";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import type { ZaloFetch, ZaloUpdate } from "./api.js";
 import type { ZaloRuntimeEnv } from "./monitor.js";
@@ -59,6 +59,7 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 
 export function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
+  recentWebhookEvents.clear();
   webhookAnomalyTracker.clear();
 }
 
@@ -71,28 +72,32 @@ export function getZaloWebhookStatusCounterSizeForTest(): number {
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    const length = Math.max(1, leftBuffer.length, rightBuffer.length);
-    const paddedLeft = Buffer.alloc(length);
-    const paddedRight = Buffer.alloc(length);
-    leftBuffer.copy(paddedLeft);
-    rightBuffer.copy(paddedRight);
-    timingSafeEqual(paddedLeft, paddedRight);
-    return false;
-  }
-
-  return timingSafeEqual(leftBuffer, rightBuffer);
+  return safeEqualSecret(left, right);
 }
 
-function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
+function buildReplayEventCacheKey(
+  target: ZaloWebhookTarget,
+  update: ZaloUpdate,
+  messageId: string,
+): string {
+  const chatId = update.message?.chat?.id ?? "";
+  const senderId = update.message?.from?.id ?? "";
+  return JSON.stringify([
+    target.path,
+    target.account.accountId,
+    update.event_name,
+    chatId,
+    senderId,
+    messageId,
+  ]);
+}
+
+function isReplayEvent(target: ZaloWebhookTarget, update: ZaloUpdate, nowMs: number): boolean {
   const messageId = update.message?.message_id;
   if (!messageId) {
     return false;
   }
-  const key = `${update.event_name}:${messageId}`;
+  const key = buildReplayEventCacheKey(target, update, messageId);
   return recentWebhookEvents.check(key, nowMs);
 }
 
@@ -222,7 +227,7 @@ export async function handleZaloWebhookRequest(
         return true;
       }
 
-      if (isReplayEvent(update, nowMs)) {
+      if (isReplayEvent(target, update, nowMs)) {
         res.statusCode = 200;
         res.end("ok");
         return true;

@@ -8,7 +8,7 @@ title: "plugins"
 
 # `openclaw plugins`
 
-Manage Gateway plugins/extensions and compatible bundles.
+Manage Gateway plugins/extensions, hook packs, and compatible bundles.
 
 Related:
 
@@ -46,13 +46,37 @@ capabilities.
 ### Install
 
 ```bash
-openclaw plugins install <path-or-spec>
-openclaw plugins install <npm-spec> --pin
-openclaw plugins install <plugin>@<marketplace>
-openclaw plugins install <plugin> --marketplace <marketplace>
+openclaw plugins install <package>                      # ClawHub first, then npm
+openclaw plugins install clawhub:<package>              # ClawHub only
+openclaw plugins install <package> --force              # overwrite existing install
+openclaw plugins install <package> --pin                # pin version
+openclaw plugins install <package> --dangerously-force-unsafe-install
+openclaw plugins install <path>                         # local path
+openclaw plugins install <plugin>@<marketplace>         # marketplace
+openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 ```
 
-Security note: treat plugin installs like running code. Prefer pinned versions.
+Bare package names are checked against ClawHub first, then npm. Security note:
+treat plugin installs like running code. Prefer pinned versions.
+
+`--force` reuses the existing install target and overwrites an already-installed
+plugin or hook pack in place. Use it when you are intentionally reinstalling
+the same id from a new local path, archive, ClawHub package, or npm artifact.
+
+`--dangerously-force-unsafe-install` is a break-glass option for false positives
+in the built-in dangerous-code scanner. It allows the install to continue even
+when the built-in scanner reports `critical` findings, but it does **not**
+bypass plugin `before_install` hook policy blocks and does **not** bypass scan
+failures.
+
+This CLI flag applies to plugin install/update flows. Gateway-backed skill
+dependency installs use the matching `dangerouslyForceUnsafeInstall` request
+override, while `openclaw skills install` remains a separate ClawHub skill
+download/install flow.
+
+`plugins install` is also the install surface for hook packs that expose
+`openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook
+visibility and per-hook enablement, not package installation.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
 **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
@@ -70,6 +94,25 @@ name, use an explicit scoped spec (for example `@scope/diffs`).
 Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 
 Claude marketplace installs are also supported.
+
+ClawHub installs use an explicit `clawhub:<package>` locator:
+
+```bash
+openclaw plugins install clawhub:openclaw-codex-app-server
+openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
+```
+
+OpenClaw now also prefers ClawHub for bare npm-safe plugin specs. It only falls
+back to npm if ClawHub does not have that package or version:
+
+```bash
+openclaw plugins install openclaw-codex-app-server
+```
+
+OpenClaw downloads the package archive from ClawHub, checks the advertised
+plugin API / minimum gateway compatibility, then installs it through the normal
+archive path. Recorded installs keep their ClawHub source metadata for later
+updates.
 
 Use `plugin@marketplace` shorthand when the marketplace name exists in Claude's
 local registry cache at `~/.claude/plugins/known_marketplaces.json`:
@@ -94,6 +137,11 @@ Marketplace sources can be:
 - a GitHub repo shorthand such as `owner/repo`
 - a git URL
 
+For remote marketplaces loaded from GitHub or git, plugin entries must stay
+inside the cloned marketplace repo. OpenClaw accepts relative path sources from
+that repo and rejects external git, GitHub, URL/archive, and absolute-path
+plugin sources from remote manifests.
+
 For local paths and archives, OpenClaw auto-detects:
 
 - native OpenClaw plugins (`openclaw.plugin.json`)
@@ -114,6 +162,9 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 openclaw plugins install -l ./my-plugin
 ```
 
+`--force` is not supported with `--link` because linked installs reuse the
+source path instead of copying over a managed install target.
+
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
 `plugins.installs` while keeping the default behavior unpinned.
 
@@ -130,7 +181,7 @@ the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
 For active memory plugins, the memory slot resets to `memory-core`.
 
 By default, uninstall also removes the plugin install directory under the active
-state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
+state-dir plugin root. Use
 `--keep-files` to keep files on disk.
 
 `--keep-config` is supported as a deprecated alias for `--keep-files`.
@@ -142,10 +193,11 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call@beta
+openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked installs in `plugins.installs`, currently npm and
-marketplace installs.
+Updates apply to tracked installs in `plugins.installs` and tracked hook-pack
+installs in `hooks.internal.installs`.
 
 When you pass a plugin id, OpenClaw reuses the recorded install spec for that
 plugin. That means previously stored dist-tags such as `@beta` and exact pinned
@@ -159,6 +211,12 @@ id-based updates.
 When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
+
+`--dangerously-force-unsafe-install` is also available on `plugins update` as a
+break-glass override for built-in dangerous-code scan false positives during
+plugin updates. It still does not bypass plugin `before_install` policy blocks
+or scan-failure blocking, and it only applies to plugin updates, not hook-pack
+updates.
 
 ### Inspect
 

@@ -1,15 +1,17 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { loadSessionStore } from "../config/sessions.js";
-import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
-
-export { loadModelCatalog } from "../agents/model-catalog.js";
-export { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
+import { resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
+import { clearSessionStoreCacheForTest, loadSessionStore } from "../config/sessions.js";
+import { resetSystemEventsForTest } from "../infra/system-events.js";
+import {
+  loadModelCatalogMock,
+  runEmbeddedPiAgentMock,
+} from "./reply.directive.directive-behavior.e2e-mocks.js";
 
 export const MAIN_SESSION_KEY = "agent:main:main";
+type RunPreparedReply = typeof import("./reply/get-reply-run.js").runPreparedReply;
 
 export const DEFAULT_TEST_MODEL_CATALOG: Array<{
   id: string;
@@ -48,7 +50,7 @@ export function makeEmbeddedTextResult(text = "done") {
 }
 
 export function mockEmbeddedTextResult(text = "done") {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue(makeEmbeddedTextResult(text));
+  runEmbeddedPiAgentMock.mockResolvedValue(makeEmbeddedTextResult(text));
 }
 
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -134,14 +136,53 @@ export function assertElevatedOffStatusReply(text: string | undefined) {
 }
 
 export function installDirectiveBehaviorE2EHooks() {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await resetSkillsRefreshForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
+    resetSystemEventsForTest();
     runEmbeddedPiAgentMock.mockReset();
-    vi.mocked(loadModelCatalog).mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
+    loadModelCatalogMock.mockReset();
+    loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetSkillsRefreshForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
+    resetSystemEventsForTest();
     vi.restoreAllMocks();
   });
+}
+
+export function installFreshDirectiveBehaviorReplyMocks(params?: {
+  onActualRunPreparedReply?: (runPreparedReply: RunPreparedReply) => void;
+  runPreparedReply?: (...args: Parameters<RunPreparedReply>) => unknown;
+}) {
+  vi.doMock("../agents/pi-embedded.js", () => ({
+    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
+    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
+    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  }));
+  vi.doMock("../agents/model-catalog.js", () => ({
+    loadModelCatalog: loadModelCatalogMock,
+  }));
+  if (params?.runPreparedReply || params?.onActualRunPreparedReply) {
+    vi.doMock("./reply/get-reply-run.js", async () => {
+      const actual = await vi.importActual<typeof import("./reply/get-reply-run.js")>(
+        "./reply/get-reply-run.js",
+      );
+      params.onActualRunPreparedReply?.(actual.runPreparedReply);
+      return {
+        ...actual,
+        runPreparedReply: (...args: Parameters<RunPreparedReply>) =>
+          params.runPreparedReply?.(...args),
+      };
+    });
+  }
 }
 
 export function makeRestrictedElevatedDisabledConfig(home: string) {
