@@ -62,6 +62,29 @@ describe("describeGeminiVideo", () => {
     expect(result.text).toBe("video ok");
   });
 
+  it("keeps private-network disabled for the default Google media endpoint", async () => {
+    const fetchFn = withFetchPreconnect(async () => {
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    await describeGeminiVideo({
+      buffer: Buffer.from("video"),
+      fileName: "clip.mp4",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+    });
+
+    expect(resolvePinnedHostnameWithPolicySpy).toHaveBeenCalled();
+    const [, options] = resolvePinnedHostnameWithPolicySpy.mock.calls[0] ?? [];
+    expect(options?.policy?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it("builds the expected request payload", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
       candidates: [

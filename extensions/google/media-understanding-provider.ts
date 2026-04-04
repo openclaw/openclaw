@@ -54,13 +54,14 @@ async function generateGeminiInlineDataText(params: {
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveGoogleGenerativeAiHttpRequestConfig({
       apiKey: params.apiKey,
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+      baseUrl: params.baseUrl,
       headers: params.headers,
       request: params.request,
       capability: params.defaultMime.startsWith("audio/") ? "audio" : "video",
       transport: "media-understanding",
     });
-  const url = `${baseUrl}/models/${model}:generateContent`;
+  const resolvedBaseUrl = baseUrl ?? params.defaultBaseUrl;
+  const url = `${resolvedBaseUrl}/models/${model}:generateContent`;
 
   const prompt = (() => {
     const trimmed = params.prompt?.trim();
