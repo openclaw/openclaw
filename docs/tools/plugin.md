@@ -245,7 +245,9 @@ See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 
 ## Plugin API overview
 
-Plugins export either a function or an object with `register(api)`:
+Native plugins export an entry object that exposes `register(api)`. Older
+plugins may still use `activate(api)` as a legacy alias, but new plugins should
+use `register`.
 
 ```typescript
 export default definePluginEntry({
@@ -264,6 +266,11 @@ export default definePluginEntry({
   },
 });
 ```
+
+OpenClaw loads the entry object and calls `register(api)` during plugin
+activation. The loader still falls back to `activate(api)` for older plugins,
+but bundled plugins and new external plugins should treat `register` as the
+public contract.
 
 Common registration methods:
 
