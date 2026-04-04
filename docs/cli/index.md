@@ -956,7 +956,7 @@ Options:
 - `--reply-to <target>` (delivery target override, separate from session routing)
 - `--reply-channel <channel>` (delivery channel override)
 - `--reply-account <id>` (delivery account id override)
-- `--local`
+- `--local` (embedded run; plugin registry still preloads first)
 - `--deliver`
 - `--json`
 - `--timeout <seconds>`
@@ -964,6 +964,7 @@ Options:
 Notes:
 
 - Gateway mode falls back to the embedded agent when the Gateway request fails.
+- `--local` still preloads the plugin registry, so plugin-provided providers, tools, and channels remain available during embedded runs.
 - `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not routing.
 
 ### `agents`
