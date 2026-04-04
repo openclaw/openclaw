@@ -1,5 +1,6 @@
 import http from "node:http";
 import { URL } from "node:url";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import {
   createWebhookInFlightLimiter,
   WEBHOOK_BODY_READ_DEFAULTS,
@@ -16,9 +17,10 @@ import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
 import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
+import { isProviderStatusTerminal } from "./providers/shared/call-status.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { CallRecord, NormalizedEvent, WebhookContext } from "./types.js";
+import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
@@ -44,7 +46,7 @@ function sanitizeTranscriptForLog(value: string): string {
   return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
 }
 
-type WebhookResponsePayload = {
+export type WebhookResponsePayload = {
   statusCode: number;
   body: string;
   headers?: Record<string, string>;
@@ -89,6 +91,8 @@ export class VoiceCallWebhookServer {
   private mediaStreamHandler: MediaStreamHandler | null = null;
   /** Delayed auto-hangup timers keyed by provider call ID after stream disconnect. */
   private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Realtime voice handler for duplex provider bridges. */
+  private realtimeHandler: RealtimeCallHandler | null = null;
 
   constructor(
     config: VoiceCallConfig,
@@ -102,11 +106,6 @@ export class VoiceCallWebhookServer {
     this.provider = provider;
     this.coreConfig = coreConfig ?? null;
     this.agentRuntime = agentRuntime ?? null;
-
-    // Initialize media stream handler if streaming is enabled
-    if (this.config.streaming.enabled) {
-      this.initializeMediaStreaming();
-    }
   }
 
   /**
@@ -114,6 +113,14 @@ export class VoiceCallWebhookServer {
    */
   getMediaStreamHandler(): MediaStreamHandler | null {
     return this.mediaStreamHandler;
+  }
+
+  getRealtimeHandler(): RealtimeCallHandler | null {
+    return this.realtimeHandler;
+  }
+
+  setRealtimeHandler(handler: RealtimeCallHandler): void {
+    this.realtimeHandler = handler;
   }
 
   private clearPendingDisconnectHangup(providerCallId: string): void {
@@ -147,26 +154,64 @@ export class VoiceCallWebhookServer {
   }
 
   /**
-   * Initialize media streaming with OpenAI Realtime STT.
+   * Initialize media streaming with the selected realtime transcription provider.
    */
-  private initializeMediaStreaming(): void {
+  private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
-    const apiKey = streaming.openaiApiKey ?? process.env.OPENAI_API_KEY;
-
-    if (!apiKey) {
-      console.warn("[voice-call] Streaming enabled but no OpenAI API key found");
+    const pluginConfig = this.coreConfig as unknown as OpenClawConfig | undefined;
+    const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
+      await import("./realtime-transcription.runtime.js");
+    const selectedProviderId = streaming.provider?.trim();
+    const configuredProvider = getRealtimeTranscriptionProvider(selectedProviderId, pluginConfig);
+    if (selectedProviderId && !configuredProvider) {
+      console.warn(
+        `[voice-call] Streaming enabled but realtime transcription provider "${selectedProviderId}" is not registered`,
+      );
+      return;
+    }
+    const provider =
+      configuredProvider ??
+      [...listRealtimeTranscriptionProviders(pluginConfig)].sort(
+        (left, right) =>
+          (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
+          (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
+      )[0];
+    if (!provider) {
+      console.warn(
+        "[voice-call] Streaming enabled but no realtime transcription provider is registered",
+      );
+      return;
+    }
+    const selectedProviderConfig =
+      selectedProviderId &&
+      streaming.providers[selectedProviderId] &&
+      typeof streaming.providers[selectedProviderId] === "object"
+        ? (streaming.providers[selectedProviderId] as Record<string, unknown>)
+        : undefined;
+    const canonicalProviderConfig =
+      streaming.providers[provider.id] && typeof streaming.providers[provider.id] === "object"
+        ? (streaming.providers[provider.id] as Record<string, unknown>)
+        : undefined;
+    const rawProviderConfig = {
+      ...(canonicalProviderConfig ?? {}),
+      ...(selectedProviderConfig ?? {}),
+    };
+    const providerConfig = provider.resolveConfig
+      ? provider.resolveConfig({
+          cfg: pluginConfig ?? ({} as OpenClawConfig),
+          rawConfig: rawProviderConfig,
+        })
+      : rawProviderConfig;
+    if (!provider.isConfigured({ cfg: pluginConfig, providerConfig })) {
+      console.warn(
+        `[voice-call] Streaming enabled but provider "${provider.id}" is not configured`,
+      );
       return;
     }
 
-    const sttProvider = new OpenAIRealtimeSTTProvider({
-      apiKey,
-      model: streaming.sttModel,
-      silenceDurationMs: streaming.silenceDurationMs,
-      vadThreshold: streaming.vadThreshold,
-    });
-
     const streamConfig: MediaStreamConfig = {
-      sttProvider,
+      transcriptionProvider: provider,
+      providerConfig,
       preStartTimeoutMs: streaming.preStartTimeoutMs,
       maxPendingConnections: streaming.maxPendingConnections,
       maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,
@@ -309,6 +354,10 @@ export class VoiceCallWebhookServer {
       return this.listeningUrl ?? this.resolveListeningUrl(bind, webhookPath);
     }
 
+    if (this.config.streaming.enabled && !this.mediaStreamHandler) {
+      await this.initializeMediaStreaming();
+    }
+
     return new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
         this.handleRequest(req, res, webhookPath).catch((err) => {
@@ -318,12 +367,15 @@ export class VoiceCallWebhookServer {
         });
       });
 
-      // Handle WebSocket upgrades for media streams
-      if (this.mediaStreamHandler) {
+      // Handle WebSocket upgrades for realtime voice and media streams.
+      if (this.realtimeHandler || this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
+          if (this.realtimeHandler && this.isRealtimeWebSocketUpgrade(request)) {
+            this.realtimeHandler.handleWebSocketUpgrade(request, socket, head);
+            return;
+          }
           const path = this.getUpgradePathname(request);
-          if (path === streamPath) {
-            console.log("[voice-call] WebSocket upgrade for media stream");
+          if (path === streamPath && this.mediaStreamHandler) {
             this.mediaStreamHandler?.handleUpgrade(request, socket, head);
           } else {
             socket.destroy();
@@ -504,6 +556,10 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
+      if (this.shouldShortCircuitToRealtimeTwiml(ctx)) {
+        return this.realtimeHandler!.buildTwiMLPayload(req, new URLSearchParams(ctx.rawBody));
+      }
+
       const parsed = this.provider.parseWebhookEvent(ctx, {
         verifiedRequestKey: verification.verifiedRequestKey,
       });
@@ -553,6 +609,42 @@ export class VoiceCallWebhookServer {
       default:
         return { ok: true };
     }
+  }
+
+  private isRealtimeWebSocketUpgrade(req: http.IncomingMessage): boolean {
+    try {
+      const pathname = buildRequestUrl(req.url, req.headers.host).pathname;
+      const pattern = this.realtimeHandler?.getStreamPathPattern();
+      return Boolean(pattern && pathname.startsWith(pattern));
+    } catch {
+      return false;
+    }
+  }
+
+  private shouldShortCircuitToRealtimeTwiml(ctx: WebhookContext): boolean {
+    if (!this.realtimeHandler || this.provider.name !== "twilio") {
+      return false;
+    }
+
+    const params = new URLSearchParams(ctx.rawBody);
+    const direction = params.get("Direction");
+    const isInbound = !direction || direction === "inbound";
+    if (!isInbound) {
+      return false;
+    }
+
+    if (ctx.query?.type === "status") {
+      return false;
+    }
+
+    const callStatus = params.get("CallStatus");
+    if (callStatus && isProviderStatusTerminal(callStatus)) {
+      return false;
+    }
+
+    // Replays must return the same TwiML body so Twilio retries reconnect cleanly.
+    // The one-time token still changes, but the behavior stays identical.
+    return !params.get("SpeechResult") && !params.get("Digits");
   }
 
   private processParsedEvents(events: NormalizedEvent[]): void {

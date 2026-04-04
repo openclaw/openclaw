@@ -1,11 +1,8 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
-
 export type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
 };
 
-export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
 export type ParsedThreadSessionSuffix = {
   baseSessionKey: string | undefined;
   threadId: string | undefined;
@@ -17,14 +14,6 @@ export type RawSessionConversationRef = {
   rawId: string;
   prefix: string;
 };
-
-type LegacySessionChatTypeSurface = {
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
-};
-
-function listLegacySessionChatTypeSurfaces(): LegacySessionChatTypeSurface[] {
-  return getBundledChannelContractSurfaces() as LegacySessionChatTypeSurface[];
-}
 
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
@@ -50,34 +39,6 @@ export function parseAgentSessionKey(
     return null;
   }
   return { agentId, rest };
-}
-
-/**
- * Best-effort chat-type extraction from session keys across canonical and legacy formats.
- */
-export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
-  const raw = (sessionKey ?? "").trim().toLowerCase();
-  if (!raw) {
-    return "unknown";
-  }
-  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
-  const tokens = new Set(scoped.split(":").filter(Boolean));
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
-  }
-  for (const surface of listLegacySessionChatTypeSurfaces()) {
-    const derived = surface.deriveLegacySessionChatType?.(scoped);
-    if (derived) {
-      return derived;
-    }
-  }
-  return "unknown";
 }
 
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {

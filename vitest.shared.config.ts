@@ -17,13 +17,26 @@ function parsePositiveInt(value: string | undefined): number | null {
 
 type VitestHostInfo = {
   cpuCount?: number;
+  loadAverage1m?: number;
   totalMemoryBytes?: number;
 };
+
+export type OpenClawVitestPool = "threads" | "forks";
+
+export const jsdomOptimizedDeps = {
+  optimizer: {
+    web: {
+      enabled: true,
+      include: ["lit", "lit-html", "@lit/reactive-element", "marked"],
+    },
+  },
+} as const;
 
 function detectVitestHostInfo(): Required<VitestHostInfo> {
   return {
     cpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
+    loadAverage1m: os.loadavg()[0] ?? 0,
     totalMemoryBytes: os.totalmem(),
   };
 }
@@ -38,21 +51,42 @@ export function resolveLocalVitestMaxWorkers(
   }
 
   const cpuCount = Math.max(1, system.cpuCount ?? 1);
+  const loadAverage1m = Math.max(0, system.loadAverage1m ?? 0);
   const totalMemoryGb = (system.totalMemoryBytes ?? 0) / 1024 ** 3;
 
-  let inferred = cpuCount <= 4 ? cpuCount - 1 : Math.floor(cpuCount / 2);
-  inferred = clamp(inferred, 1, 8);
+  let inferred =
+    cpuCount <= 4 ? 1 : cpuCount <= 8 ? 2 : cpuCount <= 12 ? 3 : cpuCount <= 16 ? 4 : 6;
 
   if (totalMemoryGb <= 16) {
-    return Math.min(inferred, 2);
+    inferred = Math.min(inferred, 2);
+  } else if (totalMemoryGb <= 32) {
+    inferred = Math.min(inferred, 3);
+  } else if (totalMemoryGb <= 64) {
+    inferred = Math.min(inferred, 4);
+  } else if (totalMemoryGb <= 128) {
+    inferred = Math.min(inferred, 5);
+  } else {
+    inferred = Math.min(inferred, 6);
   }
-  if (totalMemoryGb <= 32) {
-    return Math.min(inferred, 3);
+
+  const loadRatio = loadAverage1m > 0 ? loadAverage1m / cpuCount : 0;
+  if (loadRatio >= 1) {
+    inferred = Math.max(1, Math.floor(inferred / 2));
+  } else if (loadRatio >= 0.75) {
+    inferred = Math.max(1, inferred - 1);
   }
-  if (totalMemoryGb <= 64) {
-    return Math.min(inferred, 4);
+
+  return clamp(inferred, 1, 16);
+}
+
+export function resolveDefaultVitestPool(
+  env: Record<string, string | undefined> = process.env,
+): OpenClawVitestPool {
+  const configuredPool = (env.OPENCLAW_VITEST_POOL ?? env.OPENCLAW_TEST_POOL)?.trim();
+  if (configuredPool === "threads" || configuredPool === "forks") {
+    return configuredPool;
   }
-  return Math.min(inferred, 8);
+  return "threads";
 }
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -60,6 +94,7 @@ const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const localWorkers = resolveLocalVitestMaxWorkers();
 const ciWorkers = isWindows ? 2 : 3;
+const defaultPool = resolveDefaultVitestPool();
 
 export const sharedVitestConfig = {
   resolve: {
@@ -83,7 +118,7 @@ export const sharedVitestConfig = {
     hookTimeout: isWindows ? 180_000 : 120_000,
     unstubEnvs: true,
     unstubGlobals: true,
-    pool: "forks" as const,
+    pool: defaultPool,
     maxWorkers: isCI ? ciWorkers : localWorkers,
     forceRerunTriggers: [
       "package.json",
@@ -92,7 +127,6 @@ export const sharedVitestConfig = {
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
-      "scripts/test-projects.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.acp.config.ts",
@@ -104,13 +138,17 @@ export const sharedVitestConfig = {
       "vitest.extension-channels.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
+      "vitest.infra.config.ts",
       "vitest.live.config.ts",
       "vitest.performance-config.ts",
       "vitest.scoped-config.ts",
       "vitest.shared.config.ts",
+      "vitest.tooling.config.ts",
       "vitest.ui.config.ts",
       "vitest.unit.config.ts",
       "vitest.unit-paths.mjs",
+      "vitest.extension-provider-paths.mjs",
+      "vitest.extension-providers.config.ts",
     ],
     include: [
       "src/**/*.test.ts",
@@ -124,6 +162,7 @@ export const sharedVitestConfig = {
       "ui/src/ui/views/chat.test.ts",
       "ui/src/ui/views/nodes.devices.test.ts",
       "ui/src/ui/views/skills.test.ts",
+      "ui/src/ui/views/dreams.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",

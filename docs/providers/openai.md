@@ -188,6 +188,16 @@ In `"auto"` mode, OpenClaw also retries one early, retryable WebSocket failure
 before it falls back to SSE. Forced `"websocket"` mode still surfaces transport
 errors directly instead of hiding them behind fallback.
 
+After a connect or early-turn WebSocket failure in `"auto"` mode, OpenClaw marks
+that session's WebSocket path as degraded for about 60 seconds and sends
+subsequent turns over SSE during the cool-down instead of thrashing between
+transports.
+
+For native OpenAI-family endpoints (`openai/*`, `openai-codex/*`, and Azure
+OpenAI Responses), OpenClaw also attaches stable session and turn identity state
+to requests so retries, reconnects, and SSE fallback stay aligned to the same
+conversation identity.
+
 You can set `agents.defaults.models.<provider/model>.params.transport`:
 
 - `"sse"`: force SSE

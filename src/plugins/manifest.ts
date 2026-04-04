@@ -17,6 +17,19 @@ export type PluginManifestChannelConfig = {
   preferOver?: string[];
 };
 
+export type PluginManifestModelSupport = {
+  /**
+   * Cheap manifest-owned model-id prefixes for transparent provider activation
+   * from shorthand model refs such as `gpt-5.4` or `claude-sonnet-4.6`.
+   */
+  modelPrefixes?: string[];
+  /**
+   * Regex sources matched against the raw model id after profile suffixes are
+   * stripped. Use this when simple prefixes are not expressive enough.
+   */
+  modelPatterns?: string[];
+};
+
 export type PluginManifest = {
   id: string;
   configSchema: Record<string, unknown>;
@@ -28,6 +41,11 @@ export type PluginManifest = {
   kind?: PluginKind | PluginKind[];
   channels?: string[];
   providers?: string[];
+  /**
+   * Cheap model-family ownership metadata used before plugin runtime loads.
+   * Use this for shorthand model refs that omit an explicit provider prefix.
+   */
+  modelSupport?: PluginManifestModelSupport;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /** Cheap provider-auth env lookup without booting plugin runtime. */
@@ -52,6 +70,8 @@ export type PluginManifest = {
 
 export type PluginManifestContracts = {
   speechProviders?: string[];
+  realtimeTranscriptionProviders?: string[];
+  realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
   imageGenerationProviders?: string[];
   webFetchProviders?: string[];
@@ -125,6 +145,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   }
 
   const speechProviders = normalizeStringList(value.speechProviders);
+  const realtimeTranscriptionProviders = normalizeStringList(value.realtimeTranscriptionProviders);
+  const realtimeVoiceProviders = normalizeStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeStringList(value.mediaUnderstandingProviders);
   const imageGenerationProviders = normalizeStringList(value.imageGenerationProviders);
   const webFetchProviders = normalizeStringList(value.webFetchProviders);
@@ -132,6 +154,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const tools = normalizeStringList(value.tools);
   const contracts = {
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
+    ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
+    ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
@@ -140,6 +164,21 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   } satisfies PluginManifestContracts;
 
   return Object.keys(contracts).length > 0 ? contracts : undefined;
+}
+
+function normalizeManifestModelSupport(value: unknown): PluginManifestModelSupport | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const modelPrefixes = normalizeStringList(value.modelPrefixes);
+  const modelPatterns = normalizeStringList(value.modelPatterns);
+  const modelSupport = {
+    ...(modelPrefixes.length > 0 ? { modelPrefixes } : {}),
+    ...(modelPatterns.length > 0 ? { modelPatterns } : {}),
+  } satisfies PluginManifestModelSupport;
+
+  return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
 }
 
 function normalizeProviderAuthChoices(
@@ -307,6 +346,7 @@ export function loadPluginManifest(
   const version = typeof raw.version === "string" ? raw.version.trim() : undefined;
   const channels = normalizeStringList(raw.channels);
   const providers = normalizeStringList(raw.providers);
+  const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const cliBackends = normalizeStringList(raw.cliBackends);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
@@ -332,6 +372,7 @@ export function loadPluginManifest(
       kind,
       channels,
       providers,
+      modelSupport,
       cliBackends,
       providerAuthEnvVars,
       providerAuthChoices,

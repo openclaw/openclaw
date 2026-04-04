@@ -9,11 +9,15 @@ import type { PluginRegistry } from "./registry.js";
 
 type CapabilityProviderRegistryKey =
   | "speechProviders"
+  | "realtimeTranscriptionProviders"
+  | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders";
 
 type CapabilityContractKey =
   | "speechProviders"
+  | "realtimeTranscriptionProviders"
+  | "realtimeVoiceProviders"
   | "mediaUnderstandingProviders"
   | "imageGenerationProviders";
 
@@ -22,6 +26,8 @@ type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   speechProviders: "speechProviders",
+  realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
+  realtimeVoiceProviders: "realtimeVoiceProviders",
   mediaUnderstandingProviders: "mediaUnderstandingProviders",
   imageGenerationProviders: "imageGenerationProviders",
 };

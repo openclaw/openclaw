@@ -252,6 +252,27 @@ describe("OpenAIWebSocketManager", () => {
       await connectPromise;
     });
 
+    it("merges native session headers into the websocket handshake", async () => {
+      const manager = buildManager({
+        headers: {
+          "x-client-request-id": "session-123",
+          "x-openclaw-session-id": "session-123",
+        },
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          "x-client-request-id": "session-123",
+          "x-openclaw-session-id": "session-123",
+        }),
+      });
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
     it("does not add hidden attribution headers on custom websocket endpoints", async () => {
       const manager = buildManager({
         url: "wss://proxy.example.com/v1/responses",

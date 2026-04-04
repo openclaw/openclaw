@@ -27,15 +27,17 @@ export function createUnitVitestConfigWithOptions(
   options: {
     includePatterns?: string[];
     extraExcludePatterns?: string[];
+    name?: string;
   } = {},
 ) {
+  const isolate = resolveVitestIsolation(env);
   return defineProject({
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
-      name: "unit",
-      isolate: resolveVitestIsolation(env),
-      runner: "./test/non-isolated-runner.ts",
+      name: options.name ?? "unit",
+      isolate,
+      ...(isolate ? {} : { runner: "./test/non-isolated-runner.ts" }),
       setupFiles: [
         ...new Set([...(sharedTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"]),
       ],

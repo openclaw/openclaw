@@ -30,6 +30,7 @@ export function buildOpenAIWebSocketWarmUpPayload(params: {
   model: string;
   tools?: FunctionToolDefinition[];
   instructions?: string;
+  metadata?: Record<string, string>;
 }): WarmUpEvent {
   return {
     type: "response.create",
@@ -38,6 +39,7 @@ export function buildOpenAIWebSocketWarmUpPayload(params: {
     input: [],
     ...(params.tools?.length ? { tools: params.tools } : {}),
     ...(params.instructions ? { instructions: params.instructions } : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
   };
 }
 
@@ -47,6 +49,7 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
   options?: WsOptions;
   turnInput: PlannedWsTurnInput;
   tools: FunctionToolDefinition[];
+  metadata?: Record<string, string>;
 }): ResponseCreateEvent {
   const extraParams: Record<string, unknown> = {};
   const streamOpts = params.options;
@@ -108,6 +111,7 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
     ...(params.turnInput.previousResponseId
       ? { previous_response_id: params.turnInput.previousResponseId }
       : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
     ...extraParams,
   };
 }

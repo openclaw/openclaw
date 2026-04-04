@@ -44,6 +44,9 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
+- when credentials are reused from an external CLI like Codex CLI, OpenClaw
+  mirrors them with provenance and re-reads that external source instead of
+  rotating the refresh token itself
 
 ## Storage (where tokens live)
 
@@ -160,6 +163,8 @@ At runtime:
 
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
+- exception: reused external CLI credentials stay externally managed; OpenClaw
+  re-reads the CLI auth store and never spends the copied refresh token itself
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

@@ -47,10 +47,16 @@ const { MockManager } = vi.hoisted(() => {
     sentEvents: unknown[] = [];
     connectCallCount = 0;
     closeCallCount = 0;
+    options: unknown;
 
     // Allow tests to override connect/send behaviour
     connectShouldFail = false;
     sendShouldFail = false;
+
+    constructor(options?: unknown) {
+      super();
+      this.options = options;
+    }
 
     get previousResponseId(): string | null {
       return this._previousResponseId;
@@ -201,9 +207,9 @@ const { MockManager } = vi.hoisted(() => {
 });
 
 // Track if streamSimple (HTTP fallback) was called
-const streamSimpleCalls: Array<{ model: unknown; context: unknown }> = [];
-const mockStreamSimple = vi.fn((model: unknown, context: unknown) => {
-  streamSimpleCalls.push({ model, context });
+const streamSimpleCalls: Array<{ model: unknown; context: unknown; options?: unknown }> = [];
+const mockStreamSimple = vi.fn((model: unknown, context: unknown, options?: unknown) => {
+  streamSimpleCalls.push({ model, context, options });
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
     const msg = makeFakeAssistantMessage("http fallback response");
@@ -1174,7 +1180,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     MockManager.reset();
     streamSimpleCalls.length = 0;
     openAIWsStreamTesting.setDepsForTest({
-      createManager: (() => new MockManager()) as never,
+      createManager: ((options?: unknown) => new MockManager(options)) as never,
       streamSimple: mockStreamSimple,
     });
   });
@@ -1196,7 +1202,10 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
     releaseWsSession("sess-runtime-fallback");
+    releaseWsSession("sess-turn-metadata-retry");
+    releaseWsSession("sess-degraded-cooldown");
     releaseWsSession("sess-drop");
+    openAIWsStreamTesting.setWsDegradeCooldownMsForTest();
     openAIWsStreamTesting.setDepsForTest();
   });
 
@@ -1447,8 +1456,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
       // streamSimple was called as part of HTTP fallback
       expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
 
-      // manager.close() must be called to cancel background reconnect attempts
-      expect(MockManager.lastInstance!.closeCallCount).toBeGreaterThanOrEqual(1);
+      // The failed manager is closed before the replacement session manager is installed.
+      expect(MockManager.instances.some((instance) => instance.closeCallCount >= 1)).toBe(true);
     } finally {
       MockManager.globalConnectShouldFail = false;
     }
@@ -1550,6 +1559,103 @@ describe("createOpenAIWebSocketStreamFn", () => {
     const doneEvent = events.find((event) => event.type === "done");
     expect(doneEvent?.message?.content?.[0]?.text).toBe("retry succeeded");
   });
+
+  it("keeps native turn metadata stable across websocket retries and increments attempt", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-turn-metadata-retry");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    firstManager.simulateClose(1006, "connection lost");
+
+    await new Promise((r) => setImmediate(r));
+    const secondManager = MockManager.lastInstance!;
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-retried-meta", "retry succeeded"),
+    });
+
+    for await (const _ of await resolveStream(stream)) {
+      // consume
+    }
+
+    const firstPayload = firstManager.sentEvents[0] as { metadata?: Record<string, string> };
+    const secondPayload = secondManager.sentEvents[0] as { metadata?: Record<string, string> };
+    expect(firstPayload.metadata?.openclaw_session_id).toBe("sess-turn-metadata-retry");
+    expect(firstPayload.metadata?.openclaw_transport).toBe("websocket");
+    expect(firstPayload.metadata?.openclaw_turn_id).toBeTruthy();
+    expect(secondPayload.metadata?.openclaw_turn_id).toBe(firstPayload.metadata?.openclaw_turn_id);
+    expect(firstPayload.metadata?.openclaw_turn_attempt).toBe("1");
+    expect(secondPayload.metadata?.openclaw_turn_attempt).toBe("2");
+  });
+
+  it("keeps websocket degraded for the session until the cool-down expires", async () => {
+    openAIWsStreamTesting.setWsDegradeCooldownMsForTest(50);
+    MockManager.globalConnectShouldFail = true;
+
+    try {
+      const sessionId = "sess-degraded-cooldown";
+      const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+      const firstStream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        { transport: "auto" } as Parameters<typeof streamFn>[2],
+      );
+      void firstStream;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(streamSimpleCalls.length).toBe(1);
+      expect(MockManager.instances).toHaveLength(2);
+      const cooledManager = MockManager.lastInstance!;
+      expect(cooledManager.connectCallCount).toBe(0);
+
+      MockManager.globalConnectShouldFail = false;
+
+      const secondStream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        { transport: "auto" } as Parameters<typeof streamFn>[2],
+      );
+      void secondStream;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(streamSimpleCalls.length).toBe(2);
+      expect(MockManager.instances).toHaveLength(2);
+      expect(cooledManager.connectCallCount).toBe(0);
+
+      await new Promise((resolve) => setTimeout(resolve, 60));
+
+      const thirdStream = streamFn(
+        modelStub as Parameters<typeof streamFn>[0],
+        contextStub as Parameters<typeof streamFn>[1],
+        { transport: "auto" } as Parameters<typeof streamFn>[2],
+      );
+
+      void thirdStream;
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(cooledManager.connectCallCount).toBe(1);
+      expect(streamSimpleCalls.length).toBe(2);
+      cooledManager.simulateEvent({
+        type: "response.completed",
+        response: makeResponseObject("resp-after-cooldown", "ws recovered"),
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      MockManager.globalConnectShouldFail = false;
+      openAIWsStreamTesting.setWsDegradeCooldownMsForTest();
+      releaseWsSession("sess-degraded-cooldown");
+      releaseWsSession("sess-turn-metadata-retry");
+    }
+  });
+
   it("tracks previous_response_id across turns (incremental send)", async () => {
     const sessionId = "sess-incremental";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);

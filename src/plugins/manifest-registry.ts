@@ -15,6 +15,7 @@ import {
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
+  type PluginManifestModelSupport,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
@@ -56,6 +57,7 @@ export type PluginManifestRecord = {
   kind?: PluginKind | PluginKind[];
   channels: string[];
   providers: string[];
+  modelSupport?: PluginManifestModelSupport;
   cliBackends: string[];
   providerAuthEnvVars?: Record<string, string[]>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
@@ -216,6 +218,7 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
+    modelSupport: params.manifest.modelSupport,
     cliBackends: params.manifest.cliBackends ?? [],
     providerAuthEnvVars: params.manifest.providerAuthEnvVars,
     providerAuthChoices: params.manifest.providerAuthChoices,

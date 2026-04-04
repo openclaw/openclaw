@@ -142,6 +142,8 @@ What you set:
   </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.
+    Reused Codex CLI credentials stay managed by Codex CLI; OpenClaw re-reads
+    that source on expiry instead of rotating the copied refresh token itself.
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.

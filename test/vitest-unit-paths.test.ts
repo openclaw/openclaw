@@ -3,11 +3,8 @@ import { isUnitConfigTestFile } from "../vitest.unit-paths.mjs";
 import { bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 describe("isUnitConfigTestFile", () => {
-  it("accepts unit-config src, test, and whitelisted ui tests", () => {
+  it("accepts unit-config src tests", () => {
     expect(isUnitConfigTestFile("src/infra/git-commit.test.ts")).toBe(true);
-    expect(isUnitConfigTestFile("test/format-error.test.ts")).toBe(true);
-    expect(isUnitConfigTestFile("ui/src/ui/views/channels.test.ts")).toBe(true);
-    expect(isUnitConfigTestFile("ui/src/ui/views/chat.test.ts")).toBe(true);
   });
 
   it("rejects files excluded from the unit config", () => {
@@ -30,9 +27,12 @@ describe("isUnitConfigTestFile", () => {
     expect(isUnitConfigTestFile("src/plugin-sdk/facade-runtime.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/plugins/loader.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/infra/stable-node-path.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("test/format-error.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("test/extension-test-boundary.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/agents/pi-embedded-runner.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/commands/onboard.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("ui/src/ui/views/channels.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("ui/src/ui/views/chat.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("ui/src/ui/views/other.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/infra/git-commit.live.test.ts")).toBe(false);
     expect(isUnitConfigTestFile("src/infra/git-commit.e2e.test.ts")).toBe(false);

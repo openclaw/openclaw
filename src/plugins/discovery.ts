@@ -319,6 +319,18 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
+function resolvesToSameDirectory(left?: string, right?: string): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  const leftRealPath = safeRealpathSync(left);
+  const rightRealPath = safeRealpathSync(right);
+  if (leftRealPath && rightRealPath) {
+    return leftRealPath === rightRealPath;
+  }
+  return path.resolve(left) === path.resolve(right);
+}
+
 function readPackageManifest(dir: string, rejectHardlinks = true): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
@@ -567,10 +579,19 @@ function discoverInDirectory(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  recurseDirectories?: boolean;
   skipDirectories?: Set<string>;
+  visitedDirectories?: Set<string>;
 }) {
   if (!fs.existsSync(params.dir)) {
     return;
+  }
+  const resolvedDir = safeRealpathSync(params.dir) ?? path.resolve(params.dir);
+  if (params.recurseDirectories) {
+    if (params.visitedDirectories?.has(resolvedDir)) {
+      return;
+    }
+    params.visitedDirectories?.add(resolvedDir);
   }
   let entries: fs.Dirent[] = [];
   try {
@@ -694,6 +715,14 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: fullPath,
+      });
+      continue;
+    }
+
+    if (params.recurseDirectories) {
+      discoverInDirectory({
+        ...params,
+        dir: fullPath,
       });
     }
   }
@@ -893,7 +922,21 @@ export function discoverOpenClawPlugins(params: {
       seen,
     });
   }
-  if (roots.workspace && workspaceRoot) {
+  const workspaceMatchesBundledRoot = resolvesToSameDirectory(workspaceRoot, roots.stock);
+
+  if (roots.workspace && workspaceRoot && !workspaceMatchesBundledRoot) {
+    discoverInDirectory({
+      dir: workspaceRoot,
+      origin: "workspace",
+      ownershipUid: params.ownershipUid,
+      workspaceDir: workspaceRoot,
+      candidates,
+      diagnostics,
+      seen,
+      recurseDirectories: true,
+      skipDirectories: new Set([".openclaw"]),
+      visitedDirectories: new Set<string>(),
+    });
     discoverInDirectory({
       dir: roots.workspace,
       origin: "workspace",

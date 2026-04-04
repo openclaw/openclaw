@@ -110,6 +110,8 @@ function createTestRegistryForSetup(
     })),
     providers: [],
     speechProviders: [],
+    realtimeTranscriptionProviders: [],
+    realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     webFetchProviders: [],

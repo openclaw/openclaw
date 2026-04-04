@@ -5,6 +5,15 @@ export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
+  "ui/src/ui/app-chat.test.ts",
+  "ui/src/ui/chat/**/*.test.ts",
+  "ui/src/ui/views/agents-utils.test.ts",
+  "ui/src/ui/views/channels.test.ts",
+  "ui/src/ui/views/chat.test.ts",
+  "ui/src/ui/views/dreams.test.ts",
+  "ui/src/ui/views/usage-render-details.test.ts",
+  "ui/src/ui/controllers/agents.test.ts",
+  "ui/src/ui/controllers/chat.test.ts",
 ];
 
 export const boundaryTestFiles = [
@@ -31,15 +40,16 @@ export const bundledPluginDependentUnitTestFiles = [
 
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
+  "src/infra/**",
   `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
   "src/browser/**",
   "src/line/**",
-  "src/acp/**",
   "src/agents/**",
   "src/auto-reply/**",
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
+  "src/scripts/**",
   "src/infra/boundary-path.test.ts",
   "src/infra/git-root.test.ts",
   "src/infra/home-dir.test.ts",
@@ -53,7 +63,6 @@ export const unitTestAdditionalExcludePatterns = [
   "src/config/schema.base.generated.test.ts",
   "src/config/schema.help.quality.test.ts",
   "test/**",
-  "ui/src/ui/**",
 ];
 
 const sharedBaseExcludePatterns = [

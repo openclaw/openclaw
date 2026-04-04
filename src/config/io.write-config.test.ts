@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -10,14 +11,16 @@ import type { OpenClawConfig } from "./types.js";
 // test exercise the exact code path that caused the bug: AJV injecting
 // defaults during the write-back validation pass.
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(() => ({
-    diagnostics: [],
-    plugins: [],
-  })),
+  vi.fn(
+    (): PluginManifestRegistry => ({
+      diagnostics: [],
+      plugins: [],
+    }),
+  ),
 );
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+  loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
 
 describe("config io write", () => {
@@ -27,6 +30,39 @@ describe("config io write", () => {
     warn: () => {},
     error: () => {},
   };
+
+  function createBlueBubblesManifestRecord(): PluginManifestRecord {
+    return {
+      id: "bluebubbles",
+      origin: "bundled",
+      channels: ["bluebubbles"],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      rootDir: "/virtual/plugins/bluebubbles",
+      source: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      manifestPath: "/virtual/plugins/bluebubbles/openclaw.plugin.json",
+      channelCatalogMeta: {
+        id: "bluebubbles",
+        label: "BlueBubbles",
+        blurb: "BlueBubbles channel",
+      },
+      channelConfigs: {
+        bluebubbles: {
+          schema: {
+            type: "object",
+            properties: {
+              enrichGroupParticipantsFromContacts: { type: "boolean", default: true },
+              serverUrl: { type: "string" },
+            },
+            additionalProperties: true,
+          },
+          uiHints: {},
+        },
+      },
+    };
+  }
 
   async function withSuiteHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${homeCaseId++}`);
@@ -42,7 +78,7 @@ describe("config io write", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   afterAll(async () => {
@@ -421,36 +457,7 @@ describe("config io write", () => {
     // write-back leak.
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
-      plugins: [
-        {
-          id: "bluebubbles",
-          origin: "bundled",
-          channels: ["bluebubbles"],
-          channelCatalogMeta: {
-            id: "bluebubbles",
-            label: "BlueBubbles",
-            blurb: "BlueBubbles channel",
-          },
-          channelConfigs: {
-            bluebubbles: {
-              schema: {
-                type: "object",
-                properties: {
-                  enrichGroupParticipantsFromContacts: {
-                    type: "boolean",
-                    default: true,
-                  },
-                  serverUrl: {
-                    type: "string",
-                  },
-                },
-                additionalProperties: true,
-              },
-              uiHints: {},
-            },
-          },
-        },
-      ],
+      plugins: [createBlueBubblesManifestRecord()],
     });
 
     await withSuiteHome(async (home) => {
@@ -501,7 +508,7 @@ describe("config io write", () => {
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
-    });
+    } satisfies PluginManifestRegistry);
   });
 
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {

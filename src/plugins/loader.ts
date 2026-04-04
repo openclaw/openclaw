@@ -590,6 +590,8 @@ function createPluginRecord(params: {
     cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
     imageGenerationProviderIds: [],
     webFetchProviderIds: [],

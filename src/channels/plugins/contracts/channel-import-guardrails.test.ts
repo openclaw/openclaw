@@ -474,6 +474,26 @@ function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): v
   }
 }
 
+function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports: string[]): void {
+  for (const specifier of imports) {
+    if (!specifier.includes("/plugin-sdk/")) {
+      continue;
+    }
+    const targetSubpath = specifier.split("/plugin-sdk/")[1]?.replace(/\.[cm]?[jt]sx?$/u, "") ?? "";
+    const targetExtensionId =
+      BUNDLED_EXTENSION_IDS.find(
+        (extensionId) =>
+          targetSubpath === extensionId || targetSubpath.startsWith(`${extensionId}-`),
+      ) ?? null;
+    if (!targetExtensionId) {
+      continue;
+    }
+    expect.fail(
+      `${file} should not import plugin-specific SDK facades (${specifier}) from core production code. Use a neutral contract surface or plugin hook instead.`,
+    );
+  }
+}
+
 describe("channel import guardrails", () => {
   it("keeps channel helper modules off their own SDK barrels", () => {
     for (const source of SAME_CHANNEL_SDK_GUARDS) {
@@ -550,6 +570,15 @@ describe("channel import guardrails", () => {
   it("keeps core extension imports limited to approved public surfaces", () => {
     for (const file of collectCoreSourceFiles()) {
       expectOnlyApprovedExtensionSeams(file, getSourceAnalysis(file).extensionImports);
+    }
+  });
+
+  it("keeps core production files off plugin-specific sdk facades", () => {
+    for (const file of collectCoreSourceFiles()) {
+      expectCoreSourceStaysOffPluginSpecificSdkFacades(
+        file,
+        getSourceAnalysis(file).importSpecifiers,
+      );
     }
   });
 
