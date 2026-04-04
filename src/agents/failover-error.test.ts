@@ -527,6 +527,15 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("401 billing-style message returns billing instead of generic auth", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 401,
+        message: "401 Key limit exceeded (monthly limit)",
+      }),
+    ).toBe("billing");
+  });
+
   it("resolveFailoverStatus maps auth_permanent to 403", () => {
     expect(resolveFailoverStatus("auth_permanent")).toBe(403);
   });
