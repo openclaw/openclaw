@@ -13,6 +13,7 @@ import { isLoopbackAddress } from "../net.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
+import type { AuthenticatedConnectionBudget } from "./authenticated-connection-budget.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -63,6 +64,7 @@ export type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
+  authenticatedConnectionBudget: AuthenticatedConnectionBudget;
   port: number;
   gatewayHost?: string;
   canvasHostEnabled: boolean;
@@ -98,6 +100,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     wss,
     clients,
     preauthConnectionBudget,
+    authenticatedConnectionBudget,
     port,
     gatewayHost,
     canvasHostEnabled,
@@ -157,6 +160,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     logWs("in", "open", { connId, remoteAddr });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
     let holdsPreauthBudget = true;
+    let authenticatedBudgetKey: string | null = null;
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
     let lastFrameType: string | undefined;
@@ -210,6 +214,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       closed = true;
       clearTimeout(handshakeTimer);
       releasePreauthBudget();
+      authenticatedConnectionBudget.release(authenticatedBudgetKey);
+      authenticatedBudgetKey = null;
       if (client) {
         clients.delete(client);
       }
@@ -328,9 +334,25 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
-        releasePreauthBudget();
+        const deviceId = next.connect.device?.id?.trim() || null;
+        if (deviceId) {
+          if (!authenticatedConnectionBudget.acquire(deviceId)) {
+            handshakeState = "failed";
+            setCloseCause("authenticated-connection-limit", {
+              role: next.connect.role,
+              deviceId,
+            });
+            close(1008, "too many authenticated connections");
+            return false;
+          }
+          authenticatedBudgetKey = deviceId;
+          releasePreauthBudget();
+        }
+        // Device-less authenticated sessions stay in the pre-auth IP budget so
+        // shared-auth clients cannot bypass connection caps by omitting device identity.
         client = next;
         clients.add(next);
+        return true;
       },
       setHandshakeState: (next) => {
         handshakeState = next;

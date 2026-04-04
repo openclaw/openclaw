@@ -36,6 +36,10 @@ import {
   type HookClientIpConfig,
 } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
+import {
+  createAuthenticatedConnectionBudget,
+  type AuthenticatedConnectionBudget,
+} from "./server/authenticated-connection-budget.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {
@@ -88,6 +92,7 @@ export async function createGatewayRuntimeState(params: {
   httpBindHosts: string[];
   wss: WebSocketServer;
   preauthConnectionBudget: PreauthConnectionBudget;
+  authenticatedConnectionBudget: AuthenticatedConnectionBudget;
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -219,6 +224,7 @@ export async function createGatewayRuntimeState(params: {
       maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
     });
     const preauthConnectionBudget = createPreauthConnectionBudget();
+    const authenticatedConnectionBudget = createAuthenticatedConnectionBudget();
     for (const server of httpServers) {
       attachGatewayUpgradeHandler({
         httpServer: server,
@@ -259,6 +265,7 @@ export async function createGatewayRuntimeState(params: {
       httpBindHosts,
       wss,
       preauthConnectionBudget,
+      authenticatedConnectionBudget,
       clients,
       broadcast,
       broadcastToConnIds,

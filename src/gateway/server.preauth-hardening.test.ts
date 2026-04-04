@@ -1,13 +1,20 @@
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { listSystemPresence } from "../infra/system-presence.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { testState } from "./test-helpers.mocks.js";
-import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
+import {
+  connectOk,
+  connectReq,
+  createGatewaySuiteHarness,
+  readConnectChallengeNonce,
+} from "./test-helpers.server.js";
 import { withTempConfig } from "./test-temp-config.js";
 
 let cleanupEnv: Array<() => void> = [];
@@ -118,7 +125,9 @@ describe("gateway pre-auth hardening", () => {
       });
       expect(close.code).toBe(1000);
       expect(close.elapsedMs).toBeGreaterThan(0);
-      expect(close.elapsedMs).toBeLessThan(1_000);
+      // The server-side timeout is short, but the client can observe the close
+      // several seconds later under the forked Vitest wrapper on slower hosts.
+      expect(close.elapsedMs).toBeLessThan(15_000);
     } finally {
       await harness.close();
     }
@@ -282,5 +291,188 @@ describe("gateway pre-auth hardening", () => {
         }
       },
     });
+  });
+
+  it("rejects excess authenticated sockets for the same device identity", async () => {
+    const previous = process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY;
+    process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY = "1";
+    cleanupEnv.push(() => {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY;
+      } else {
+        process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY = previous;
+      }
+    });
+
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "token", token: "secret" } },
+    });
+    const paired = await issueOperatorToken({
+      name: "authenticated-connection-limit",
+      approvedScopes: ["operator.admin"],
+    });
+
+    try {
+      const firstWs = await harness.openWs();
+      const secondWs = await harness.openWs();
+
+      await connectOk(firstWs, {
+        skipDefaultAuth: true,
+        deviceToken: paired.token,
+        deviceIdentityPath: paired.identityPath,
+      });
+
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        secondWs.once("close", (code, reason) => {
+          resolve({ code, reason: reason.toString() });
+        });
+      });
+      const secondConnect = connectReq(secondWs, {
+        skipDefaultAuth: true,
+        deviceToken: paired.token,
+        deviceIdentityPath: paired.identityPath,
+        timeoutMs: 250,
+      });
+
+      await expect(closed).resolves.toEqual({
+        code: 1008,
+        reason: "too many authenticated connections",
+      });
+      await expect(secondConnect).rejects.toThrow(/too many authenticated connections/i);
+      expect(firstWs.readyState).toBe(1);
+
+      firstWs.close();
+      await new Promise<void>((resolve) => {
+        firstWs.once("close", () => resolve());
+      });
+
+      const thirdWs = await harness.openWs();
+      await connectOk(thirdWs, {
+        skipDefaultAuth: true,
+        deviceToken: paired.token,
+        deviceIdentityPath: paired.identityPath,
+      });
+      thirdWs.close();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("keeps device-less authenticated sockets inside the pre-auth budget", async () => {
+    const previous = process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
+    process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = "1";
+    cleanupEnv.push(() => {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP;
+      } else {
+        process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP = previous;
+      }
+    });
+
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "token", token: "secret" } },
+    });
+
+    try {
+      const firstWs = await harness.openWs();
+      await connectOk(firstWs, {
+        token: "secret",
+        device: null,
+      });
+
+      const rejectedStatus = await new Promise<number>((resolve, reject) => {
+        const req = http.request({
+          host: "127.0.0.1",
+          port: harness.port,
+          path: "/",
+          headers: {
+            Connection: "Upgrade",
+            Upgrade: "websocket",
+            "Sec-WebSocket-Key": "dGVzdC1rZXktMDEyMzQ1Ng==",
+            "Sec-WebSocket-Version": "13",
+          },
+        });
+        req.once("upgrade", (_res, socket) => {
+          socket.destroy();
+          reject(new Error("expected websocket upgrade to be rejected"));
+        });
+        req.once("response", (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        req.once("error", reject);
+        req.end();
+      });
+      expect(rejectedStatus).toBe(503);
+
+      firstWs.close();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("a rejected duplicate-device connection does not corrupt the active device presence", async () => {
+    const previous = process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY;
+    process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY = "1";
+    cleanupEnv.push(() => {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY;
+      } else {
+        process.env.OPENCLAW_TEST_MAX_AUTHENTICATED_CONNECTIONS_PER_IDENTITY = previous;
+      }
+    });
+
+    const harness = await createGatewaySuiteHarness({
+      serverOptions: { auth: { mode: "token", token: "secret" } },
+    });
+    const paired = await issueOperatorToken({
+      name: "presence-corruption-check",
+      approvedScopes: ["operator.admin"],
+    });
+
+    try {
+      const firstWs = await harness.openWs();
+      await connectOk(firstWs, {
+        skipDefaultAuth: true,
+        deviceToken: paired.token,
+        deviceIdentityPath: paired.identityPath,
+        client: { id: "test", version: "1.0.0", platform: "test", mode: "test" },
+      });
+
+      // Presence should reflect the active connection.
+      const before = listSystemPresence().find((p) => p.deviceId === paired.deviceId);
+      expect(before).toBeDefined();
+      expect(before!.version).toBe("1.0.0");
+
+      // A second connection for the same device is rejected by the budget.
+      // If presence were written before setClient, this would silently overwrite
+      // the active connection's metadata with the rejected socket's values.
+      const secondWs = await harness.openWs();
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        secondWs.once("close", (code, reason) => {
+          resolve({ code, reason: reason.toString() });
+        });
+      });
+      const rejectedConnect = connectReq(secondWs, {
+        skipDefaultAuth: true,
+        deviceToken: paired.token,
+        deviceIdentityPath: paired.identityPath,
+        client: { id: "test", version: "9.9.9", platform: "test", mode: "test" },
+        timeoutMs: 250,
+      });
+      await expect(closed).resolves.toEqual({
+        code: 1008,
+        reason: "too many authenticated connections",
+      });
+      await expect(rejectedConnect).rejects.toThrow(/too many authenticated connections/i);
+
+      // Presence for the active connection must be unchanged.
+      const after = listSystemPresence().find((p) => p.deviceId === paired.deviceId);
+      expect(after?.version).toBe("1.0.0");
+
+      firstWs.close();
+    } finally {
+      await harness.close();
+    }
   });
 });

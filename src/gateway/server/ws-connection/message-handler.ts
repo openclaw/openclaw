@@ -179,7 +179,7 @@ export function attachGatewayWsMessageHandler(params: {
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
   getClient: () => GatewayWsClient | null;
-  setClient: (next: GatewayWsClient) => void;
+  setClient: (next: GatewayWsClient) => boolean;
   setHandshakeState: (state: "pending" | "connected" | "failed") => void;
   setCloseCause: (cause: string, meta?: Record<string, unknown>) => void;
   setLastFrameMeta: (meta: { type?: string; method?: string; id?: string }) => void;
@@ -1136,24 +1136,6 @@ export function attachGatewayWsMessageHandler(params: {
           );
         }
 
-        if (presenceKey) {
-          upsertPresence(presenceKey, {
-            host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
-            ip: isLocalClient ? undefined : reportedClientIp,
-            version: connectParams.client.version,
-            platform: connectParams.client.platform,
-            deviceFamily: connectParams.client.deviceFamily,
-            modelIdentifier: connectParams.client.modelIdentifier,
-            mode: connectParams.client.mode,
-            deviceId: device?.id,
-            roles: [role],
-            scopes,
-            instanceId: device?.id ?? instanceId,
-            reason: "connect",
-          });
-          incrementPresenceVersion();
-        }
-
         const snapshot = buildGatewaySnapshot({
           includeSensitive: scopes.includes(ADMIN_SCOPE),
         });
@@ -1212,7 +1194,30 @@ export function attachGatewayWsMessageHandler(params: {
           canvasCapabilityExpiresAtMs,
         };
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
-        setClient(nextClient);
+        if (!setClient(nextClient)) {
+          return;
+        }
+        // Presence must be written only after setClient succeeds — writing it
+        // before would corrupt the existing device's presence entry on budget
+        // exhaustion and leave a stale record that the disconnect handler never
+        // cleans up (since client is never assigned when setClient returns false).
+        if (presenceKey) {
+          upsertPresence(presenceKey, {
+            host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
+            ip: isLocalClient ? undefined : reportedClientIp,
+            version: connectParams.client.version,
+            platform: connectParams.client.platform,
+            deviceFamily: connectParams.client.deviceFamily,
+            modelIdentifier: connectParams.client.modelIdentifier,
+            mode: connectParams.client.mode,
+            deviceId: device?.id,
+            roles: [role],
+            scopes,
+            instanceId: device?.id ?? instanceId,
+            reason: "connect",
+          });
+          incrementPresenceVersion();
+        }
         setHandshakeState("connected");
         if (role === "node") {
           const context = buildRequestContext();
