@@ -308,10 +308,15 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         `${hookName} handler from ${pluginId}`,
       );
     } catch (err) {
-      if (err instanceof TimeoutError) {
+      // Only quarantine on runner-originated timeouts — not plugin-internal
+      // TimeoutError instances that may bubble up from the SDK's exported
+      // withTimeout (e.g. browser-support). The runner always produces a
+      // message of the form "<hookName> handler from <pluginId> timed out".
+      const runnerLabel = `${hookName} handler from ${pluginId}`;
+      if (err instanceof TimeoutError && err.message === `${runnerLabel} timed out`) {
         quarantinedHandlers.add(handlerFn);
         logger?.warn?.(
-          `[hooks] quarantined ${hookName} handler from ${pluginId} after timeout — future invocations will be skipped`,
+          `[hooks] quarantined ${runnerLabel} after timeout — future invocations will be skipped`,
         );
       }
       throw err;

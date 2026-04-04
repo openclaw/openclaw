@@ -5,6 +5,7 @@
  * configured timeout so it cannot permanently block agent runs.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TimeoutError } from "../node-host/with-timeout.js";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
@@ -559,5 +560,47 @@ describe("hook handler timeout", () => {
     expect(handlerCallCount).toBe(1);
     // The error log should mention quarantine
     expect(logs.some((l) => l.includes("quarantined"))).toBe(true);
+  });
+
+  it("does not quarantine a handler that throws a plugin-internal TimeoutError", async () => {
+    const logs: string[] = [];
+    let handlerCallCount = 0;
+
+    addTestHook({
+      registry,
+      pluginId: "browser-plugin",
+      hookName: "before_prompt_build",
+      handler: (() => {
+        handlerCallCount++;
+        // Simulate a plugin-internal timeout (e.g. browser screenshot timed out)
+        return Promise.reject(new TimeoutError("browser screenshot timed out"));
+      }) as PluginHookRegistration["handler"],
+    });
+
+    const runner = createHookRunner(registry, {
+      hookTimeoutMs: 5000,
+      catchErrors: true,
+      logger: {
+        debug: () => {},
+        warn: (msg) => logs.push(msg),
+        error: (msg) => logs.push(msg),
+      },
+    });
+
+    // First call: handler throws a plugin-internal TimeoutError
+    const p1 = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
+    await vi.advanceTimersByTimeAsync(0);
+    await p1;
+
+    expect(handlerCallCount).toBe(1);
+    // Should NOT be quarantined — the TimeoutError is plugin-internal, not runner-originated
+    expect(logs.some((l) => l.includes("quarantined"))).toBe(false);
+
+    // Second call: handler should still be called (not quarantined)
+    const p2 = runner.runBeforePromptBuild({ prompt: "hello again", messages: [] }, stubCtx);
+    await vi.advanceTimersByTimeAsync(0);
+    await p2;
+
+    expect(handlerCallCount).toBe(2);
   });
 });
