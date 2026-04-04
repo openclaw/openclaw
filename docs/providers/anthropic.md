@@ -285,7 +285,15 @@ If the `claude` binary is not on the gateway host PATH:
 ### Migrate from Anthropic auth to Claude CLI
 
 If you currently use `anthropic/...` with a setup-token or API key and want to
-switch the same gateway host to Claude CLI:
+switch the same gateway host to Claude CLI, OpenClaw supports that as a normal
+provider-auth migration path.
+
+Prerequisites:
+
+- Claude CLI installed on the **same gateway host** that runs OpenClaw
+- Claude CLI already signed in there: `claude auth login`
+
+Then run:
 
 ```bash
 openclaw models auth login --provider anthropic --method cli --set-default
@@ -304,6 +312,14 @@ What this does:
 - rewrites Anthropic default-model fallbacks like `anthropic/claude-opus-4-6`
   to `claude-cli/claude-opus-4-6`
 - adds matching `claude-cli/...` entries to `agents.defaults.models`
+
+Quick verification:
+
+```bash
+openclaw models status
+```
+
+You should see the resolved primary model under `claude-cli/...`.
 
 What it does **not** do:
 

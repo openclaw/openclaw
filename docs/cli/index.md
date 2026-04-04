@@ -945,7 +945,10 @@ Anthropic Claude CLI migration:
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
-Note: `--auth-choice anthropic-cli` is a deprecated legacy alias. Use `models auth login` instead.
+Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
+
+Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.
+Use `anthropic-cli` for onboarding, or use `models auth login` directly.
 
 ### `models` (root)
 
