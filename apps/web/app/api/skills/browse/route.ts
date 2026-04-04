@@ -16,7 +16,7 @@ const CATEGORY_MAP: Record<string, string> = {
   Databases: "database",
 };
 
-export const CATEGORIES = Object.keys(CATEGORY_MAP);
+const CATEGORIES = Object.keys(CATEGORY_MAP);
 
 const FEATURED_QUERIES = ["react", "ai", "nextjs", "typescript", "python", "docker"];
 const FEATURED_LIMIT = 15;

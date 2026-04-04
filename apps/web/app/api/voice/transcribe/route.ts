@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   }
 
   const uploaded = formData.get("file");
-  if (!(uploaded instanceof Blob)) {
+  if (!(uploaded instanceof File)) {
     return Response.json({ error: "Field 'file' is required." }, { status: 400 });
   }
 
@@ -32,9 +32,7 @@ export async function POST(request: Request) {
     return buildUnavailableResponse("Enable ElevenLabs in Integrations to use server-side transcription.");
   }
 
-  const file = uploaded instanceof File
-    ? uploaded
-    : new File([uploaded], "recording.webm", { type: uploaded.type || "audio/webm" });
+  const file = uploaded;
 
   try {
     const transcript = await transcribeElevenLabsAudio({

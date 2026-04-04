@@ -13,13 +13,6 @@ type WebSession = {
   messageCount: number;
 };
 
-type SkillEntry = {
-  name: string;
-  description: string;
-  emoji?: string;
-  source: string;
-};
-
 type MemoryFile = {
   name: string;
   sizeBytes: number;
@@ -34,7 +27,7 @@ type TreeNode = {
   children?: TreeNode[];
 };
 
-type SidebarSection = "chats" | "skills" | "memories" | "workspace" | "reports";
+type SidebarSection = "chats" | "memories" | "workspace" | "reports";
 
 type SidebarProps = {
   onSessionSelect?: (sessionId: string) => void;
@@ -122,34 +115,6 @@ function ChatsSection({
           })}
         </div>
       )}
-    </div>
-  );
-}
-
-function SkillsSection({ skills }: { skills: SkillEntry[] }) {
-  if (skills.length === 0) {
-    return <p className="text-sm text-[var(--color-text-muted)] px-3">No skills found.</p>;
-  }
-
-  return (
-    <div className="space-y-1">
-      {skills.map((skill) => (
-        <div
-          key={`${skill.source}:${skill.name}`}
-          className="px-3 py-2 rounded-lg hover:bg-[var(--color-surface-hover)] transition-colors"
-        >
-          <div className="flex items-center gap-2">
-            {skill.emoji && <span className="text-base">{skill.emoji}</span>}
-            <span className="text-sm font-medium">{skill.name}</span>
-            <span className="text-xs text-[var(--color-text-muted)] ml-auto">{skill.source}</span>
-          </div>
-          {skill.description && (
-            <p className="text-xs text-[var(--color-text-muted)] mt-0.5 line-clamp-2">
-              {skill.description}
-            </p>
-          )}
-        </div>
-      ))}
     </div>
   );
 }
@@ -349,7 +314,6 @@ export function Sidebar({
 }: SidebarProps) {
   const [openSections, setOpenSections] = useState<Set<SidebarSection>>(new Set(["chats", "workspace"]));
   const [webSessions, setWebSessions] = useState<WebSession[]>([]);
-  const [skills, setSkills] = useState<SkillEntry[]>([]);
   const [mainMemory, setMainMemory] = useState<string | null>(null);
   const [dailyLogs, setDailyLogs] = useState<MemoryFile[]>([]);
   const [workspaceTree, setWorkspaceTree] = useState<TreeNode[]>([]);
@@ -370,15 +334,13 @@ export function Sidebar({
     async function load() {
       setLoading(true);
       try {
-        const [webSessionsRes, skillsRes, memoriesRes, workspaceRes, workspaceListRes] = await Promise.all([
+        const [webSessionsRes, memoriesRes, workspaceRes, workspaceListRes] = await Promise.all([
           fetch("/api/web-sessions").then((r) => r.json()),
-          fetch("/api/skills").then((r) => r.json()),
           fetch("/api/memories").then((r) => r.json()),
           fetch("/api/workspace/tree").then((r) => r.json()).catch(() => ({ tree: [] })),
           fetch("/api/workspace/list").then((r) => r.json()).catch(() => ({ activeWorkspace: null })),
         ]);
         setWebSessions(webSessionsRes.sessions ?? []);
-        setSkills(skillsRes.skills ?? []);
         setMainMemory(memoriesRes.mainMemory ?? null);
         setDailyLogs(memoriesRes.dailyLogs ?? []);
         setWorkspaceTree(workspaceRes.tree ?? []);
@@ -488,17 +450,6 @@ export function Sidebar({
                 )}
               </div>
             )}
-
-            {/* Skills */}
-            <div>
-              <SectionHeader
-                title="Skills"
-                count={skills.length}
-                isOpen={openSections.has("skills")}
-                onToggle={() => toggleSection("skills")}
-              />
-              {openSections.has("skills") && <SkillsSection skills={skills} />}
-            </div>
 
             {/* Memories */}
             <div>

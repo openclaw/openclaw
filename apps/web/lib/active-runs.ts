@@ -851,6 +851,7 @@ function wireSubscribeOnlyProcess(
 	let currentStatusReasoningLabel: string | null = null;
 	let textStarted = false;
 	let reasoningStarted = false;
+	let everSentResponseActivity = false;
 	let statusReasoningActive = false;
 	let agentErrorReported = false;
 	const liveStats = {
