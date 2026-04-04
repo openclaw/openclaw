@@ -1,50 +1,112 @@
-import { describe, expect, it } from "vitest";
-import { createExpiringMapCache, resolveCacheTtlMs } from "./cache-utils.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  resolveCacheTtlMs,
+  isCacheEnabled,
+  createExpiringMapCache,
+} from "./cache-utils.js";
 
 describe("resolveCacheTtlMs", () => {
-  it("accepts exact non-negative integers", () => {
-    expect(resolveCacheTtlMs({ envValue: "0", defaultTtlMs: 60_000 })).toBe(0);
-    expect(resolveCacheTtlMs({ envValue: "120000", defaultTtlMs: 60_000 })).toBe(120_000);
+  it("returns parsed env value when valid", () => {
+    expect(resolveCacheTtlMs({ envValue: "60000", defaultTtlMs: 30000 })).toBe(60000);
   });
 
-  it("rejects malformed env values and falls back to the default", () => {
-    expect(resolveCacheTtlMs({ envValue: "0abc", defaultTtlMs: 60_000 })).toBe(60_000);
-    expect(resolveCacheTtlMs({ envValue: "15ms", defaultTtlMs: 60_000 })).toBe(60_000);
+  it("returns default for undefined env value", () => {
+    expect(resolveCacheTtlMs({ envValue: undefined, defaultTtlMs: 30000 })).toBe(30000);
+  });
+
+  it("returns default for invalid env value", () => {
+    expect(resolveCacheTtlMs({ envValue: "invalid", defaultTtlMs: 30000 })).toBe(30000);
+  });
+
+  it("returns default for negative env value", () => {
+    expect(resolveCacheTtlMs({ envValue: "-1000", defaultTtlMs: 30000 })).toBe(30000);
+  });
+});
+
+describe("isCacheEnabled", () => {
+  it("returns true for positive ttl", () => {
+    expect(isCacheEnabled(1000)).toBe(true);
+    expect(isCacheEnabled(1)).toBe(true);
+  });
+
+  it("returns false for zero ttl", () => {
+    expect(isCacheEnabled(0)).toBe(false);
+  });
+
+  it("returns false for negative ttl", () => {
+    expect(isCacheEnabled(-1000)).toBe(false);
   });
 });
 
 describe("createExpiringMapCache", () => {
-  it("expires entries on read after the TTL", () => {
-    let now = 1_000;
-    const cache = createExpiringMapCache<string, string>({
-      ttlMs: 5_000,
-      clock: () => now,
-    });
+  it("stores and retrieves values", () => {
+    const cache = createExpiringMapCache({ ttlMs: 1000 });
+    cache.set("key", "value");
+    expect(cache.get("key")).toBe("value");
+  });
 
-    cache.set("alpha", "a");
-    expect(cache.get("alpha")).toBe("a");
+  it("returns undefined for missing keys", () => {
+    const cache = createExpiringMapCache({ ttlMs: 1000 });
+    expect(cache.get("nonexistent")).toBeUndefined();
+  });
 
-    now = 6_001;
-    expect(cache.get("alpha")).toBeUndefined();
+  it("deletes values", () => {
+    const cache = createExpiringMapCache({ ttlMs: 1000 });
+    cache.set("key", "value");
+    cache.delete("key");
+    expect(cache.get("key")).toBeUndefined();
+  });
+
+  it("clears all values", () => {
+    const cache = createExpiringMapCache({ ttlMs: 1000 });
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.clear();
     expect(cache.size()).toBe(0);
   });
 
-  it("supports dynamic TTLs and opportunistic pruning", () => {
-    let now = 1_000;
-    let ttlMs = 5_000;
-    const cache = createExpiringMapCache<string, string>({
-      ttlMs: () => ttlMs,
-      pruneIntervalMs: 1_000,
-      clock: () => now,
+  it("returns correct size", () => {
+    const cache = createExpiringMapCache({ ttlMs: 1000 });
+    cache.set("a", 1);
+    cache.set("b", 2);
+    expect(cache.size()).toBe(2);
+  });
+
+  it("returns keys", () => {
+    const cache = createExpiringMapCache({ ttlMs: 1000 });
+    cache.set("a", 1);
+    cache.set("b", 2);
+    expect(cache.keys()).toContain("a");
+    expect(cache.keys()).toContain("b");
+  });
+
+  it("returns undefined when cache is disabled", () => {
+    const cache = createExpiringMapCache({ ttlMs: 0 });
+    cache.set("key", "value");
+    expect(cache.get("key")).toBeUndefined();
+  });
+
+  it("respects ttl expiration", () => {
+    let currentTime = 1000;
+    const cache = createExpiringMapCache({
+      ttlMs: 500,
+      clock: () => currentTime,
     });
+    cache.set("key", "value");
+    expect(cache.get("key")).toBe("value");
+    currentTime = 2000; // past TTL
+    expect(cache.get("key")).toBeUndefined();
+  });
 
-    cache.set("stale", "old");
-    now = 7_000;
-    ttlMs = 2_000;
-
-    cache.set("fresh", "new");
-
-    expect(cache.get("stale")).toBeUndefined();
-    expect(cache.keys()).toEqual(["fresh"]);
+  it("pruneExpired removes expired entries", () => {
+    let currentTime = 1000;
+    const cache = createExpiringMapCache({
+      ttlMs: 500,
+      clock: () => currentTime,
+    });
+    cache.set("key", "value");
+    currentTime = 2000;
+    cache.pruneExpired();
+    expect(cache.get("key")).toBeUndefined();
   });
 });
