@@ -75,6 +75,7 @@ import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { createBoundaryAwareStreamFnForModel } from "../../provider-transport-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -90,6 +91,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { stripSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
@@ -141,6 +143,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
@@ -190,6 +193,7 @@ export {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 export {
@@ -227,6 +231,13 @@ export function resolveEmbeddedAgentStreamFn(params: {
 }): StreamFn {
   if (params.providerStreamFn) {
     const inner = params.providerStreamFn;
+    const normalizeContext = (context: Parameters<StreamFn>[1]) =>
+      context.systemPrompt
+        ? {
+            ...context,
+            systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+          }
+        : context;
     // Provider-owned transports bypass pi-coding-agent's default auth lookup,
     // so keep injecting the resolved runtime apiKey for streamSimple-compatible
     // transports that still read credentials from options.apiKey.
@@ -234,10 +245,13 @@ export function resolveEmbeddedAgentStreamFn(params: {
       const { authStorage, model } = params;
       return async (m, context, options) => {
         const apiKey = await authStorage.getApiKey(model.provider);
-        return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
+        return inner(m, normalizeContext(context), {
+          ...options,
+          apiKey: apiKey ?? options?.apiKey,
+        });
       };
     }
-    return inner;
+    return (m, context, options) => inner(m, normalizeContext(context), options);
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
@@ -251,6 +265,13 @@ export function resolveEmbeddedAgentStreamFn(params: {
 
   if (params.model.provider === "anthropic-vertex") {
     return createAnthropicVertexStreamFnForModel(params.model);
+  }
+
+  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+    if (boundaryAwareStreamFn) {
+      return boundaryAwareStreamFn;
+    }
   }
 
   return currentStreamFn;
@@ -1464,6 +1485,8 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
+          modelProviderId: params.model.provider,
+          modelId: params.model.id,
           messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
@@ -1521,17 +1544,22 @@ export async function runEmbeddedAttempt(
           }
           const sessionContext = sessionManager.buildSessionContext();
           activeSession.agent.replaceMessages(sessionContext.messages);
-          log.warn(
+          const orphanRepairMessage =
             `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
-          );
+            `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
+          if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
+            log.warn(orphanRepairMessage);
+          } else {
+            log.debug(orphanRepairMessage);
+          }
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Called each run; only mutates already-answered user turns that still carry image blocks.
+          // Only mutates user turns older than a few assistant replies so recent
+          // history stays byte-identical for prompt-cache prefix matching.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.replaceMessages(activeSession.messages);

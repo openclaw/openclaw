@@ -25,7 +25,7 @@ export async function makeTempDir(prefix: string): Promise<string> {
   return dir;
 }
 
-async function writeExecutable(filePath: string, content: string): Promise<void> {
+export async function writeExecutable(filePath: string, content: string): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, { encoding: "utf-8", mode: 0o755 });
 }

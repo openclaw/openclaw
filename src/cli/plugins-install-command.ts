@@ -42,6 +42,12 @@ function resolveInstallMode(force?: boolean): "install" | "update" {
   return force ? "update" : "install";
 }
 
+function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): InstallSafetyOverrides {
+  return {
+    dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
+  };
+}
+
 async function installBundledPluginSource(params: {
   config: OpenClawConfig;
   rawSpec: string;
@@ -76,6 +82,7 @@ async function tryInstallHookPackFromLocalPath(params: {
   config: OpenClawConfig;
   resolvedPath: string;
   installMode: "install" | "update";
+  safetyOverrides?: InstallSafetyOverrides;
   link?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (params.link) {
@@ -88,6 +95,7 @@ async function tryInstallHookPackFromLocalPath(params: {
     }
 
     const probe = await installHooksFromPath({
+      ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
       path: params.resolvedPath,
       dryRun: true,
     });
@@ -126,6 +134,7 @@ async function tryInstallHookPackFromLocalPath(params: {
   }
 
   const result = await installHooksFromPath({
+    ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
     path: params.resolvedPath,
     mode: params.installMode,
     logger: createHookPackInstallLogger(),
@@ -304,10 +313,11 @@ export async function runPluginInstallCommand(params: {
     return defaultRuntime.exit(1);
   }
   const installMode = resolveInstallMode(opts.force);
+  const safetyOverrides = resolveInstallSafetyOverrides(opts);
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
-      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+      ...safetyOverrides,
       marketplace: opts.marketplace,
       mode: installMode,
       plugin: raw,
@@ -340,12 +350,17 @@ export async function runPluginInstallCommand(params: {
     if (opts.link) {
       const existing = cfg.plugins?.load?.paths ?? [];
       const merged = Array.from(new Set([...existing, resolved]));
-      const probe = await installPluginFromPath({ path: resolved, dryRun: true });
+      const probe = await installPluginFromPath({
+        ...safetyOverrides,
+        path: resolved,
+        dryRun: true,
+      });
       if (!probe.ok) {
         const hookFallback = await tryInstallHookPackFromLocalPath({
           config: cfg,
           installMode,
           resolvedPath: resolved,
+          safetyOverrides,
           link: true,
         });
         if (hookFallback.ok) {
@@ -381,7 +396,7 @@ export async function runPluginInstallCommand(params: {
     }
 
     const result = await installPluginFromPath({
-      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+      ...safetyOverrides,
       mode: installMode,
       path: resolved,
       logger: createPluginInstallLogger(),
@@ -391,6 +406,7 @@ export async function runPluginInstallCommand(params: {
         config: cfg,
         installMode,
         resolvedPath: resolved,
+        safetyOverrides,
       });
       if (hookFallback.ok) {
         return;
@@ -454,7 +470,7 @@ export async function runPluginInstallCommand(params: {
   const clawhubSpec = parseClawHubPluginSpec(raw);
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
-      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+      ...safetyOverrides,
       mode: installMode,
       spec: raw,
       logger: createPluginInstallLogger(),
@@ -490,7 +506,7 @@ export async function runPluginInstallCommand(params: {
   const preferredClawHubSpec = buildPreferredClawHubSpec(raw);
   if (preferredClawHubSpec) {
     const clawhubResult = await installPluginFromClawHub({
-      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+      ...safetyOverrides,
       mode: installMode,
       spec: preferredClawHubSpec,
       logger: createPluginInstallLogger(),
@@ -525,7 +541,7 @@ export async function runPluginInstallCommand(params: {
   }
 
   const result = await installPluginFromNpmSpec({
-    dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+    ...safetyOverrides,
     mode: installMode,
     spec: raw,
     logger: createPluginInstallLogger(),

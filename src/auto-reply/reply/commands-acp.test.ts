@@ -114,10 +114,8 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
-const {
-  __testing: acpResetTargetTesting,
-  resolveEffectiveResetTargetSessionKey,
-} = await import("./acp-reset-target.js");
+const { __testing: acpResetTargetTesting, resolveEffectiveResetTargetSessionKey } =
+  await import("./acp-reset-target.js");
 const { createTaskRecord, resetTaskRegistryForTests } =
   await import("../../tasks/task-registry.js");
 const { failTaskRunByRunId } = await import("../../tasks/task-executor.js");

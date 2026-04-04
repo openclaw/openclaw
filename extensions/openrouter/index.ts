@@ -5,8 +5,12 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  buildPassthroughGeminiSanitizingReplayPolicy,
+  DEFAULT_CONTEXT_TOKENS,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  composeProviderStreamWrappers,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
   createOpenRouterSystemCacheWrapper,
@@ -74,23 +78,6 @@ function isOpenRouterCacheTtlModel(modelId: string): boolean {
   return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
-function buildOpenRouterReplayPolicy(modelId?: string) {
-  const normalizedModelId = modelId?.toLowerCase() ?? "";
-  return {
-    applyAssistantFirstOrderingFix: false,
-    validateGeminiTurns: false,
-    validateAnthropicTurns: false,
-    ...(normalizedModelId.includes("gemini")
-      ? {
-          sanitizeThoughtSignatures: {
-            allowBase64Only: true,
-            includeCamelCase: true,
-          },
-        }
-      : {}),
-  };
-}
-
 export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
@@ -142,23 +129,25 @@ export default definePluginEntry({
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);
       },
-      buildReplayPolicy: ({ modelId }) => buildOpenRouterReplayPolicy(modelId),
+      buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+      resolveReasoningOutputMode: () => "native",
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
-        let streamFn = ctx.streamFn;
         const providerRouting =
           ctx.extraParams?.provider != null && typeof ctx.extraParams.provider === "object"
             ? (ctx.extraParams.provider as Record<string, unknown>)
             : undefined;
-        if (providerRouting) {
-          streamFn = injectOpenRouterRouting(streamFn, providerRouting);
-        }
         const skipReasoningInjection =
           ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId);
         const openRouterThinkingLevel = skipReasoningInjection ? undefined : ctx.thinkingLevel;
-        streamFn = createOpenRouterWrapper(streamFn, openRouterThinkingLevel);
-        streamFn = createOpenRouterSystemCacheWrapper(streamFn);
-        return streamFn;
+        return composeProviderStreamWrappers(
+          ctx.streamFn,
+          providerRouting
+            ? (streamFn) => injectOpenRouterRouting(streamFn, providerRouting)
+            : undefined,
+          (streamFn) => createOpenRouterWrapper(streamFn, openRouterThinkingLevel),
+          (streamFn) => createOpenRouterSystemCacheWrapper(streamFn),
+        );
       },
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });

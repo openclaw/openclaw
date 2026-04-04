@@ -5,8 +5,6 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
-  type ProviderReplayPolicy,
-  type ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -29,12 +27,6 @@ import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
-
-function buildOllamaReplayPolicy(
-  ctx: ProviderReplayPolicyContext,
-): ProviderReplayPolicy | undefined {
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
-}
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
@@ -160,7 +152,8 @@ export default definePluginEntry({
           providerBaseUrl: config?.models?.providers?.ollama?.baseUrl,
         });
       },
-      buildReplayPolicy: (ctx) => buildOllamaReplayPolicy(ctx),
+      buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+      resolveReasoningOutputMode: () => "native",
       wrapStreamFn: (ctx) => {
         return createConfiguredOllamaCompatStreamWrapper(ctx);
       },

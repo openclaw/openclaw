@@ -14,6 +14,7 @@ export const CONFIGURE_WIZARD_SECTIONS = [
   "gateway",
   "daemon",
   "channels",
+  "plugins",
   "skills",
   "health",
 ] as const;
@@ -64,6 +65,7 @@ export const CONFIGURE_SECTION_OPTIONS: Array<{
     label: "Channels",
     hint: "Link WhatsApp/Telegram/etc and defaults",
   },
+  { value: "plugins", label: "Plugins", hint: "Configure plugin settings (sandbox, tools, etc.)" },
   { value: "skills", label: "Skills", hint: "Install/enable workspace skills" },
   {
     value: "health",

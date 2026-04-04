@@ -2,7 +2,8 @@ import { verifyDeviceSignature } from "../../../infra/device-identity.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { buildDeviceAuthPayload, buildDeviceAuthPayloadV3 } from "../../device-auth.js";
-import { isLoopbackAddress } from "../../net.js";
+import { isLoopbackAddress, isPrivateOrLoopbackHost, resolveHostName } from "../../net.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
@@ -58,6 +59,52 @@ export function shouldAllowSilentLocalPairing(params: {
     (params.reason === "not-paired" ||
       params.reason === "scope-upgrade" ||
       params.reason === "role-upgrade")
+  );
+}
+
+export function shouldSkipBackendSelfPairing(params: {
+  connectParams: ConnectParams;
+  isLocalClient: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isBackendClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+  if (!isBackendClient) {
+    return false;
+  }
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  const usesDeviceTokenAuth = params.authMethod === "device-token";
+  return (
+    params.isLocalClient &&
+    !params.hasBrowserOriginHeader &&
+    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
+  );
+}
+
+export function shouldTreatCliContainerHostAsLocal(params: {
+  connectParams: ConnectParams;
+  requestHost?: string;
+  remoteAddress?: string;
+  hasProxyHeaders: boolean;
+  hasBrowserOriginHeader: boolean;
+  sharedAuthOk: boolean;
+  authMethod: GatewayAuthResult["method"];
+}): boolean {
+  const isCliClient =
+    params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
+    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
+  return (
+    isCliClient &&
+    params.sharedAuthOk &&
+    usesSharedSecretAuth &&
+    !params.hasProxyHeaders &&
+    !params.hasBrowserOriginHeader &&
+    isLoopbackAddress(params.remoteAddress) &&
+    isPrivateOrLoopbackHost(resolveHostName(params.requestHost))
   );
 }
 

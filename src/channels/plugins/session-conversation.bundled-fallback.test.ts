@@ -15,10 +15,10 @@ const fallbackState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugin-sdk/facade-runtime.js", () => ({
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) =>
+  loadBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) =>
     dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
       ? { resolveSessionConversation: fallbackState.resolveSessionConversation }
-      : null,
+      : {},
 }));
 
 vi.mock("../../plugins/bundled-plugin-metadata.js", async () => {

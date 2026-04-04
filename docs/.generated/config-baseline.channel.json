@@ -38,6 +38,137 @@
       "hasChildren": true
     },
     {
+      "path": "channels.bluebubbles.accounts.*.actions",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.addParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.edit",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.leaveGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reactions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.removeParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.renameGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reply",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendAttachment",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendWithEffect",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.setGroupIcon",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.unsend",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.bluebubbles.accounts.*.allowFrom",
       "kind": "channel",
       "type": "array",
@@ -1969,16 +2100,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.guilds.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.autoArchiveDuration",
@@ -4472,16 +4593,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.discord.guilds.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.discord.guilds.*.channels.*.autoArchiveDuration",
@@ -8467,16 +8578,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.googlechat.accounts.*.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.googlechat.accounts.*.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -9146,16 +9247,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.googlechat.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.googlechat.groups.*.enabled",
@@ -13731,16 +13822,6 @@
       "hasChildren": false
     },
     {
-      "path": "channels.matrix.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.matrix.groups.*.allowBots",
       "kind": "channel",
       "type": [
@@ -14103,16 +14184,6 @@
       "path": "channels.matrix.rooms.*.account",
       "kind": "channel",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.matrix.rooms.*.allow",
-      "kind": "channel",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -20852,16 +20923,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.slack.accounts.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.slack.accounts.*.channels.*.allowBots",
       "kind": "channel",
       "type": "boolean",
@@ -22312,16 +22373,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.slack.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.slack.channels.*.allowBots",

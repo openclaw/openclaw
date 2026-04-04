@@ -82,9 +82,7 @@ const googlechatDmPolicy: ChannelSetupDmPolicy = {
         dm: {
           ...currentDm,
           policy,
-          ...(policy === "open"
-            ? { allowFrom: addWildcardAllowFrom(currentDm?.allowFrom) }
-            : {}),
+          ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(currentDm?.allowFrom) } : {}),
         },
       },
     });

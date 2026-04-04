@@ -19,7 +19,7 @@ describe("discord audit", () => {
     fetchChannelPermissionsDiscordMock.mockReset();
   });
 
-  it("collects numeric channel ids and counts unresolved keys", async () => {
+  it("collects numeric channel ids even when config uses allow=false and counts unresolved keys", async () => {
     const cfg = {
       channels: {
         discord: {
@@ -43,12 +43,18 @@ describe("discord audit", () => {
       cfg,
       accountId: "default",
     });
-    expect(collected.channelIds).toEqual(["111"]);
+    expect(collected.channelIds).toEqual(["111", "222"]);
     expect(collected.unresolvedChannels).toBe(1);
 
     fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
       channelId: "111",
       permissions: ["ViewChannel"],
+      raw: "0",
+      isDm: false,
+    });
+    fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
+      channelId: "222",
+      permissions: ["ViewChannel", "SendMessages"],
       raw: "0",
       isDm: false,
     });
@@ -60,6 +66,7 @@ describe("discord audit", () => {
       timeoutMs: 1000,
     });
     expect(audit.ok).toBe(false);
+    expect(audit.channels).toHaveLength(2);
     expect(audit.channels[0]?.channelId).toBe("111");
     expect(audit.channels[0]?.missing).toContain("SendMessages");
   });

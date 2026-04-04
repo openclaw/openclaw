@@ -5,7 +5,7 @@ import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
-} from "../plugin-sdk/telegram-command-config.js";
+} from "./telegram-command-config.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -405,7 +405,6 @@ export const DiscordDmSchema = z
 
 export const DiscordGuildChannelSchema = z
   .object({
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     tools: ToolPolicySchema,
@@ -757,7 +756,6 @@ export const GoogleChatDmSchema = z
 export const GoogleChatGroupSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
@@ -831,7 +829,6 @@ export const SlackDmSchema = z
 export const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,

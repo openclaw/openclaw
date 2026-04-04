@@ -25,7 +25,7 @@ Most days:
 - Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
 - Faster local full-suite run on a roomy machine: `pnpm test:max`
 - Direct Vitest watch loop (modern projects config): `pnpm test:watch`
-- Direct file targeting now routes extension/channel paths too: `pnpm test -- extensions/discord/src/monitor/message-handler.preflight.test.ts`
+- Direct file targeting now routes extension/channel paths too: `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts`
 
 When you touch tests or want extra confidence:
 
@@ -46,7 +46,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 ### Unit / integration (default)
 
 - Command: `pnpm test`
-- Config: native Vitest `projects` via `vitest.config.ts` (`unit` + `boundary`)
+- Config: native Vitest `projects` via `vitest.config.ts`
 - Files: core/unit inventories under `src/**/*.test.ts`, `packages/**/*.test.ts`, `test/**/*.test.ts`, and the whitelisted `ui` node tests covered by `vitest.unit.config.ts`
 - Scope:
   - Pure unit tests
@@ -57,9 +57,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
 - Projects note:
-  - `pnpm test` and `pnpm test:watch` both use the same native Vitest `projects` config now.
-  - The tiny script wrapper still keeps scheduling native, but it now reroutes direct `extensions/...` and channel-surface test paths onto the matching Vitest lane automatically.
-  - If you target mixed suites in one command, the wrapper runs those lanes sequentially under the same local heavy-check lock.
+  - `pnpm test`, `pnpm test:watch`, and `pnpm test:changed` all use the same native Vitest root `projects` config now.
+  - Direct file filters route natively through the root project graph, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` works without a custom wrapper.
 - Embedded runner note:
   - When you change message-tool discovery inputs or compaction runtime context,
     keep both levels of coverage.
@@ -72,16 +71,14 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     through the real `run.ts` / `compact.ts` paths; helper-only tests are not a
     sufficient substitute for those integration paths.
 - Pool note:
-  - Base Vitest config still defaults to `forks`.
-  - Unit and boundary projects stay on `forks`.
-  - Channel, extension, and gateway configs also stay on `forks`.
-  - Unit, channel, and extension configs default to `isolate: false` for faster file startup.
-  - `pnpm test` inherits the isolation defaults from the root `vitest.config.ts` projects config.
-  - Opt back into unit-file isolation with `OPENCLAW_TEST_ISOLATE=1 pnpm test`.
-  - `OPENCLAW_TEST_NO_ISOLATE=0` or `OPENCLAW_TEST_NO_ISOLATE=false` also force isolated runs.
+  - Base Vitest config now defaults to `threads`.
+  - The shared Vitest config also fixes `isolate: false` and uses the non-isolated runner across the root projects, e2e, and live configs.
+  - The root UI lane keeps its `jsdom` setup and optimizer, but now runs on the shared non-isolated runner too.
+  - `pnpm test` inherits the same `threads` + `isolate: false` defaults from the root `vitest.config.ts` projects config.
 - Fast-local iteration note:
   - `pnpm test:changed` runs the native projects config with `--changed origin/main`.
   - `pnpm test:max` and `pnpm test:changed:max` keep the same native projects config, just with a higher worker cap.
+  - Local worker auto-scaling is intentionally conservative now and also backs off when the host load average is already high, so multiple concurrent Vitest runs do less damage by default.
   - The base Vitest config marks the projects/config files as `forceRerunTriggers` so changed-mode reruns stay correct when test wiring changes.
   - The config keeps `OPENCLAW_VITEST_FS_MODULE_CACHE` enabled on supported hosts; set `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/abs/path` if you want one explicit cache location for direct profiling.
 - Perf-debug note:
@@ -96,7 +93,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`
 - Runtime defaults:
-  - Uses Vitest `forks` for deterministic cross-file isolation.
+  - Uses Vitest `threads` with `isolate: false`, matching the rest of the repo.
   - Uses adaptive workers (CI: up to 2, local: 1 by default).
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:

@@ -17,10 +17,10 @@ import {
   resolveSlackAccount,
   type ResolvedSlackAccount,
 } from "./accounts.js";
+import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
-import { getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "./runtime-api.js";
 
 export const SLACK_CHANNEL = "slack" as const;
 
@@ -119,7 +119,7 @@ export function setSlackChannelAllowlist(
   accountId: string,
   channelKeys: string[],
 ): OpenClawConfig {
-  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
+  const channels = Object.fromEntries(channelKeys.map((key) => [key, { enabled: true }]));
   return patchChannelConfigForAccount({
     cfg,
     channel: SLACK_CHANNEL,

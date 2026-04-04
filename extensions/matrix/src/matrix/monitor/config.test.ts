@@ -39,13 +39,13 @@ describe("resolveMatrixMonitorConfig", () => {
     );
 
     const roomsConfig: MatrixRoomsConfig = {
-      "*": { allow: true },
+      "*": { enabled: true },
       "room:!ops:example.org": {
-        allow: true,
+        enabled: true,
         users: ["Dana", "user:@Erin:Example.org"],
       },
       General: {
-        allow: true,
+        enabled: true,
       },
     };
 
@@ -62,13 +62,13 @@ describe("resolveMatrixMonitorConfig", () => {
     expect(result.allowFrom).toEqual(["@alice:example.org", "@bob:example.org"]);
     expect(result.groupAllowFrom).toEqual(["@carol:example.org"]);
     expect(result.roomsConfig).toEqual({
-      "*": { allow: true },
+      "*": { enabled: true },
       "!ops:example.org": {
-        allow: true,
+        enabled: true,
         users: ["@dana:example.org", "@erin:example.org"],
       },
       "!general:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
     expect(resolveTargets).toHaveBeenCalledTimes(3);
@@ -116,7 +116,7 @@ describe("resolveMatrixMonitorConfig", () => {
       groupAllowFrom: ["matrix:@known:example.org"],
       roomsConfig: {
         "channel:Project X": {
-          allow: true,
+          enabled: true,
           users: ["matrix:Ghost"],
         },
       },
@@ -174,7 +174,7 @@ describe("resolveMatrixMonitorConfig", () => {
       accountId: "ops",
       roomsConfig: {
         "#allowed:example.org": {
-          allow: true,
+          enabled: true,
         },
       },
       runtime,
@@ -183,7 +183,7 @@ describe("resolveMatrixMonitorConfig", () => {
 
     expect(result.roomsConfig).toEqual({
       "!allowed-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
     expect(resolveTargets).toHaveBeenCalledWith(

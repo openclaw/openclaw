@@ -6,7 +6,13 @@ import {
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
-import { checkZaloAuthenticated, getZaloUserInfo } from "./zalo-js.js";
+
+let zalouserAccountsRuntimePromise: Promise<typeof import("./accounts.runtime.js")> | undefined;
+
+async function loadZalouserAccountsRuntime() {
+  zalouserAccountsRuntimePromise ??= import("./accounts.runtime.js");
+  return await zalouserAccountsRuntimePromise;
+}
 
 const {
   listAccountIds: listZalouserAccountIds,
@@ -66,7 +72,7 @@ export async function resolveZalouserAccount(params: {
   accountId?: string | null;
 }): Promise<ResolvedZalouserAccount> {
   const { accountId, enabled, merged, profile } = resolveZalouserAccountBase(params);
-  const authenticated = await checkZaloAuthenticated(profile);
+  const authenticated = await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile);
 
   return {
     accountId,
@@ -107,7 +113,7 @@ export async function listEnabledZalouserAccounts(
 export async function getZcaUserInfo(
   profile: string,
 ): Promise<{ userId?: string; displayName?: string } | null> {
-  const info = await getZaloUserInfo(profile);
+  const info = await (await loadZalouserAccountsRuntime()).getZaloUserInfo(profile);
   if (!info) {
     return null;
   }
@@ -117,6 +123,8 @@ export async function getZcaUserInfo(
   };
 }
 
-export { checkZaloAuthenticated as checkZcaAuthenticated };
+export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
+  return await (await loadZalouserAccountsRuntime()).checkZaloAuthenticated(profile);
+}
 
 export type { ResolvedZalouserAccount } from "./types.js";

@@ -1,6 +1,7 @@
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../../src/channels/plugins/types.js";
-import { resolveOutboundSendDep } from "../../../src/infra/outbound/send-deps.js";
-import { collectStatusIssuesFromLastError } from "../../../src/plugin-sdk/status-helpers.js";
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";
 
 function normalizeIMessageTestHandle(raw: string): string {
   const trimmed = raw.trim();

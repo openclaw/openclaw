@@ -10,7 +10,14 @@ title: "OAuth"
 
 # OAuth
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, you can either use the **setup-token** flow or reuse a local **Claude CLI** login on the gateway host. Anthropic subscription use outside Claude Code has been restricted for some users in the past, so treat it as a user-choice risk and verify current Anthropic policy yourself. OpenAI Codex OAuth is explicitly supported for use in external tools like OpenClaw. This page explains:
+OpenClaw supports “subscription auth” via OAuth for providers that offer it
+(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, you
+can either use the **setup-token** flow or reuse a local **Claude CLI** login
+on the gateway host, but Anthropic changed third-party harness billing on
+**April 4, 2026 at 12:00 PM PT / 8:00 PM BST**: Anthropic says Claude
+subscription limits no longer cover OpenClaw and Anthropic now requires **Extra
+Usage** for that traffic. OpenAI Codex OAuth is explicitly supported for use in
+external tools like OpenClaw. This page explains:
 
 For Anthropic in production, API key auth is the safer recommended path over subscription setup-token auth.
 
@@ -37,6 +44,9 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
+- when credentials are reused from an external CLI like Codex CLI, OpenClaw
+  mirrors them with provenance and re-reads that external source instead of
+  rotating the refresh token itself
 
 ## Storage (where tokens live)
 
@@ -57,9 +67,16 @@ For static secret refs and runtime snapshot activation behavior, see [Secrets Ma
 ## Anthropic setup-token (subscription auth)
 
 <Warning>
-Anthropic setup-token support is technical compatibility, not a policy guarantee.
-Anthropic has blocked some subscription usage outside Claude Code in the past.
-Decide for yourself whether to use subscription auth, and verify Anthropic's current terms.
+Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+OpenClaw or other third-party harnesses. Anthropic setup-token support remains
+technically usable in OpenClaw, but Anthropic now requires **Extra Usage**
+(pay-as-you-go billed separately from the subscription) for that traffic.
+
+If you want other subscription-style options in OpenClaw, see [OpenAI
+Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
+Plan](/providers/qwen_modelstudio), [MiniMax Coding Plan](/providers/minimax),
+and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
 Run `claude setup-token` on any machine, then paste it into OpenClaw:
@@ -83,7 +100,16 @@ openclaw models status
 ## Anthropic Claude CLI migration
 
 If Claude CLI is already installed and signed in on the gateway host, you can
-switch Anthropic model selection over to the local CLI backend:
+switch Anthropic model selection over to the local CLI backend. This is a
+supported OpenClaw path when you want to reuse a local Claude CLI login on the
+same host.
+
+Prerequisites:
+
+- the `claude` binary is installed on the gateway host
+- Claude CLI is already authenticated there via `claude auth login`
+
+Migration command:
 
 ```bash
 openclaw models auth login --provider anthropic --method cli --set-default
@@ -96,7 +122,15 @@ openclaw onboard --auth-choice anthropic-cli
 ```
 
 This keeps existing Anthropic auth profiles for rollback, but rewrites the main
-default-model path from `anthropic/...` to `claude-cli/...`.
+default-model path from `anthropic/...` to `claude-cli/...`, rewrites matching
+Anthropic Claude fallbacks, and adds matching `claude-cli/...` allowlist
+entries under `agents.defaults.models`.
+
+Verify:
+
+```bash
+openclaw models status
+```
 
 ## OAuth exchange (how login works)
 
@@ -117,6 +151,7 @@ Claude CLI path:
 1. sign in with `claude auth login` on the gateway host
 2. run `openclaw models auth login --provider anthropic --method cli --set-default`
 3. store no new auth profile; switch model selection to `claude-cli/...`
+4. keep existing Anthropic auth profiles for rollback
 
 Wizard paths:
 
@@ -146,6 +181,8 @@ At runtime:
 
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
+- exception: reused external CLI credentials stay externally managed; OpenClaw
+  re-reads the CLI auth store and never spends the copied refresh token itself
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

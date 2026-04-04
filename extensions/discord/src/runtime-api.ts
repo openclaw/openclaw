@@ -5,10 +5,7 @@ export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
-export {
-  buildChannelConfigSchema,
-  DiscordConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+export { buildChannelConfigSchema, DiscordConfigSchema } from "../config-api.js";
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,

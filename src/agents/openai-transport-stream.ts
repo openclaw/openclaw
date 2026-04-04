@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   calculateCost,
@@ -18,6 +19,8 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { resolveOpenAICompletionsCompatDefaultsFromCapabilities } from "./openai-completions-compat.js";
 import {
@@ -26,8 +29,9 @@ import {
 } from "./openai-responses-payload-policy.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
-import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 
@@ -222,7 +226,7 @@ function convertResponsesMessages(
   if (includeSystemPrompt && context.systemPrompt) {
     messages.push({
       role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(context.systemPrompt),
+      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
   let msgIndex = 0;
@@ -328,7 +332,15 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = options?.strict === undefined ? false : options.strict;
+  const strict = options?.strict;
+  if (strict === undefined) {
+    return tools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })) as unknown as FunctionTool[];
+  }
   return tools.map((tool) => ({
     type: "function",
     name: tool.name,
@@ -553,6 +565,7 @@ function buildOpenAIClientHeaders(
   model: Model<Api>,
   context: Context,
   optionHeaders?: Record<string, string>,
+  turnHeaders?: Record<string, string>,
 ): Record<string, string> {
   const headers = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -567,7 +580,33 @@ function buildOpenAIClientHeaders(
   if (optionHeaders) {
     Object.assign(headers, optionHeaders);
   }
+  if (turnHeaders) {
+    Object.assign(headers, turnHeaders);
+  }
   return headers;
+}
+
+function resolveProviderTransportTurnState(
+  model: Model<Api>,
+  params: {
+    sessionId?: string;
+    turnId: string;
+    attempt: number;
+    transport: "stream" | "websocket";
+  },
+) {
+  return resolveProviderTransportTurnStateWithPlugin({
+    provider: model.provider,
+    context: {
+      provider: model.provider,
+      modelId: model.id,
+      model: model as ProviderRuntimeModel,
+      sessionId: params.sessionId,
+      turnId: params.turnId,
+      attempt: params.attempt,
+      transport: params.transport,
+    },
+  });
 }
 
 function createOpenAIResponsesClient(
@@ -575,12 +614,13 @@ function createOpenAIResponsesClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  turnHeaders?: Record<string, string>,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     fetch: buildGuardedModelFetch(model),
   });
 }
@@ -609,12 +649,30 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAIResponsesClient(model, context, apiKey, options?.headers);
-        let params = buildOpenAIResponsesParams(model, context, options as OpenAIResponsesOptions);
+        const turnState = resolveProviderTransportTurnState(model, {
+          sessionId: options?.sessionId,
+          turnId: randomUUID(),
+          attempt: 1,
+          transport: "stream",
+        });
+        const client = createOpenAIResponsesClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          turnState?.headers,
+        );
+        let params = buildOpenAIResponsesParams(
+          model,
+          context,
+          options as OpenAIResponsesOptions,
+          turnState?.metadata,
+        );
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
+        params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
@@ -667,6 +725,7 @@ export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
+  metadata?: Record<string, string>,
 ) {
   const compat = getCompat(model as OpenAIModeModel);
   const supportsDeveloperRole =
@@ -687,6 +746,7 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: cacheRetention === "none" ? undefined : options?.sessionId,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
+    ...(metadata ? { metadata } : {}),
   };
   if (options?.maxTokens) {
     params.max_output_tokens = options.maxTokens;
@@ -698,7 +758,9 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    params.tools = convertResponsesTools(context.tools);
+    params.tools = convertResponsesTools(context.tools, {
+      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel),
+    });
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoningSummary) {
@@ -739,18 +801,32 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createAzureOpenAIClient(model, context, apiKey, options?.headers);
+        const turnState = resolveProviderTransportTurnState(model, {
+          sessionId: options?.sessionId,
+          turnId: randomUUID(),
+          attempt: 1,
+          transport: "stream",
+        });
+        const client = createAzureOpenAIClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          turnState?.headers,
+        );
         const deploymentName = resolveAzureDeploymentName(model);
         let params = buildAzureOpenAIResponsesParams(
           model,
           context,
           options as OpenAIResponsesOptions | undefined,
           deploymentName,
+          turnState?.metadata,
         );
         const nextParams = await options?.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as typeof params;
         }
+        params = mergeTransportMetadata(params, turnState?.metadata);
         const responseStream = (await client.responses.create(
           params as never,
           options?.signal ? { signal: options.signal } : undefined,
@@ -798,12 +874,13 @@ function createAzureOpenAIClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  turnHeaders?: Record<string, string>,
 ) {
   return new AzureOpenAI({
     apiKey,
     apiVersion: resolveAzureOpenAIApiVersion(),
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
     baseURL: normalizeAzureBaseUrl(model.baseUrl),
     fetch: buildGuardedModelFetch(model),
   });
@@ -814,8 +891,9 @@ function buildAzureOpenAIResponsesParams(
   context: Context,
   options: OpenAIResponsesOptions | undefined,
   deploymentName: string,
+  metadata?: Record<string, string>,
 ) {
-  const params = buildOpenAIResponsesParams(model, context, options);
+  const params = buildOpenAIResponsesParams(model, context, options, metadata);
   params.model = deploymentName;
   delete params.store;
   return params;
@@ -1138,6 +1216,7 @@ type OpenAIResponsesRequestParams = {
   stream: true;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
+  metadata?: Record<string, string>;
   store?: boolean;
   max_output_tokens?: number;
   temperature?: number;
@@ -1156,14 +1235,56 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
-function convertTools(tools: NonNullable<Context["tools"]>, compat: ReturnType<typeof getCompat>) {
+function resolvesToNativeOpenAIStrictTools(model: OpenAIModeModel): boolean {
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "llm",
+    transport: "stream",
+    modelId: model.id,
+    compat:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStore?: boolean })
+        : undefined,
+  });
+  if (!capabilities.usesKnownNativeOpenAIRoute) {
+    return false;
+  }
+  return (
+    capabilities.provider === "openai" ||
+    capabilities.provider === "openai-codex" ||
+    capabilities.provider === "azure-openai" ||
+    capabilities.provider === "azure-openai-responses"
+  );
+}
+
+function resolveOpenAIStrictToolSetting(
+  model: OpenAIModeModel,
+  compat?: ReturnType<typeof getCompat>,
+): boolean | undefined {
+  if (resolvesToNativeOpenAIStrictTools(model)) {
+    return true;
+  }
+  if (compat?.supportsStrictMode) {
+    return false;
+  }
+  return undefined;
+}
+
+function convertTools(
+  tools: NonNullable<Context["tools"]>,
+  compat: ReturnType<typeof getCompat>,
+  model: OpenAIModeModel,
+) {
+  const strict = resolveOpenAIStrictToolSetting(model, compat);
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,
-      ...(compat.supportsStrictMode ? { strict: false } : {}),
+      ...(strict === undefined ? {} : { strict }),
     },
   }));
 }
@@ -1174,9 +1295,15 @@ export function buildOpenAICompletionsParams(
   options: OpenAICompletionsOptions | undefined,
 ) {
   const compat = getCompat(model);
+  const completionsContext = context.systemPrompt
+    ? {
+        ...context,
+        systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+      }
+    : context;
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertMessages(model as never, context, compat as never),
+    messages: convertMessages(model as never, completionsContext, compat as never),
     stream: true,
   };
   if (compat.supportsUsageInStreaming) {
@@ -1196,7 +1323,7 @@ export function buildOpenAICompletionsParams(
     params.temperature = options.temperature;
   }
   if (context.tools) {
-    params.tools = convertTools(context.tools, compat);
+    params.tools = convertTools(context.tools, compat, model);
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
   }

@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { expect, type MockInstance } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 
 export function createWhatsAppPollFixture() {
   const cfg = { marker: "resolved-cfg" } as OpenClawConfig;

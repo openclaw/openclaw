@@ -10,10 +10,12 @@ import {
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
   buildTransportAwareSimpleStreamFn,
+  createBoundaryAwareStreamFnForModel,
   isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 describe("openai transport stream", () => {
   it("reports the supported transport-aware APIs", () => {
@@ -22,6 +24,51 @@ describe("openai transport stream", () => {
     expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
     expect(isTransportAwareApiSupported("google-generative-ai")).toBe(true);
+  });
+
+  it("builds boundary-aware stream shapers for supported default agent transports", () => {
+    expect(
+      createBoundaryAwareStreamFnForModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">),
+    ).toBeTypeOf("function");
+    expect(
+      createBoundaryAwareStreamFnForModel({
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"anthropic-messages">),
+    ).toBeTypeOf("function");
+    expect(
+      createBoundaryAwareStreamFnForModel({
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"google-generative-ai">),
+    ).toBeTypeOf("function");
   });
 
   it("prepares a custom simple-completion api alias when transport overrides are attached", () => {
@@ -439,6 +486,155 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
+  it("strips the internal cache boundary from OpenAI system prompts", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: Array<{ content?: string }> };
+
+    expect(params.input?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
+  });
+
+  it("defaults responses tool schemas to strict on native OpenAI routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean }> };
+
+    expect(params.tools?.[0]?.strict).toBe(true);
+  });
+
+  it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean }> };
+
+    expect(params.tools?.[0]).not.toHaveProperty("strict");
+  });
+
+  it("adds native OpenAI turn metadata on direct Responses routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" } as never,
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+        openclaw_turn_attempt: "1",
+        openclaw_transport: "stream",
+      },
+    ) as { metadata?: Record<string, string> };
+
+    expect(params.metadata).toMatchObject({
+      openclaw_session_id: "session-123",
+      openclaw_turn_id: "turn-123",
+      openclaw_turn_attempt: "1",
+      openclaw_transport: "stream",
+    });
+  });
+
+  it("leaves proxy-like OpenAI Responses routes without native turn metadata by default", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+    ) as { metadata?: Record<string, string> };
+
+    expect(params).not.toHaveProperty("metadata");
+  });
+
   it("gates responses service_tier to native OpenAI endpoints", () => {
     const nativeParams = buildOpenAIResponsesParams(
       {
@@ -563,6 +759,31 @@ describe("openai transport stream", () => {
     ) as { messages?: Array<{ role?: string }> };
 
     expect(params.messages?.[0]).toMatchObject({ role: "system" });
+  });
+
+  it("strips the internal cache boundary from OpenAI completions system prompts", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-4.1",
+        name: "GPT-4.1",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<{ content?: string }> };
+
+    expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
   it("uses system role and streaming usage compat for native ModelStudio completions providers", () => {
@@ -693,6 +914,37 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("defaults completions tool schemas to strict on native OpenAI routes", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
+
+    expect(params.tools?.[0]?.function?.strict).toBe(true);
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

@@ -15,8 +15,9 @@ let resolveModelAsyncMock: typeof import("../../../src/agents/pi-embedded-runner
 let ensureCustomApiRegisteredMock: typeof import("../../../src/agents/custom-api-registry.js").ensureCustomApiRegistered;
 let prepareModelForSimpleCompletionMock: typeof import("../../../src/agents/simple-completion-transport.js").prepareModelForSimpleCompletion;
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     completeSimple: vi.fn(),

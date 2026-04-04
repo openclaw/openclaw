@@ -1,6 +1,8 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { renderRootHelpText as renderSourceRootHelpText } from "../src/cli/program/root-help.ts";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -78,24 +80,8 @@ export function readBundledChannelCatalogIds(
     .map((entry) => entry.id);
 }
 
-async function captureStdout(action: () => void | Promise<void>): Promise<string> {
-  let output = "";
-  const originalWrite = process.stdout.write.bind(process.stdout);
-  const captureWrite: typeof process.stdout.write = ((chunk: string | Uint8Array) => {
-    output += String(chunk);
-    return true;
-  }) as typeof process.stdout.write;
-  process.stdout.write = captureWrite;
-  try {
-    await action();
-  } finally {
-    process.stdout.write = originalWrite;
-  }
-  return output;
-}
-
 export async function renderBundledRootHelpText(
-  distDirOverride: string = distDir,
+  _distDirOverride: string = distDir,
 ): Promise<string> {
   const bundleName = readdirSync(distDirOverride).find(
     (entry) => entry.startsWith("root-help-") && entry.endsWith(".js"),
@@ -104,14 +90,30 @@ export async function renderBundledRootHelpText(
     throw new Error("No root-help bundle found in dist; cannot write CLI startup metadata.");
   }
   const moduleUrl = pathToFileURL(path.join(distDirOverride, bundleName)).href;
-  const mod = (await import(moduleUrl)) as { outputRootHelp?: () => void | Promise<void> };
-  if (typeof mod.outputRootHelp !== "function") {
-    throw new Error(`Bundle ${bundleName} does not export outputRootHelp.`);
-  }
-
-  return captureStdout(async () => {
-    await mod.outputRootHelp?.();
+  const inlineModule = [
+    `const mod = await import(${JSON.stringify(moduleUrl)});`,
+    "if (typeof mod.outputRootHelp !== 'function') {",
+    `  throw new Error(${JSON.stringify(`Bundle ${bundleName} does not export outputRootHelp.`)});`,
+    "}",
+    "await mod.outputRootHelp();",
+    "process.exit(0);",
+  ].join("\n");
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", inlineModule], {
+    cwd: distDirOverride,
+    encoding: "utf8",
+    timeout: 30_000,
   });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr?.trim();
+    throw new Error(
+      `Failed to render bundled root help from ${bundleName}` +
+        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
+    );
+  }
+  return result.stdout ?? "";
 }
 
 export async function writeCliStartupMetadata(options?: {
@@ -124,7 +126,13 @@ export async function writeCliStartupMetadata(options?: {
   const resolvedExtensionsDir = options?.extensionsDir ?? extensionsDir;
   const catalog = readBundledChannelCatalogIds(resolvedExtensionsDir);
   const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...catalog]);
-  const rootHelpText = await renderBundledRootHelpText(resolvedDistDir);
+  const useSourceRootHelp =
+    resolvedDistDir === distDir &&
+    resolvedOutputPath === outputPath &&
+    resolvedExtensionsDir === extensionsDir;
+  const rootHelpText = useSourceRootHelp
+    ? await renderSourceRootHelpText({ pluginSdkResolution: "src" })
+    : await renderBundledRootHelpText(resolvedDistDir);
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(
@@ -144,4 +152,5 @@ export async function writeCliStartupMetadata(options?: {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   await writeCliStartupMetadata();
+  process.exit(0);
 }

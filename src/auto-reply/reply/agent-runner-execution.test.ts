@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import { MAX_LIVE_SWITCH_RETRIES } from "./agent-runner-execution.js";
@@ -745,5 +746,64 @@ describe("runAgentTurnWithFallback", () => {
     expect(followupRun.run.model).toBe("gpt-5.4");
     expect(followupRun.run.authProfileId).toBe("profile-c");
     expect(followupRun.run.authProfileIdSource).toBe("auto");
+  });
+
+  it("does not roll back newer override changes after a failed fallback candidate", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("openai", "gpt-5.4")).rejects.toThrow("fallback failed");
+        throw new Error("fallback failed");
+      },
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      providerOverride: "anthropic",
+      modelOverride: "claude",
+      authProfileOverride: "anthropic:default",
+      authProfileOverrideSource: "user",
+    };
+    const sessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      sessionEntry.providerOverride = "zai";
+      sessionEntry.modelOverride = "glm-5";
+      sessionEntry.authProfileOverride = "zai:work";
+      sessionEntry.authProfileOverrideSource = "user";
+      throw new Error("fallback failed");
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    expect(sessionEntry.providerOverride).toBe("zai");
+    expect(sessionEntry.modelOverride).toBe("glm-5");
+    expect(sessionEntry.authProfileOverride).toBe("zai:work");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(sessionStore.main.providerOverride).toBe("zai");
+    expect(sessionStore.main.modelOverride).toBe("glm-5");
   });
 });

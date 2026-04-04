@@ -2318,6 +2318,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "number",
                         exclusiveMinimum: 0,
                       },
+                      contextTokens: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
                       maxTokens: {
                         type: "number",
                         exclusiveMinimum: 0,

@@ -183,7 +183,7 @@ export function normalizeCompatibilityConfig({
     }
   }
 
-  if (!changed) {
+  if (!changed && changes.length === 0) {
     return { config: cfg, changes: [] };
   }
   return {
