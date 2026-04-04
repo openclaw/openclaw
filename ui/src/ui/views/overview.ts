@@ -145,8 +145,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/dashboard"
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
-            title="Control UI auth docs (opens in new tab)"
-            >Docs: Control UI auth</a
+            title=${t("overview.connection.authDocsTitle")}
+            >${t("overview.connection.authDocsLink")}</a
           >
         </div>
       </div>
