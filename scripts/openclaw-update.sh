@@ -49,6 +49,7 @@ fi
 
 DRY_RUN=false
 TARGET_VERSION=""
+EXPLICIT_VERSION=""  # Non-empty only when the caller passed an explicit version
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -70,7 +71,7 @@ Examples:
   openclaw-update.sh --dry-run    # Check what would happen
 USAGE
             exit 0 ;;
-        *) TARGET_VERSION="$1"; shift ;;
+        *) EXPLICIT_VERSION="$1"; TARGET_VERSION="$1"; shift ;;
     esac
 done
 
@@ -137,11 +138,11 @@ else
 fi
 
 # Already up-to-date?
+SKIP_GATEWAY_UPDATE=false
 if [[ "${CURRENT_VERSION}" == "${TARGET_VERSION}" ]]; then
-    success "Already at target version ${TARGET_VERSION}"
-    echo ""
-    echo "Nothing to do. Run with a different version to force update."
-    exit 0
+    warn "Gateway already at ${TARGET_VERSION} — skipping gateway update, checking plugin peers..."
+    NEW_GATEWAY="${CURRENT_VERSION}"  # Set for summary
+    SKIP_GATEWAY_UPDATE=true
 fi
 
 log "Update path: ${CURRENT_VERSION} → ${TARGET_VERSION}"
@@ -394,6 +395,9 @@ cd "${HOME}"
 # Phase 5: Update Gateway
 # ============================================================================
 
+if [[ "${SKIP_GATEWAY_UPDATE}" == "true" ]]; then
+    log "Skipping Phase 5 (gateway already at target version)"
+else
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
 echo -e "${BOLD}           Phase 5: Updating Gateway                           ${NC}"
 echo -e "${BOLD}═══════════════════════════════════════════════════════════════${NC}"
@@ -416,12 +420,26 @@ if [[ "${INSTALL_TYPE}" == "git" ]]; then
         exit 3
     fi
 else
-    log "Running: openclaw update --tag ${TARGET_VERSION} --no-restart"
-    if openclaw update --tag "${TARGET_VERSION}" --no-restart 2>&1; then
-        success "Gateway update completed"
+    # Only pass --tag when the caller explicitly requested a version.
+    # Without --tag, 'openclaw update' follows the user's configured channel
+    # (stable/beta/dev).  Passing --tag with the npm-resolved stable version
+    # would silently downgrade beta/dev installs to stable.
+    if [[ -n "${EXPLICIT_VERSION}" ]]; then
+        log "Running: openclaw update --tag ${TARGET_VERSION} --no-restart"
+        if openclaw update --tag "${TARGET_VERSION}" --no-restart 2>&1; then
+            success "Gateway update completed"
+        else
+            fail "Gateway update failed"
+            exit 3
+        fi
     else
-        fail "Gateway update failed"
-        exit 3
+        log "Running: openclaw update --no-restart (channel-based, no explicit version)"
+        if openclaw update --no-restart 2>&1; then
+            success "Gateway update completed"
+        else
+            fail "Gateway update failed"
+            exit 3
+        fi
     fi
 fi
 
@@ -433,6 +451,7 @@ else
     warn "Gateway version: expected ${TARGET_VERSION}, got ${NEW_GATEWAY}"
 fi
 echo ""
+fi  # end SKIP_GATEWAY_UPDATE check
 
 # ============================================================================
 # Phase 6: Pre-Restart Validation
