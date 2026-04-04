@@ -50,6 +50,11 @@ const ERROR_PATTERNS = {
     /\btpm\b/i,
     "tokens per minute",
     "tokens per day",
+    // Chinese provider rate-limit messages (e.g. MiniMax error 2062)
+    "速率限制",
+    "请求量较高",
+    "请稍后重试",
+    /\(2062\)/,
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,

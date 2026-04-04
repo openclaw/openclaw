@@ -1217,8 +1217,23 @@ export function isFailoverErrorMessage(raw: string): boolean {
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
-  if (!msg || msg.stopReason !== "error") {
+  if (!msg) {
     return false;
   }
-  return isFailoverErrorMessage(msg.errorMessage ?? "");
+  if (msg.stopReason === "error") {
+    return isFailoverErrorMessage(msg.errorMessage ?? "");
+  }
+  // Some providers (e.g. MiniMax) return rate-limit/overload errors as regular
+  // text responses (stopReason=end_turn) instead of API errors. Detect short
+  // error-like text that matches failover patterns to trigger fallback.
+  if (Array.isArray(msg.content)) {
+    const text = msg.content
+      .map((b) => (b && typeof b === "object" && "text" in b && typeof b.text === "string" ? b.text : ""))
+      .join("")
+      .trim();
+    if (text && text.length < 500 && (isRateLimitErrorMessage(text) || isOverloadedErrorMessage(text))) {
+      return true;
+    }
+  }
+  return false;
 }
