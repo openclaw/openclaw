@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   loadModelCatalogMock,
   getModelRefStatusMock,
+  normalizeProviderIdMock,
   normalizeModelSelectionMock,
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
@@ -10,6 +11,9 @@ const {
 } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
+  normalizeProviderIdMock: vi.fn((value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "",
+  ),
   normalizeModelSelectionMock: vi.fn((value: unknown) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
   ),
@@ -24,6 +28,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/model-selection.js", () => ({
   getModelRefStatus: getModelRefStatusMock,
+  normalizeProviderId: normalizeProviderIdMock,
   normalizeModelSelection: normalizeModelSelectionMock,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,

@@ -1,4 +1,4 @@
-import { channelTestInclude } from "./vitest.channel-paths.mjs";
+import { coreChannelTestInclude } from "./vitest.channel-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -9,9 +9,10 @@ export function loadIncludePatternsFromEnv(
 }
 
 export function createChannelsVitestConfig(env?: Record<string, string | undefined>) {
-  return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? channelTestInclude, {
+  return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? coreChannelTestInclude, {
     env,
-    exclude: ["src/gateway/**"],
+    exclude: ["src/gateway/**", "src/channels/plugins/contracts/**"],
+    name: "channels",
     passWithNoTests: true,
   });
 }

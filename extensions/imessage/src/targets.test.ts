@@ -1,12 +1,16 @@
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
+import { imessagePlugin } from "./channel.js";
+import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
 import { probeIMessage } from "./probe.js";
+import { imessageDmPolicy } from "./setup-core.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 import {
   formatIMessageChatTarget,
@@ -17,10 +21,12 @@ import {
   parseIMessageTarget,
 } from "./targets.js";
 
+const getIMessageSetupStatus = createPluginSetupWizardStatus(imessagePlugin);
+
 const spawnMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: (...args: unknown[]) => spawnMock(...args),
@@ -178,6 +184,157 @@ describe("parseIMessageAllowFromEntries", () => {
       error: "Invalid chat_identifier entry",
     });
   });
+
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      imessageDmPolicy.getCurrent(
+        {
+          channels: {
+            imessage: {
+              dmPolicy: "disabled",
+              accounts: {
+                work: {
+                  cliPath: "imsg",
+                  dmPolicy: "allowlist",
+                },
+              },
+            },
+          },
+        },
+        "work",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(imessageDmPolicy.resolveConfigKeys?.({ channels: { imessage: {} } }, "work")).toEqual({
+      policyKey: "channels.imessage.accounts.work.dmPolicy",
+      allowFromKey: "channels.imessage.accounts.work.allowFrom",
+    });
+  });
+
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
+    const next = imessageDmPolicy.setPolicy(
+      {
+        channels: {
+          imessage: {
+            allowFrom: ["+15555550123"],
+            accounts: {
+              work: {
+                cliPath: "imsg",
+              },
+            },
+          },
+        },
+      },
+      "open",
+      "work",
+    );
+
+    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
+    expect(next.channels?.imessage?.allowFrom).toBeUndefined();
+    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
+  });
+
+  it("uses the configured default account for omitted-account DM policy reads, keys, and writes", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          allowFrom: ["+15555550123"],
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              cliPath: "imsg",
+              dmPolicy: "allowlist" as const,
+              allowFrom: ["chat_id:123"],
+            },
+          },
+        },
+      },
+    };
+
+    expect(imessageDmPolicy.getCurrent(cfg)).toBe("allowlist");
+    expect(imessageDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.imessage.accounts.work.dmPolicy",
+      allowFromKey: "channels.imessage.accounts.work.allowFrom",
+    });
+
+    const next = imessageDmPolicy.setPolicy(cfg, "open");
+
+    expect(next.channels?.imessage?.dmPolicy).toBeUndefined();
+    expect(next.channels?.imessage?.allowFrom).toBeUndefined();
+    expect(next.channels?.imessage?.accounts?.work?.dmPolicy).toBe("open");
+    expect(next.channels?.imessage?.accounts?.work?.allowFrom).toEqual(["chat_id:123", "*"]);
+  });
+});
+
+describe("imessage setup status", () => {
+  it("does not inherit configured state from a sibling account", async () => {
+    const result = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            accounts: {
+              default: {
+                cliPath: "/usr/local/bin/imsg",
+              },
+              work: {},
+            },
+          },
+        },
+      },
+      accountOverrides: {
+        imessage: "work",
+      },
+    });
+
+    expect(result.configured).toBe(false);
+    expect(result.statusLines).toContain("iMessage: needs setup");
+  });
+
+  it("uses configured defaultAccount for omitted setup status cliPath", async () => {
+    const status = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "/tmp/root-imsg",
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-imsg",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain("imsg: missing (/tmp/work-imsg)");
+  });
+
+  it("does not inherit configured state from a sibling when defaultAccount is named", async () => {
+    const status = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            defaultAccount: "work",
+            accounts: {
+              default: {
+                cliPath: "/usr/local/bin/imsg",
+              },
+              work: {},
+            },
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.configured).toBe(false);
+    expect(status.statusLines).toContain("iMessage: needs setup");
+  });
 });
 
 describe("probeIMessage", () => {
@@ -206,5 +363,62 @@ describe("probeIMessage", () => {
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("status probe uses account-scoped cliPath and dbPath", async () => {
+    const probeAccount = imessagePlugin.status?.probeAccount;
+    if (!probeAccount) {
+      throw new Error("imessage status.probeAccount unavailable");
+    }
+
+    const probeSpy = vi.spyOn(channelRuntimeModule, "probeIMessageAccount").mockResolvedValue({
+      ok: true,
+      cliPath: "imsg-work",
+      dbPath: "/tmp/work-db",
+    } as Awaited<ReturnType<typeof channelRuntimeModule.probeIMessageAccount>>);
+
+    const cfg = {
+      channels: {
+        imessage: {
+          cliPath: "imsg-root",
+          dbPath: "/tmp/root-db",
+          accounts: {
+            work: {
+              cliPath: "imsg-work",
+              dbPath: "/tmp/work-db",
+            },
+          },
+        },
+      },
+    } as const;
+    const account = imessagePlugin.config.resolveAccount(cfg, "work");
+
+    await probeAccount({ account, cfg, timeoutMs: 2500 } as never);
+
+    expect(probeSpy).toHaveBeenCalledWith({
+      timeoutMs: 2500,
+      cliPath: "imsg-work",
+      dbPath: "/tmp/work-db",
+    });
+  });
+
+  it("setup status lines use the selected account cliPath", async () => {
+    const status = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "/tmp/root-imsg",
+            accounts: {
+              work: {
+                cliPath: "/tmp/work-imsg",
+              },
+            },
+          },
+        },
+      } as never,
+      accountOverrides: { imessage: "work" },
+    });
+
+    expect(status.statusLines).toContain("imsg: missing (/tmp/work-imsg)");
   });
 });

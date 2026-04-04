@@ -1,5 +1,5 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test/helpers/plugins/fetch-mock.js";
 import { createXSearchTool } from "./x-search.js";
 
 function installXSearchFetch(payload?: Record<string, unknown>) {
@@ -228,6 +228,44 @@ describe("xai x_search tool", () => {
     const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
     expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
       "Bearer xai-legacy-key",
+    );
+  });
+
+  it("uses migrated runtime auth when the source config still carries legacy x_search apiKey", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "legacy-x-search-key", // pragma: allowlist secret
+              enabled: true,
+            } as Record<string, unknown>,
+          },
+        },
+      },
+      runtimeConfig: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "migrated-runtime-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:migrated-runtime-key", {
+      query: "migrated runtime auth",
+    });
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer migrated-runtime-key",
     );
   });
 

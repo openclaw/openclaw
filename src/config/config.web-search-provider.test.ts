@@ -91,10 +91,83 @@ vi.mock("../plugins/web-search-providers.js", () => {
   };
 });
 
+const secretInputSchema = {
+  oneOf: [
+    { type: "string" },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        source: { type: "string" },
+        provider: { type: "string" },
+        id: { type: "string" },
+      },
+      required: ["source", "provider", "id"],
+    },
+  ],
+};
+
+function buildWebSearchPluginSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      webSearch: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          apiKey: secretInputSchema,
+          baseUrl: secretInputSchema,
+          model: { type: "string" },
+        },
+      },
+    },
+  };
+}
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        channels: [],
+        providers: [],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        rootDir: "/tmp/plugins/brave",
+        source: "test",
+        manifestPath: "/tmp/plugins/brave/openclaw.plugin.json",
+        schemaCacheKey: "test:brave",
+        configSchema: buildWebSearchPluginSchema(),
+      },
+      ...["firecrawl", "google", "moonshot", "perplexity", "searxng", "tavily", "xai"].map(
+        (id) => ({
+          id,
+          origin: "bundled",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: `/tmp/plugins/${id}`,
+          source: "test",
+          manifestPath: `/tmp/plugins/${id}/openclaw.plugin.json`,
+          schemaCacheKey: `test:${id}`,
+          configSchema: buildWebSearchPluginSchema(),
+        }),
+      ),
+    ],
+    diagnostics: [],
+  }),
+}));
+
 let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
 let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
 
 beforeAll(async () => {
+  vi.resetModules();
   ({ validateConfigObjectWithPlugins } = await import("./config.js"));
   ({
     __testing: { resolveSearchProvider },
@@ -102,16 +175,25 @@ beforeAll(async () => {
 });
 
 describe("web search provider config", () => {
-  it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
+  it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
         allow: ["bluebubbles", "memory-core"],
+        entries: {
+          brave: {
+            config: {
+              webSearch: {
+                apiKey: "test-brave-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
       },
       tools: {
         web: {
           search: {
             enabled: true,
-            apiKey: "test-brave-key", // pragma: allowlist secret
+            provider: "brave",
           },
         },
       },
@@ -231,7 +313,7 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("rejects legacy scoped provider config for bundled providers", () => {
+  it("accepts legacy scoped provider config for bundled providers via auto-migration", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
         web: {
@@ -245,7 +327,21 @@ describe("web search provider config", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.config.tools?.web?.search).toEqual({
+      provider: "gemini",
+    });
+    expect(res.config.plugins?.entries?.google).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "legacy-key",
+        },
+      },
+    });
   });
 
   it("accepts gemini provider with no extra config", () => {
@@ -256,32 +352,6 @@ describe("web search provider config", () => {
     );
 
     expect(res.ok).toBe(true);
-  });
-
-  it("accepts brave llm-context mode config", () => {
-    const res = validateConfigObjectWithPlugins(
-      buildWebSearchProviderConfig({
-        provider: "brave",
-        providerConfig: {
-          mode: "llm-context",
-        },
-      }),
-    );
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects invalid brave mode config values", () => {
-    const res = validateConfigObjectWithPlugins(
-      buildWebSearchProviderConfig({
-        provider: "brave",
-        providerConfig: {
-          mode: "invalid-mode",
-        },
-      }),
-    );
-
-    expect(res.ok).toBe(false);
   });
 });
 

@@ -16,7 +16,7 @@ For the short guide, see [Onboarding (CLI)](/start/wizard).
 
 Local mode (default) walks you through:
 
-- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Ollama, Moonshot, and AI Gateway options)
+- Model and auth setup (OpenAI Code subscription OAuth, Anthropic API key or setup token, plus MiniMax, GLM, Ollama, Moonshot, StepFun, and AI Gateway options)
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
@@ -142,6 +142,8 @@ What you set:
   </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.
+    Reused Codex CLI credentials stay managed by Codex CLI; OpenClaw re-reads
+    that source on expiry instead of rotating the copied refresh token itself.
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
@@ -176,6 +178,11 @@ What you set:
   <Accordion title="MiniMax">
     Config is auto-written. Hosted default is `MiniMax-M2.7`.
     More detail: [MiniMax](/providers/minimax).
+  </Accordion>
+  <Accordion title="StepFun">
+    Config is auto-written for StepFun standard or Step Plan on China or global endpoints.
+    Standard currently includes `step-3.5-flash`, and Step Plan also includes `step-3.5-flash-2603`.
+    More detail: [StepFun](/providers/stepfun).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
     Prompts for `SYNTHETIC_API_KEY`.

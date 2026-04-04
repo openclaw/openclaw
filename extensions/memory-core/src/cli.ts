@@ -4,7 +4,16 @@ import {
   formatHelpExamples,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
-import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
+import type {
+  MemoryCommandOptions,
+  MemoryPromoteCommandOptions,
+  MemorySearchCommandOptions,
+} from "./cli.types.js";
+import {
+  DEFAULT_PROMOTION_MIN_RECALL_COUNT,
+  DEFAULT_PROMOTION_MIN_SCORE,
+  DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+} from "./short-term-promotion.js";
 
 type MemoryCliRuntime = typeof import("./cli.runtime.js");
 
@@ -30,6 +39,11 @@ async function runMemorySearch(queryArg: string | undefined, opts: MemorySearchC
   await runtime.runMemorySearch(queryArg, opts);
 }
 
+async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryPromote(opts);
+}
+
 export function registerMemoryCli(program: Command) {
   const memory = program
     .command("memory")
@@ -45,6 +59,14 @@ export function registerMemoryCli(program: Command) {
           [
             'openclaw memory search --query "deployment" --max-results 20',
             "Limit results for focused troubleshooting.",
+          ],
+          [
+            `openclaw memory promote --limit 10 --min-score ${DEFAULT_PROMOTION_MIN_SCORE}`,
+            "Review weighted short-term candidates for long-term memory.",
+          ],
+          [
+            "openclaw memory promote --apply",
+            "Append top-ranked short-term candidates into MEMORY.md.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
@@ -83,5 +105,32 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
       await runMemorySearch(queryArg, opts);
+    });
+
+  memory
+    .command("promote")
+    .description("Rank short-term recalls and optionally append top entries to MEMORY.md")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--limit <n>", "Max candidates", (value: string) => Number(value))
+    .option(
+      "--min-score <n>",
+      `Minimum weighted score (default: ${DEFAULT_PROMOTION_MIN_SCORE})`,
+      (value: string) => Number(value),
+    )
+    .option(
+      "--min-recall-count <n>",
+      `Minimum recall count (default: ${DEFAULT_PROMOTION_MIN_RECALL_COUNT})`,
+      (value: string) => Number(value),
+    )
+    .option(
+      "--min-unique-queries <n>",
+      `Minimum distinct query count (default: ${DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES})`,
+      (value: string) => Number(value),
+    )
+    .option("--apply", "Append selected candidates to MEMORY.md", false)
+    .option("--include-promoted", "Include already promoted candidates", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: MemoryPromoteCommandOptions) => {
+      await runMemoryPromote(opts);
     });
 }

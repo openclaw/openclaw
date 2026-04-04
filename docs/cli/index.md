@@ -46,7 +46,6 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`browser`](/cli/browser)
 - [`cron`](/cli/cron)
 - [`tasks`](/cli/index#tasks)
-- [`flows`](/cli/flows)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
 - [`hooks`](/cli/hooks)
@@ -173,10 +172,7 @@ openclaw [--dev] [--profile <name>] <command>
     show
     notify
     cancel
-  flows
-    list
-    show
-    cancel
+    flow list|show|cancel
   gateway
     call
     health
@@ -312,7 +308,7 @@ Manage extensions and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
 - `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).
-- `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`).
+- `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`; use `--force` to overwrite an existing install target).
 - `openclaw plugins marketplace list <marketplace>` — list marketplace entries before install.
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
 - `openclaw plugins doctor` — report plugin load errors.
@@ -570,7 +566,7 @@ Subcommands:
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Gmail Pub/Sub hook setup + runner. See [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration).
 
 Subcommands:
 
@@ -814,6 +810,9 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
+- `tasks flow list` — list active and recent Task Flow flows
+- `tasks flow show <lookup>` — inspect a flow by id or lookup key
+- `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
 
 ## Gateway
 
@@ -932,9 +931,13 @@ openclaw models auth setup-token --provider anthropic
 openclaw models status
 ```
 
-Policy note: this is technical compatibility. Anthropic has blocked some
-subscription usage outside Claude Code in the past; verify current Anthropic
-terms before relying on setup-token in production.
+Billing note: Anthropic changed third-party harness billing on **April 4, 2026
+at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no
+longer cover OpenClaw, and setup-token usage in OpenClaw now requires **Extra
+Usage** billed separately from the subscription. For production, prefer an
+Anthropic API key or another supported subscription-style provider such as
+OpenAI Codex, Alibaba Cloud Model Studio Coding Plan, MiniMax Coding Plan, or
+Z.AI / GLM Coding Plan.
 
 Anthropic Claude CLI migration:
 

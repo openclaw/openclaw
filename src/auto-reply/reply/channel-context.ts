@@ -1,4 +1,7 @@
-type DiscordSurfaceParams = {
+import type { OpenClawConfig } from "../../config/config.js";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+
+type CommandSurfaceParams = {
   ctx: {
     OriginatingChannel?: string;
     Surface?: string;
@@ -10,25 +13,20 @@ type DiscordSurfaceParams = {
   };
 };
 
-type DiscordAccountParams = {
+type ChannelAccountParams = {
+  cfg: OpenClawConfig;
   ctx: {
+    OriginatingChannel?: string;
+    Surface?: string;
+    Provider?: string;
     AccountId?: string;
+  };
+  command: {
+    channel?: string;
   };
 };
 
-export function isDiscordSurface(params: DiscordSurfaceParams): boolean {
-  return resolveCommandSurfaceChannel(params) === "discord";
-}
-
-export function isTelegramSurface(params: DiscordSurfaceParams): boolean {
-  return resolveCommandSurfaceChannel(params) === "telegram";
-}
-
-export function isMatrixSurface(params: DiscordSurfaceParams): boolean {
-  return resolveCommandSurfaceChannel(params) === "matrix";
-}
-
-export function resolveCommandSurfaceChannel(params: DiscordSurfaceParams): string {
+export function resolveCommandSurfaceChannel(params: CommandSurfaceParams): string {
   const channel =
     params.ctx.OriginatingChannel ??
     params.command.channel ??
@@ -39,11 +37,15 @@ export function resolveCommandSurfaceChannel(params: DiscordSurfaceParams): stri
     .toLowerCase();
 }
 
-export function resolveDiscordAccountId(params: DiscordAccountParams): string {
-  return resolveChannelAccountId(params);
-}
-
-export function resolveChannelAccountId(params: DiscordAccountParams): string {
+export function resolveChannelAccountId(params: ChannelAccountParams): string {
   const accountId = typeof params.ctx.AccountId === "string" ? params.ctx.AccountId.trim() : "";
-  return accountId || "default";
+  if (accountId) {
+    return accountId;
+  }
+  const channel = resolveCommandSurfaceChannel(params);
+  const plugin = getActivePluginChannelRegistry()?.channels.find(
+    (entry) => entry.plugin.id === channel,
+  )?.plugin;
+  const configuredDefault = plugin?.config.defaultAccountId?.(params.cfg)?.trim();
+  return configuredDefault || "default";
 }

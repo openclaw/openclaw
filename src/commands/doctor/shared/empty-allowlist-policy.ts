@@ -1,6 +1,7 @@
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
+import { shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning } from "./channel-doctor.js";
 
 type CollectEmptyAllowlistPolicyWarningsParams = {
   account: DoctorAccountRecord;
@@ -61,7 +62,17 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
     return warnings;
   }
 
-  if (params.channelName === "telegram") {
+  if (
+    params.channelName &&
+    shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning({
+      account: params.account,
+      channelName: params.channelName,
+      dmPolicy,
+      effectiveAllowFrom,
+      parent: params.parent,
+      prefix: params.prefix,
+    })
+  ) {
     return warnings;
   }
 

@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "openclaw/plugin-sdk/testing";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+} from "../../../src/cli/test-runtime-capture.js";
+import { recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -20,30 +21,15 @@ const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   })),
 );
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => {
+vi.mock("./cli.host.runtime.js", async () => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveDefaultAgentId,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>();
-  return {
-    ...actual,
-    resolveCommandSecretRefsViaGateway,
-  };
-});
-
-vi.mock("./memory/index.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./memory/index.js")>();
+    await vi.importActual<typeof import("./cli.host.runtime.js")>("./cli.host.runtime.js");
   return {
     ...actual,
     getMemorySearchManager,
+    loadConfig,
+    resolveCommandSecretRefsViaGateway,
+    resolveDefaultAgentId,
   };
 });
 
@@ -121,6 +107,25 @@ describe("memory cli", () => {
     );
   }
 
+  async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+    const startedAt = Date.now();
+    let lastError: unknown;
+    while (Date.now() - startedAt < timeoutMs) {
+      try {
+        return await task();
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+      }
+    }
+    if (lastError instanceof Error) {
+      throw lastError;
+    }
+    throw new Error("Timed out waiting for async test condition");
+  }
+
   async function runMemoryCli(args: string[]) {
     const program = new Command();
     program.name("test");
@@ -159,6 +164,15 @@ describe("memory cli", () => {
       await run(dbPath);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-promote-"));
+    try {
+      await run(workspaceDir);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   }
 
@@ -267,6 +281,8 @@ describe("memory cli", () => {
     expect(helpText).toContain("Quick search using positional query.");
     expect(helpText).toContain('openclaw memory search --query "deployment" --max-results 20');
     expect(helpText).toContain("Limit results for focused troubleshooting.");
+    expect(helpText).toContain("openclaw memory promote --apply");
+    expect(helpText).toContain("Append top-ranked short-term candidates into MEMORY.md.");
   });
 
   it("prints vector error when unavailable", async () => {
@@ -594,5 +610,148 @@ describe("memory cli", () => {
     expect(Array.isArray(payload.results)).toBe(true);
     expect(payload.results).toHaveLength(1);
     expect(close).toHaveBeenCalled();
+  });
+
+  it("records short-term recall entries from memory search hits", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const search = vi.fn(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ]);
+      mockManager({
+        search,
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
+      const store = JSON.parse(storeRaw) as {
+        entries?: Record<string, { path: string; recallCount: number }>;
+      };
+      const entries = Object.values(store.entries ?? {});
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        recallCount: 1,
+      });
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("prints no candidates when promote has no short-term recall data", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["promote"]);
+
+      expect(log).toHaveBeenCalledWith("No short-term recall candidates.");
+      expect(close).toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
+    });
+  });
+
+  it("prints promote candidates as json", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router notes",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 4,
+            endLine: 8,
+            score: 0.86,
+            snippet: "Configured VLAN 10 for IoT on router",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--json",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const payload = firstWrittenJsonArg<{ candidates: unknown[] }>(writeJson);
+      expect(payload).not.toBeNull();
+      if (!payload) {
+        throw new Error("expected json payload");
+      }
+      expect(Array.isArray(payload.candidates)).toBe(true);
+      expect(payload.candidates).toHaveLength(1);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("applies top promote candidates into MEMORY.md", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "network setup",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 10,
+            endLine: 14,
+            score: 0.91,
+            snippet: "Gateway host uses local mode and binds loopback port 18789",
+            source: "memory",
+          },
+        ],
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--apply",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "0",
+      ]);
+
+      const memoryPath = path.join(workspaceDir, "MEMORY.md");
+      const memoryText = await fs.readFile(memoryPath, "utf-8");
+      expect(memoryText).toContain("Promoted From Short-Term Memory");
+      expect(memoryText).toContain("memory/2026-04-01.md:10-14");
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Promoted 1 candidate(s) to"));
+      expect(close).toHaveBeenCalled();
+    });
   });
 });

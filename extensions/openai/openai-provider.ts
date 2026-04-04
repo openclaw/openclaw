@@ -9,24 +9,26 @@ import {
   normalizeProviderId,
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  createOpenAIAttributionHeadersWrapper,
-  createOpenAIDefaultTransportWrapper,
-} from "openclaw/plugin-sdk/provider-stream";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import { buildOpenAIReplayPolicy } from "./replay-policy.js";
 import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
   isOpenAIApiBaseUrl,
   matchesExactOrPrefix,
 } from "./shared.js";
+import { wrapAzureOpenAIProviderStream, wrapOpenAIProviderStream } from "./stream-hooks.js";
+import {
+  resolveOpenAITransportTurnState,
+  resolveOpenAIWebSocketSessionPolicy,
+} from "./transport-policy.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
-const OPENAI_GPT_54_CONTEXT_TOKENS = 272_000;
+const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
@@ -202,6 +204,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
   return {
     id: PROVIDER_ID,
     label: "OpenAI",
+    hookAliases: ["azure-openai", "azure-openai-responses"],
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],
     auth: [
@@ -237,11 +240,28 @@ export function buildOpenAIProvider(): ProviderPlugin {
       shouldUseOpenAIResponsesTransport({ provider, api, baseUrl })
         ? { api: "openai-responses", baseUrl }
         : undefined,
-    capabilities: {
-      providerFamily: "openai",
+    buildReplayPolicy: (ctx) => buildOpenAIReplayPolicy(ctx),
+    prepareExtraParams: (ctx) => {
+      const transport = ctx.extraParams?.transport;
+      const hasSupportedTransport =
+        transport === "auto" || transport === "sse" || transport === "websocket";
+      const hasExplicitWarmup = typeof ctx.extraParams?.openaiWsWarmup === "boolean";
+      if (hasSupportedTransport && hasExplicitWarmup) {
+        return ctx.extraParams;
+      }
+      return {
+        ...ctx.extraParams,
+        ...(hasSupportedTransport ? {} : { transport: "auto" }),
+        ...(hasExplicitWarmup ? {} : { openaiWsWarmup: true }),
+      };
     },
     wrapStreamFn: (ctx) =>
-      createOpenAIAttributionHeadersWrapper(createOpenAIDefaultTransportWrapper(ctx.streamFn)),
+      normalizeProviderId(ctx.provider) === PROVIDER_ID
+        ? wrapOpenAIProviderStream(ctx)
+        : wrapAzureOpenAIProviderStream(ctx),
+    resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
+    resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
+    resolveReasoningOutputMode: () => "native",
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {

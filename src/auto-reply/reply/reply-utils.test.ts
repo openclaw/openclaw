@@ -189,106 +189,45 @@ describe("normalizeReplyPayload", () => {
     expect(result!.interactive).toBeUndefined();
   });
 
-  it("applies responsePrefix before compiling Slack directives into shared interactive blocks", () => {
+  it("applies responsePrefix before channel-owned transforms run", () => {
     const result = normalizeReplyPayload(
       {
         text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
       },
-      { responsePrefix: "[bot]", enableSlackInteractiveReplies: true },
+      { responsePrefix: "[bot]" },
     );
 
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("[bot] hello");
-    expect(result!.interactive).toEqual({
-      blocks: [
-        {
-          type: "text",
-          text: "[bot] hello",
-        },
-        {
-          type: "buttons",
-          buttons: [
-            {
-              label: "Retry",
-              value: "retry",
-            },
-            {
-              label: "Ignore",
-              value: "ignore",
-            },
-          ],
-        },
-      ],
-    });
+    expect(result!.text).toBe("[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
+    expect(result!.interactive).toBeUndefined();
   });
 
-  it("compiles simple trailing Options lines into Slack buttons when interactive replies are enabled", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "Current verbose level: off.\nOptions: on, full, off.",
-      },
-      { enableSlackInteractiveReplies: true },
-    );
+  it("leaves trailing Options lines for channel-owned transforms", () => {
+    const result = normalizeReplyPayload({
+      text: "Current verbose level: off.\nOptions: on, full, off.",
+    });
 
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("Current verbose level: off.");
-    expect(result!.interactive).toEqual({
-      blocks: [
-        {
-          type: "text",
-          text: "Current verbose level: off.",
-        },
-        {
-          type: "buttons",
-          buttons: [
-            { label: "on", value: "on" },
-            { label: "full", value: "full" },
-            { label: "off", value: "off" },
-          ],
-        },
-      ],
-    });
+    expect(result!.text).toBe("Current verbose level: off.\nOptions: on, full, off.");
+    expect(result!.interactive).toBeUndefined();
   });
 
-  it("uses a Slack select when simple Options lines exceed the button row size", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
-      },
-      { enableSlackInteractiveReplies: true },
-    );
+  it("leaves larger Options lists for channel-owned transforms", () => {
+    const result = normalizeReplyPayload({
+      text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+    });
 
     expect(result).not.toBeNull();
-    expect(result!.text).toBe("Choose a reasoning level.");
-    expect(result!.interactive).toEqual({
-      blocks: [
-        {
-          type: "text",
-          text: "Choose a reasoning level.",
-        },
-        {
-          type: "select",
-          placeholder: "Choose an option",
-          options: [
-            { label: "off", value: "off" },
-            { label: "minimal", value: "minimal" },
-            { label: "low", value: "low" },
-            { label: "medium", value: "medium" },
-            { label: "high", value: "high" },
-            { label: "adaptive", value: "adaptive" },
-          ],
-        },
-      ],
-    });
+    expect(result!.text).toBe(
+      "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+    );
+    expect(result!.interactive).toBeUndefined();
   });
 
   it("leaves complex Options lines as plain text", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
-      },
-      { enableSlackInteractiveReplies: true },
-    );
+    const result = normalizeReplyPayload({
+      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+    });
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe(
@@ -822,6 +761,50 @@ describe("block reply coalescer", () => {
     await coalescer.flush({ force: true });
 
     expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("does not coalesce reasoning blocks into visible reply text", async () => {
+    const flushes: Array<{ text?: string; isReasoning?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isReasoning: payload.isReasoning,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    coalescer.enqueue({ text: "Visible answer" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Reasoning:\n_hidden_", isReasoning: true },
+      { text: "Visible answer", isReasoning: undefined },
+    ]);
+    coalescer.stop();
+  });
+
+  it("preserves compaction notice markers across flushes", async () => {
+    const flushes: Array<{ text?: string; isCompactionNotice?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isCompactionNotice: payload.isCompactionNotice,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Compacting context...", isCompactionNotice: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([{ text: "Compacting context...", isCompactionNotice: true }]);
     coalescer.stop();
   });
 

@@ -32,6 +32,7 @@ native OpenClaw plugin registers against one or more capability types:
 | Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
 | CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
 | Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
+| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | `openai`                  |
 | Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
 | Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
 | Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
@@ -196,6 +197,12 @@ We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled
 plugins should import their own local runtime code directly from their
 extension-owned modules.
 
+The same boundary applies to provider-named SDK seams in general: core should
+not import channel-specific convenience barrels for Slack, Discord, Signal,
+WhatsApp, or similar extensions. If core needs a behavior, either consume the
+bundled plugin's own `api.ts` / `runtime-api.ts` barrel or promote the need
+into a narrow generic capability in the shared SDK.
+
 For polls specifically, there are two execution paths:
 
 - `outbound.sendPoll` is the shared baseline for channels that fit the common
@@ -233,8 +240,9 @@ Examples:
 - the bundled `minimax`, `mistral`, `moonshot`, and `zai` plugins own their
   media-understanding backends
 - the `voice-call` plugin is a feature plugin: it owns call transport, tools,
-  CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
-  inventing a second speech stack
+  CLI, routes, and Twilio media-stream bridging, but it consumes shared speech
+  plus realtime-transcription and realtime-voice capabilities instead of
+  importing vendor plugins directly
 
 The intended end state is:
 
@@ -998,8 +1006,10 @@ authoring plugins:
   contract on the plugin. Core then reads approval auth, delivery, render, and
   native-routing behavior through that one capability instead of mixing
   approval behavior into unrelated plugin fields.
-- `openclaw/plugin-sdk/channel-runtime` remains only as a compatibility shim.
-  New code should import the narrower primitives instead.
+- `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
+  compatibility shim for older plugins. New code should import the narrower
+  generic primitives instead, and repo code should not add new imports of the
+  shim.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
   public entry points under a plugin package root such as `index.js`, `api.js`,

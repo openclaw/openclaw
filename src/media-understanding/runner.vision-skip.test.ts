@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -10,8 +10,10 @@ import { __testing as loaderTesting } from "../plugins/loader.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+import { withMediaFixture } from "./runner.test-utils.js";
 
-const catalog = [
+const baseCatalog = [
   {
     id: "gpt-4.1",
     name: "GPT-4.1",
@@ -19,6 +21,7 @@ const catalog = [
     input: ["text", "image"] as const,
   },
 ];
+let catalog = [...baseCatalog];
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
 
@@ -33,8 +36,6 @@ vi.mock("../agents/model-catalog.js", async () => {
 });
 
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
-let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
-let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
 let resolveAutoImageModel: typeof import("./runner.js").resolveAutoImageModel;
 let runCapability: typeof import("./runner.js").runCapability;
 
@@ -72,8 +73,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
 }
 
 describe("runCapability image skip", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     vi.doMock("../agents/model-catalog.js", async () => {
       const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(
         "../agents/model-catalog.js",
@@ -83,14 +83,14 @@ describe("runCapability image skip", () => {
         loadModelCatalog,
       };
     });
-    ({
-      buildProviderRegistry,
-      createMediaAttachmentCache,
-      normalizeMediaAttachments,
-      resolveAutoImageModel,
-      runCapability,
-    } = await import("./runner.js"));
+    ({ buildProviderRegistry, resolveAutoImageModel, runCapability } = await import("./runner.js"));
+  });
+
+  beforeEach(() => {
+    catalog = [...baseCatalog];
     loadModelCatalog.mockClear();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    vi.unstubAllEnvs();
   });
 
   it("skips image understanding when the active model supports vision", async () => {
@@ -152,5 +152,103 @@ describe("runCapability image skip", () => {
       setActivePluginRegistry(createEmptyPluginRegistry());
       vi.unstubAllEnvs();
     }
+  });
+
+  it("auto-selects configured OpenRouter image providers with a resolved model", async () => {
+    let seenModel: string | undefined;
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-openrouter",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          models: {
+            providers: {
+              openrouter: {
+                apiKey: "test-openrouter-key", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "openrouter",
+              {
+                id: "openrouter",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  seenModel = req.model;
+                  return { text: "openrouter ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(result.outputs[0]?.provider).toBe("openrouter");
+        expect(result.outputs[0]?.model).toBe("auto");
+        expect(result.outputs[0]?.text).toBe("openrouter ok");
+        expect(seenModel).toBe("auto");
+      },
+    );
+  });
+
+  it("skips configured image providers without an auto-resolvable model", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-custom-skip",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          models: {
+            providers: {
+              "custom-image": {
+                apiKey: "test-custom-key", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "custom-image",
+              {
+                id: "custom-image",
+                capabilities: ["image"],
+                describeImage: async () => ({ text: "custom ok" }),
+              },
+            ],
+          ]),
+        });
+
+        expect(result.outputs).toHaveLength(0);
+        expect(result.decision.outcome).toBe("skipped");
+        expect(result.decision.attachments).toEqual([{ attachmentIndex: 0, attempts: [] }]);
+      },
+    );
   });
 });

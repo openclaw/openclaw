@@ -52,7 +52,7 @@ export function setDiscordGuildChannelAllowlist(
     const existing = guilds[guildKey] ?? {};
     if (entry.channelKey) {
       const channels = { ...existing.channels };
-      channels[entry.channelKey] = { allow: true };
+      channels[entry.channelKey] = { enabled: true };
       guilds[guildKey] = { ...existing, channels };
     } else {
       guilds[guildKey] = existing;
@@ -108,11 +108,8 @@ export function createDiscordSetupWizardBase(handlers: {
       unconfiguredHint: "needs token",
       configuredScore: 2,
       unconfiguredScore: 1,
-      resolveConfigured: ({ cfg }) =>
-        listDiscordSetupAccountIds(cfg).some((accountId) => {
-          const account = inspectDiscordSetupAccount({ cfg, accountId });
-          return account.configured;
-        }),
+      resolveConfigured: ({ cfg, accountId }) =>
+        inspectDiscordSetupAccount({ cfg, accountId }).configured,
     }),
     credentials: [
       {

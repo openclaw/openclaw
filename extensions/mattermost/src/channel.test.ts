@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createChannelReplyPipeline } from "../runtime-api.js";
 
@@ -20,8 +20,11 @@ vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/ssrf-runtime")) as Record<
+    string,
+    unknown
+  >;
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
 
@@ -43,8 +46,8 @@ type MattermostSendTextParams = Parameters<MattermostSendText>[0];
 type MattermostSendMedia = NonNullable<NonNullable<typeof mattermostPlugin.outbound>["sendMedia"]>;
 type MattermostSendMediaParams = Parameters<MattermostSendMedia>[0];
 
-function getDescribedActions(cfg: OpenClawConfig): string[] {
-  return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
+function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
+  return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
 function requireMattermostNormalizeTarget() {
@@ -108,10 +111,12 @@ function createMattermostActionContext(
 }
 
 describe("mattermostPlugin", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ mattermostPlugin } = await import("./channel.js"));
     ({ resetMattermostReactionBotUserCacheForTests } = await import("./mattermost/reactions.js"));
+  });
+
+  beforeEach(() => {
     sendMessageMattermostMock.mockReset();
     sendMessageMattermostMock.mockResolvedValue({
       messageId: "post-1",
@@ -172,6 +177,33 @@ describe("mattermostPlugin", () => {
           chatType: "direct",
         }),
       ).toBe("off");
+    });
+
+    it("uses configured defaultAccount when accountId is omitted", () => {
+      const resolveReplyToMode = requireMattermostReplyToModeResolver();
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            defaultAccount: "alerts",
+            replyToMode: "off",
+            accounts: {
+              alerts: {
+                replyToMode: "all",
+                botToken: "alerts-token",
+                baseUrl: "https://alerts.example.com",
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveReplyToMode({
+          cfg,
+          chatType: "channel",
+        }),
+      ).toBe("all");
     });
   });
 
@@ -288,6 +320,34 @@ describe("mattermostPlugin", () => {
 
       const actions = getDescribedActions(cfg);
       expect(actions).toContain("react");
+    });
+
+    it("honors the selected Mattermost account during discovery", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { reactions: false },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { reactions: false },
+              },
+              work: {
+                enabled: true,
+                botToken: "work-token",
+                baseUrl: "https://chat.example.com",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      };
+
+      expect(getDescribedActions(cfg, "default")).toEqual(["send"]);
+      expect(getDescribedActions(cfg, "work")).toEqual(["send", "react"]);
     });
 
     it("blocks react when default account disables reactions and accountId is omitted", async () => {

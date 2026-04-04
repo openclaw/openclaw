@@ -250,6 +250,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
         "openai/gpt-5.2": { alias: "gpt" },
       },
+      skills: ["github", "weather"], // inherited by agents that omit list[].skills
       thinkingDefault: "low",
       verboseDefault: "off",
       elevatedDefault: "on",
@@ -308,12 +309,14 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       {
         id: "main",
         default: true,
+        // inherits defaults.skills -> github, weather
         thinkingDefault: "high", // per-agent thinking override
         reasoningDefault: "on", // per-agent reasoning visibility
         fastModeDefault: false, // per-agent fast mode
       },
       {
         id: "quick",
+        skills: [], // no skills for this agent
         fastModeDefault: true, // this agent always runs fast
         thinkingDefault: "off",
       },
@@ -462,6 +465,27 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
 
 ## Common patterns
 
+### Shared skill baseline with one override
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "~/.openclaw/workspace",
+      skills: ["github", "weather"],
+    },
+    list: [
+      { id: "main", default: true },
+      { id: "docs", workspace: "~/.openclaw/workspace-docs", skills: ["docs-search"] },
+    ],
+  },
+}
+```
+
+- `agents.defaults.skills` is the shared baseline.
+- `agents.list[].skills` replaces that baseline for one agent.
+- Use `skills: []` when an agent should see no skills.
+
 ### Multi-platform setup
 
 ```json5
@@ -545,9 +569,11 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
 ### Anthropic setup-token + API key, MiniMax fallback
 
 <Warning>
-Anthropic setup-token usage outside Claude Code has been restricted for some
-users in the past. Treat this as user-choice risk and verify current Anthropic
-terms before depending on subscription auth.
+Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+OpenClaw, and Anthropic setup-token traffic now requires **Extra Usage** billed
+separately from the subscription. Prefer an Anthropic API key if you want the
+clearest billing path.
 </Warning>
 
 ```json5

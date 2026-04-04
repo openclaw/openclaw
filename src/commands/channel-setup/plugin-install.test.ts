@@ -5,8 +5,8 @@ import {
   bundledPluginRootAt,
 } from "../../../test/helpers/bundled-plugin-paths.js";
 
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const existsSync = vi.fn();
   return {
     ...actual,
@@ -30,8 +30,10 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 const resolveBundledPluginSources = vi.fn();
 const getChannelPluginCatalogEntry = vi.fn();
-vi.mock("../../channels/plugins/catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../channels/plugins/catalog.js")>();
+vi.mock("../../channels/plugins/catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../../channels/plugins/catalog.js")>(
+    "../../channels/plugins/catalog.js",
+  );
   return {
     ...actual,
     getChannelPluginCatalogEntry: (...args: unknown[]) => getChannelPluginCatalogEntry(...args),
@@ -119,6 +121,7 @@ beforeEach(() => {
   applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
     config: params.config,
     changes: [],
+    autoEnabledReasons: {},
   }));
   resolveBundledPluginSources.mockReturnValue(new Map());
   getChannelPluginCatalogEntry.mockReturnValue(undefined);
@@ -378,6 +381,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         includeSetupOnlyChannelPlugins: true,
@@ -402,7 +407,11 @@ describe("ensureChannelSetupPluginInstalled", () => {
         },
       },
     } as OpenClawConfig;
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: [],
+      autoEnabledReasons: {},
+    });
 
     reloadChannelSetupPluginRegistry({
       cfg,
@@ -417,6 +426,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
       }),
     );
   });
@@ -436,6 +447,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/telegram-plugin"],
@@ -503,6 +516,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         onlyPluginIds: ["@openclaw/telegram-plugin"],
       }),
     );
@@ -523,6 +538,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/telegram-plugin"],
@@ -568,6 +585,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["custom-telegram-plugin"],
@@ -592,6 +611,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: cfg,
+        activationSourceConfig: cfg,
+        autoEnabledReasons: {},
         workspaceDir: "/tmp/openclaw-workspace",
         cache: false,
         onlyPluginIds: ["@openclaw/msteams-plugin"],

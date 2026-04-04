@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn());
 const parseStrictPositiveInteger = vi.hoisted(() => vi.fn());
@@ -15,8 +15,8 @@ vi.mock("./runtime-api.js", () => ({
   parseStrictPositiveInteger,
 }));
 
-vi.mock("./client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./client.js")>();
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
   return {
     ...actual,
     fetchMattermostUserTeams,
@@ -40,8 +40,13 @@ vi.mock("./slash-state.js", () => ({
 }));
 
 describe("mattermost monitor slash", () => {
+  let registerMattermostMonitorSlashCommands: typeof import("./monitor-slash.js").registerMattermostMonitorSlashCommands;
+
+  beforeAll(async () => {
+    ({ registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     listSkillCommandsForAgents.mockReset();
     parseStrictPositiveInteger.mockReset();
     fetchMattermostUserTeams.mockReset();
@@ -60,7 +65,6 @@ describe("mattermost monitor slash", () => {
   it("returns early when slash commands are disabled", async () => {
     resolveSlashCommandConfig.mockReturnValue({ enabled: false });
     isSlashCommandsEnabled.mockReturnValue(false);
-    const { registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js");
 
     await registerMattermostMonitorSlashCommands({
       client: {} as never,
@@ -94,8 +98,6 @@ describe("mattermost monitor slash", () => {
       log: vi.fn(),
       error: vi.fn(),
     };
-
-    const { registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js");
 
     await registerMattermostMonitorSlashCommands({
       client: {} as never,
@@ -156,8 +158,6 @@ describe("mattermost monitor slash", () => {
       log: vi.fn(),
       error: vi.fn(),
     };
-
-    const { registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js");
 
     await registerMattermostMonitorSlashCommands({
       client: {} as never,

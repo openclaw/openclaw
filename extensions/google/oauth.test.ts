@@ -279,6 +279,13 @@ describe("loginGeminiCliOAuth", () => {
     });
   }
 
+  function getFormField(body: RequestInit["body"], name: string): string | null {
+    if (!(body instanceof URLSearchParams)) {
+      throw new Error("Expected URLSearchParams body");
+    }
+    return body.get(name);
+  }
+
   type LoginGeminiCliOAuthFn = (options: {
     isRemote: boolean;
     openUrl: () => Promise<void>;
@@ -397,6 +404,61 @@ describe("loginGeminiCliOAuth", () => {
         pluginType: "GEMINI",
       },
     });
+  });
+
+  it("keeps OAuth state separate from the PKCE verifier during manual login", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = getRequestUrl(input);
+      requests.push({ url, init });
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if (url === LOAD_PROD) {
+        return responseJson({
+          currentTier: { id: "standard-tier" },
+          cloudaicompanionProject: { id: "prod-project" },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const { authUrl } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    const authState = new URL(authUrl).searchParams.get("state");
+    expect(authState).toBeTruthy();
+
+    const tokenRequest = requests.find((request) => request.url === TOKEN_URL);
+    expect(tokenRequest).toBeDefined();
+    const codeVerifier = getFormField(tokenRequest?.init?.body, "code_verifier");
+    expect(codeVerifier).toBeTruthy();
+    expect(codeVerifier).not.toBe(authState);
+  });
+
+  it("rejects manual callback input when the returned state does not match", async () => {
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+
+    await expect(
+      loginGeminiCliOAuth({
+        isRemote: true,
+        openUrl: async () => {},
+        log: () => {},
+        note: async () => {},
+        prompt: async () =>
+          "http://localhost:8085/oauth2callback?code=oauth-code&state=wrong-state",
+        progress: { update: () => {}, stop: () => {} },
+      }),
+    ).rejects.toThrow("OAuth state mismatch - please try again");
   });
 
   it("falls back to GOOGLE_CLOUD_PROJECT when all loadCodeAssist endpoints fail", async () => {

@@ -20,9 +20,14 @@ export {
 } from "../infra/exec-approval-reply.js";
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 export {
+  createChannelApproverDmTargetResolver,
+  createChannelNativeOriginTargetResolver,
+} from "./approval-native-helpers.js";
+export {
   doesApprovalRequestMatchChannelAccount,
   resolveApprovalRequestOriginTarget,
   resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
   resolveApprovalRequestSessionTarget,
   resolveExecApprovalSessionTarget,
   type ExecApprovalSessionTarget,
@@ -40,12 +45,9 @@ export {
 export { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
 export {
   createChannelExecApprovalProfile,
+  isChannelExecApprovalClientEnabledFromConfig,
   isChannelExecApprovalTargetRecipient,
 } from "./approval-client-helpers.js";
-export {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
-} from "./approval-native-helpers.js";
 export { createChannelNativeApprovalRuntime } from "../infra/approval-native-runtime.js";
 export {
   createApproverRestrictedNativeApprovalAdapter,

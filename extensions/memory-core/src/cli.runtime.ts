@@ -2,34 +2,40 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   colorize,
   defaultRuntime,
   formatErrorMessage,
+  getMemorySearchManager,
   isRich,
+  listMemoryFiles,
+  loadConfig,
+  normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
+  resolveDefaultAgentId,
+  resolveSessionTranscriptsDirForAgent,
+  resolveStateDir,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
   theme,
+  type OpenClawConfig,
   withManager,
   withProgress,
   withProgressTotals,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+} from "./cli.host.runtime.js";
+import type {
+  MemoryCommandOptions,
+  MemoryPromoteCommandOptions,
+  MemorySearchCommandOptions,
+} from "./cli.types.js";
 import {
-  loadConfig,
-  resolveDefaultAgentId,
-  resolveSessionTranscriptsDirForAgent,
-  resolveStateDir,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import {
-  listMemoryFiles,
-  normalizeExtraMemoryPaths,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
-import { getMemorySearchManager } from "./memory/index.js";
+  applyShortTermPromotions,
+  recordShortTermRecalls,
+  rankShortTermPromotionCandidates,
+  resolveShortTermRecallStorePath,
+} from "./short-term-promotion.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
@@ -750,6 +756,17 @@ export async function runMemorySearch(
         process.exitCode = 1;
         return;
       }
+      const workspaceDir =
+        typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
+          ? manager.status().workspaceDir
+          : undefined;
+      void recordShortTermRecalls({
+        workspaceDir,
+        query,
+        results,
+      }).catch(() => {
+        // Recall tracking is best-effort and must not block normal search results.
+      });
       if (opts.json) {
         defaultRuntime.writeJson({ results });
         return;
@@ -770,6 +787,130 @@ export async function runMemorySearch(
         );
         lines.push(colorize(rich, theme.muted, result.snippet));
         lines.push("");
+      }
+      defaultRuntime.log(lines.join("\n").trim());
+    },
+  });
+}
+
+export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentId = resolveAgent(cfg, opts.agent);
+
+  await withMemoryManagerForAgent({
+    cfg,
+    agentId,
+    purpose: "status",
+    run: async (manager) => {
+      const status = manager.status();
+      const workspaceDir = status.workspaceDir?.trim();
+      if (!workspaceDir) {
+        defaultRuntime.error("Memory promote requires a resolvable workspace directory.");
+        process.exitCode = 1;
+        return;
+      }
+
+      let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
+      try {
+        candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          limit: opts.limit,
+          minScore: opts.minScore,
+          minRecallCount: opts.minRecallCount,
+          minUniqueQueries: opts.minUniqueQueries,
+          includePromoted: Boolean(opts.includePromoted),
+        });
+      } catch (err) {
+        defaultRuntime.error(`Memory promote ranking failed: ${formatErrorMessage(err)}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let applyResult: Awaited<ReturnType<typeof applyShortTermPromotions>> | undefined;
+      if (opts.apply) {
+        try {
+          applyResult = await applyShortTermPromotions({
+            workspaceDir,
+            candidates,
+            limit: opts.limit,
+            minScore: opts.minScore,
+            minRecallCount: opts.minRecallCount,
+            minUniqueQueries: opts.minUniqueQueries,
+          });
+        } catch (err) {
+          defaultRuntime.error(`Memory promote apply failed: ${formatErrorMessage(err)}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+
+      if (opts.json) {
+        defaultRuntime.writeJson({
+          workspaceDir,
+          storePath,
+          candidates,
+          apply: applyResult
+            ? {
+                applied: applyResult.applied,
+                memoryPath: applyResult.memoryPath,
+                appliedCandidates: applyResult.appliedCandidates,
+              }
+            : undefined,
+        });
+        return;
+      }
+
+      if (candidates.length === 0) {
+        defaultRuntime.log("No short-term recall candidates.");
+        defaultRuntime.log(`Recall store: ${shortenHomePath(storePath)}`);
+        return;
+      }
+
+      const rich = isRich();
+      const lines: string[] = [];
+      lines.push(
+        `${colorize(rich, theme.heading, "Short-Term Promotion Candidates")} ${colorize(
+          rich,
+          theme.muted,
+          `(${agentId})`,
+        )}`,
+      );
+      lines.push(`${colorize(rich, theme.muted, "Recall store:")} ${shortenHomePath(storePath)}`);
+      for (const candidate of candidates) {
+        lines.push(
+          `${colorize(rich, theme.success, candidate.score.toFixed(3))} ${colorize(
+            rich,
+            theme.accent,
+            `${shortenHomePath(candidate.path)}:${candidate.startLine}-${candidate.endLine}`,
+          )}`,
+        );
+        lines.push(
+          colorize(
+            rich,
+            theme.muted,
+            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d`,
+          ),
+        );
+        if (candidate.snippet) {
+          lines.push(colorize(rich, theme.muted, candidate.snippet));
+        }
+        lines.push("");
+      }
+      if (applyResult) {
+        if (applyResult.applied > 0) {
+          lines.push(
+            colorize(
+              rich,
+              theme.success,
+              `Promoted ${applyResult.applied} candidate(s) to ${shortenHomePath(applyResult.memoryPath)}.`,
+            ),
+          );
+        } else {
+          lines.push(colorize(rich, theme.warn, "No candidates met apply criteria."));
+        }
       }
       defaultRuntime.log(lines.join("\n").trim());
     },

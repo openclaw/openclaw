@@ -34,7 +34,6 @@ export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginCommandContext,
-  PluginInteractiveTelegramHandlerContext,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
@@ -63,18 +62,43 @@ export type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
+  ProviderReplaySessionEntry,
+  ProviderReplaySessionState,
   ProviderResolveDynamicModelContext,
+  ProviderResolveTransportTurnStateContext,
+  ProviderResolveWebSocketSessionPolicyContext,
   ProviderResolvedUsageAuth,
+  RealtimeTranscriptionProviderPlugin,
   ProviderSanitizeReplayHistoryContext,
+  ProviderTransportTurnState,
+  ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
+  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
 export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type { OutboundIdentity } from "../infra/outbound/identity.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export type { ReplyPayload } from "../auto-reply/types.js";
+export type { AllowlistMatch } from "../channels/allowlist-match.js";
+export type {
+  BaseProbeResult,
+  ChannelAccountSnapshot,
+  ChannelGroupContext,
+  ChannelMessageActionName,
+  ChannelMeta,
+  ChannelSetupInput,
+} from "../channels/plugins/types.js";
+export type { ChatType } from "../channels/chat-type.js";
+export type { NormalizedLocation } from "../channels/location.js";
+export type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
+export type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
+export type { PollInput } from "../polls.js";
 export { isSecretRef } from "../config/types.secrets.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 export type {
@@ -107,7 +131,8 @@ export type {
 } from "../infra/provider-usage.types.js";
 export type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 export type { ChannelConfigUiHint, ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export type { PluginRuntime } from "../plugins/runtime/types.js";
+export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+export type { WizardPrompter } from "../wizard/prompts.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
 export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
@@ -150,6 +175,19 @@ export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 export { resolveGatewayPort } from "../config/paths.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeAtHashSlug, normalizeHyphenSlug } from "../shared/string-normalization.js";
+export { createActionGate } from "../agents/tools/common.js";
+export {
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringArrayParam,
+  readStringParam,
+} from "../agents/tools/common.js";
+export { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+export { isTrustedProxyAddress, resolveClientIp } from "../gateway/net.js";
+export { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
+export { ensureConfiguredAcpBindingReady } from "../acp/persistent-bindings.lifecycle.js";
+export { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 
 export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 export type {
@@ -244,6 +282,8 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   meta?: Partial<NonNullable<ChannelPlugin<TResolvedAccount>["meta"]>>;
   setupWizard?: NonNullable<ChannelPlugin<TResolvedAccount>["setupWizard"]>;
   capabilities?: ChannelPlugin<TResolvedAccount>["capabilities"];
+  commands?: ChannelPlugin<TResolvedAccount>["commands"];
+  doctor?: ChannelPlugin<TResolvedAccount>["doctor"];
   agentPrompt?: ChannelPlugin<TResolvedAccount>["agentPrompt"];
   streaming?: ChannelPlugin<TResolvedAccount>["streaming"];
   reload?: ChannelPlugin<TResolvedAccount>["reload"];
@@ -264,6 +304,8 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
       ChannelPlugin<TResolvedAccount>,
       | "setupWizard"
       | "capabilities"
+      | "commands"
+      | "doctor"
       | "agentPrompt"
       | "streaming"
       | "reload"
@@ -354,6 +396,7 @@ type ChatChannelSecurityOptions<TResolvedAccount extends { accountId?: string | 
     normalizeEntry?: (raw: string) => string;
   };
   collectWarnings?: ChannelSecurityAdapter<TResolvedAccount>["collectWarnings"];
+  collectAuditFindings?: ChannelSecurityAdapter<TResolvedAccount>["collectAuditFindings"];
 };
 
 type ChatChannelPairingOptions = {
@@ -461,6 +504,9 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
         normalizeEntry: security.dm.normalizeEntry,
       }),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
+    ...(security.collectAuditFindings
+      ? { collectAuditFindings: security.collectAuditFindings }
+      : {}),
   };
 }
 
@@ -556,6 +602,8 @@ export function createChannelPluginBase<TResolvedAccount>(
     },
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
+    ...(params.commands ? { commands: params.commands } : {}),
+    ...(params.doctor ? { doctor: params.doctor } : {}),
     ...(params.agentPrompt ? { agentPrompt: params.agentPrompt } : {}),
     ...(params.streaming ? { streaming: params.streaming } : {}),
     ...(params.reload ? { reload: params.reload } : {}),

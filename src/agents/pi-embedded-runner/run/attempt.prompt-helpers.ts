@@ -6,6 +6,7 @@ import type {
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import type { CompactEmbeddedPiSessionParams } from "../compact.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
@@ -109,10 +110,7 @@ export function prependSystemPromptAddition(params: {
   systemPrompt: string;
   systemPromptAddition?: string;
 }): string {
-  if (!params.systemPromptAddition) {
-    return params.systemPrompt;
-  }
-  return `${params.systemPromptAddition}\n\n${params.systemPrompt}`;
+  return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
 /** Build runtime context passed into context-engine afterTurn hooks. */

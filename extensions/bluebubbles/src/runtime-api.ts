@@ -1,4 +1,4 @@
-export { resolveAckReaction } from "openclaw/plugin-sdk/bluebubbles";
+export { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 export {
   createActionGate,
   jsonResult,
@@ -51,3 +51,8 @@ export {
   resolveWebhookTargetWithAuthOrRejectSync,
   withResolvedWebhookRequestPipeline,
 } from "openclaw/plugin-sdk/bluebubbles";
+export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+export {
+  evaluateSupplementalContextVisibility,
+  shouldIncludeSupplementalContext,
+} from "openclaw/plugin-sdk/security-runtime";

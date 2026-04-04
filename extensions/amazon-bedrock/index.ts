@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { buildAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
@@ -87,10 +88,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
-      capabilities: {
-        providerFamily: "anthropic",
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      buildReplayPolicy: ({ modelId }) => buildAnthropicReplayPolicyForModel(modelId),
       wrapStreamFn,
       resolveDefaultThinkingLevel: ({ modelId }) =>
         CLAUDE_46_MODEL_RE.test(modelId.trim()) ? "adaptive" : undefined,

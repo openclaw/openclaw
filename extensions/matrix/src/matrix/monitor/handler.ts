@@ -1,8 +1,12 @@
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
+import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
+  formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
   formatMatrixMessageText,
   resolveMatrixMessageAttachment,
@@ -137,12 +141,20 @@ function resolveMatrixInboundBodyText(params: {
   msgtype?: string;
   hadMediaUrl: boolean;
   mediaDownloadFailed: boolean;
+  mediaSizeLimitExceeded?: boolean;
 }): string {
   if (params.mediaPlaceholder) {
     return params.rawBody || params.mediaPlaceholder;
   }
   if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
     return params.rawBody;
+  }
+  if (params.mediaSizeLimitExceeded) {
+    return formatMatrixMediaTooLargeText({
+      body: params.rawBody,
+      filename: params.filename,
+      msgtype: params.msgtype,
+    });
   }
   return formatMatrixMediaUnavailableText({
     body: params.rawBody,
@@ -218,6 +230,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getMemberDisplayName,
     needsRoomAliasesForConfig,
   } = params;
+  const contextVisibilityMode = resolveChannelContextVisibilityMode({
+    cfg,
+    channel: "matrix",
+    accountId,
+  });
   let cachedStoreAllowFrom: {
     value: string[];
     expiresAtMs: number;
@@ -759,6 +776,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           placeholder: string;
         } | null = null;
         let mediaDownloadFailed = false;
+        let mediaSizeLimitExceeded = false;
         const finalContentUrl =
           "url" in content && typeof content.url === "string" ? content.url : undefined;
         const finalContentFile =
@@ -788,6 +806,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             });
           } catch (err) {
             mediaDownloadFailed = true;
+            if (isMatrixMediaSizeLimitError(err)) {
+              mediaSizeLimitExceeded = true;
+            }
             const errorText = err instanceof Error ? err.message : String(err);
             logVerboseMessage(
               `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
@@ -810,6 +831,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           msgtype: content.msgtype,
           hadMediaUrl: Boolean(finalMediaUrl),
           mediaDownloadFailed,
+          mediaSizeLimitExceeded,
         });
         if (!bodyText) {
           await commitInboundEventIfClaimed();
@@ -925,7 +947,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
       const threadTarget = thread.threadId;
-      const shouldIncludeRoomContextSender = (contextSenderId?: string): boolean => {
+      const isRoomContextSenderAllowed = (contextSenderId?: string): boolean => {
         if (!isRoom || !contextSenderId) {
           return true;
         }
@@ -943,24 +965,40 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
         return true;
       };
+      const shouldIncludeRoomContextSender = (
+        kind: "thread" | "quote" | "history",
+        contextSenderId?: string,
+      ): boolean =>
+        evaluateSupplementalContextVisibility({
+          mode: contextVisibilityMode,
+          kind,
+          senderAllowed: isRoomContextSenderAllowed(contextSenderId),
+        }).include;
       let threadContext = _threadRootId
         ? await resolveThreadContext({ roomId, threadRootId: _threadRootId })
         : undefined;
-      let threadContextBlockedByAllowlist = false;
-      if (threadContext?.senderId && !shouldIncludeRoomContextSender(threadContext.senderId)) {
-        logVerboseMessage("matrix: drop thread root context (sender allowlist)");
-        threadContextBlockedByAllowlist = true;
+      let threadContextBlockedByPolicy = false;
+      if (
+        threadContext?.senderId &&
+        !shouldIncludeRoomContextSender("thread", threadContext.senderId)
+      ) {
+        logVerboseMessage(`matrix: drop thread root context (mode=${contextVisibilityMode})`);
+        threadContextBlockedByPolicy = true;
         threadContext = undefined;
       }
       let replyContext: Awaited<ReturnType<typeof resolveReplyContext>> | undefined;
-      if (replyToEventId && replyToEventId === _threadRootId && threadContextBlockedByAllowlist) {
-        replyContext = undefined;
-      } else if (replyToEventId && replyToEventId === _threadRootId && threadContext?.summary) {
+      if (replyToEventId && replyToEventId === _threadRootId && threadContext?.summary) {
         replyContext = {
           replyToBody: threadContext.summary,
           replyToSender: threadContext.senderLabel,
           replyToSenderId: threadContext.senderId,
         };
+      } else if (
+        replyToEventId &&
+        replyToEventId === _threadRootId &&
+        threadContextBlockedByPolicy
+      ) {
+        replyContext = await resolveReplyContext({ roomId, eventId: replyToEventId });
       } else {
         replyContext = replyToEventId
           ? await resolveReplyContext({ roomId, eventId: replyToEventId })
@@ -968,9 +1006,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
       if (
         replyContext?.replyToSenderId &&
-        !shouldIncludeRoomContextSender(replyContext.replyToSenderId)
+        !shouldIncludeRoomContextSender("quote", replyContext.replyToSenderId)
       ) {
-        logVerboseMessage("matrix: drop reply context (sender allowlist)");
+        logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
         replyContext = undefined;
       }
       const roomInfo = isRoom ? await getRoomInfo(roomId) : undefined;

@@ -3,6 +3,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveConfigDir } from "../utils.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
@@ -17,29 +18,38 @@ function resolveCachedPreferredTmpDir(): string {
   return cachedPreferredTmpDir;
 }
 
-function buildMediaLocalRoots(
+export function buildMediaLocalRoots(
   stateDir: string,
+  configDir: string,
   options: BuildMediaLocalRootsOptions = {},
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
+  const resolvedConfigDir = path.resolve(configDir);
   const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
-  return [
-    preferredTmpDir,
-    path.join(resolvedStateDir, "media"),
-    path.join(resolvedStateDir, "workspace"),
-    path.join(resolvedStateDir, "sandboxes"),
-  ];
+  return Array.from(
+    new Set([
+      preferredTmpDir,
+      path.join(resolvedStateDir, "media"),
+      path.join(resolvedStateDir, "workspace"),
+      path.join(resolvedStateDir, "sandboxes"),
+      // Upgraded installs can still resolve the active state dir to the legacy
+      // ~/.clawdbot tree while new media writes already go under ~/.openclaw/media.
+      // Keep inbound media readable across that split without widening roots beyond
+      // the managed media cache.
+      path.join(resolvedConfigDir, "media"),
+    ]),
+  );
 }
 
 export function getDefaultMediaLocalRoots(): readonly string[] {
-  return buildMediaLocalRoots(resolveStateDir());
+  return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
 ): readonly string[] {
-  const roots = buildMediaLocalRoots(resolveStateDir());
+  const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
   if (!agentId?.trim()) {
     return roots;
   }

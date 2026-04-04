@@ -4,9 +4,13 @@ const { callGatewayMock } = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
 }));
 
-vi.mock("../agent-scope.js", () => ({
-  resolveSessionAgentId: () => "agent-123",
-}));
+vi.mock("../agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
+  return {
+    ...actual,
+    resolveSessionAgentId: () => "agent-123",
+  };
+});
 
 import { createCronTool } from "./cron-tool.js";
 

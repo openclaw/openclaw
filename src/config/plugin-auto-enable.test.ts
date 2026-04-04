@@ -11,7 +11,11 @@ import {
   makeTrackedTempDir,
   mkdirSafeDir,
 } from "../plugins/test-helpers/fs-fixtures.js";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import {
+  applyPluginAutoEnable,
+  detectPluginAutoEnableCandidates,
+  resolvePluginAutoEnableCandidateReason,
+} from "./plugin-auto-enable.js";
 import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
@@ -44,6 +48,7 @@ function makeRegistry(
     id: string;
     channels: string[];
     autoEnableWhenConfiguredProviders?: string[];
+    modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
     contracts?: { webFetchProviders?: string[] };
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
@@ -53,6 +58,7 @@ function makeRegistry(
       id: p.id,
       channels: p.channels,
       autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
+      modelSupport: p.modelSupport,
       contracts: p.contracts,
       channelConfigs: p.channelConfigs,
       providers: [],
@@ -121,6 +127,44 @@ afterEach(() => {
 });
 
 describe("applyPluginAutoEnable", () => {
+  it("detects typed channel-configured candidates", () => {
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {
+        channels: { slack: { botToken: "x" } },
+      },
+      env: {},
+    });
+
+    expect(candidates).toEqual([
+      {
+        pluginId: "slack",
+        kind: "channel-configured",
+        channelId: "slack",
+      },
+    ]);
+  });
+
+  it("formats typed provider-auth candidates into stable reasons", () => {
+    expect(
+      resolvePluginAutoEnableCandidateReason({
+        pluginId: "google",
+        kind: "provider-auth-configured",
+        providerId: "google",
+      }),
+    ).toBe("google auth configured");
+  });
+
+  it("treats an undefined config as empty", () => {
+    const result = applyPluginAutoEnable({
+      config: undefined,
+      env: {},
+    });
+
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
   it("auto-enables built-in channels without appending to plugins.allow", () => {
     const result = applyWithSlackConfig({ plugins: { allow: ["telegram"] } });
 

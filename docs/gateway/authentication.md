@@ -89,9 +89,17 @@ This credential is only authorized for use with Claude Code and cannot be used f
 …use an Anthropic API key instead.
 
 <Warning>
-Anthropic setup-token support is technical compatibility only. Anthropic has blocked
-some subscription usage outside Claude Code in the past. Use it only if you decide
-the policy risk is acceptable, and verify Anthropic's current terms yourself.
+Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+OpenClaw or other third-party harnesses. Setup-token auth still works in
+OpenClaw, but Anthropic now requires **Extra Usage** (pay-as-you-go billed
+separately from the subscription) for that traffic.
+
+If you want the clearest path for always-on or team gateways, prefer an
+Anthropic API key. OpenClaw also supports other subscription-style options,
+including [OpenAI Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
+Plan](/providers/qwen_modelstudio), [MiniMax Coding Plan](/providers/minimax),
+and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
@@ -114,7 +122,7 @@ openclaw models status --check
 ```
 
 Optional ops scripts (systemd/Termux) are documented here:
-[/automation/auth-monitoring](/automation/auth-monitoring)
+[Auth monitoring scripts](/help/scripts#auth-monitoring-scripts)
 
 > `claude setup-token` requires an interactive TTY.
 
