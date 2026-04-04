@@ -1046,6 +1046,35 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
+  <Accordion title="Why did an isolated cron run switch models or retry once?">
+    That is usually the live model-switch path, not duplicate scheduling.
+
+    Isolated cron can persist a runtime model handoff and retry when the active
+    run throws `LiveSessionModelSwitchError`. The retry keeps the switched
+    provider/model, and if the switch carried a new auth profile override, cron
+    persists that too before retrying.
+
+    Related selection rules:
+
+    - Gmail hook model override wins first when applicable.
+    - Then per-job `model`.
+    - Then any stored cron-session model override.
+    - Then the normal agent/default model selection.
+
+    The retry loop is bounded. After the initial attempt plus 2 switch retries,
+    cron aborts instead of looping forever.
+
+    Debug:
+
+    ```bash
+    openclaw cron runs --id <jobId> --limit 50
+    openclaw tasks show <runId-or-sessionKey>
+    ```
+
+    Docs: [Cron jobs](/automation/cron-jobs), [cron CLI](/cli/cron).
+
+  </Accordion>
+
   <Accordion title="How do I install skills on Linux?">
     Use native `openclaw skills` commands or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
     Browse skills at [https://clawhub.ai](https://clawhub.ai).
