@@ -207,7 +207,12 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
 }
 
 export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<void> {
-  api.registerCliBackend(buildAnthropicCliBackend());
+  // Be defensive against partially initialized module graphs during test/runtime bootstrap.
+  const cliBackend =
+    typeof buildAnthropicCliBackend === "function" ? buildAnthropicCliBackend() : undefined;
+  if (cliBackend) {
+    api.registerCliBackend(cliBackend);
+  }
   api.registerProvider({
     id: PROVIDER_ID,
     label: "Anthropic",
