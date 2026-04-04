@@ -356,6 +356,13 @@ export function resolveIMessageInboundDecision(params: {
         scope: echoScope,
         text: bodyText || undefined,
         messageIds: inboundMessageIds,
+        // When the inbound message has no GUID (only a numeric SQLite row ID),
+        // the ID short-circuit must be bypassed so text matching can still
+        // identify assistant echo replies. Outbound messages are stored with
+        // GUID-based IDs, so a numeric inbound ID will never match — without
+        // this flag the ID mismatch fires an early return and the echo slips
+        // through, restarting the reply loop.
+        skipIdShortCircuit: !hasInboundGuid,
       })
     ) {
       params.logVerbose?.(
