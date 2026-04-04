@@ -756,11 +756,94 @@ Options:
 - `--force`
 - `--json`
 
+#### `agents set-identity`
+
+Update an agent identity (name/theme/emoji/avatar).
+
+Options:
+
+- `--agent <id>`
+- `--workspace <dir>`
+- `--identity-file <path>`
+- `--from-identity`
+- `--name <name>`
+- `--theme <theme>`
+- `--emoji <emoji>`
+- `--avatar <value>`
+- `--json`
+
 ### `acp`
 
 Run the ACP bridge that connects IDEs to the Gateway.
 
-See [`acp`](/cli/acp) for full options and examples.
+Root options:
+
+- `--url <url>`
+- `--token <token>`
+- `--token-file <path>`
+- `--password <password>`
+- `--password-file <path>`
+- `--session <key>`
+- `--session-label <label>`
+- `--require-existing`
+- `--reset-session`
+- `--no-prefix-cwd`
+- `--provenance <off|meta|meta+receipt>`
+- `--verbose`
+
+#### `acp client`
+
+Interactive ACP client for bridge debugging.
+
+Options:
+
+- `--cwd <dir>`
+- `--server <command>`
+- `--server-args <args...>`
+- `--server-verbose`
+- `--verbose`
+
+See [`acp`](/cli/acp) for full behavior, security notes, and examples.
+
+### `approvals`
+
+Manage exec approvals. Alias: `exec-approvals`.
+
+#### `approvals get`
+
+Fetch the exec approvals snapshot and effective policy.
+
+Options:
+
+- `--node <node>`
+- `--gateway`
+- `--json`
+- node RPC options from `openclaw nodes`
+
+#### `approvals set`
+
+Replace exec approvals with JSON from a file or stdin.
+
+Options:
+
+- `--node <node>`
+- `--gateway`
+- `--file <path>`
+- `--stdin`
+- `--json`
+- node RPC options from `openclaw nodes`
+
+#### `approvals allowlist add|remove`
+
+Edit the per-agent exec allowlist.
+
+Options:
+
+- `--node <node>`
+- `--gateway`
+- `--agent <id>` (defaults to `*`)
+- `--json`
+- node RPC options from `openclaw nodes`
 
 ### `status`
 
