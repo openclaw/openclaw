@@ -96,7 +96,7 @@ function renderEntry(entry: PresenceEntry, masked: boolean) {
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
         <div class="muted">${t("instances.lastInput", { value: lastInput })}</div>
-        <div class="muted">${t("instances.reason", { value: entry.reason ?? "" })}</div>
+        <div class="muted">${entry.reason ? t("instances.reason", { value: entry.reason }) : ""}</div>
       </div>
     </div>
   `;
