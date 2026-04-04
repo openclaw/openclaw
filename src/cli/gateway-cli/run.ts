@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { readSecretFromFile } from "../../acp/secret-file.js";
 import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
@@ -523,6 +525,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     while (true) {
       try {
         await startLoop();
+        // Gateway started successfully — clear any stale startup error.
+        try {
+          const { clearStartupError } = await import("../../infra/startup-error.js");
+          clearStartupError();
+        } catch {
+          // Diagnostics must never interfere with normal operation.
+        }
         break;
       } catch (err) {
         const isGatewayAlreadyRunning =
@@ -611,5 +620,100 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts, command) => {
       await runGatewayCommand(resolveGatewayRunOptions(opts, command));
+    });
+}
+
+/**
+ * Add `gateway watchdog` subcommand.
+ *
+ * Runs the openclaw-watchdog.sh script as a foreground process.
+ * The script pings the gateway /health endpoint and restarts it if it is down.
+ *
+ * Usage:
+ *   openclaw gateway watchdog --interval 3
+ */
+export function addGatewayWatchdogCommand(gatewayCommand: Command): Command {
+  const thisFile = fileURLToPath(import.meta.url);
+  const scriptsDir = path.resolve(thisFile, "../../../../scripts");
+  const scriptPath = path.join(scriptsDir, "openclaw-watchdog.sh");
+
+  return gatewayCommand
+    .command("watchdog")
+    .description(
+      "Run the gateway health watchdog. " +
+        "Pings /health every N minutes, restarts the gateway if it is down, " +
+        "and sends a macOS notification on failure.",
+    )
+    .option(
+      "--interval <minutes>",
+      "Minutes between health checks (default: 5, min: 1)",
+      (val) => Math.max(1, parseInt(val, 10)),
+      5,
+    )
+    .option("--gateway-url <url>", "Gateway health URL (default: http://localhost:18789)")
+    .option("--token <token>", "Gateway auth token (default: OPENCLAW_GATEWAY_TOKEN env)")
+    .option("--max-attempts <n>", "Max restart attempts (default: 3)", (val) => parseInt(val, 10), 3)
+    .option("--no-notify", "Disable desktop notifications")
+    .action(async (opts) => {
+      const args = [
+        scriptPath,
+        "--interval-minutes",
+        String(opts.interval),
+        "--max-attempts",
+        String(opts.maxAttempts),
+      ];
+      if (opts.gatewayUrl) {
+        args.push("--gateway-url", opts.gatewayUrl);
+      }
+      if (opts.token) {
+        args.push("--token", opts.token);
+      }
+      if (!opts.notify) {
+        args.push("--no-notify");
+      }
+
+      console.log(`Starting OpenClaw watchdog (interval: ${opts.interval}min)…`);
+      console.log(`Script: ${scriptPath}`);
+
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn("bash", args, {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            OPENCLAW_GATEWAY_URL:
+              opts.gatewayUrl ?? process.env.OPENCLAW_GATEWAY_URL ?? "http://localhost:18789",
+            OPENCLAW_GATEWAY_TOKEN: opts.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
+          },
+        });
+      } catch (err) {
+        defaultRuntime.error(`Failed to spawn watchdog: ${err}`);
+        process.exit(1);
+        return;
+      }
+
+      child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
+      child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
+
+      let ownSignal = false;
+      const handleSignal = () => {
+        ownSignal = true;
+        child.kill("SIGTERM");
+      };
+      process.on("SIGINT", handleSignal);
+      process.on("SIGTERM", handleSignal);
+
+      child.on("close", (code) => {
+        process.removeListener("SIGINT", handleSignal);
+        process.removeListener("SIGTERM", handleSignal);
+        if (ownSignal) {
+          return; // Clean signal-initiated exit
+        }
+        if (code === 0) {
+          return;
+        }
+        defaultRuntime.error(`Watchdog exited with code ${code ?? "unknown"}`);
+        process.exit(code ?? 1);
+      });
     });
 }
