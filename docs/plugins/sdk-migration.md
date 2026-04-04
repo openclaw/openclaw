@@ -165,8 +165,7 @@ bundled plugin workspace, keep provider-owned helpers in that plugin's own
   | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers |
   | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
   | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
-  | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
-  | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
+  | `plugin-sdk/allow-from` | Allowlist formatting and input mapping | `formatAllowFromLowercase`, `mapAllowlistResolutionInputs` |
   | `plugin-sdk/command-auth` | Command gating | `resolveControlCommandGate` |
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
   | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
