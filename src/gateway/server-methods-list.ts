@@ -93,6 +93,10 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // Bot member management (dashboard → gateway)
+  "bot-member.send-verification",
+  "bot-member.allow-from.add",
+  "bot-member.allow-from.remove",
 ];
 
 export function listGatewayMethods(): string[] {

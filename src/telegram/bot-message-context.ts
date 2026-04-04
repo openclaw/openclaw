@@ -29,10 +29,25 @@ import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
+import { buildPairingReply, buildAllowlistReply } from "../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import path from "node:path";
+
+/** Resolve the widget chat URL from config and agent dir env var. */
+function resolveWidgetUrl(): string | undefined {
+  const baseUrl = loadConfig().meta?.widgetBaseUrl;
+  if (!baseUrl) return undefined;
+  const agentDir = process.env.OPENCLAW_AGENT_DIR;
+  if (!agentDir) return undefined;
+  // agentDir is like /root/.openclaw/agents/{agentName}/... — extract agent name
+  const parts = agentDir.split(path.sep);
+  const agentsIdx = parts.lastIndexOf("agents");
+  const agentName = agentsIdx >= 0 && agentsIdx + 1 < parts.length ? parts[agentsIdx + 1] : undefined;
+  if (!agentName) return undefined;
+  return `${baseUrl.replace(/\/$/, "")}/chat/${agentName}`;
+}
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -320,6 +335,7 @@ export const buildTelegramMessageContext = async ({
                       channel: "telegram",
                       idLine: `Your Telegram user id: ${telegramUserId}`,
                       code,
+                      widgetUrl: resolveWidgetUrl(),
                     }),
                   ),
               });
@@ -327,6 +343,30 @@ export const buildTelegramMessageContext = async ({
           } catch (err) {
             logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
           }
+        } else if (dmPolicy === "allowlist") {
+          // Send registration link for allowlist mode
+          const widgetUrl = resolveWidgetUrl();
+          if (widgetUrl) {
+            const telegramUserId = msg.from?.id ? String(msg.from.id) : candidate;
+            try {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    buildAllowlistReply({
+                      idLine: `Your Telegram user id: ${telegramUserId}`,
+                      widgetUrl,
+                    }),
+                  ),
+              });
+            } catch (err) {
+              logVerbose(`telegram allowlist reply failed for chat ${chatId}: ${String(err)}`);
+            }
+          }
+          logVerbose(
+            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+          );
         } else {
           logVerbose(
             `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,

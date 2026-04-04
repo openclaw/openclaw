@@ -29,6 +29,8 @@ export type OpenClawConfig = {
   meta?: {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
+    /** Base URL for the dashboard widget page. */
+    widgetBaseUrl?: string;
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
   };
