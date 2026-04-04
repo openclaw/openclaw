@@ -302,16 +302,12 @@ enum GatewayEnvironment {
 
         let prefixedPattern = #"^openclaw\s+(v?\d+\.\d+\.\d+(?:[-+][^\s()]+)?)\s*(?:\([^\n]+\))?$"#
         let barePattern = #"^(v?\d+\.\d+\.\d+(?:[-+][^\s()]+)?)\s*(?:\([^\n]+\))?$"#
+        let prefixedRegex = try? NSRegularExpression(pattern: prefixedPattern, options: [.caseInsensitive])
+        let bareRegex = try? NSRegularExpression(pattern: barePattern, options: [.caseInsensitive])
 
-        func extractVersion(from line: String, pattern: String) -> String? {
-            guard let range = line.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
-                  let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
-            else {
-                return nil
-            }
-
-            let nsRange = NSRange(range, in: line)
-            guard let match = regex.firstMatch(in: line, options: [], range: nsRange),
+        func extractVersion(from line: String, regex: NSRegularExpression?) -> String? {
+            let fullRange = NSRange(line.startIndex..<line.endIndex, in: line)
+            guard let match = regex?.firstMatch(in: line, options: [], range: fullRange),
                   match.numberOfRanges > 1,
                   let versionRange = Range(match.range(at: 1), in: line)
             else {
@@ -322,13 +318,13 @@ enum GatewayEnvironment {
         }
 
         for line in lines {
-            if let version = extractVersion(from: line, pattern: prefixedPattern) {
+            if let version = extractVersion(from: line, regex: prefixedRegex) {
                 return version
             }
         }
 
         for line in lines {
-            if let version = extractVersion(from: line, pattern: barePattern) {
+            if let version = extractVersion(from: line, regex: bareRegex) {
                 return version
             }
         }
