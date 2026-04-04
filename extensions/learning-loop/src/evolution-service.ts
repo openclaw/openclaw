@@ -209,14 +209,11 @@ export class EvolutionService {
 
   private filterUnsafeEntries(skillName: string, entries: EvolutionEntry[]): EvolutionEntry[] {
     return entries.filter((entry) => {
-      if (entry.change.target !== "description") {
-        return true;
-      }
       if (!looksLikeInjection(entry.change.content)) {
         return true;
       }
       this.logger.warn(
-        `learning-loop: blocked injection-like description evolution for ${skillName}`,
+        `learning-loop: blocked injection-like ${entry.change.target} evolution for ${skillName}`,
       );
       return false;
     });
