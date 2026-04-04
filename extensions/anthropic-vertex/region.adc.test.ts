@@ -38,6 +38,9 @@ describe("anthropic-vertex ADC reads", () => {
       GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex-adc.json",
     } as NodeJS.ProcessEnv;
 
+    existsSyncMock.mockClear();
+    readFileSyncMock.mockClear();
+
     expect(resolveAnthropicVertexProjectId(env)).toBe("vertex-project");
     expect(hasAnthropicVertexAvailableAuth(env)).toBe(true);
     expect(existsSyncMock).not.toHaveBeenCalled();

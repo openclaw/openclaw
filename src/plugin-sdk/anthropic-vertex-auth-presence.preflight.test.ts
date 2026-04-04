@@ -34,6 +34,9 @@ describe("hasAnthropicVertexAvailableAuth ADC preflight", () => {
   });
 
   it("reads explicit ADC credentials without an existsSync preflight", () => {
+    existsSyncMock.mockClear();
+    readFileSyncMock.mockClear();
+
     expect(
       hasAnthropicVertexAvailableAuth({
         GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex-adc.json",
