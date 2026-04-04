@@ -1232,6 +1232,12 @@ for usage/billing and raise limits as needed.
 
     This path is host-local. If the Gateway runs elsewhere, either run a node host on the browser machine or use remote CDP instead.
 
+    Current limits on `existing-session` / `user`:
+
+    - actions are ref-driven, not CSS-selector driven
+    - uploads require `ref` / `inputRef` and currently support one file at a time
+    - `responsebody`, PDF export, download interception, and batch actions still need a managed browser or raw CDP profile
+
   </Accordion>
 </AccordionGroup>
 
@@ -1549,29 +1555,32 @@ for usage/billing and raise limits as needed.
             },
           },
         },
-      },
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "brave",
-            maxResults: 5,
-          },
-          fetch: {
-            enabled: true,
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              maxResults: 5,
+            },
+            fetch: {
+              enabled: true,
+              provider: "firecrawl", // optional; omit for auto-detect
+            },
           },
         },
-      },
     }
     ```
 
     Provider-specific web-search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
     Legacy `tools.web.search.*` provider paths still load temporarily for compatibility, but they should not be used for new configs.
+    Firecrawl web-fetch fallback config lives under `plugins.entries.firecrawl.config.webFetch.*`.
 
     Notes:
 
     - If you use allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
     - `web_fetch` is enabled by default (unless explicitly disabled).
+    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. Today the bundled provider is Firecrawl.
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 
     Docs: [Web tools](/tools/web).
@@ -1593,6 +1602,8 @@ for usage/billing and raise limits as needed.
 
     - Use `openclaw config set` for small changes.
     - Use `openclaw configure` for interactive edits.
+    - Use `config.schema.lookup` first when you are not sure about an exact path or field shape; it returns a shallow schema node plus immediate child summaries for drill-down.
+    - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
 
     Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
 
@@ -1762,7 +1773,13 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="Is there an API / RPC way to apply config?">
-    Yes. `config.apply` validates + writes the full config and restarts the Gateway as part of the operation.
+    Yes.
+
+    - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
+    - `config.get`: fetch the current snapshot + hash
+    - `config.patch`: safe partial update (preferred for most RPC edits)
+    - `config.apply`: validate + replace the full config, then restart
+
   </Accordion>
 
   <Accordion title="Minimal sane config for a first install">
@@ -2183,6 +2200,8 @@ for usage/billing and raise limits as needed.
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json`
 
     Avoid `config.apply` with a partial object unless you intend to replace the whole config.
+    For RPC edits, inspect with `config.schema.lookup` first and prefer `config.patch`. The lookup payload gives you the normalized path, shallow schema docs/constraints, and immediate child summaries.
+    for partial updates.
     If you did overwrite config, restore from backup or re-run `openclaw doctor` to repair.
 
     Docs: [Models](/concepts/models), [Configure](/cli/configure), [Config](/cli/config), [Doctor](/gateway/doctor).
@@ -2457,8 +2476,10 @@ for usage/billing and raise limits as needed.
 
     The rate-limit bucket includes more than plain `429` responses. OpenClaw
     also treats messages like `Too many concurrent requests`,
-    `ThrottlingException`, `resource exhausted`, and periodic usage-window
-    limits (`weekly/monthly limit reached`) as failover-worthy rate limits.
+    `ThrottlingException`, `concurrency limit reached`,
+    `workers_ai ... quota limit exceeded`, `resource exhausted`, and periodic
+    usage-window limits (`weekly/monthly limit reached`) as failover-worthy
+    rate limits.
 
     Some billing-looking responses are not `402`, and some HTTP `402`
     responses also stay in that transient bucket. If a provider returns
@@ -2471,17 +2492,21 @@ for usage/billing and raise limits as needed.
     `rate_limit`, not a long billing disable.
 
     Context-overflow errors are different: signatures such as
-    `request_too_large`, `input exceeds the maximum number of tokens`, or
-    `input is too long for the model` stay on the compaction/retry path instead
-    of advancing model fallback.
+    `request_too_large`, `input exceeds the maximum number of tokens`,
+    `input token count exceeds the maximum number of input tokens`,
+    `input is too long for the model`, or `ollama error: context length
+    exceeded` stay on the compaction/retry path instead of advancing model
+    fallback.
 
     Generic server-error text is intentionally narrower than "anything with
     unknown/error in it". OpenClaw does treat provider-scoped transient shapes
     such as Anthropic bare `An unknown error occurred`, OpenRouter bare
     `Provider returned error`, stop-reason errors like `Unhandled stop reason:
-    error`, and JSON `api_error` payloads with transient server text
+    error`, JSON `api_error` payloads with transient server text
     (`internal server error`, `unknown error, 520`, `upstream error`, `backend
-    error`) as timeout/failover signals when the provider context matches.
+    error`), and provider-busy errors such as `ModelNotReadyException` as
+    failover-worthy timeout/overloaded signals when the provider context
+    matches.
     Generic internal fallback text like `LLM request failed with an unknown
     error.` stays conservative and does not trigger model fallback by itself.
 
@@ -2565,6 +2590,10 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     OpenClaw may temporarily skip a profile if it's in a short **cooldown** (rate limits/timeouts/auth failures) or a longer **disabled** state (billing/insufficient credits). To inspect this, run `openclaw models status --json` and check `auth.unusableProfiles`. Tuning: `auth.cooldowns.billingBackoffHours*`.
 
+    Rate-limit cooldowns can be model-scoped. A profile that is cooling down
+    for one model can still be usable for a sibling model on the same provider,
+    while billing/disabled windows still block the whole profile.
+
     You can also set a **per-agent** order override (stored in that agent's `auth-profiles.json`) via the CLI:
 
     ```bash
@@ -2586,6 +2615,15 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     ```bash
     openclaw models auth order set --provider anthropic --agent main anthropic:default
     ```
+
+    To verify what will actually be tried, use:
+
+    ```bash
+    openclaw models status --probe
+    ```
+
+    If a stored profile is omitted from the explicit order, probe reports
+    `excluded_by_auth_order` for that profile instead of trying it silently.
 
   </Accordion>
 

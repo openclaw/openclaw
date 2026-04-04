@@ -48,7 +48,8 @@ is a small, self-contained module with a clear purpose and documented contract.
 
 Legacy provider convenience seams for bundled channels are also gone. Imports
 such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, and
+`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`,
+`openclaw/plugin-sdk/whatsapp-surface`, and
 `openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
 stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
@@ -313,7 +314,8 @@ The same rule applies to other generated bundled-helper families such as:
 - LINE: `plugin-sdk/line*`
 - IRC: `plugin-sdk/irc*`
 - bundled helper/plugin surfaces like `plugin-sdk/googlechat`,
-  `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles*`,
+  `plugin-sdk/whatsapp-surface`, `plugin-sdk/zalouser`,
+  `plugin-sdk/bluebubbles*`,
   `plugin-sdk/mattermost*`, `plugin-sdk/msteams`,
   `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
   `plugin-sdk/twitch`, `plugin-sdk/openai`, `plugin-sdk/moonshot`,
@@ -330,6 +332,15 @@ The same rule applies to other generated bundled-helper families such as:
   `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
   `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
   `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
+
+`plugin-sdk/github-copilot-token` currently exposes the narrow token-helper
+surface `DEFAULT_COPILOT_API_BASE_URL`,
+`deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken`.
+
+`plugin-sdk/whatsapp-surface` currently exposes `DEFAULT_WEB_MEDIA_BYTES`,
+WhatsApp auth/account helpers, directory-config helpers, group-policy helpers,
+outbound-target resolution, and the narrow `WebChannelStatus` /
+`WebInboundMessage` / `WebListenerCloseReason` / `WebMonitorTuning` types.
 
 For Qwen specifically, prefer the canonical `plugin-sdk/qwen` and
 `plugin-sdk/qwen-definitions` seams. `plugin-sdk/modelstudio*` remains

@@ -542,7 +542,7 @@ change other sessions.
 
 Two built-in tools can make persistent control-plane changes:
 
-- `gateway` can call `config.apply`, `config.patch`, and `update.run`.
+- `gateway` can inspect config with `config.schema.lookup` / `config.get`, and can make persistent changes with `config.apply`, `config.patch`, and `update.run`.
 - `cron` can create scheduled jobs that keep running after the original chat/task ends.
 
 For any agent/surface that handles untrusted content, deny these by default:

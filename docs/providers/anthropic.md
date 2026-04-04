@@ -360,6 +360,8 @@ More details: [/gateway/cli-backends](/gateway/cli-backends)
 **No available auth profile (all in cooldown/unavailable)**
 
 - Check `openclaw models status --json` for `auth.unusableProfiles`.
+- Anthropic rate-limit cooldowns can be model-scoped, so a sibling Anthropic
+  model may still be usable even when the current one is cooling down.
 - Add another Anthropic profile or wait for cooldown.
 
 More: [/gateway/troubleshooting](/gateway/troubleshooting) and [/help/faq](/help/faq).

@@ -168,8 +168,8 @@ surface.
 - Key selection order preserves priority and deduplicates values.
 - Requests are retried with the next key only on rate-limit responses (for
   example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many
-concurrent requests`, `ThrottlingException`, or periodic usage-limit
-  messages).
+concurrent requests`, `ThrottlingException`, `concurrency limit reached`,
+  `workers_ai ... quota limit exceeded`, or periodic usage-limit messages).
 - Non-rate-limit failures fail immediately; no key rotation is attempted.
 - When all candidate keys fail, the final error is returned from the last attempt.
 

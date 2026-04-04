@@ -509,6 +509,8 @@ Options:
   `qwen-standard-api-key-cn`, `qwen-standard-api-key`, `qwen-api-key-cn`, `qwen-api-key`,
   `modelstudio-standard-api-key-cn`, `modelstudio-standard-api-key`,
   `modelstudio-api-key-cn`, `modelstudio-api-key`, `custom-api-key`, `skip`
+- Qwen note: `qwen-*` is the canonical auth-choice family. `modelstudio-*`
+  ids remain accepted as legacy compatibility aliases only.
 - `--secret-input-mode <plaintext|ref>` (default `plaintext`; use `ref` to store provider default env refs instead of plaintext keys)
 - `--anthropic-api-key <key>`
 - `--openai-api-key <key>`
@@ -577,7 +579,7 @@ Subcommands:
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
-- `config schema`: print the generated JSON schema for `openclaw.json`.
+- `config schema`: print the generated JSON schema for `openclaw.json`, including field `title` / `description` metadata and best-effort live plugin/channel schema metadata.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -1460,6 +1462,8 @@ Notes:
 
 Common RPCs:
 
+- `config.schema.lookup` (inspect one config subtree with a shallow schema node, matched hint metadata, and immediate child summaries)
+- `config.get` (read current config snapshot + hash)
 - `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)
 - `config.patch` (merge a partial update + restart + wake)
@@ -1467,6 +1471,7 @@ Common RPCs:
 
 Tip: when calling `config.set`/`config.apply`/`config.patch` directly, pass `baseHash` from
 `config.get` if a config already exists.
+Tip: for partial edits, inspect with `config.schema.lookup` first and prefer `config.patch`.
 Tip: these config write RPCs preflight active SecretRef resolution for refs in the submitted config payload and reject writes when an effectively active submitted ref is unresolved.
 
 ## Models
@@ -1527,9 +1532,15 @@ Options:
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
+- `--agent <id>`
 
 Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 `--probe` runs live requests (may consume tokens and trigger rate limits).
+Probe rows can come from auth profiles, env credentials, or `models.json`.
+Expect probe statuses like `ok`, `auth`, `rate_limit`, `billing`, `timeout`,
+`format`, `unknown`, and `no_model`.
+When an explicit `auth.order.<provider>` omits a stored profile, probe reports
+`excluded_by_auth_order` instead of silently trying that profile.
 
 ### `models set <model>`
 

@@ -36,6 +36,7 @@ Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,
 the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
 configured default agent.
+Probe rows can come from auth profiles, env credentials, or `models.json`.
 
 Notes:
 
@@ -63,6 +64,27 @@ Options:
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
 - `--agent <id>` (configured agent id; overrides `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
+
+Probe status buckets:
+
+- `ok`
+- `auth`
+- `rate_limit`
+- `billing`
+- `timeout`
+- `format`
+- `unknown`
+- `no_model`
+
+Probe detail/reason-code cases to expect:
+
+- `excluded_by_auth_order`: a stored profile exists, but explicit
+  `auth.order.<provider>` omitted it, so probe reports the exclusion instead of
+  trying it.
+- `missing_credential`, `invalid_expires`, `expired`, `unresolved_ref`:
+  profile is present but not eligible/resolvable.
+- `no_model`: provider auth exists, but OpenClaw could not resolve a probeable
+  model candidate for that provider.
 
 ## Aliases + fallbacks
 
