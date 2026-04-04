@@ -206,7 +206,7 @@ That means generated images/files outside the workspace can now send when your f
 ```bash
 openclaw status          # local status (creds, sessions, queued events)
 openclaw status --all    # full diagnosis (read-only, pasteable)
-openclaw status --deep   # adds gateway health probes (Telegram + Discord)
+openclaw status --deep   # adds gateway health probes (WhatsApp Web + Telegram + Discord + Slack + Signal)
 openclaw health --json   # gateway health snapshot (WS)
 ```
 

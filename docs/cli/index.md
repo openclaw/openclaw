@@ -356,7 +356,7 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 
 - `openclaw security audit` — audit config + local state for common security foot-guns.
 - `openclaw security audit --deep` — best-effort live Gateway probe.
-- `openclaw security audit --fix` — tighten safe defaults and chmod state/config.
+- `openclaw security audit --fix` — tighten safe defaults and state/config permissions.
 
 ## Secrets
 
