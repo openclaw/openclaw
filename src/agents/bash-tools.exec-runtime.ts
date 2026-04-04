@@ -221,9 +221,13 @@ export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
 }) {
-  // `auto` is a routing strategy, not a wildcard allowlist. Keep per-call host
-  // selection pinned to the configured/session-selected target so a sandboxed
-  // session cannot silently hop to gateway or node.
+  // `auto` means "use sandbox/gateway by default, but permit agents to
+  // explicitly select any host".  Without this, an agent requesting
+  // `host=node` while the config says `auto` is rejected because the
+  // strict equality `"node" === "auto"` fails.
+  if (params.configuredTarget === "auto") {
+    return true;
+  }
   return params.requestedTarget === params.configuredTarget;
 }
 
