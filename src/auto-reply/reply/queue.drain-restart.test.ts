@@ -25,7 +25,7 @@ function createRun(params: {
 }): FollowupRun {
   return {
     execution: {
-      visibility: "internal-only",
+      visibility: "internal",
       agentPrompt: params.prompt,
     },
     messageId: params.messageId,
