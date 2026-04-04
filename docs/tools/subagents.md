@@ -43,6 +43,9 @@ transcript path on disk when you need the raw full transcript.
 
 - The spawn command is non-blocking; it returns a run id immediately.
 - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
+- Completion is push-based. Once spawned, do not poll `/subagents list`,
+  `sessions_list`, or `sessions_history` in a loop just to wait for it to
+  finish; inspect status only on-demand for debugging or intervention.
 - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 - For manual spawns, delivery is resilient:
   - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
@@ -188,6 +191,14 @@ Results flow back up the chain:
 3. Main agent receives the announce and delivers to the user
 
 Each level only sees announces from its direct children.
+
+Operational guidance:
+
+- Start child work once and wait for completion events instead of building poll
+  loops around `sessions_list`, `sessions_history`, `/subagents list`, or
+  `exec` sleep commands.
+- If a child completion event arrives after you already sent the final answer,
+  the correct follow-up is `NO_REPLY`.
 
 ### Tool policy by depth
 

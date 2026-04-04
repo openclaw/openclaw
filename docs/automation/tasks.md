@@ -26,6 +26,9 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 - ACP, subagents, all cron jobs, and CLI operations create tasks. Heartbeat turns do not.
 - Each task moves through `queued → running → terminal` (succeeded, failed, timed_out, cancelled, or lost).
 - Cron tasks stay live while the cron runtime still owns the job; chat-backed CLI tasks stay live only while their owning run context is still active.
+- Completion is push-driven: detached work can notify directly or wake the
+  requester session/heartbeat when it finishes, so status polling loops are
+  usually unnecessary.
 - Isolated cron runs and subagent completions best-effort clean up tracked browser tabs/processes for their child session before final cleanup bookkeeping.
 - Isolated cron delivery suppresses stale interim parent replies while
   descendant subagent work is still draining, and it prefers final descendant
@@ -127,6 +130,10 @@ When a task reaches a terminal state, OpenClaw notifies you. There are two deliv
 <Tip>
 Task completion triggers an immediate heartbeat wake so you see the result quickly — you do not have to wait for the next scheduled heartbeat tick.
 </Tip>
+
+That means the usual workflow is push-based: start detached work once, then let
+the runtime wake or notify you on completion. Poll task state only when you
+need debugging, intervention, or an explicit audit.
 
 ### Notification policies
 
