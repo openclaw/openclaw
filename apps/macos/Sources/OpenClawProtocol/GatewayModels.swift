@@ -2019,6 +2019,7 @@ public struct TalkSpeakParams: Codable, Sendable {
     public let modelid: String?
     public let outputformat: String?
     public let speed: Double?
+    public let ratewpm: Int?
     public let stability: Double?
     public let similarity: Double?
     public let style: Double?
@@ -2026,6 +2027,7 @@ public struct TalkSpeakParams: Codable, Sendable {
     public let seed: Int?
     public let normalize: String?
     public let language: String?
+    public let latencytier: Int?
 
     public init(
         text: String,
@@ -2033,19 +2035,22 @@ public struct TalkSpeakParams: Codable, Sendable {
         modelid: String?,
         outputformat: String?,
         speed: Double?,
+        ratewpm: Int?,
         stability: Double?,
         similarity: Double?,
         style: Double?,
         speakerboost: Bool?,
         seed: Int?,
         normalize: String?,
-        language: String?)
+        language: String?,
+        latencytier: Int?)
     {
         self.text = text
         self.voiceid = voiceid
         self.modelid = modelid
         self.outputformat = outputformat
         self.speed = speed
+        self.ratewpm = ratewpm
         self.stability = stability
         self.similarity = similarity
         self.style = style
@@ -2053,6 +2058,7 @@ public struct TalkSpeakParams: Codable, Sendable {
         self.seed = seed
         self.normalize = normalize
         self.language = language
+        self.latencytier = latencytier
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2061,6 +2067,7 @@ public struct TalkSpeakParams: Codable, Sendable {
         case modelid = "modelId"
         case outputformat = "outputFormat"
         case speed
+        case ratewpm = "rateWpm"
         case stability
         case similarity
         case style
@@ -2068,6 +2075,7 @@ public struct TalkSpeakParams: Codable, Sendable {
         case seed
         case normalize
         case language
+        case latencytier = "latencyTier"
     }
 }
 
