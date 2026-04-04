@@ -1,8 +1,19 @@
 {
   "name": "@openclaw/diffs",
+  "displayName": "Diffs",
   "version": "2026.3.14",
   "private": true,
   "description": "OpenClaw diff viewer plugin",
+  "homepage": "https://github.com/openclaw/openclaw/tree/main/extensions/diffs",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "extensions/diffs"
+  },
   "type": "module",
   "scripts": {
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
@@ -15,6 +26,14 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.14",
+      "minGatewayVersion": "2026.3.14"
+    },
+    "build": {
+      "openclawVersion": "2026.3.14",
+      "pluginSdkVersion": "2026.3.14"
+    }
   }
 }

@@ -1,0 +1,41 @@
+name: ClawHub Package Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_id:
+        description: Plugin directory name under extensions/
+        required: true
+        default: diffs
+        type: string
+      dry_run:
+        description: Preview only without publishing
+        required: true
+        default: true
+        type: boolean
+      version:
+        description: Optional package version override
+        required: false
+        type: string
+      tags:
+        description: Optional comma-separated tags
+        required: false
+        default: latest
+        type: string
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+      id-token: write
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@main
+    with:
+      source: ./extensions/${{ inputs.plugin_id }}
+      dry_run: ${{ inputs.dry_run }}
+      version: ${{ inputs.version }}
+      tags: ${{ inputs.tags }}
+      source_repo: ${{ github.repository }}
+      source_commit: ${{ github.sha }}
+      source_ref: ${{ github.ref }}
+    secrets:
+      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}
