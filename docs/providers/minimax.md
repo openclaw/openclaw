@@ -51,18 +51,18 @@ refs as text-only metadata until explicit provider config is materialized.
 
 **Best for:** quick setup with MiniMax Coding Plan via OAuth, no API key required.
 
-Enable the bundled OAuth plugin and authenticate:
+Authenticate with the explicit regional OAuth choice:
 
 ```bash
-openclaw plugins enable minimax  # skip if already loaded.
-openclaw gateway restart  # restart if gateway is already running
-openclaw onboard --auth-choice minimax-portal
+openclaw onboard --auth-choice minimax-global-oauth
+# or
+openclaw onboard --auth-choice minimax-cn-oauth
 ```
 
-You will be prompted to select an endpoint:
+Choice mapping:
 
-- **Global** - International users (`api.minimax.io`)
-- **CN** - Users in China (`api.minimaxi.com`)
+- `minimax-global-oauth`: International users (`api.minimax.io`)
+- `minimax-cn-oauth`: Users in China (`api.minimaxi.com`)
 
 See the MiniMax plugin package README in the OpenClaw repo for details.
 
@@ -72,9 +72,16 @@ See the MiniMax plugin package README in the OpenClaw repo for details.
 
 Configure via CLI:
 
-- Run `openclaw configure`
-- Select **Model/auth**
-- Choose a **MiniMax** auth option
+- Interactive onboarding:
+
+```bash
+openclaw onboard --auth-choice minimax-global-api
+# or
+openclaw onboard --auth-choice minimax-cn-api
+```
+
+- `minimax-global-api`: International users (`api.minimax.io`)
+- `minimax-cn-api`: Users in China (`api.minimaxi.com`)
 
 ```json5
 {
@@ -144,6 +151,13 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 2. Select **Model/auth**.
 3. Choose a **MiniMax** auth option.
 4. Pick your default model when prompted.
+
+Current MiniMax auth choices in the wizard/CLI:
+
+- `minimax-global-oauth`
+- `minimax-cn-oauth`
+- `minimax-global-api`
+- `minimax-cn-api`
 
 ## Configuration options
 
