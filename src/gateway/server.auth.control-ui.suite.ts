@@ -780,6 +780,14 @@ export function registerControlUiAndPairingSuite(): void {
           "operator.write",
         ]),
       );
+      expect(
+        initialPayload?.auth?.deviceTokens?.find((entry) => entry.role === "operator")?.scopes,
+      ).not.toEqual(
+        expect.arrayContaining(["node.camera", "node.display", "node.exec", "node.voice"]),
+      );
+      expect(
+        initialPayload?.auth?.deviceTokens?.find((entry) => entry.role === "operator")?.scopes,
+      ).not.toEqual(expect.arrayContaining(["operator.admin", "operator.pairing"]));
 
       const afterBootstrap = await listDevicePairing();
       expect(

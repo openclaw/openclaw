@@ -626,6 +626,36 @@ describe("device pairing tokens", () => {
     );
   });
 
+  test("bootstrap pairing keeps operator token scopes operator-only", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-operator-scope",
+        publicKey: "bootstrap-public-key-operator-scope",
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: [],
+        silent: true,
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveBootstrapDevicePairing(
+        request.request.requestId,
+        {
+          roles: ["node", "operator"],
+          scopes: ["node.exec", "operator.pairing", "operator.read", "operator.write"],
+        },
+        baseDir,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
+
+    const paired = await getPairedDevice("bootstrap-device-operator-scope", baseDir);
+    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.tokens?.node?.scopes).toEqual([]);
+  });
+
   test("verifies token and rejects mismatches", async () => {
     const { baseDir, token } = await setupOperatorToken(["operator.read"]);
 

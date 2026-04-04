@@ -275,8 +275,10 @@ struct GatewayNodeSessionTests {
                     "deviceToken": "operator-device-token",
                     "role": "operator",
                     "scopes": [
+                        "node.exec",
                         "operator.admin",
                         "operator.approvals",
+                        "operator.pairing",
                         "operator.read",
                         "operator.talk.secrets",
                         "operator.write",
@@ -315,8 +317,12 @@ struct GatewayNodeSessionTests {
         #expect(nodeEntry.token == "node-device-token")
         #expect(nodeEntry.scopes == [])
         #expect(operatorEntry.token == "operator-device-token")
-        #expect(operatorEntry.scopes.contains("operator.approvals"))
-        #expect(!operatorEntry.scopes.contains("operator.admin"))
+        #expect(operatorEntry.scopes == [
+            "operator.approvals",
+            "operator.read",
+            "operator.talk.secrets",
+            "operator.write",
+        ])
 
         await gateway.disconnect()
     }

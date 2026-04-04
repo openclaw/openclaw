@@ -34,7 +34,10 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import type { createSubsystemLogger } from "../../../logging/subsystem.js";
-import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
+import {
+  resolveBootstrapProfileScopesForRole,
+  type DeviceBootstrapProfile,
+} from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import {
   isBrowserOperatorUiClient,
@@ -1071,7 +1074,12 @@ export function attachGatewayWsMessageHandler(params: {
               continue;
             }
             const bootstrapRoleScopes =
-              bootstrapRole === "operator" ? bootstrapProfileForHello.scopes : [];
+              bootstrapRole === "operator"
+                ? resolveBootstrapProfileScopesForRole(
+                    bootstrapRole,
+                    bootstrapProfileForHello.scopes,
+                  )
+                : [];
             const extraToken = await ensureDeviceToken({
               deviceId: device.id,
               role: bootstrapRole,

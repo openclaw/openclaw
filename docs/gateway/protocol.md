@@ -109,6 +109,11 @@ bounded role entries in `deviceTokens`:
 }
 ```
 
+For the built-in node/operator bootstrap flow, the primary node token stays
+`scopes: []` and any handed-off operator token stays bounded to the bootstrap
+operator allowlist (`operator.approvals`, `operator.read`,
+`operator.talk.secrets`, `operator.write`).
+
 ### Node example
 
 ```json

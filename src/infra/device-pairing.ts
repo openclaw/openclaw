@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
-import type { DeviceBootstrapProfile } from "../shared/device-bootstrap-profile.js";
+import {
+  resolveBootstrapProfileScopesForRole,
+  type DeviceBootstrapProfile,
+} from "../shared/device-bootstrap-profile.js";
 import { resolveMissingRequestedScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   createAsyncLock,
@@ -643,7 +646,10 @@ export async function approveBootstrapDevicePairing(
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     for (const roleForToken of approvedRoles) {
       const existingToken = tokens[roleForToken];
-      const tokenScopes = roleForToken === OPERATOR_ROLE ? approvedScopes : [];
+      const tokenScopes =
+        roleForToken === OPERATOR_ROLE
+          ? resolveBootstrapProfileScopesForRole(roleForToken, approvedScopes)
+          : [];
       tokens[roleForToken] = buildDeviceAuthToken({
         role: roleForToken,
         scopes: tokenScopes,
