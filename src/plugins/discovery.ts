@@ -611,6 +611,10 @@ function discoverInDirectory(params: {
       if (!isExtensionFile(fullPath)) {
         continue;
       }
+      const expectedManifest = path.join(params.dir, "openclaw.plugin.json");
+      if (!fs.existsSync(expectedManifest) && params.recurseDirectories) {
+        continue;
+      }
       addCandidate({
         candidates: params.candidates,
         diagnostics: params.diagnostics,

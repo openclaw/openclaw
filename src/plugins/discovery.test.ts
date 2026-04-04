@@ -873,4 +873,28 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateOrder(first.candidates, ["alpha", "beta"]);
     expectCandidateOrder(second.candidates, ["beta", "alpha"]);
   });
+
+
+  it("does not treat bare files as plugin candidates when recursing workspace directories", () => {
+    const testDir = makeTempDir();
+    const workspaceDir = path.join(testDir, "workspace");
+    const scriptsDir = path.join(workspaceDir, "scripts");
+    mkdirSafe(scriptsDir);
+    fs.writeFileSync(path.join(scriptsDir, "random-script.js"), "console.log('not a plugin');");
+    
+    const skillsDir = path.join(workspaceDir, "skills", "user", "myskill", "scripts");
+    mkdirSafe(skillsDir);
+    fs.writeFileSync(path.join(skillsDir, "query.js"), "console.log('also not a plugin');");
+
+    const result = discoverOpenClawPlugins({
+      workspaceDir,
+      extraPaths: [],
+      env: { ...process.env, OPENCLAW_HOME: testDir },
+      cache: false,
+    });
+
+    const candidatePaths = result.candidates.map((c) => normalizePathForAssertion(c.source));
+    expect(candidatePaths).not.toContain(normalizePathForAssertion(path.join(scriptsDir, "random-script.js")));
+    expect(candidatePaths).not.toContain(normalizePathForAssertion(path.join(skillsDir, "query.js")));
+  });
 });
