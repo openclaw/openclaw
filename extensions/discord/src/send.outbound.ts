@@ -18,6 +18,7 @@ import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { resolveDiscordClientAccountContext } from "./client.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import {
   buildDiscordMessagePayload,
   buildDiscordSendError,
@@ -25,7 +26,6 @@ import {
   createDiscordClient,
   normalizeDiscordPollInput,
   normalizeStickerIds,
-  parseAndResolveRecipient,
   resolveChannelId,
   resolveDiscordChannelType,
   resolveDiscordSendComponents,

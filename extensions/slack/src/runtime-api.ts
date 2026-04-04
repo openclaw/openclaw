@@ -9,18 +9,18 @@ export type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 export type {
   ChannelPlugin,
-  OpenClawConfig,
   OpenClawPluginApi,
   PluginRuntime,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/channel-plugin-common";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 export type { SlackAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 export {
   emptyPluginConfigSchema,
   formatPairingApproveHint,
-  getChatChannelMeta,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/channel-plugin-common";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-export { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./targets.js";
+export { looksLikeSlackTargetId, normalizeSlackMessagingTarget } from "./target-parsing.js";
+export { getChatChannelMeta } from "./channel-api.js";
 export {
   createActionGate,
   imageResultFromFile,

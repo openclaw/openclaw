@@ -41,7 +41,7 @@ function getBluebubblesPlugin(): ChannelPlugin {
   if (!bluebubblesPluginCache) {
     ({ bluebubblesPlugin: bluebubblesPluginCache } = loadBundledPluginPublicSurfaceSync<{
       bluebubblesPlugin: ChannelPlugin;
-    }>({ pluginId: "bluebubbles", artifactBasename: "api.js" }));
+    }>({ pluginId: "bluebubbles", artifactBasename: "index.js" }));
   }
   return bluebubblesPluginCache;
 }

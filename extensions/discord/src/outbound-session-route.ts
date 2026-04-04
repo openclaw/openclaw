@@ -5,7 +5,7 @@ import {
   type RoutePeer,
 } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { parseDiscordTarget } from "./targets.js";
+import { parseDiscordTarget } from "./target-parsing.js";
 
 export type ResolveDiscordOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
