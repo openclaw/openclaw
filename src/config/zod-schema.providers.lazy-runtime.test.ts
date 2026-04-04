@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
+import type { BundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 
-const listBundledPluginMetadataMock = vi.hoisted(() => vi.fn(() => []));
+const listBundledPluginMetadataMock = vi.hoisted(() =>
+  vi.fn<(options?: unknown) => readonly BundledPluginMetadata[]>(() => []),
+);
 
 describe("ChannelsSchema bundled runtime loading", () => {
   beforeEach(() => {
     listBundledPluginMetadataMock.mockClear();
     vi.doMock("../plugins/bundled-plugin-metadata.js", () => ({
-      listBundledPluginMetadata: (...args: unknown[]) => listBundledPluginMetadataMock(...args),
+      listBundledPluginMetadata: (options?: unknown) => listBundledPluginMetadataMock(options),
     }));
   });
 
@@ -48,7 +51,7 @@ describe("ChannelsSchema bundled runtime loading", () => {
             },
           },
         },
-      },
+      } as unknown as BundledPluginMetadata,
     ]);
 
     const runtime = await importFreshModule<typeof import("./zod-schema.providers.js")>(

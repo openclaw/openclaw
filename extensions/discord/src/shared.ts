@@ -1,3 +1,4 @@
+import { createJiti } from "jiti";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -19,10 +20,21 @@ export const DISCORD_CHANNEL = "discord" as const;
 type DiscordDoctorModule = typeof import("./doctor.js");
 
 let discordDoctorModulePromise: Promise<DiscordDoctorModule> | undefined;
+let discordDoctorLoader: ReturnType<typeof createJiti> | undefined;
+let cachedDiscordDoctorModule: DiscordDoctorModule | undefined;
 
 async function loadDiscordDoctorModule(): Promise<DiscordDoctorModule> {
   discordDoctorModulePromise ??= import("./doctor.js");
   return await discordDoctorModulePromise;
+}
+
+function loadDiscordDoctorModuleSync(): DiscordDoctorModule {
+  if (cachedDiscordDoctorModule) {
+    return cachedDiscordDoctorModule;
+  }
+  discordDoctorLoader ??= createJiti(import.meta.url, { interopDefault: true });
+  cachedDiscordDoctorModule = discordDoctorLoader("./doctor.js") as DiscordDoctorModule;
+  return cachedDiscordDoctorModule;
 }
 
 const discordDoctor: ChannelDoctorAdapter = {
@@ -31,8 +43,8 @@ const discordDoctor: ChannelDoctorAdapter = {
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
   legacyConfigRules: DISCORD_LEGACY_CONFIG_RULES,
-  normalizeCompatibilityConfig: async (params) =>
-    (await loadDiscordDoctorModule()).discordDoctor.normalizeCompatibilityConfig?.(params) ?? {
+  normalizeCompatibilityConfig: (params) =>
+    loadDiscordDoctorModuleSync().discordDoctor.normalizeCompatibilityConfig?.(params) ?? {
       config: params.cfg,
       changes: [],
     },
@@ -40,8 +52,8 @@ const discordDoctor: ChannelDoctorAdapter = {
     (await loadDiscordDoctorModule()).discordDoctor.collectPreviewWarnings?.(params) ?? [],
   collectMutableAllowlistWarnings: async (params) =>
     (await loadDiscordDoctorModule()).discordDoctor.collectMutableAllowlistWarnings?.(params) ?? [],
-  repairConfig: async (params) =>
-    (await loadDiscordDoctorModule()).discordDoctor.repairConfig?.(params) ?? {
+  repairConfig: (params) =>
+    loadDiscordDoctorModuleSync().discordDoctor.repairConfig?.(params) ?? {
       config: params.cfg,
       changes: [],
     },

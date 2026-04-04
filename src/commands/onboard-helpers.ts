@@ -10,6 +10,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import {
   detectBrowserOpenSupport,
   openUrl,
