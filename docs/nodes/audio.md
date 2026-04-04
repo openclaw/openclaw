@@ -129,6 +129,7 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 ## Notes & limits
 
 - Provider auth follows the standard model auth order (auth profiles, env vars, `models.providers.*.apiKey`).
+- Groq setup details: [Groq](/providers/groq).
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used.
 - Deepgram setup details: [Deepgram (audio transcription)](/providers/deepgram).
 - Mistral setup details: [Mistral](/providers/mistral).

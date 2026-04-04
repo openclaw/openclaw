@@ -55,12 +55,13 @@ export GROQ_API_KEY="gsk_..."
 
 Groq also provides fast Whisper-based audio transcription. When configured as a
 media-understanding provider, OpenClaw uses Groq's `whisper-large-v3-turbo`
-model to transcribe voice messages.
+model to transcribe voice messages through the shared `tools.media.audio`
+surface.
 
 ```json5
 {
-  media: {
-    understanding: {
+  tools: {
+    media: {
       audio: {
         models: [{ provider: "groq" }],
       },
@@ -74,6 +75,14 @@ model to transcribe voice messages.
 If the Gateway runs as a daemon (launchd/systemd), make sure `GROQ_API_KEY` is
 available to that process (for example, in `~/.openclaw/.env` or via
 `env.shellEnv`).
+
+## Audio notes
+
+- Shared config path: `tools.media.audio`
+- Default Groq audio base URL: `https://api.groq.com/openai/v1`
+- Default Groq audio model: `whisper-large-v3-turbo`
+- Groq audio transcription uses the OpenAI-compatible `/audio/transcriptions`
+  path
 
 ## Available models
 
