@@ -298,8 +298,19 @@ The same rule applies to other generated bundled-helper families such as:
 - IRC: `plugin-sdk/irc*`
 - bundled helper/plugin surfaces like `plugin-sdk/googlechat`,
   `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles*`,
-  `plugin-sdk/mattermost*`, `plugin-sdk/openai`, `plugin-sdk/moonshot`,
+  `plugin-sdk/mattermost*`, `plugin-sdk/msteams`,
+  `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
+  `plugin-sdk/twitch`, `plugin-sdk/openai`, `plugin-sdk/moonshot`,
   `plugin-sdk/modelstudio*`, `plugin-sdk/provider-moonshot`,
+  `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`,
+  `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`,
+  `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`,
+  `plugin-sdk/kilocode`, `plugin-sdk/minimax`, `plugin-sdk/mistral`,
+  `plugin-sdk/nvidia`, `plugin-sdk/ollama*`, `plugin-sdk/opencode`,
+  `plugin-sdk/opencode-go`, `plugin-sdk/qianfan`, `plugin-sdk/sglang`,
+  `plugin-sdk/synthetic`, `plugin-sdk/venice`, `plugin-sdk/vllm`,
+  `plugin-sdk/xai`, `plugin-sdk/volcengine`,
+  `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
   `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
   `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
 
