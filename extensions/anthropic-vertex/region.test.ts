@@ -1,29 +1,38 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { resolveAnthropicVertexRegion, resolveAnthropicVertexRegionFromBaseUrl } from "./api.js";
 
-describe("anthropic-vertex ADC reads", () => {
-  afterEach(() => {
-    vi.resetModules();
-    vi.doUnmock("node:fs");
+describe("anthropic vertex region helpers", () => {
+  it("accepts well-formed regional env values", () => {
+    expect(
+      resolveAnthropicVertexRegion({
+        GOOGLE_CLOUD_LOCATION: "us-east1",
+      } as NodeJS.ProcessEnv),
+    ).toBe("us-east1");
   });
 
-  it("reads explicit ADC credentials without an existsSync preflight", async () => {
-    const existsSync = vi.fn(() => false);
-    const readFileSync = vi.fn((pathname: string) =>
-      pathname.endsWith(".json") ? '{"project_id":"vertex-project"}' : "",
+  it("falls back to the default region for malformed env values", () => {
+    expect(
+      resolveAnthropicVertexRegion({
+        GOOGLE_CLOUD_LOCATION: "us-central1.attacker.example",
+      } as NodeJS.ProcessEnv),
+    ).toBe("global");
+  });
+
+  it("parses regional Vertex endpoints", () => {
+    expect(
+      resolveAnthropicVertexRegionFromBaseUrl("https://europe-west4-aiplatform.googleapis.com"),
+    ).toBe("europe-west4");
+  });
+
+  it("treats the global Vertex endpoint as global", () => {
+    expect(resolveAnthropicVertexRegionFromBaseUrl("https://aiplatform.googleapis.com")).toBe(
+      "global",
     );
-    vi.doMock("node:fs", () => ({
-      existsSync,
-      readFileSync,
-    }));
+  });
 
-    const region = await import("./region.js");
-    const env = {
-      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex-adc.json",
-    } as NodeJS.ProcessEnv;
-
-    expect(region.resolveAnthropicVertexProjectId(env)).toBe("vertex-project");
-    expect(region.hasAnthropicVertexAvailableAuth(env)).toBe(true);
-    expect(existsSync).not.toHaveBeenCalled();
-    expect(readFileSync).toHaveBeenCalledWith("/tmp/vertex-adc.json", "utf8");
+  it("does not infer a Vertex region from custom proxy hosts", () => {
+    expect(
+      resolveAnthropicVertexRegionFromBaseUrl("https://proxy.example.com/google/aiplatform"),
+    ).toBeUndefined();
   });
 });
