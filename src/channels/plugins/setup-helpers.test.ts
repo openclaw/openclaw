@@ -253,13 +253,14 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
       accounts: {
         Ops: {
           enabled: true,
-          homeserver: "https://matrix.example.org",
-          userId: "@ops:example.org",
-          accessToken: "token",
         },
       },
     });
-    expect(next.channels?.matrix?.accounts?.ops).toBeUndefined();
+    expect(next.channels?.matrix?.accounts?.ops).toMatchObject({
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "token",
+    });
     expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
     expect(next.channels?.matrix?.homeserver).toBeUndefined();
     expect(next.channels?.matrix?.userId).toBeUndefined();

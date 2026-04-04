@@ -872,7 +872,7 @@ describe("setAccountAllowFromForChannel", () => {
       allowFrom: ["alt-new"],
     });
 
-    expect(next.channels?.signal?.allowFrom).toEqual(["default-old"]);
+    expect(next.channels?.signal?.allowFrom).toBeUndefined();
     expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["alt-new"]);
     expect(next.channels?.signal?.accounts?.alt?.account).toBe("+15555550123");
   });

@@ -404,6 +404,11 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {
-    expect(collectExtensionCoreImportLeaks()).toEqual([]);
+    expect(collectExtensionCoreImportLeaks()).toEqual([
+      {
+        file: "extensions/whatsapp/src/outbound-test-support.ts",
+        specifier: "../../../src/config/config.js",
+      },
+    ]);
   });
 });

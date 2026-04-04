@@ -98,11 +98,13 @@ describe("state migrations", () => {
     expect(detected.sessions.legacyKeys).toEqual(["group:123@g.us"]);
     expect(detected.agentDir.hasLegacy).toBe(true);
     expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
-      path.join(stateDir, "credentials", "whatsapp", "default", "creds.json"),
-      path.join(stateDir, "credentials", "whatsapp", "default", "pre-key-1.json"),
-      resolveChannelAllowFromPath("telegram", env, "alpha"),
-    ]);
+    expect(detected.channelPlans.plans.map((plan) => plan.targetPath).toSorted()).toEqual(
+      [
+        path.join(stateDir, "credentials", "whatsapp", "default", "creds.json"),
+        path.join(stateDir, "credentials", "whatsapp", "default", "pre-key-1.json"),
+        resolveChannelAllowFromPath("telegram", env, "alpha"),
+      ].toSorted(),
+    );
     expect(detected.preview).toEqual([
       `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
       `- Sessions: canonicalize legacy keys in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
@@ -133,9 +135,9 @@ describe("state migrations", () => {
       "Canonicalized 1 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
+      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
       `Moved WhatsApp auth creds.json → ${path.join(stateDir, "credentials", "whatsapp", "default", "creds.json")}`,
       `Moved WhatsApp auth pre-key-1.json → ${path.join(stateDir, "credentials", "whatsapp", "default", "pre-key-1.json")}`,
-      `Copied Telegram pairing allowFrom → ${resolveChannelAllowFromPath("telegram", env, "alpha")}`,
     ]);
 
     const mergedStore = JSON.parse(

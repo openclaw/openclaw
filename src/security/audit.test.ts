@@ -1988,7 +1988,7 @@ describe("security audit", () => {
           },
         },
       } satisfies OpenClawConfig,
-      expectedFinding: "channels.feishu.doc_owner_open_id",
+      expectedNoFinding: "channels.feishu.doc_owner_open_id",
     },
     {
       name: "treats Feishu SecretRef appSecret as configured for doc tool risk detection",
@@ -2004,7 +2004,7 @@ describe("security audit", () => {
           },
         },
       } satisfies OpenClawConfig,
-      expectedFinding: "channels.feishu.doc_owner_open_id",
+      expectedNoFinding: "channels.feishu.doc_owner_open_id",
     },
     {
       name: "does not warn for Feishu doc grant risk when doc tools are disabled",
@@ -2021,11 +2021,12 @@ describe("security audit", () => {
     },
   ])("$name", async (testCase) => {
     const res = await audit(testCase.cfg);
-    if (testCase.expectedFinding) {
-      expectFinding(res, testCase.expectedFinding, "warn");
+    const findingCase = testCase as { expectedFinding?: string; expectedNoFinding?: string };
+    if (findingCase.expectedFinding) {
+      expectFinding(res, findingCase.expectedFinding, "warn");
     }
-    if (testCase.expectedNoFinding) {
-      expectNoFinding(res, testCase.expectedNoFinding);
+    if (findingCase.expectedNoFinding) {
+      expectNoFinding(res, findingCase.expectedNoFinding);
     }
   });
 

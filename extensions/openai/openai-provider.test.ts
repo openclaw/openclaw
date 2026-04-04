@@ -191,7 +191,7 @@ describe("buildOpenAIProvider", () => {
       id: "gpt-5.4",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
-      contextWindow: 400_000,
+      contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
   });
