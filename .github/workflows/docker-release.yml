@@ -68,6 +68,19 @@ jobs:
           provenance: false
           push: true
 
+      - name: Generate SBOM for amd64
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta.outputs.tags }}
+          artifact-name: sbom-clawd-amd64.spdx.json
+          output-file: sbom-clawd-amd64.spdx.json
+
+      - name: Upload SBOM amd64
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-amd64
+          path: sbom-clawd-amd64.spdx.json
+
   # Build arm64 image
   build-arm64:
     runs-on: ubuntu-24.04-arm
@@ -116,6 +129,19 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-cache:arm64,mode=max
           provenance: false
           push: true
+
+      - name: Generate SBOM for arm64
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta.outputs.tags }}
+          artifact-name: sbom-clawd-arm64.spdx.json
+          output-file: sbom-clawd-arm64.spdx.json
+
+      - name: Upload SBOM arm64
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-arm64
+          path: sbom-clawd-arm64.spdx.json
 
   # Create multi-platform manifest
   create-manifest:
