@@ -11,6 +11,11 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("\nNO_REPLY\n")).toBe(true);
   });
 
+  it("returns true for mixed-case token", () => {
+    expect(isSilentReplyText("no_reply")).toBe(true);
+    expect(isSilentReplyText("  No_RePlY  ")).toBe(true);
+  });
+
   it("returns false for undefined/empty", () => {
     expect(isSilentReplyText(undefined)).toBe(false);
     expect(isSilentReplyText("")).toBe(false);

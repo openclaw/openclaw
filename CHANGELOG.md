@@ -120,6 +120,7 @@ Docs: https://docs.openclaw.ai
 - Agents/exec: restore `host=node` routing for node-pinned and `host=auto` sessions, while still blocking sandboxed `auto` sessions from jumping to gateway. (#60788) Thanks @openperf.
 - Agents/compaction: keep assistant tool calls and displaced tool results in the same compaction chunk so strict summarization providers stop rejecting orphaned tool pairs. (#58849) Thanks @openperf.
 - Cron: suppress exact `NO_REPLY` sentinel direct-delivery payloads, keep silent direct replies from falling back into duplicate main-summary sends, and treat structured `deleteAfterRun` silent replies the same as text silent replies. (#45737) Thanks @openperf.
+- Cron: keep exact silent-token detection case-insensitive again so mixed-case `NO_REPLY` outputs still stay silent in text and direct delivery paths. Thanks @obviyus.
 
 ## 2026.4.2
 

@@ -673,6 +673,32 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     ).toBe(false);
   });
 
+  it("suppresses mixed-case NO_REPLY in text delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "No_Reply" });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+      }),
+    );
+    expect(
+      shouldEnqueueCronMainSummary({
+        summaryText: "No_Reply",
+        deliveryRequested: true,
+        delivered: state.result?.delivered,
+        deliveryAttempted: state.result?.deliveryAttempted,
+        suppressMainSummary: false,
+        isCronSystemEvent: () => true,
+      }),
+    ).toBe(false);
+  });
+
   it("cleans up the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
