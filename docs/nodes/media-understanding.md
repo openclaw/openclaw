@@ -100,7 +100,7 @@ one of these supported sources instead:
 - the provider's standard environment variable (for example `GOOGLE_API_KEY`,
   `GROQ_API_KEY`, `OPENAI_API_KEY`)
 - `models.providers.<provider>.apiKey` in config when it resolves to a usable
-  string value, including plaintext or `${ENV_VAR}` substitution
+  string value via plaintext or `${ENV_VAR}` substitution
 
 If none of those sources resolve for a provider entry, media understanding skips
 that entry and falls back to the next configured model.
