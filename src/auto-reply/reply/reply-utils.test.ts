@@ -185,6 +185,29 @@ describe("normalizeReplyPayload", () => {
     expect(result!.text).toBe('{"action":"NO_REPLY","note":"example"}');
   });
 
+  it("keeps sticker-only payload (no text, no media)", () => {
+    const result = normalizeReplyPayload({ sticker: { raw: "1070:17878" } });
+    expect(result).not.toBeNull();
+    expect(result!.sticker).toEqual({ raw: "1070:17878" });
+  });
+
+  it("keeps sticker payload with text", () => {
+    const result = normalizeReplyPayload({ text: "おはよう！", sticker: { raw: "446:1988" } });
+    expect(result).not.toBeNull();
+    expect(result!.sticker).toEqual({ raw: "446:1988" });
+    expect(result!.text).toBe("おはよう！");
+  });
+
+  it("does not skip sticker-only payload (onSkip not called)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { sticker: { raw: "1070:17878" } },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).not.toBeNull();
+    expect(reasons).toEqual([]);
+  });
+
   it("strips NO_REPLY but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLY",
