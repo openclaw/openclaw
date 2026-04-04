@@ -965,9 +965,8 @@ class PipelineExecutor:
                         _check_text = _check_text.replace(_fp, "")
                     _has_error_markers = (
                         response.startswith("⚠️")
-                        or "traceback" in _check_text
-                        or "exception:" in _check_text
-                        or "error:" in _check_text
+                        or re.search(r"^traceback \(most recent call", _check_text, re.MULTILINE) is not None
+                        or re.search(r"^\w*error:", _check_text, re.MULTILINE) is not None
                         or "failed to execute" in _check_text
                     )
                     if _has_error_markers:
