@@ -2367,6 +2367,11 @@ for usage/billing and raise limits as needed.
     `ThrottlingException`, `resource exhausted`, and periodic usage-window
     limits (`weekly/monthly limit reached`) as failover-worthy rate limits.
 
+    Some HTTP `402` responses also stay in that transient bucket. If the
+    message looks like a retryable usage-window or organization/workspace spend
+    limit (`daily limit reached, resets tomorrow`, `organization spending limit
+    exceeded`), OpenClaw treats it as `rate_limit`, not a long billing disable.
+
     Context-overflow errors are different: signatures such as
     `request_too_large`, `input exceeds the maximum number of tokens`, or
     `input is too long for the model` stay on the compaction/retry path instead
