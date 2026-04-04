@@ -7,8 +7,14 @@ import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-h
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { testState } from "./test-helpers.mocks.js";
-import { createGatewaySuiteHarness, readConnectChallengeNonce } from "./test-helpers.server.js";
+import {
+  createGatewaySuiteHarness,
+  installGatewayTestHooks,
+  readConnectChallengeNonce,
+} from "./test-helpers.server.js";
 import { withTempConfig } from "./test-temp-config.js";
+
+installGatewayTestHooks({ scope: "suite" });
 
 let cleanupEnv: Array<() => void> = [];
 
