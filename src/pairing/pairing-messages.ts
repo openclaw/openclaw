@@ -9,7 +9,7 @@ export function buildPairingReply(params: {
 }): string {
   const { channel, idLine, code, widgetUrl } = params;
   const lines = [
-    "OpenClaw: access not configured.",
+    "AgentGlob: access not configured.",
     "",
     idLine,
     "",
