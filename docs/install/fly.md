@@ -229,7 +229,9 @@ read_when:
 
     Or visit `https://my-openclaw.fly.dev/`
 
-    Paste your gateway token (the one from `OPENCLAW_GATEWAY_TOKEN`) to authenticate.
+    Authenticate with the configured shared secret. This guide uses the gateway
+    token from `OPENCLAW_GATEWAY_TOKEN`; if you switched to password auth, use
+    that password instead.
 
     ### Logs
 
