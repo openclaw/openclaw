@@ -522,6 +522,17 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate-limited to **3 requests per 60 seconds** per `deviceId+clientIp`. When limited, the RPC returns `UNAVAILABLE` with `retryAfterMs`.
 </Note>
 
+Safe/default flow:
+
+- `config.schema.lookup`: inspect one path-scoped config subtree with field docs
+- `config.get`: fetch the current snapshot + hash
+- `config.patch`: preferred partial update path
+- `config.apply`: full-config replacement only
+- `update.run`: explicit self-update + restart
+
+When you are not replacing the entire config, prefer `config.schema.lookup`
+then `config.patch`.
+
 <AccordionGroup>
   <Accordion title="config.apply (full replace)">
     Validates + writes the full config and restarts the Gateway in one step.
