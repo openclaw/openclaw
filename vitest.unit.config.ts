@@ -30,13 +30,14 @@ export function createUnitVitestConfigWithOptions(
     name?: string;
   } = {},
 ) {
+  const isolate = resolveVitestIsolation(env);
   return defineProject({
     ...sharedVitestConfig,
     test: {
       ...sharedTest,
       name: options.name ?? "unit",
-      isolate: resolveVitestIsolation(env),
-      runner: "./test/non-isolated-runner.ts",
+      isolate,
+      ...(isolate ? {} : { runner: "./test/non-isolated-runner.ts" }),
       setupFiles: [
         ...new Set([...(sharedTest.setupFiles ?? []), "test/setup-openclaw-runtime.ts"]),
       ],

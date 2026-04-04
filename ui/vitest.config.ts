@@ -1,11 +1,13 @@
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig, defineProject } from "vitest/config";
+import { jsdomOptimizedDeps } from "../vitest.shared.config.ts";
 
 export default defineConfig({
   test: {
     projects: [
       defineProject({
         test: {
+          deps: jsdomOptimizedDeps,
           name: "unit",
           include: ["src/**/*.test.ts"],
           exclude: ["src/**/*.browser.test.ts", "src/**/*.node.test.ts"],
@@ -15,6 +17,7 @@ export default defineConfig({
       }),
       defineProject({
         test: {
+          deps: jsdomOptimizedDeps,
           name: "unit-node",
           include: ["src/**/*.node.test.ts"],
           environment: "jsdom",

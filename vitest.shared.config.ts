@@ -23,6 +23,15 @@ type VitestHostInfo = {
 
 export type OpenClawVitestPool = "threads" | "forks";
 
+export const jsdomOptimizedDeps = {
+  optimizer: {
+    web: {
+      enabled: true,
+      include: ["lit", "lit-html", "@lit/reactive-element", "marked"],
+    },
+  },
+} as const;
+
 function detectVitestHostInfo(): Required<VitestHostInfo> {
   return {
     cpuCount:
