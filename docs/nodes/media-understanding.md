@@ -81,7 +81,7 @@ Each `models[]` entry can be **provider** or **CLI**:
 {
   type: "provider", // default if omitted
   provider: "openai",
-  model: "gpt-5.2",
+  model: "gpt-5.4-mini",
   prompt: "Describe the image in <= 500 chars.",
   maxChars: 500,
   maxBytes: 10485760,
@@ -148,8 +148,8 @@ working option**:
    - `whisper` (Python CLI; downloads models automatically)
 2. **Gemini CLI** (`gemini`) using `read_many_files`
 3. **Provider keys**
-   - Audio: OpenAI → Groq → Deepgram → Google
-   - Image: OpenAI → Anthropic → Google → MiniMax
+   - Audio: OpenAI → Groq → Deepgram → Google → Mistral
+   - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
    - Video: Google
 
 To disable auto-detection, set:
@@ -188,6 +188,7 @@ If you set `capabilities`, the entry only runs for those media types. For shared
 lists, OpenClaw can infer defaults:
 
 - `openai`, `anthropic`, `minimax`: **image**
+- `minimax-portal`: **image**
 - `moonshot`: **image + video**
 - `google` (Gemini API): **image + audio + video**
 - `mistral`: **audio**
@@ -233,7 +234,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
   tools: {
     media: {
       models: [
-        { provider: "openai", model: "gpt-5.2", capabilities: ["image"] },
+        { provider: "openai", model: "gpt-5.4-mini", capabilities: ["image"] },
         {
           provider: "google",
           model: "gemini-3-flash-preview",
@@ -314,7 +315,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
         maxBytes: 10485760,
         maxChars: 500,
         models: [
-          { provider: "openai", model: "gpt-5.2" },
+          { provider: "openai", model: "gpt-5.4-mini" },
           { provider: "anthropic", model: "claude-opus-4-6" },
           {
             type: "cli",
@@ -377,7 +378,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a short summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.2) · audio skipped (maxBytes)
+📎 Media: image ok (openai/gpt-5.4-mini) · audio skipped (maxBytes)
 ```
 
 This shows per‑capability outcomes and the chosen provider/model when applicable.
