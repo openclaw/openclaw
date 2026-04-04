@@ -1,4 +1,5 @@
 import { resolveSafeBins } from "./exec-approvals-allowlist.js";
+import { resolveExecDenylist } from "./exec-denylist.js";
 import {
   normalizeSafeBinProfileFixtures,
   resolveSafeBinProfiles,
@@ -16,6 +17,7 @@ import {
 
 export type ExecSafeBinConfigScope = {
   safeBins?: string[] | null;
+  denylist?: string[] | null;
   safeBinProfiles?: SafeBinProfileFixtures | null;
   safeBinTrustedDirs?: string[] | null;
 };
@@ -105,6 +107,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   onWarning?: (message: string) => void;
 }): {
   safeBins: Set<string>;
+  denylist: string[];
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   trustedSafeBinDirs: ReadonlySet<string>;
   unprofiledSafeBins: string[];
@@ -112,6 +115,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   writableTrustedSafeBinDirs: ReadonlyArray<WritableTrustedSafeBinDir>;
 } {
   const safeBins = resolveSafeBins(params.local?.safeBins ?? params.global?.safeBins);
+  const denylist = resolveExecDenylist(params.local?.denylist ?? params.global?.denylist);
   const safeBinProfiles = resolveSafeBinProfiles(
     resolveMergedSafeBinProfileFixtures({
       global: params.global,
@@ -146,6 +150,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   }
   return {
     safeBins,
+    denylist,
     safeBinProfiles,
     trustedSafeBinDirs,
     unprofiledSafeBins,

@@ -17,6 +17,7 @@ import {
   type ShellChainOperator,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { matchesExecDenylist } from "./exec-denylist.js";
 import {
   detectInterpreterInlineEvalArgv,
   isInterpreterLikeAllowlistPattern,
@@ -125,6 +126,7 @@ export type SkillBinTrustEntry = {
 type ExecAllowlistContext = {
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
+  denylist?: readonly string[];
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -138,6 +140,7 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
   return {
     allowlist: params.allowlist,
     safeBins: params.safeBins,
+    denylist: params.denylist,
     safeBinProfiles: params.safeBinProfiles,
     cwd: params.cwd,
     env: params.env,
@@ -685,6 +688,8 @@ export function evaluateExecAllowlist(
 export type ExecAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
+  denylistDenied: boolean;
+  denylistPattern: string | null;
   allowlistMatches: ExecAllowlistEntry[];
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
@@ -1075,6 +1080,8 @@ export function evaluateShellAllowlist(
   const analysisFailure = (): ExecAllowlistAnalysis => ({
     analysisOk: false,
     allowlistSatisfied: false,
+    denylistDenied: false,
+    denylistPattern: null,
     allowlistMatches: [],
     segments: [],
     segmentAllowlistEntries: [],
@@ -1100,10 +1107,29 @@ export function evaluateShellAllowlist(
     if (!analysis.ok) {
       return analysisFailure();
     }
+    const denylistEval = matchesExecDenylist({
+      analysis,
+      commandText: params.command,
+      denylist: allowlistContext.denylist,
+    });
+    if (denylistEval.denied) {
+      return {
+        analysisOk: true,
+        allowlistSatisfied: false,
+        denylistDenied: true,
+        denylistPattern: denylistEval.pattern,
+        allowlistMatches: [],
+        segments: analysis.segments,
+        segmentAllowlistEntries: analysis.segments.map(() => null),
+        segmentSatisfiedBy: analysis.segments.map(() => null),
+      };
+    }
     const evaluation = evaluateExecAllowlist({ analysis, ...allowlistContext });
     return {
       analysisOk: true,
       allowlistSatisfied: evaluation.allowlistSatisfied,
+      denylistDenied: false,
+      denylistPattern: null,
       allowlistMatches: evaluation.allowlistMatches,
       segments: analysis.segments,
       segmentAllowlistEntries: evaluation.segmentAllowlistEntries,
@@ -1136,6 +1162,27 @@ export function evaluateShellAllowlist(
     evaluation: ExecAllowlistEvaluation;
     opToNext: ShellChainOperator | null;
   }>;
+  const combinedSegments = finalizedEvaluations.flatMap((entry) => entry.analysis.segments);
+  const denylistEval = matchesExecDenylist({
+    analysis: {
+      ok: true,
+      segments: combinedSegments,
+    },
+    commandText: params.command,
+    denylist: allowlistContext.denylist,
+  });
+  if (denylistEval.denied) {
+    return {
+      analysisOk: true,
+      allowlistSatisfied: false,
+      denylistDenied: true,
+      denylistPattern: denylistEval.pattern,
+      allowlistMatches: [],
+      segments: combinedSegments,
+      segmentAllowlistEntries: combinedSegments.map(() => null),
+      segmentSatisfiedBy: combinedSegments.map(() => null),
+    };
+  }
   const allowSkillPreludeAtIndex = new Set<number>();
   const reachableSkillIds = new Set<string>();
   // Only allow the `cat SKILL.md && printf ...` display prelude when it sits on a
@@ -1191,6 +1238,8 @@ export function evaluateShellAllowlist(
       return {
         analysisOk: true,
         allowlistSatisfied: false,
+        denylistDenied: false,
+        denylistPattern: null,
         allowlistMatches,
         segments,
         segmentAllowlistEntries,
@@ -1202,6 +1251,8 @@ export function evaluateShellAllowlist(
   return {
     analysisOk: true,
     allowlistSatisfied: true,
+    denylistDenied: false,
+    denylistPattern: null,
     allowlistMatches,
     segments,
     segmentAllowlistEntries,

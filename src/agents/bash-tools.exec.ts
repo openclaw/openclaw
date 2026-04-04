@@ -1183,6 +1183,7 @@ export function createExecTool(
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   const {
     safeBins,
+    denylist,
     safeBinProfiles,
     trustedSafeBinDirs,
     unprofiledSafeBins,
@@ -1476,6 +1477,7 @@ export function createExecTool(
           security,
           ask,
           strictInlineEval: defaults?.strictInlineEval,
+          denylist,
           trigger: defaults?.trigger,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
@@ -1502,6 +1504,7 @@ export function createExecTool(
           security,
           ask,
           safeBins,
+          denylist,
           safeBinProfiles,
           strictInlineEval: defaults?.strictInlineEval,
           trigger: defaults?.trigger,

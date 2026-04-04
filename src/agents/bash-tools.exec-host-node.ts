@@ -48,6 +48,7 @@ export type ExecuteNodeHostCommandParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   strictInlineEval?: boolean;
+  denylist?: readonly string[];
   timeoutSec?: number;
   defaultTimeoutSec: number;
   approvalRunningNoticeMs: number;
@@ -127,6 +128,7 @@ export async function executeNodeHostCommand(
   const baseAllowlistEval = evaluateShellAllowlist({
     command: params.command,
     allowlist: [],
+    denylist: params.denylist,
     safeBins: new Set(),
     cwd: params.workdir,
     env: params.env,
@@ -134,6 +136,10 @@ export async function executeNodeHostCommand(
     trustedSafeBinDirs: params.trustedSafeBinDirs,
   });
   let analysisOk = baseAllowlistEval.analysisOk;
+  if (baseAllowlistEval.denylistDenied) {
+    const matchedPattern = baseAllowlistEval.denylistPattern ?? "<unknown>";
+    throw new Error(`exec denied by denylist pattern: ${matchedPattern}`);
+  }
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
   const inlineEvalHit =
@@ -172,6 +178,7 @@ export async function executeNodeHostCommand(
         const allowlistEval = evaluateShellAllowlist({
           command: params.command,
           allowlist: resolved.allowlist,
+          denylist: params.denylist,
           safeBins: new Set(),
           cwd: params.workdir,
           env: params.env,

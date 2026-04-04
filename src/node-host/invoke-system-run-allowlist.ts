@@ -9,6 +9,7 @@ import {
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
+import { matchesExecDenylist } from "../infra/exec-denylist.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import type { RunResult } from "./invoke-types.js";
 
@@ -16,6 +17,8 @@ export type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   allowlistSatisfied: boolean;
+  denylistDenied: boolean;
+  denylistPattern: string | null;
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
 };
@@ -26,6 +29,7 @@ export function evaluateSystemRunAllowlist(params: {
   approvals: ReturnType<typeof resolveExecApprovals>;
   security: ExecSecurity;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
+  denylist: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["denylist"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
   trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
   cwd: string | undefined;
@@ -38,6 +42,7 @@ export function evaluateSystemRunAllowlist(params: {
       command: params.shellCommand,
       allowlist: params.approvals.allowlist,
       safeBins: params.safeBins,
+      denylist: params.denylist,
       safeBinProfiles: params.safeBinProfiles,
       cwd: params.cwd,
       env: params.env,
@@ -49,6 +54,8 @@ export function evaluateSystemRunAllowlist(params: {
     return {
       analysisOk: allowlistEval.analysisOk,
       allowlistMatches: allowlistEval.allowlistMatches,
+      denylistDenied: allowlistEval.denylistDenied,
+      denylistPattern: allowlistEval.denylistPattern,
       allowlistSatisfied:
         params.security === "allowlist" && allowlistEval.analysisOk
           ? allowlistEval.allowlistSatisfied
@@ -59,6 +66,11 @@ export function evaluateSystemRunAllowlist(params: {
   }
 
   const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+  const denylistEval = matchesExecDenylist({
+    analysis,
+    commandText: params.argv.join(" "),
+    denylist: params.denylist,
+  });
   const allowlistEval = evaluateExecAllowlist({
     analysis,
     allowlist: params.approvals.allowlist,
@@ -72,6 +84,8 @@ export function evaluateSystemRunAllowlist(params: {
   return {
     analysisOk: analysis.ok,
     allowlistMatches: allowlistEval.allowlistMatches,
+    denylistDenied: denylistEval.denied,
+    denylistPattern: denylistEval.pattern,
     allowlistSatisfied:
       params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
     segments: analysis.segments,

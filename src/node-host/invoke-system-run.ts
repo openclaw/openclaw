@@ -328,28 +328,44 @@ async function evaluateSystemRunPolicyPhase(
   const security = approvals.agent.security;
   const ask = approvals.agent.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
-  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
-    global: cfg.tools?.exec,
-    local: agentExec,
-    onWarning: warnWritableTrustedDirOnce,
-  });
-  const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  let { analysisOk, allowlistMatches, allowlistSatisfied, segments, segmentAllowlistEntries } =
-    evaluateSystemRunAllowlist({
-      shellCommand: parsed.shellPayload,
-      argv: parsed.argv,
-      approvals,
-      security,
-      safeBins,
-      safeBinProfiles,
-      trustedSafeBinDirs,
-      cwd: parsed.cwd,
-      env: parsed.env,
-      skillBins: bins,
-      autoAllowSkills,
+  const { safeBins, denylist, safeBinProfiles, trustedSafeBinDirs } =
+    resolveExecSafeBinRuntimePolicy({
+      global: cfg.tools?.exec,
+      local: agentExec,
+      onWarning: warnWritableTrustedDirOnce,
     });
+  const bins = autoAllowSkills ? await opts.skillBins.current() : [];
+  let {
+    analysisOk,
+    allowlistMatches,
+    allowlistSatisfied,
+    denylistDenied,
+    denylistPattern,
+    segments,
+    segmentAllowlistEntries,
+  } = evaluateSystemRunAllowlist({
+    shellCommand: parsed.shellPayload,
+    argv: parsed.argv,
+    approvals,
+    security,
+    safeBins,
+    denylist,
+    safeBinProfiles,
+    trustedSafeBinDirs,
+    cwd: parsed.cwd,
+    env: parsed.env,
+    skillBins: bins,
+    autoAllowSkills,
+  });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
+  if (denylistDenied) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "allowlist-miss",
+      message: `SYSTEM_RUN_DENIED: denylist pattern matched (${denylistPattern ?? "<unknown>"})`,
+    });
+    return null;
+  }
   const inlineEvalHit = strictInlineEval
     ? (segments
         .map((segment) =>
