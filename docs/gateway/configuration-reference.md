@@ -2338,10 +2338,10 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
             id: "kimi-k2.5",
             name: "Kimi K2.5",
             reasoning: false,
-            input: ["text"],
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 256000,
-            maxTokens: 8192,
+            contextWindow: 262144,
+            maxTokens: 262144,
           },
         ],
       },
@@ -2352,6 +2352,10 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
 
 For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw onboard --auth-choice moonshot-api-key-cn`.
 
+Native Moonshot endpoints advertise streaming usage compatibility on the shared
+`openai-completions` transport, and OpenClaw now keys that off endpoint
+capabilities rather than the built-in provider id alone.
+
 </Accordion>
 
 <Accordion title="Kimi Coding">
@@ -2361,8 +2365,8 @@ For the China endpoint: `baseUrl: "https://api.moonshot.cn/v1"` or `openclaw onb
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kimi-coding/k2p5" },
-      models: { "kimi-coding/k2p5": { alias: "Kimi K2.5" } },
+      model: { primary: "kimi/kimi-code" },
+      models: { "kimi/kimi-code": { alias: "Kimi Code" } },
     },
   },
 }

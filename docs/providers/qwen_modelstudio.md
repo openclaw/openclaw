@@ -72,6 +72,12 @@ After onboarding, set a default model:
 The provider auto-selects the endpoint based on your auth choice. You can
 override with a custom `baseUrl` in config.
 
+Native Model Studio endpoints advertise streaming usage compatibility on the
+shared `openai-completions` transport. OpenClaw keys that off endpoint
+capabilities now, so DashScope-compatible custom provider ids targeting the
+same native hosts inherit the same streaming-usage behavior instead of
+requiring the built-in `modelstudio` provider id specifically.
+
 ## Get your API key
 
 - **China**: [bailian.console.aliyun.com](https://bailian.console.aliyun.com/)
@@ -95,6 +101,14 @@ OpenClaw currently ships this bundled Model Studio catalog:
 
 Availability can still vary by endpoint and billing plan even when a model is
 present in the bundled catalog.
+
+Native-streaming usage compatibility applies to both the Coding Plan hosts and
+the Standard DashScope-compatible hosts:
+
+- `https://coding.dashscope.aliyuncs.com/v1`
+- `https://coding-intl.dashscope.aliyuncs.com/v1`
+- `https://dashscope.aliyuncs.com/compatible-mode/v1`
+- `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
 
 ## Qwen 3.6 Plus availability
 

@@ -208,6 +208,14 @@ API key auth, and dynamic model resolution.
     `createDefaultModelsPresetAppliers(...)`, and
     `createModelCatalogPresetAppliers(...)`.
 
+    When a provider's native endpoint supports streamed usage blocks on the
+    normal `openai-completions` transport, prefer the shared catalog helpers in
+    `openclaw/plugin-sdk/provider-catalog-shared` instead of hardcoding
+    provider-id checks. `supportsNativeStreamingUsageCompat(...)` and
+    `applyProviderNativeStreamingUsageCompat(...)` detect support from the
+    endpoint capability map, so native Moonshot/DashScope-style endpoints still
+    opt in even when a plugin is using a custom provider id.
+
   </Step>
 
   <Step title="Add dynamic model resolution">
