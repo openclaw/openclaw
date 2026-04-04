@@ -26,6 +26,7 @@ function makeEntry(skill: Skill): SkillEntry {
     skill,
     frontmatter: {},
     exposure: {
+      includeInRuntimeRegistry: true,
       includeInAvailableSkillsPrompt: skill.disableModelInvocation !== true,
       userInvocable: true,
     },

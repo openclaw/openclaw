@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import { shouldIncludeSkill } from "./skills/config.js";
 import { resolveSkillInvocationPolicy } from "./skills/frontmatter.js";
 import { formatSkillsForPrompt } from "./skills/skill-contract.js";
@@ -10,20 +11,25 @@ describe("issue 60716 proof", () => {
     } as const;
 
     const invocation = resolveSkillInvocationPolicy(frontmatter as never);
-    const skill = {
+    const skill = createCanonicalFixtureSkill({
       name: "proof-skill",
       description: "proof desc",
       filePath: "/tmp/proof/SKILL.md",
-      content: "# proof",
       baseDir: "/tmp/proof",
+      source: "workspace",
       disableModelInvocation: invocation.disableModelInvocation,
-    };
+    });
 
     const entry = {
       skill,
       frontmatter,
       metadata: undefined,
       invocation,
+      exposure: {
+        includeInRuntimeRegistry: true,
+        includeInAvailableSkillsPrompt: true,
+        userInvocable: true,
+      },
     };
 
     const included = shouldIncludeSkill({ entry, config: undefined, eligibility: undefined });
