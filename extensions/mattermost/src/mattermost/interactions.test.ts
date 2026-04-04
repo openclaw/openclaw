@@ -1,6 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
+import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import type { MattermostClient, MattermostPost } from "./client.js";
@@ -441,13 +441,11 @@ describe("createMattermostInteractionHandler", () => {
       options: { sessionKey?: string | null; sessionId?: string | null; userId?: string | null },
     ) => boolean = () => true,
   ) {
-    setMattermostRuntime(
-      createPluginRuntimeMock({
-        system: {
-          enqueueSystemEvent,
-        },
-      }),
-    );
+    setMattermostRuntime({
+      system: {
+        enqueueSystemEvent,
+      },
+    } as unknown as PluginRuntime);
   }
 
   function createMattermostClientMock(

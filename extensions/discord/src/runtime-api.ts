@@ -5,16 +5,17 @@ export {
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
 } from "openclaw/plugin-sdk/channel-status";
-export {
-  buildChannelConfigSchema,
-  DiscordConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+export { buildChannelConfigSchema, DiscordConfigSchema } from "../config-api.js";
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
-export type { ChannelPlugin, OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
+export type {
+  ChannelPlugin,
+  OpenClawPluginApi,
+  PluginRuntime,
+} from "openclaw/plugin-sdk/channel-plugin-common";
 export type {
   DiscordAccountConfig,
   DiscordActionConfig,
@@ -51,8 +52,7 @@ export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 export {
   emptyPluginConfigSchema,
   formatPairingApproveHint,
-  getChatChannelMeta,
-} from "openclaw/plugin-sdk/core";
+} from "openclaw/plugin-sdk/channel-plugin-common";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 export {
@@ -60,4 +60,5 @@ export {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+export { getChatChannelMeta } from "./channel-api.js";
 export { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";

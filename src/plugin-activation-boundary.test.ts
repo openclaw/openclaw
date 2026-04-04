@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-sdk/facade-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-sdk/facade-runtime.js")>();
+vi.mock("./plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./plugin-sdk/facade-runtime.js")>(
+    "./plugin-sdk/facade-runtime.js",
+  );
   return {
     ...actual,
     loadBundledPluginPublicSurfaceModuleSync,
@@ -45,12 +47,6 @@ describe("plugin activation boundary", () => {
       }>
     | undefined;
   let browserAmbientImportsPromise: Promise<void> | undefined;
-  let discordMaintenancePromise:
-    | Promise<{
-        unbindThreadBindingsBySessionKey: typeof import("./plugin-sdk/discord-maintenance.js").unbindThreadBindingsBySessionKey;
-      }>
-    | undefined;
-
   function importAmbientModules() {
     ambientImportsPromise ??= Promise.all([
       import("./agents/cli-session.js"),
@@ -108,13 +104,6 @@ describe("plugin activation boundary", () => {
       import("./security/audit-extra.sync.js"),
     ]).then(() => undefined);
     return browserAmbientImportsPromise;
-  }
-
-  function importDiscordMaintenance() {
-    discordMaintenancePromise ??= import("./plugin-sdk/discord-maintenance.js").then((module) => ({
-      unbindThreadBindingsBySessionKey: module.unbindThreadBindingsBySessionKey,
-    }));
-    return discordMaintenancePromise;
   }
 
   it("does not load bundled provider plugins on ambient command imports", async () => {
@@ -187,17 +176,16 @@ describe("plugin activation boundary", () => {
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 
-  it("keeps discord cleanup helpers cold when discord is disabled", async () => {
-    const discord = await importDiscordMaintenance();
+  it("keeps generic session-binding cleanup helpers cold when plugins are disabled", async () => {
+    const { getSessionBindingService } =
+      await import("./infra/outbound/session-binding-service.js");
 
-    expect(
-      discord.unbindThreadBindingsBySessionKey({
+    await expect(
+      getSessionBindingService().unbind({
         targetSessionKey: "agent:main:test",
-        targetKind: "acp",
         reason: "session-reset",
-        sendFarewell: true,
       }),
-    ).toEqual([]);
+    ).resolves.toEqual([]);
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
   });
 

@@ -1,15 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "openclaw/plugin-sdk/zod";
-import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
-
-export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
-export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
-
-export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
-export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
+import { AcpxPluginConfigSchema } from "./config-schema.js";
+import type {
+  AcpxPluginConfig,
+  AcpxPermissionMode,
+  AcpxNonInteractivePermissionPolicy,
+  McpServerConfig,
+  AcpxMcpServer,
+  ResolvedAcpxPluginConfig,
+} from "./config-schema.js";
+import type { z } from "openclaw/plugin-sdk/zod";
+export {
+  ACPX_NON_INTERACTIVE_POLICIES,
+  ACPX_PERMISSION_MODES,
+  type AcpxMcpServer,
+  type AcpxNonInteractivePermissionPolicy,
+  type AcpxPermissionMode,
+  type AcpxPluginConfig,
+  type McpServerConfig,
+  type ResolvedAcpxPluginConfig,
+  createAcpxPluginConfigSchema,
+} from "./config-schema.js";
 
 export const ACPX_VERSION_ANY = "any";
 export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
@@ -72,48 +84,6 @@ export function buildAcpxLocalInstallCommand(version: string = ACPX_PINNED_VERSI
 }
 export const ACPX_LOCAL_INSTALL_COMMAND = buildAcpxLocalInstallCommand();
 
-export type McpServerConfig = {
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-};
-
-export type AcpxMcpServer = {
-  name: string;
-  command: string;
-  args: string[];
-  env: Array<{ name: string; value: string }>;
-};
-
-export type AcpxPluginConfig = {
-  command?: string;
-  expectedVersion?: string;
-  cwd?: string;
-  permissionMode?: AcpxPermissionMode;
-  nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
-  pluginToolsMcpBridge?: boolean;
-  strictWindowsCmdWrapper?: boolean;
-  timeoutSeconds?: number;
-  queueOwnerTtlSeconds?: number;
-  mcpServers?: Record<string, McpServerConfig>;
-};
-
-export type ResolvedAcpxPluginConfig = {
-  command: string;
-  expectedVersion?: string;
-  allowPluginLocalInstall: boolean;
-  stripProviderAuthEnvVars: boolean;
-  installCommand: string;
-  cwd: string;
-  permissionMode: AcpxPermissionMode;
-  nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
-  pluginToolsMcpBridge: boolean;
-  strictWindowsCmdWrapper: boolean;
-  timeoutSeconds?: number;
-  queueOwnerTtlSeconds: number;
-  mcpServers: Record<string, McpServerConfig>;
-};
-
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
 const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 0.1;
@@ -122,56 +92,6 @@ const DEFAULT_STRICT_WINDOWS_CMD_WRAPPER = true;
 type ParseResult =
   | { ok: true; value: AcpxPluginConfig | undefined }
   | { ok: false; message: string };
-
-const nonEmptyTrimmedString = (message: string) =>
-  z.string({ error: message }).trim().min(1, { error: message });
-
-const McpServerConfigSchema = z.object({
-  command: nonEmptyTrimmedString("command must be a non-empty string").describe(
-    "Command to run the MCP server",
-  ),
-  args: z
-    .array(z.string({ error: "args must be an array of strings" }), {
-      error: "args must be an array of strings",
-    })
-    .optional()
-    .describe("Arguments to pass to the command"),
-  env: z
-    .record(z.string(), z.string({ error: "env values must be strings" }), {
-      error: "env must be an object of strings",
-    })
-    .optional()
-    .describe("Environment variables for the MCP server"),
-});
-
-const AcpxPluginConfigSchema = z.strictObject({
-  command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
-  expectedVersion: nonEmptyTrimmedString("expectedVersion must be a non-empty string").optional(),
-  cwd: nonEmptyTrimmedString("cwd must be a non-empty string").optional(),
-  permissionMode: z
-    .enum(ACPX_PERMISSION_MODES, {
-      error: `permissionMode must be one of: ${ACPX_PERMISSION_MODES.join(", ")}`,
-    })
-    .optional(),
-  nonInteractivePermissions: z
-    .enum(ACPX_NON_INTERACTIVE_POLICIES, {
-      error: `nonInteractivePermissions must be one of: ${ACPX_NON_INTERACTIVE_POLICIES.join(", ")}`,
-    })
-    .optional(),
-  pluginToolsMcpBridge: z.boolean({ error: "pluginToolsMcpBridge must be a boolean" }).optional(),
-  strictWindowsCmdWrapper: z
-    .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
-    .optional(),
-  timeoutSeconds: z
-    .number({ error: "timeoutSeconds must be a number >= 0.001" })
-    .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
-    .optional(),
-  queueOwnerTtlSeconds: z
-    .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
-    .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
-    .optional(),
-  mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
-});
 
 function formatAcpxConfigIssue(issue: z.ZodIssue | undefined): string {
   if (!issue) {
@@ -261,10 +181,6 @@ function resolveConfiguredMcpServers(params: {
   }
   resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME] = resolvePluginToolsMcpServerConfig(params.moduleUrl);
   return resolved;
-}
-
-export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
-  return buildPluginConfigSchema(AcpxPluginConfigSchema);
 }
 
 export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {

@@ -12,7 +12,11 @@ describe("secrets configure plan helpers", () => {
   it("builds configure candidates from supported configure targets", () => {
     const config = {
       talk: {
-        apiKey: "plain", // pragma: allowlist secret
+        providers: {
+          elevenlabs: {
+            apiKey: "plain", // pragma: allowlist secret
+          },
+        },
       },
       channels: {
         telegram: {
@@ -23,7 +27,7 @@ describe("secrets configure plan helpers", () => {
 
     const candidates = buildConfigureCandidates(config);
     const paths = candidates.map((entry) => entry.path);
-    expect(paths).toContain("talk.apiKey");
+    expect(paths).toContain("talk.providers.elevenlabs.apiKey");
     expect(paths).toContain("channels.telegram.botToken");
   });
 
@@ -84,10 +88,14 @@ describe("secrets configure plan helpers", () => {
     const candidates = buildConfigureCandidatesForScope({
       config: {
         talk: {
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "TALK_API_KEY",
+          providers: {
+            elevenlabs: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "TALK_API_KEY",
+              },
+            },
           },
         },
       } as OpenClawConfig,
@@ -113,7 +121,7 @@ describe("secrets configure plan helpers", () => {
     expect(candidates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: "talk.apiKey",
+          path: "talk.providers.elevenlabs.apiKey",
           existingRef: {
             source: "env",
             provider: "default",
@@ -152,25 +160,24 @@ describe("secrets configure plan helpers", () => {
       } as OpenClawConfig,
     });
 
-    const legacy = candidates.find((entry) => entry.path === "talk.apiKey");
     const normalized = candidates.find(
       (entry) => entry.path === "talk.providers.elevenlabs.apiKey",
     );
-    expect(legacy?.isDerived).not.toBe(true);
     expect(normalized?.isDerived).toBe(true);
   });
 
   it("reports configure change presence and builds deterministic plan shape", () => {
     const selected = new Map([
       [
-        "talk.apiKey",
+        "talk.providers.elevenlabs.apiKey",
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
-          label: "talk.apiKey",
+          type: "talk.providers.*.apiKey",
+          path: "talk.providers.elevenlabs.apiKey",
+          pathSegments: ["talk", "providers", "elevenlabs", "apiKey"],
+          label: "talk.providers.elevenlabs.apiKey",
           configFile: "openclaw.json" as const,
           expectedResolvedValue: "string" as const,
+          providerId: "elevenlabs",
           ref: {
             source: "env" as const,
             provider: "default",
@@ -198,7 +205,7 @@ describe("secrets configure plan helpers", () => {
       generatedAt: "2026-02-28T00:00:00.000Z",
     });
     expect(plan.targets).toHaveLength(1);
-    expect(plan.targets[0]?.path).toBe("talk.apiKey");
+    expect(plan.targets[0]?.path).toBe("talk.providers.elevenlabs.apiKey");
     expect(plan.providerUpserts).toBeDefined();
     expect(plan.options).toEqual({
       scrubEnv: true,

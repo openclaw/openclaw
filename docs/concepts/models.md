@@ -44,7 +44,7 @@ openclaw onboard
 ```
 
 It can set up model + auth for common providers, including **OpenAI Code (Codex)
-subscription** (OAuth) and **Anthropic** (API key or `claude setup-token`).
+subscription** (OAuth) and **Anthropic** (API key or Claude CLI).
 
 ## Config keys (overview)
 
@@ -99,7 +99,7 @@ You can switch models for the current session without restarting:
 /model
 /model list
 /model 3
-/model openai/gpt-5.2
+/model openai/gpt-5.4
 /model status
 ```
 
@@ -163,12 +163,14 @@ JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
 (effective auth per provider).
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
-Auth choice is provider/account dependent. For always-on gateway hosts, API keys are usually the most predictable; subscription token flows are also supported.
+Auth choice is provider/account dependent. For always-on gateway hosts, API
+keys are usually the most predictable; Claude CLI reuse and existing legacy
+Anthropic token profiles are also supported.
 
-Example (Anthropic setup-token):
+Example (Claude CLI):
 
 ```bash
-claude setup-token
+claude auth login
 openclaw models status
 ```
 

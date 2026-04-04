@@ -6,8 +6,6 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai-model-id.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   resolveAgentConfig,
@@ -18,6 +16,7 @@ import { resolveConfiguredProviderFallback } from "./configured-provider-fallbac
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import {
   findNormalizedProviderKey,
   findNormalizedProviderValue,
@@ -74,17 +73,7 @@ function normalizeAliasKey(value: string): string {
 }
 
 export function modelKey(provider: string, model: string) {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
-    ? modelId
-    : `${providerId}/${modelId}`;
+  return sharedModelKey(provider, model);
 }
 
 export function legacyModelKey(provider: string, model: string): string | null {
@@ -115,59 +104,16 @@ export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
   return Object.keys(backends).some((key) => normalizeProviderId(key) === normalized);
 }
 
-function normalizeAnthropicModelId(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  const lower = trimmed.toLowerCase();
-  // Keep alias resolution local so bundled startup paths cannot trip a TDZ on
-  // a module-level alias table while config parsing is still initializing.
-  switch (lower) {
-    case "opus-4.6":
-      return "claude-opus-4-6";
-    case "opus-4.5":
-      return "claude-opus-4-5";
-    case "sonnet-4.6":
-      return "claude-sonnet-4-6";
-    case "sonnet-4.5":
-      return "claude-sonnet-4-5";
-    default:
-      return trimmed;
-  }
-}
-
 function normalizeProviderModelId(provider: string, model: string): string {
-  if (provider === "anthropic") {
-    return normalizeAnthropicModelId(model);
-  }
-  if (provider === "google" || provider === "google-vertex") {
-    return normalizeGoogleModelId(model);
-  }
-  if (provider === "openai") {
-    return model;
-  }
-  if (provider === "openrouter") {
-    return model.includes("/") ? model : `openrouter/${model}`;
-  }
-  if (provider === "xai") {
-    return normalizeXaiModelId(model);
-  }
-  if (provider === "vercel-ai-gateway" && !model.includes("/")) {
-    // Allow Vercel-specific Claude refs without an upstream prefix.
-    const normalizedAnthropicModel = normalizeAnthropicModelId(model);
-    if (normalizedAnthropicModel.startsWith("claude-")) {
-      return `anthropic/${normalizedAnthropicModel}`;
-    }
-  }
+  const staticModelId = normalizeStaticProviderModelId(provider, model);
   return (
     normalizeProviderModelIdWithRuntime({
       provider,
       context: {
         provider,
-        modelId: model,
+        modelId: staticModelId,
       },
-    }) ?? model
+    }) ?? staticModelId
   );
 }
 
@@ -209,6 +155,42 @@ export function parseModelRef(
     return null;
   }
   return normalizeModelRef(providerRaw, model, options);
+}
+
+export function resolvePersistedModelRef(params: {
+  defaultProvider: string;
+  runtimeProvider?: string;
+  runtimeModel?: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): ModelRef | null {
+  const defaultProvider = params.defaultProvider.trim();
+  const runtimeProvider = params.runtimeProvider?.trim();
+  const runtimeModel = params.runtimeModel?.trim();
+  if (runtimeModel) {
+    if (runtimeProvider) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    return (
+      parseModelRef(runtimeModel, defaultProvider) ?? {
+        provider: defaultProvider,
+        model: runtimeModel,
+      }
+    );
+  }
+
+  const overrideProvider = params.overrideProvider?.trim();
+  const overrideModel = params.overrideModel?.trim();
+  if (!overrideModel) {
+    return null;
+  }
+  const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
+  return (
+    parseModelRef(encodedOverride, defaultProvider) ?? {
+      provider: overrideProvider || defaultProvider,
+      model: overrideModel,
+    }
+  );
 }
 
 export function inferUniqueProviderFromConfiguredModels(params: {
@@ -381,12 +363,13 @@ export function resolveConfiguredModelRef(params: {
         return aliasMatch.ref;
       }
 
-      // Default to anthropic if no provider is specified, but warn as this is deprecated.
+      // Default to the configured provider if no provider is specified, but warn as this is deprecated.
       const safeTrimmed = sanitizeForLog(trimmed);
+      const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
       getLog().warn(
-        `Model "${safeTrimmed}" specified without provider. Falling back to "anthropic/${safeTrimmed}". Please use "anthropic/${safeTrimmed}" in your config.`,
+        `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
       );
-      return { provider: "anthropic", model: trimmed };
+      return { provider: params.defaultProvider, model: trimmed };
     }
 
     const resolved = resolveModelRefFromString({

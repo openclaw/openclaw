@@ -1,12 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
-import {
-  DisconnectReason,
-  fetchLatestBaileysVersion,
-  makeCacheableSignalKeyStore,
-  makeWASocket,
-  useMultiFileAuthState,
-} from "@whiskeysockets/baileys";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
@@ -21,6 +14,13 @@ import {
   resolveWebCredsPath,
 } from "./auth-store.js";
 import { formatError, getStatusCode } from "./session-errors.js";
+import {
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  makeWASocket,
+  useMultiFileAuthState,
+} from "./session.runtime.js";
 export { formatError, getStatusCode } from "./session-errors.js";
 
 export {

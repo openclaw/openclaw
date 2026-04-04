@@ -288,13 +288,7 @@ const ConfiguredProviderRequestSchema = z
   .strict()
   .optional();
 
-const ConfiguredModelProviderRequestSchema = z
-  .object({
-    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
-    auth: ConfiguredProviderRequestAuthSchema,
-  })
-  .strict()
-  .optional();
+const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
 
 export const ModelDefinitionSchema = z
   .object({
@@ -313,6 +307,7 @@ export const ModelDefinitionSchema = z
       .strict()
       .optional(),
     contextWindow: z.number().positive().optional(),
+    contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,

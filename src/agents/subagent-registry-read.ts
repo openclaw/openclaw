@@ -1,6 +1,10 @@
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
+import {
+  countActiveDescendantRunsFromRuns,
+  listDescendantRunsForRequesterFromRuns,
+  listRunsForControllerFromRuns,
+} from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -75,6 +79,20 @@ export function listSubagentRunsForController(controllerSessionKey: string): Sub
   return listRunsForControllerFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     controllerSessionKey,
+  );
+}
+
+export function countActiveDescendantRuns(rootSessionKey: string): number {
+  return countActiveDescendantRunsFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+  );
+}
+
+export function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
+  return listDescendantRunsForRequesterFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
   );
 }
 

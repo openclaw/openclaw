@@ -38,6 +38,137 @@
       "hasChildren": true
     },
     {
+      "path": "channels.bluebubbles.accounts.*.actions",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.addParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.edit",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.leaveGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reactions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.removeParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.renameGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reply",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendAttachment",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendWithEffect",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.setGroupIcon",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.unsend",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.bluebubbles.accounts.*.allowFrom",
       "kind": "channel",
       "type": "array",
@@ -1543,6 +1674,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -1954,16 +2100,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.guilds.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.autoArchiveDuration",
@@ -2867,31 +3003,13 @@
     {
       "path": "channels.discord.accounts.*.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
         "partial",
         "block",
         "progress"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "partial",
-        "block",
-        "off"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -3993,6 +4111,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -4460,16 +4593,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.discord.guilds.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.discord.guilds.*.channels.*.autoArchiveDuration",
@@ -5437,10 +5560,7 @@
     {
       "path": "channels.discord.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
@@ -5456,26 +5576,6 @@
       ],
       "label": "Discord Streaming Mode",
       "help": "Unified Discord stream preview mode: \"off\" | \"partial\" | \"block\" | \"progress\". \"progress\" maps to \"partial\" on Discord. Legacy boolean/streamMode keys are auto-mapped.",
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "partial",
-        "block",
-        "off"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Discord Stream Mode (Legacy)",
-      "help": "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
       "hasChildren": false
     },
     {
@@ -8478,16 +8578,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.googlechat.accounts.*.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.googlechat.accounts.*.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -9159,16 +9249,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.googlechat.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.googlechat.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -9649,6 +9729,21 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.imessage.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -10315,6 +10410,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.imessage.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.imessage.dbPath",
       "kind": "channel",
       "type": "string",
@@ -10968,6 +11078,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.irc.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -11690,6 +11815,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.irc.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -13377,6 +13517,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.defaultAccount",
       "kind": "channel",
       "type": "string",
@@ -13501,6 +13656,104 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -13562,16 +13815,6 @@
       "path": "channels.matrix.groups.*.account",
       "kind": "channel",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.matrix.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -13941,16 +14184,6 @@
       "path": "channels.matrix.rooms.*.account",
       "kind": "channel",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.matrix.rooms.*.allow",
-      "kind": "channel",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -15583,6 +15816,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.msteams.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.msteams.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -16675,6 +16923,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.nextcloud-talk.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk.accounts.*.dmHistoryLimit",
       "kind": "channel",
       "type": "integer",
@@ -17283,6 +17546,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nextcloud-talk.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -18906,6 +19184,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.signal.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.signal.accounts.*.defaultTo",
       "kind": "channel",
       "type": "string",
@@ -19040,6 +19333,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.signal.accounts.*.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.signal.accounts.*.groups.*.requireMention",
@@ -19645,6 +19948,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.signal.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.signal.defaultAccount",
       "kind": "channel",
       "type": "string",
@@ -19795,6 +20113,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.signal.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.signal.groups.*.requireMention",
@@ -20595,16 +20923,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.slack.accounts.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.slack.accounts.*.channels.*.allowBots",
       "kind": "channel",
       "type": "boolean",
@@ -20892,6 +21210,21 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -21548,31 +21881,13 @@
     {
       "path": "channels.slack.accounts.*.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
         "partial",
         "block",
         "progress"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.slack.accounts.*.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "replace",
-        "status_final",
-        "append"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -22060,16 +22375,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.slack.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.slack.channels.*.allowBots",
       "kind": "channel",
       "type": "boolean",
@@ -22375,6 +22680,21 @@
       ],
       "label": "Slack Config Writes",
       "help": "Allow Slack to write config in response to channel events/commands (default: true).",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23088,10 +23408,7 @@
     {
       "path": "channels.slack.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
@@ -23107,26 +23424,6 @@
       ],
       "label": "Slack Streaming Mode",
       "help": "Unified Slack stream preview mode: \"off\" | \"partial\" | \"block\" | \"progress\". Legacy boolean/streamMode keys are auto-mapped.",
-      "hasChildren": false
-    },
-    {
-      "path": "channels.slack.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "replace",
-        "status_final",
-        "append"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Slack Stream Mode (Legacy)",
-      "help": "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
       "hasChildren": false
     },
     {
@@ -23732,6 +24029,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.customCommands",
       "kind": "channel",
       "type": "array",
@@ -24215,6 +24527,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.direct.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.direct.*.topics.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -24627,6 +24949,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.groups.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -24924,6 +25256,16 @@
         "disabled",
         "allowlist"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -25263,31 +25605,13 @@
     {
       "path": "channels.telegram.accounts.*.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
         "partial",
         "block",
         "progress"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.telegram.accounts.*.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "off",
-        "partial",
-        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -25889,6 +26213,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.customCommands",
       "kind": "channel",
       "type": "array",
@@ -26387,6 +26726,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.direct.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.direct.*.topics.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -26836,6 +27185,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.groups.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -27133,6 +27492,16 @@
         "disabled",
         "allowlist"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -27515,10 +27884,7 @@
     {
       "path": "channels.telegram.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
@@ -27534,21 +27900,6 @@
       ],
       "label": "Telegram Streaming Mode",
       "help": "Unified Telegram stream preview mode: \"off\" | \"partial\" | \"block\" | \"progress\" (default: \"partial\"). \"progress\" maps to \"partial\" on Telegram. Legacy boolean/streamMode keys are auto-mapped.",
-      "hasChildren": false
-    },
-    {
-      "path": "channels.telegram.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "off",
-        "partial",
-        "block"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
       "hasChildren": false
     },
     {
@@ -28813,6 +29164,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.accounts.*.debounceMs",
       "kind": "channel",
       "type": "integer",
@@ -29502,6 +29868,21 @@
       ],
       "label": "WhatsApp Config Writes",
       "help": "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -30765,16 +31146,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.zalouser.accounts.*.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.zalouser.accounts.*.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -31067,16 +31438,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.zalouser.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.zalouser.groups.*.enabled",

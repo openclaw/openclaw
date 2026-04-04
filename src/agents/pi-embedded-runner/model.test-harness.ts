@@ -57,6 +57,7 @@ export function buildOpenAICodexForwardCompatExpectation(
   baseUrl: string;
 } {
   const isGpt54 = id === "gpt-5.4";
+  const isGpt54Mini = id === "gpt-5.4-mini";
   const isSpark = id === "gpt-5.3-codex-spark";
   return {
     provider: "openai-codex",
@@ -69,8 +70,11 @@ export function buildOpenAICodexForwardCompatExpectation(
       ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
       : isGpt54
         ? { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }
-        : OPENAI_CODEX_TEMPLATE_MODEL.cost,
-    contextWindow: isGpt54 ? 272_000 : isSpark ? 128_000 : 272000,
+        : isGpt54Mini
+          ? { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }
+          : OPENAI_CODEX_TEMPLATE_MODEL.cost,
+    contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
+    ...(isGpt54 ? { contextTokens: 272_000 } : {}),
     maxTokens: 128000,
   };
 }

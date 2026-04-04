@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
     ...b,
     ...a,
   })),
+  getChannelPlugin: vi.fn(() => undefined),
   normalizeChannelId: vi.fn((channel: string) => channel),
   resolveOutboundTarget: vi.fn(() => ({ ok: true as const, to: "+15550002" })),
   deliverOutboundPayloads: vi.fn(async () => [{ channel: "whatsapp", messageId: "msg-1" }]),
@@ -67,6 +68,7 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: mocks.getChannelPlugin,
   normalizeChannelId: mocks.normalizeChannelId,
 }));
 
@@ -88,9 +90,11 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+vi.mock("../infra/heartbeat-wake.js", async () => {
   return await mergeMockedModule(
-    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
     () => ({
       requestHeartbeatNow: mocks.requestHeartbeatNow,
     }),
@@ -138,7 +142,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect.objectContaining({
         channel: "whatsapp",
         to: "+15550002",
-        session: { key: "agent:main:main", agentId: "main" },
+        session: { key: "agent:main:main", agentId: "agent-from-key" },
         deps,
         bestEffort: false,
         skipQueue: true,

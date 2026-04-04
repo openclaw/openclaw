@@ -305,6 +305,57 @@ describe("outbound", () => {
       );
     });
 
+    it("uses configured defaultAccount when accountId is omitted", async () => {
+      const { sendMessageTwitchInternal } = await import("./send.js");
+
+      vi.mocked(resolveTwitchAccountContext)
+        .mockImplementationOnce(() => ({
+          accountId: "secondary",
+          account: {
+            ...mockAccount,
+            channel: "secondary-channel",
+          },
+          tokenResolution: { source: "config", token: mockAccount.accessToken },
+          configured: true,
+          availableAccountIds: ["default", "secondary"],
+        }))
+        .mockImplementation((_cfg, accountId) => ({
+          accountId: accountId?.trim() || "secondary",
+          account: {
+            ...mockAccount,
+            channel: "secondary-channel",
+          },
+          tokenResolution: { source: "config", token: mockAccount.accessToken },
+          configured: true,
+          availableAccountIds: ["default", "secondary"],
+        }));
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        ok: true,
+        messageId: "msg-secondary",
+      });
+
+      await twitchOutbound.sendText!({
+        cfg: {
+          channels: {
+            twitch: {
+              defaultAccount: "secondary",
+            },
+          },
+        } as typeof mockConfig,
+        to: "#secondary-channel",
+        text: "Hello!",
+      });
+
+      expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
+        "secondary-channel",
+        "Hello!",
+        expect.any(Object),
+        "secondary",
+        true,
+        console,
+      );
+    });
+
     it("should handle abort signal", async () => {
       const abortController = new AbortController();
       abortController.abort();

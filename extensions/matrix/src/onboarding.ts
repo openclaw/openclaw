@@ -183,7 +183,7 @@ function setMatrixGroupPolicy(
 }
 
 function setMatrixGroupRooms(cfg: CoreConfig, roomKeys: string[], accountId?: string) {
-  const groups = Object.fromEntries(roomKeys.map((key) => [key, { allow: true }]));
+  const groups = Object.fromEntries(roomKeys.map((key) => [key, { enabled: true }]));
   return updateMatrixAccountConfig(cfg, resolveMatrixOnboardingAccountId(cfg, accountId), {
     groups,
     rooms: null,

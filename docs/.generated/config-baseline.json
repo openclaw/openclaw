@@ -1703,7 +1703,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: feishu, googlechat, nostr, msteams, mattermost, nextcloud-talk, matrix, bluebubbles, line, zalo, zalouser, synology-chat, tlon, discord, imessage, irc, qqbot, signal, slack, telegram, twitch, whatsapp.",
       "hasChildren": false
     },
     {
@@ -3685,16 +3685,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.defaults.sandbox.perSession",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.defaults.sandbox.prune",
       "kind": "core",
       "type": "object",
@@ -3993,6 +3983,30 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.skills",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Skills",
+      "help": "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.skills.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.skipBootstrap",
       "kind": "core",
       "type": "boolean",
@@ -4011,6 +4025,26 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.subagents.allowAgents",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.subagents.allowAgents.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "agents.defaults.subagents.announceTimeoutMs",
@@ -4497,7 +4531,7 @@
       "tags": [
         "automation"
       ],
-      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: telegram, whatsapp, discord, irc, googlechat, slack, signal, imessage, line, bluebubbles, feishu, matrix, mattermost, msteams, nextcloud-talk, nostr, qqbot, synology-chat, tlon, twitch, zalo, zalouser.",
+      "help": "Delivery target (\"last\", \"none\", or a channel id). Known channels: feishu, googlechat, nostr, msteams, mattermost, nextcloud-talk, matrix, bluebubbles, line, zalo, zalouser, synology-chat, tlon, discord, imessage, irc, qqbot, signal, slack, telegram, twitch, whatsapp.",
       "hasChildren": false
     },
     {
@@ -6141,16 +6175,6 @@
       "hasChildren": false
     },
     {
-      "path": "agents.list.*.sandbox.perSession",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "agents.list.*.sandbox.prune",
       "kind": "core",
       "type": "object",
@@ -6459,7 +6483,7 @@
         "advanced"
       ],
       "label": "Agent Skill Filter",
-      "help": "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+      "help": "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
       "hasChildren": true
     },
     {
@@ -7816,6 +7840,38 @@
       "hasChildren": true
     },
     {
+      "path": "auth.cooldowns.authPermanentBackoffMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "reliability"
+      ],
+      "label": "Auth-Permanent Backoff (minutes)",
+      "help": "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
+      "hasChildren": false
+    },
+    {
+      "path": "auth.cooldowns.authPermanentMaxMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access",
+        "auth",
+        "performance"
+      ],
+      "label": "Auth-Permanent Backoff Cap (minutes)",
+      "help": "Cap (minutes) for auth_permanent backoff (default: 60).",
+      "hasChildren": false
+    },
+    {
       "path": "auth.cooldowns.billingBackoffHours",
       "kind": "core",
       "type": "number",
@@ -8741,20 +8797,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "browser.ssrfPolicy.allowPrivateNetwork",
-      "kind": "core",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "access"
-      ],
-      "label": "Browser Allow Private Network",
-      "help": "Legacy alias for browser.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
       "hasChildren": false
     },
     {
@@ -12265,7 +12307,7 @@
         "advanced"
       ],
       "label": "Internal Hooks Enabled",
-      "help": "Enables processing for internal hook handlers and configured entries in the internal hook runtime. Keep disabled unless internal hook handlers are intentionally configured.",
+      "help": "Enables processing for internal hooks and configured entries in the internal hook runtime. Keep disabled unless internal hooks are intentionally configured.",
       "hasChildren": false
     },
     {
@@ -12329,72 +12371,6 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers",
-      "kind": "core",
-      "type": "array",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Handlers",
-      "help": "List of internal event handlers mapping event names to modules and optional exports. Keep handler definitions explicit so event-to-code routing is auditable.",
-      "hasChildren": true
-    },
-    {
-      "path": "hooks.internal.handlers.*",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "hooks.internal.handlers.*.event",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Event",
-      "help": "Internal event name that triggers this handler module when emitted by the runtime. Use stable event naming conventions to avoid accidental overlap across handlers.",
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers.*.export",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Export",
-      "help": "Optional named export for the internal hook handler function when module default export is not used. Set this when one module ships multiple handler entrypoints.",
-      "hasChildren": false
-    },
-    {
-      "path": "hooks.internal.handlers.*.module",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced"
-      ],
-      "label": "Internal Hook Module",
-      "help": "Safe relative module path for the internal hook handler implementation loaded at runtime. Keep module files in reviewed directories and avoid dynamic path composition.",
       "hasChildren": false
     },
     {
@@ -14467,7 +14443,7 @@
         "advanced"
       ],
       "label": "Enable Status Reactions",
-      "help": "Enable lifecycle status reactions for Telegram. When enabled, the ack reaction becomes the initial 'queued' state and progresses through thinking, tool, done/error automatically. Default: false.",
+      "help": "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram requires this to be true before lifecycle reactions are used.",
       "hasChildren": false
     },
     {
@@ -15479,6 +15455,16 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.models.*.contextTokens",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "models.providers.*.models.*.contextWindow",
       "kind": "core",
       "type": "number",
@@ -15629,7 +15615,7 @@
         "models"
       ],
       "label": "Model Provider Request Overrides",
-      "help": "Optional request overrides for model-provider requests. Today this path supports header and auth overrides only; proxy and TLS transport settings are reserved for request paths that can carry them end to end.",
+      "help": "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
       "hasChildren": true
     },
     {
@@ -15846,6 +15832,521 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.request.proxy",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy",
+      "help": "Optional proxy override for model-provider requests. Use \"env-proxy\" to honor environment proxy settings or \"explicit-proxy\" to route through a specific proxy URL.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.mode",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy Mode",
+      "help": "Proxy override mode for model-provider requests: \"env-proxy\" or \"explicit-proxy\".",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy TLS",
+      "help": "Optional TLS settings used when connecting to the configured proxy.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS CA",
+      "help": "Custom CA bundle used to verify the proxy TLS certificate chain.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.ca.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Cert",
+      "help": "Client TLS certificate presented to the proxy when mutual TLS is required.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.cert.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.insecureSkipVerify",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Skip Verify",
+      "help": "Skips proxy TLS certificate verification. Use only for controlled development environments.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Key",
+      "help": "Private key paired with request.proxy.tls.cert for proxy mutual TLS.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.key.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request Proxy TLS Passphrase",
+      "help": "Optional passphrase used to decrypt request.proxy.tls.key.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.passphrase.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.tls.serverName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request Proxy TLS Server Name",
+      "help": "Optional SNI/server-name override used when establishing TLS to the proxy.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.proxy.url",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models",
+        "url-secret"
+      ],
+      "label": "Model Provider Request Proxy URL",
+      "help": "Explicit proxy URL used when request.proxy.mode is explicit-proxy. Credentials embedded in the URL are treated as sensitive and redacted from snapshots.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request TLS",
+      "help": "Optional TLS settings used when connecting directly to the upstream model endpoint.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.ca",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS CA",
+      "help": "Custom CA bundle used to verify the upstream TLS certificate chain.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.ca.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.ca.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.ca.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.cert",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Cert",
+      "help": "Client TLS certificate presented to the upstream endpoint when mutual TLS is required.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.cert.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.cert.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.cert.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.insecureSkipVerify",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Skip Verify",
+      "help": "Skips upstream TLS certificate verification. Use only for controlled development environments.",
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.key",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Key",
+      "help": "Private key paired with request.tls.cert for upstream mutual TLS.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.key.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.key.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.key.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "models",
+        "security"
+      ],
+      "label": "Model Provider Request TLS Passphrase",
+      "help": "Optional passphrase used to decrypt request.tls.key.",
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.passphrase.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.request.tls.serverName",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Model Provider Request TLS Server Name",
+      "help": "Optional SNI/server-name override used when establishing upstream TLS.",
+      "hasChildren": false
+    },
+    {
       "path": "nodeHost",
       "kind": "core",
       "type": "object",
@@ -15938,7 +16439,7 @@
         "access"
       ],
       "label": "Plugin Allowlist",
-      "help": "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Use this to enforce approved extension inventories in controlled environments.",
+      "help": "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       "hasChildren": true
     },
     {
@@ -17856,55 +18357,6 @@
       "hasChildren": true
     },
     {
-      "path": "talk.apiKey",
-      "kind": "core",
-      "type": [
-        "object",
-        "string"
-      ],
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "auth",
-        "media",
-        "security"
-      ],
-      "label": "Talk API Key",
-      "help": "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
-      "hasChildren": true
-    },
-    {
-      "path": "talk.apiKey.id",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.apiKey.provider",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.apiKey.source",
-      "kind": "core",
-      "type": "string",
-      "required": true,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "talk.interruptOnSpeech",
       "kind": "core",
       "type": "boolean",
@@ -17916,35 +18368,6 @@
       ],
       "label": "Talk Interrupt on Speech",
       "help": "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.modelId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media",
-        "models"
-      ],
-      "label": "Talk Model ID",
-      "help": "Legacy ElevenLabs model ID for Talk mode (default: eleven_v3). Prefer talk.providers.elevenlabs.modelId.",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.outputFormat",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Output Format",
-      "help": "Use this legacy ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128) only during migration. Prefer talk.providers.elevenlabs.outputFormat.",
       "hasChildren": false
     },
     {
@@ -18123,44 +18546,6 @@
       ],
       "label": "Talk Silence Timeout (ms)",
       "help": "Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (700 ms on macOS and Android, 900 ms on iOS).",
-      "hasChildren": false
-    },
-    {
-      "path": "talk.voiceAliases",
-      "kind": "core",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Voice Aliases",
-      "help": "Use this legacy ElevenLabs voice alias map (for example {\"Clawd\":\"EXAVITQu4vr4xnSDxMaL\"}) only during migration. Prefer talk.providers.elevenlabs.voiceAliases.",
-      "hasChildren": true
-    },
-    {
-      "path": "talk.voiceAliases.*",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "talk.voiceId",
-      "kind": "core",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "media"
-      ],
-      "label": "Talk Voice ID",
-      "help": "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
       "hasChildren": false
     },
     {
@@ -27722,6 +28107,137 @@
       "hasChildren": true
     },
     {
+      "path": "channels.bluebubbles.accounts.*.actions",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.addParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.edit",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.leaveGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reactions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.removeParticipant",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.renameGroup",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.reply",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendAttachment",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.sendWithEffect",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.setGroupIcon",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.bluebubbles.accounts.*.actions.unsend",
+      "kind": "channel",
+      "type": "boolean",
+      "required": true,
+      "defaultValue": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.bluebubbles.accounts.*.allowFrom",
       "kind": "channel",
       "type": "array",
@@ -29227,6 +29743,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.accounts.*.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -29638,16 +30169,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.discord.accounts.*.guilds.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.discord.accounts.*.guilds.*.channels.*.autoArchiveDuration",
@@ -30551,31 +31072,13 @@
     {
       "path": "channels.discord.accounts.*.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
         "partial",
         "block",
         "progress"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.accounts.*.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "partial",
-        "block",
-        "off"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -31677,6 +32180,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.discord.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.discord.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -32144,16 +32662,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.discord.guilds.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.discord.guilds.*.channels.*.autoArchiveDuration",
@@ -33121,10 +33629,7 @@
     {
       "path": "channels.discord.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
@@ -33140,26 +33645,6 @@
       ],
       "label": "Discord Streaming Mode",
       "help": "Unified Discord stream preview mode: \"off\" | \"partial\" | \"block\" | \"progress\". \"progress\" maps to \"partial\" on Discord. Legacy boolean/streamMode keys are auto-mapped.",
-      "hasChildren": false
-    },
-    {
-      "path": "channels.discord.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "partial",
-        "block",
-        "off"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Discord Stream Mode (Legacy)",
-      "help": "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
       "hasChildren": false
     },
     {
@@ -36162,16 +36647,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.googlechat.accounts.*.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.googlechat.accounts.*.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -36843,16 +37318,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.googlechat.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.googlechat.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -37333,6 +37798,21 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.imessage.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -37999,6 +38479,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.imessage.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.imessage.dbPath",
       "kind": "channel",
       "type": "string",
@@ -38652,6 +39147,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.irc.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -39374,6 +39884,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.irc.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -41061,6 +41586,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.defaultAccount",
       "kind": "channel",
       "type": "string",
@@ -41185,6 +41725,104 @@
       "hasChildren": false
     },
     {
+      "path": "channels.matrix.execApprovals",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.agentFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.agentFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.approvers",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.approvers.*",
+      "kind": "channel",
+      "type": [
+        "number",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.sessionFilter",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.execApprovals.sessionFilter.*",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.execApprovals.target",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "dm",
+        "channel",
+        "both"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.matrix.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -41246,16 +41884,6 @@
       "path": "channels.matrix.groups.*.account",
       "kind": "channel",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.matrix.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -41625,16 +42253,6 @@
       "path": "channels.matrix.rooms.*.account",
       "kind": "channel",
       "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.matrix.rooms.*.allow",
-      "kind": "channel",
-      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -43267,6 +43885,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.msteams.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.msteams.dangerouslyAllowNameMatching",
       "kind": "channel",
       "type": "boolean",
@@ -44359,6 +44992,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.nextcloud-talk.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.nextcloud-talk.accounts.*.dmHistoryLimit",
       "kind": "channel",
       "type": "integer",
@@ -44967,6 +45615,21 @@
       "enumValues": [
         "length",
         "newline"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.nextcloud-talk.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -46590,6 +47253,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.signal.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.signal.accounts.*.defaultTo",
       "kind": "channel",
       "type": "string",
@@ -46724,6 +47402,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.signal.accounts.*.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.signal.accounts.*.groups.*.requireMention",
@@ -47329,6 +48017,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.signal.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.signal.defaultAccount",
       "kind": "channel",
       "type": "string",
@@ -47479,6 +48182,16 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
+    },
+    {
+      "path": "channels.signal.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
     },
     {
       "path": "channels.signal.groups.*.requireMention",
@@ -48279,16 +48992,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.slack.accounts.*.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.slack.accounts.*.channels.*.allowBots",
       "kind": "channel",
       "type": "boolean",
@@ -48576,6 +49279,21 @@
       "kind": "channel",
       "type": "boolean",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -49232,31 +49950,13 @@
     {
       "path": "channels.slack.accounts.*.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
         "partial",
         "block",
         "progress"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.slack.accounts.*.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "replace",
-        "status_final",
-        "append"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -49744,16 +50444,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.slack.channels.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.slack.channels.*.allowBots",
       "kind": "channel",
       "type": "boolean",
@@ -50059,6 +50749,21 @@
       ],
       "label": "Slack Config Writes",
       "help": "Allow Slack to write config in response to channel events/commands (default: true).",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.slack.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -50772,10 +51477,7 @@
     {
       "path": "channels.slack.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
@@ -50791,26 +51493,6 @@
       ],
       "label": "Slack Streaming Mode",
       "help": "Unified Slack stream preview mode: \"off\" | \"partial\" | \"block\" | \"progress\". Legacy boolean/streamMode keys are auto-mapped.",
-      "hasChildren": false
-    },
-    {
-      "path": "channels.slack.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "replace",
-        "status_final",
-        "append"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "channels",
-        "network"
-      ],
-      "label": "Slack Stream Mode (Legacy)",
-      "help": "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
       "hasChildren": false
     },
     {
@@ -51416,6 +52098,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.customCommands",
       "kind": "channel",
       "type": "array",
@@ -51899,6 +52596,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.direct.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.direct.*.topics.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -52311,6 +53018,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.accounts.*.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.accounts.*.groups.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -52608,6 +53325,16 @@
         "disabled",
         "allowlist"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.accounts.*.groups.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -52947,31 +53674,13 @@
     {
       "path": "channels.telegram.accounts.*.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
         "partial",
         "block",
         "progress"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "channels.telegram.accounts.*.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "off",
-        "partial",
-        "block"
       ],
       "deprecated": false,
       "sensitive": false,
@@ -53573,6 +54282,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.customCommands",
       "kind": "channel",
       "type": "array",
@@ -54071,6 +54795,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.direct.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.direct.*.topics.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -54520,6 +55254,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.telegram.groups.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.telegram.groups.*.requireMention",
       "kind": "channel",
       "type": "boolean",
@@ -54817,6 +55561,16 @@
         "disabled",
         "allowlist"
       ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.telegram.groups.*.topics.*.ingest",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -55199,10 +55953,7 @@
     {
       "path": "channels.telegram.streaming",
       "kind": "channel",
-      "type": [
-        "boolean",
-        "string"
-      ],
+      "type": "string",
       "required": false,
       "enumValues": [
         "off",
@@ -55218,21 +55969,6 @@
       ],
       "label": "Telegram Streaming Mode",
       "help": "Unified Telegram stream preview mode: \"off\" | \"partial\" | \"block\" | \"progress\" (default: \"partial\"). \"progress\" maps to \"partial\" on Telegram. Legacy boolean/streamMode keys are auto-mapped.",
-      "hasChildren": false
-    },
-    {
-      "path": "channels.telegram.streamMode",
-      "kind": "channel",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "off",
-        "partial",
-        "block"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
       "hasChildren": false
     },
     {
@@ -56497,6 +57233,21 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.accounts.*.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.accounts.*.debounceMs",
       "kind": "channel",
       "type": "integer",
@@ -57186,6 +57937,21 @@
       ],
       "label": "WhatsApp Config Writes",
       "help": "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.contextVisibility",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "all",
+        "allowlist",
+        "allowlist_quote"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -58449,16 +59215,6 @@
       "hasChildren": true
     },
     {
-      "path": "channels.zalouser.accounts.*.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
       "path": "channels.zalouser.accounts.*.groups.*.enabled",
       "kind": "channel",
       "type": "boolean",
@@ -58751,16 +59507,6 @@
       "sensitive": false,
       "tags": [],
       "hasChildren": true
-    },
-    {
-      "path": "channels.zalouser.groups.*.allow",
-      "kind": "channel",
-      "type": "boolean",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
     },
     {
       "path": "channels.zalouser.groups.*.enabled",
@@ -64659,6 +65405,120 @@
       ],
       "label": "@openclaw/memory-core Config",
       "help": "Plugin-defined config payload for memory-core.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming.frequency",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Dreaming Frequency",
+      "help": "Optional cron cadence override for managed dreaming runs.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming.limit",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Promotion Limit",
+      "help": "Maximum short-term candidates promoted per dreaming run (set to 0 to skip promotions).",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming.minRecallCount",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Promotion Min Recalls",
+      "help": "Minimum recall count required for automatic promotion.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming.minScore",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Promotion Min Score",
+      "help": "Minimum weighted rank required for automatic promotion.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming.minUniqueQueries",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Promotion Min Queries",
+      "help": "Minimum unique query count required for automatic promotion.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming.mode",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "enumValues": [
+        "off",
+        "core",
+        "deep",
+        "rem"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Dreaming Mode",
+      "help": "Select dreaming mode: off, core, deep, or rem.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.memory-core.config.dreaming.timezone",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Dreaming Timezone",
+      "help": "IANA timezone for the managed dreaming cron schedule.",
       "hasChildren": false
     },
     {
@@ -66540,6 +67400,21 @@
       ],
       "label": "@openclaw/openai-provider Config",
       "help": "Plugin-defined config payload for openai.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openai.config.personalityOverlay",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "friendly",
+        "off"
+      ],
+      "defaultValue": "friendly",
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -70478,6 +71353,199 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.voice-call.config.realtime",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable Realtime Voice",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.instructions",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Realtime Instructions",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.provider",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Realtime Voice Provider",
+      "help": "Uses the first registered realtime voice provider when unset.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.providers",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Realtime Provider Config",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.providers.*",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.streamPath",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "storage"
+      ],
+      "label": "Realtime Stream Path",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.description",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.name",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.parameters",
+      "kind": "plugin",
+      "type": "object",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.parameters.properties",
+      "kind": "plugin",
+      "type": "object",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.parameters.required",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.parameters.required.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.parameters.type",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "enumValues": [
+        "object"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.realtime.tools.*.type",
+      "kind": "plugin",
+      "type": "string",
+      "required": true,
+      "enumValues": [
+        "function"
+      ],
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.voice-call.config.responseModel",
       "kind": "plugin",
       "type": "string",
@@ -70488,6 +71556,7 @@
         "advanced"
       ],
       "label": "Response Model",
+      "help": "Optional override. Falls back to the runtime default model when unset.",
       "hasChildren": false
     },
     {
@@ -70677,21 +71746,6 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.voice-call.config.streaming.openaiApiKey",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": true,
-      "tags": [
-        "advanced",
-        "auth",
-        "security"
-      ],
-      "label": "OpenAI Realtime API Key",
-      "hasChildren": false
-    },
-    {
       "path": "plugins.entries.voice-call.config.streaming.preStartTimeoutMs",
       "kind": "plugin",
       "type": "integer",
@@ -70702,9 +71756,36 @@
       "hasChildren": false
     },
     {
-      "path": "plugins.entries.voice-call.config.streaming.silenceDurationMs",
+      "path": "plugins.entries.voice-call.config.streaming.provider",
       "kind": "plugin",
-      "type": "integer",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Streaming Provider",
+      "help": "Uses the first registered realtime transcription provider when unset.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.voice-call.config.streaming.providers",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Streaming Provider Config",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.voice-call.config.streaming.providers.*",
+      "kind": "plugin",
+      "type": "object",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -70723,76 +71804,6 @@
         "storage"
       ],
       "label": "Media Stream Path",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.streaming.sttModel",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [
-        "advanced",
-        "media"
-      ],
-      "label": "Realtime STT Model",
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.streaming.sttProvider",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "openai-realtime"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.streaming.vadThreshold",
-      "kind": "plugin",
-      "type": "number",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.stt",
-      "kind": "plugin",
-      "type": "object",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": true
-    },
-    {
-      "path": "plugins.entries.voice-call.config.stt.model",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
-      "hasChildren": false
-    },
-    {
-      "path": "plugins.entries.voice-call.config.stt.provider",
-      "kind": "plugin",
-      "type": "string",
-      "required": false,
-      "enumValues": [
-        "openai"
-      ],
-      "deprecated": false,
-      "sensitive": false,
-      "tags": [],
       "hasChildren": false
     },
     {
@@ -71092,7 +72103,11 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [],
+      "tags": [
+        "advanced",
+        "media"
+      ],
+      "label": "TTS Provider Config",
       "hasChildren": true
     },
     {
@@ -71247,12 +72262,10 @@
       "deprecated": false,
       "sensitive": true,
       "tags": [
-        "advanced",
         "auth",
         "media",
         "security"
       ],
-      "label": "ElevenLabs API Key",
       "hasChildren": false
     },
     {
@@ -71278,11 +72291,9 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [
-        "advanced",
         "media",
         "url-secret"
       ],
-      "label": "ElevenLabs Base URL",
       "hasChildren": false
     },
     {
@@ -71302,12 +72313,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "advanced",
-        "media",
-        "models"
-      ],
-      "label": "ElevenLabs Model ID",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -71327,11 +72333,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "advanced",
-        "media"
-      ],
-      "label": "ElevenLabs Voice ID",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -71522,12 +72524,10 @@
       "deprecated": false,
       "sensitive": true,
       "tags": [
-        "advanced",
         "auth",
         "media",
         "security"
       ],
-      "label": "OpenAI API Key",
       "hasChildren": false
     },
     {
@@ -71560,12 +72560,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "advanced",
-        "media",
-        "models"
-      ],
-      "label": "OpenAI TTS Model",
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -71585,11 +72580,7 @@
       "required": false,
       "deprecated": false,
       "sensitive": false,
-      "tags": [
-        "advanced",
-        "media"
-      ],
-      "label": "OpenAI TTS Voice",
+      "tags": [],
       "hasChildren": false
     },
     {

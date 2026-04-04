@@ -3,21 +3,92 @@ import { EventEmitter } from "node:events";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
-import { attachChildProcessBridge } from "./child-process-bridge.js";
-import {
-  resolveCommandEnv,
-  resolveProcessExitCode,
-  runCommandWithTimeout,
-  shouldSpawnWithShell,
-} from "./exec.js";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
+let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
+let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
+let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
+let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
+
+async function loadExecModules(options?: { mockSpawn?: boolean }) {
+  vi.resetModules();
+  if (options?.mockSpawn) {
+    vi.doMock("node:child_process", async () => {
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      return {
+        ...actual,
+        spawn: spawnMock,
+      };
+    });
+  } else {
+    vi.doUnmock("node:child_process");
+  }
+  ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
+  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, shouldSpawnWithShell } =
+    await import("./exec.js"));
+}
 
 describe("runCommandWithTimeout", () => {
-  beforeEach(() => {
+  function createSilentIdleArgv(): string[] {
+    return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
+  }
+
+  function createKilledChild(signal: NodeJS.Signals = "SIGKILL"): ChildProcess {
+    const child = new EventEmitter() as EventEmitter & ChildProcess;
+    child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
+    child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
+    child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
+    child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
+    child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
+    let killed = false;
+    let exitCode: number | null = null;
+    let signalCode: NodeJS.Signals | null = null;
+    Object.defineProperties(child, {
+      pid: {
+        configurable: true,
+        enumerable: true,
+        get: () => 1234,
+      },
+      killed: {
+        configurable: true,
+        enumerable: true,
+        get: () => killed,
+      },
+      exitCode: {
+        configurable: true,
+        enumerable: true,
+        get: () => exitCode,
+      },
+      signalCode: {
+        configurable: true,
+        enumerable: true,
+        get: () => signalCode,
+      },
+    });
+    child.kill = vi.fn((receivedSignal?: NodeJS.Signals) => {
+      const resolvedSignal = receivedSignal ?? signal;
+      killed = true;
+      exitCode = null;
+      signalCode = resolvedSignal;
+      child.emit("exit", null, resolvedSignal);
+      child.emit("close", null, resolvedSignal);
+      return true;
+    }) as ChildProcess["kill"];
+    return child;
+  }
+
+  beforeEach(async () => {
     vi.useRealTimers();
+    spawnMock.mockReset();
+    await loadExecModules();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.doUnmock("node:child_process");
   });
 
   it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
@@ -87,16 +158,19 @@ describe("runCommandWithTimeout", () => {
 
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
-    { timeout: 15_000 },
+    { timeout: 5_000 },
     async () => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-        {
-          timeoutMs: 2_000,
-          noOutputTimeoutMs: 200,
-        },
-      );
+      vi.useFakeTimers();
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 2_000,
+        noOutputTimeoutMs: 200,
+      });
 
+      await vi.advanceTimersByTimeAsync(250);
+      const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
       expect(result.code).not.toBe(0);
@@ -105,15 +179,18 @@ describe("runCommandWithTimeout", () => {
 
   it.runIf(process.platform !== "win32")(
     "reports global timeout termination when overall timeout elapses",
-    { timeout: 15_000 },
+    { timeout: 5_000 },
     async () => {
-      const result = await runCommandWithTimeout(
-        [process.execPath, "-e", "setTimeout(() => {}, 5_000)"],
-        {
-          timeoutMs: 200,
-        },
-      );
+      vi.useFakeTimers();
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 200,
+      });
 
+      await vi.advanceTimersByTimeAsync(250);
+      const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
       expect(result.code).not.toBe(0);

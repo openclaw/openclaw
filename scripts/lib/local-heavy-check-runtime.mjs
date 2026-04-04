@@ -7,6 +7,7 @@ const DEFAULT_LOCAL_GO_GC = "30";
 const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_LOCK_POLL_MS = 500;
+const DEFAULT_LOCK_PROGRESS_MS = 15 * 1000;
 const DEFAULT_STALE_LOCK_MS = 30 * 1000;
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
@@ -73,12 +74,17 @@ export function acquireLocalHeavyCheckLockSync(params) {
     DEFAULT_LOCK_TIMEOUT_MS,
   );
   const pollMs = readPositiveInt(env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS, DEFAULT_LOCK_POLL_MS);
+  const progressMs = readPositiveInt(
+    env.OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS,
+    DEFAULT_LOCK_PROGRESS_MS,
+  );
   const staleLockMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS,
     DEFAULT_STALE_LOCK_MS,
   );
   const startedAt = Date.now();
   let waitingLogged = false;
+  let lastProgressAt = 0;
 
   fs.mkdirSync(locksDir, { recursive: true });
 
@@ -120,11 +126,20 @@ export function acquireLocalHeavyCheckLockSync(params) {
       if (!waitingLogged) {
         const ownerLabel = describeOwner(owner);
         console.error(
-          `[${params.toolName}] waiting for the local heavy-check lock${
+          `[${params.toolName}] queued behind the local heavy-check lock${
             ownerLabel ? ` held by ${ownerLabel}` : ""
           }...`,
         );
         waitingLogged = true;
+        lastProgressAt = Date.now();
+      } else if (Date.now() - lastProgressAt >= progressMs) {
+        const ownerLabel = describeOwner(owner);
+        console.error(
+          `[${params.toolName}] still waiting ${formatElapsedMs(elapsedMs)} for the local heavy-check lock${
+            ownerLabel ? ` held by ${ownerLabel}` : ""
+          }...`,
+        );
+        lastProgressAt = Date.now();
       }
 
       sleepSync(pollMs);
@@ -211,6 +226,19 @@ function describeOwner(owner) {
   const pid = typeof owner.pid === "number" ? `pid ${owner.pid}` : "unknown pid";
   const cwd = typeof owner.cwd === "string" ? owner.cwd : "unknown cwd";
   return `${tool}, ${pid}, cwd ${cwd}`;
+}
+
+function formatElapsedMs(elapsedMs) {
+  if (elapsedMs < 1000) {
+    return `${elapsedMs}ms`;
+  }
+  const seconds = elapsedMs / 1000;
+  if (seconds < 60) {
+    return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainderSeconds = Math.round(seconds % 60);
+  return `${minutes}m ${remainderSeconds}s`;
 }
 
 function sleepSync(ms) {

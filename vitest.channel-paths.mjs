@@ -1,31 +1,37 @@
 import path from "node:path";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
-  bundledPluginFile,
   bundledPluginRoot,
 } from "./scripts/lib/bundled-plugin-paths.mjs";
 
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
-export const extensionRoutedChannelTestFiles = [
-  bundledPluginFile("telegram", "src/fetch.network-policy.test.ts"),
-];
+export const extensionRoutedChannelTestFiles = [];
 
 const extensionRoutedChannelTestFileSet = new Set(extensionRoutedChannelTestFiles);
 
 export const channelTestRoots = [
-  bundledPluginRoot("telegram"),
+  "src/channels",
   bundledPluginRoot("discord"),
-  bundledPluginRoot("whatsapp"),
   bundledPluginRoot("slack"),
   bundledPluginRoot("signal"),
   bundledPluginRoot("imessage"),
-  "src/browser",
-  "src/line",
+  bundledPluginRoot("browser"),
+  bundledPluginRoot("line"),
 ];
 
+export const extensionChannelTestRoots = channelTestRoots.filter((root) =>
+  root.startsWith(BUNDLED_PLUGIN_PATH_PREFIX),
+);
+export const coreChannelTestRoots = channelTestRoots.filter(
+  (root) => !root.startsWith(BUNDLED_PLUGIN_PATH_PREFIX),
+);
 export const channelTestPrefixes = channelTestRoots.map((root) => `${root}/`);
 export const channelTestInclude = channelTestRoots.map((root) => `${root}/**/*.test.ts`);
+export const extensionChannelTestInclude = extensionChannelTestRoots.map(
+  (root) => `${root}/**/*.test.ts`,
+);
+export const coreChannelTestInclude = coreChannelTestRoots.map((root) => `${root}/**/*.test.ts`);
 export const channelTestExclude = channelTestRoots.map((root) => `${root}/**`);
 
 const extensionChannelRootOverrideBasenames = new Map();
@@ -56,6 +62,10 @@ export const extensionExcludedChannelTestGlobs = channelTestRoots
     const alternation = allowedBasenames.join("|");
     return `${relativeRoot}/**/!(${alternation}).test.ts`;
   });
+
+export const extensionChannelOverrideExcludeGlobs = extensionRoutedChannelTestFiles
+  .filter((file) => file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))
+  .map((file) => file.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
 
 export function isChannelSurfaceTestFile(filePath) {
   const normalizedFile = normalizeRepoPath(filePath);

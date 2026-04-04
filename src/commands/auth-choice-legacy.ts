@@ -1,9 +1,9 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { AuthChoice } from "./onboard-types.js";
 import {
   resolveManifestDeprecatedProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import type { AuthChoice } from "./onboard-types.js";
 
 function resolveLegacyCliBackendChoice(
   choice: string,
@@ -32,7 +32,7 @@ export function resolveLegacyAuthChoiceAliasesForCli(params?: {
     .flatMap((choice) => choice.deprecatedChoiceIds ?? [])
     .filter((choice): choice is AuthChoice => choice.endsWith("-cli"))
     .toSorted((left, right) => left.localeCompare(right));
-  return ["setup-token", "oauth", ...manifestCliAliases];
+  return manifestCliAliases;
 }
 
 export function normalizeLegacyOnboardAuthChoice(

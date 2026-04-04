@@ -41,6 +41,23 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", { config });
   });
 
+  it("threads agentId through live skill loading", () => {
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      agentId: "writer",
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [],
+      },
+    });
+
+    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+      config: {},
+      agentId: "writer",
+    });
+  });
+
   it("prefers the active runtime snapshot when caller config still contains SecretRefs", () => {
     const sourceConfig: OpenClawConfig = {
       skills: {

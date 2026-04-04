@@ -16,8 +16,9 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
-import { resolveDiscordProxyFetch } from "./client.js";
+import { resolveDiscordClientAccountContext } from "./client.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import {
   buildDiscordMessagePayload,
   buildDiscordSendError,
@@ -25,7 +26,6 @@ import {
   createDiscordClient,
   normalizeDiscordPollInput,
   normalizeStickerIds,
-  parseAndResolveRecipient,
   resolveChannelId,
   resolveDiscordChannelType,
   resolveDiscordSendComponents,
@@ -365,14 +365,17 @@ export async function sendWebhookMessageDiscord(
     throw new Error("Discord webhook id/token are required");
   }
 
-  const rewrittenText = rewriteDiscordKnownMentions(text, {
-    accountId: opts.accountId,
-  });
   const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
-  const fetchImpl = resolveDiscordProxyFetch({ cfg: opts.cfg, accountId: opts.accountId });
+  const { account, proxyFetch } = resolveDiscordClientAccountContext({
+    cfg: opts.cfg,
+    accountId: opts.accountId,
+  });
+  const rewrittenText = rewriteDiscordKnownMentions(text, {
+    accountId: account.accountId,
+  });
 
-  const response = await (fetchImpl ?? fetch)(
+  const response = await (proxyFetch ?? fetch)(
     resolveWebhookExecutionUrl({
       webhookId,
       webhookToken,
@@ -404,10 +407,6 @@ export async function sendWebhookMessageDiscord(
     channel_id?: string;
   };
   try {
-    const account = resolveDiscordAccount({
-      cfg: opts.cfg ?? loadConfig(),
-      accountId: opts.accountId,
-    });
     recordChannelActivity({
       channel: "discord",
       accountId: account.accountId,
@@ -431,11 +430,16 @@ export async function sendStickerDiscord(
   stickerIds: string[],
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
+  const cfg = opts.cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
   const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
-        accountId: opts.accountId,
+        accountId: accountInfo.accountId,
       })
     : undefined;
   const stickers = normalizeStickerIds(stickerIds);
@@ -457,11 +461,16 @@ export async function sendPollDiscord(
   poll: PollInput,
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
+  const cfg = opts.cfg ?? loadConfig();
+  const accountInfo = resolveDiscordAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
   const { rest, request, channelId } = await resolveDiscordSendTarget(to, opts);
   const content = opts.content?.trim();
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
-        accountId: opts.accountId,
+        accountId: accountInfo.accountId,
       })
     : undefined;
   if (poll.durationSeconds !== undefined) {

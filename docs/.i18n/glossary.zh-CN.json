@@ -48,6 +48,14 @@
     "target": "快速开始"
   },
   {
+    "source": "Chutes",
+    "target": "Chutes"
+  },
+  {
+    "source": "Qwen",
+    "target": "Qwen"
+  },
+  {
     "source": "Diffs",
     "target": "Diffs"
   },
@@ -214,6 +222,10 @@
   {
     "source": "FAQ",
     "target": "常见问题"
+  },
+  {
+    "source": "Ollama Web Search",
+    "target": "Ollama Web 搜索"
   },
   {
     "source": "onboarding",
