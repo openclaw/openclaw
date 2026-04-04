@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Synology Chat/security: route webhook token comparison through the shared constant-time secret helper for consistency with other bundled plugins.
 - Gateway/security: scope loopback browser-origin auth throttling by normalized origin so one localhost Control UI tab cannot lock out a different localhost browser origin after repeated auth failures.
 - Node exec approvals: keep node-host `system.run` approvals bound to the prepared execution plan, so script-drift revalidation still runs after agent-side approval forwarding.
+- Agents/pairing: merge completion announce delivery context with the requester session fallback so missing `to` still reaches the original channel, and include `operator.talk.secrets` in CLI default operator scopes for node-role device pairing approvals. (#56481) Thanks @maxpetrusenko.
 - Models/MiniMax: honor `MINIMAX_API_HOST` for implicit bundled MiniMax provider catalogs so China-hosted API-key setups pick `api.minimaxi.com/anthropic` without manual provider config. (#34524) Thanks @caiqinghua.
 - Usage/MiniMax: invert remaining-style `usage_percent` fields when MiniMax reports only remaining percentage data, so usage bars stop showing nearly-full remaining quota as nearly-exhausted usage. (#60254) Thanks @jwchmodx.
 - Usage/MiniMax: prefer the chat-model `model_remains` entry and derive Coding Plan window labels from MiniMax interval timestamps so MiniMax usage snapshots stop picking zero-budget media rows and misreporting 4h windows as `5h`. (#52349) Thanks @IVY-AI-gif.
