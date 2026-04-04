@@ -202,7 +202,11 @@ export function mergePrimaryFallbackConfig(
     next.primary = patch.primary;
   }
   if (patch.fallbacks !== undefined) {
-    next.fallbacks = patch.fallbacks;
+    if (patch.fallbacks.length === 0) {
+      delete next.fallbacks;
+    } else {
+      next.fallbacks = patch.fallbacks;
+    }
   }
   return next;
 }

@@ -279,8 +279,8 @@ export async function modelsScanCommand(
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");
   }
 
-  if (selected.length === 0) {
-    throw new Error("No models selected for fallbacks.");
+  if (opts.setDefault && selected.length === 0) {
+    throw new Error("No models selected for primary model.");
   }
   if (opts.setImage && selectedImages.length === 0) {
     throw new Error("No image-capable models selected for image model.");
@@ -312,7 +312,7 @@ export async function modelsScanCommand(
       ...cfg.agents?.defaults,
       model: {
         ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-        fallbacks: selected,
+        ...(selected.length > 0 ? { fallbacks: selected } : {}),
         ...(opts.setDefault ? { primary: selected[0] } : {}),
       },
       ...(nextImageModel ? { imageModel: nextImageModel } : {}),
