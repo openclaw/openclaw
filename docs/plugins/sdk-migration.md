@@ -290,6 +290,19 @@ bundled-plugin maintenance and compatibility, but they are intentionally
 omitted from the common migration table and are not the recommended target for
 new plugin code.
 
+The same rule applies to other generated bundled-helper families such as:
+
+- browser: `plugin-sdk/browser*`
+- Matrix: `plugin-sdk/matrix*`
+- LINE: `plugin-sdk/line*`
+- IRC: `plugin-sdk/irc*`
+- bundled helper/plugin surfaces like `plugin-sdk/googlechat`,
+  `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles*`,
+  `plugin-sdk/mattermost*`, `plugin-sdk/openai`, `plugin-sdk/moonshot`,
+  `plugin-sdk/modelstudio*`, `plugin-sdk/provider-moonshot`,
+  `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`,
+  `plugin-sdk/thread-ownership`, and `plugin-sdk/voice-call`
+
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask in Discord.
 

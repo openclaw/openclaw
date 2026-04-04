@@ -251,6 +251,18 @@ explicitly promotes one as public.
     | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
     | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helper surface |
   </Accordion>
+
+  <Accordion title="Reserved bundled-helper subpaths">
+    | Family | Current generated subpaths | Intended use |
+    | --- | --- | --- |
+    | Browser | `plugin-sdk/browser`, `plugin-sdk/browser-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-support` | Bundled browser plugin maintenance and compatibility |
+    | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
+    | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
+    | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
+    | Channel-specific helpers | `plugin-sdk/googlechat`, `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles`, `plugin-sdk/bluebubbles-policy`, `plugin-sdk/mattermost`, `plugin-sdk/mattermost-policy`, `plugin-sdk/feishu-conversation` | Bundled channel compatibility/helper seams |
+    | Provider-specific helpers | `plugin-sdk/openai`, `plugin-sdk/moonshot`, `plugin-sdk/modelstudio`, `plugin-sdk/modelstudio-definitions`, `plugin-sdk/provider-moonshot`, `plugin-sdk/together`, `plugin-sdk/amazon-bedrock`, `plugin-sdk/anthropic-vertex` | Bundled provider-specific helper seams |
+    | Plugin-specific helpers | `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`, `plugin-sdk/voice-call` | Bundled feature/plugin helper seams |
+  </Accordion>
 </AccordionGroup>
 
 ## Registration API
