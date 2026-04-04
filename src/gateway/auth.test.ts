@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
@@ -347,6 +347,50 @@ describe("gateway auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
+  });
+
+  it("serializes async auth attempts per rate-limit key", async () => {
+    const limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      exemptLoopback: false,
+    });
+    let releaseWhois!: () => void;
+    const whoisGate = new Promise<void>((resolve) => {
+      releaseWhois = resolve;
+    });
+    let whoisCalls = 0;
+    const tailscaleWhois = async () => {
+      whoisCalls += 1;
+      await whoisGate;
+      return null;
+    };
+
+    const baseParams = {
+      auth: { mode: "token" as const, token: "secret", allowTailscale: true },
+      connectAuth: { token: "wrong" },
+      tailscaleWhois,
+      authSurface: "ws-control-ui" as const,
+      req: createTailscaleForwardedReq(),
+      trustedProxies: ["127.0.0.1"],
+      rateLimiter: limiter,
+    };
+
+    const first = authorizeGatewayConnect(baseParams);
+    const second = authorizeGatewayConnect(baseParams);
+
+    await vi.waitFor(() => {
+      expect(whoisCalls).toBe(1);
+    });
+    releaseWhois();
+
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(firstResult.ok).toBe(false);
+    expect(firstResult.reason).toBe("token_mismatch");
+    expect(secondResult.ok).toBe(false);
+    expect(secondResult.reason).toBe("rate_limited");
+    expect(whoisCalls).toBe(1);
   });
 
   it("keeps tailscale header auth disabled on HTTP auth wrapper", async () => {

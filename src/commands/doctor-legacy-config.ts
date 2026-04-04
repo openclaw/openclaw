@@ -1,4 +1,6 @@
+import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { isDeepStrictEqual } from "node:util";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
@@ -82,6 +84,37 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
     };
   };
 
+  const normalizeVoiceCallLegacyConfig = () => {
+    const rawVoiceCallConfig = next.plugins?.entries?.["voice-call"]?.config;
+    if (!isRecord(rawVoiceCallConfig)) {
+      return;
+    }
+
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: rawVoiceCallConfig,
+      configPathPrefix: "plugins.entries.voice-call.config",
+    });
+    if (migration.changes.length === 0) {
+      return;
+    }
+
+    const plugins = structuredClone(next.plugins ?? {});
+    const entries = { ...plugins.entries };
+    const existingVoiceCallEntry = isRecord(entries["voice-call"])
+      ? (entries["voice-call"] as Record<string, unknown>)
+      : {};
+    entries["voice-call"] = {
+      ...existingVoiceCallEntry,
+      config: migration.config,
+    };
+    plugins.entries = entries;
+    next = {
+      ...next,
+      plugins,
+    };
+    changes.push(...migration.changes);
+  };
+
   const seedMissingDefaultAccountsFromSingleAccountBase = () => {
     const channels = next.channels as Record<string, unknown> | undefined;
     if (!channels) {
@@ -153,6 +186,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
 
   seedMissingDefaultAccountsFromSingleAccountBase();
   normalizeLegacyBrowserProfiles();
+  normalizeVoiceCallLegacyConfig();
   const webSearchMigration = migrateLegacyWebSearchConfig(next);
   if (webSearchMigration.changes.length > 0) {
     next = webSearchMigration.config;
@@ -353,7 +387,7 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
       return;
     }
 
-    const sameShape = JSON.stringify(normalizedTalk) === JSON.stringify(rawTalk);
+    const sameShape = isDeepStrictEqual(normalizedTalk, rawTalk);
     if (sameShape) {
       return;
     }

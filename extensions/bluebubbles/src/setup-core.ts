@@ -21,8 +21,8 @@ export function setBlueBubblesDmPolicy(
   const existingAllowFrom =
     resolvedAccountId === "default"
       ? cfg.channels?.bluebubbles?.allowFrom
-      : cfg.channels?.bluebubbles?.accounts?.[resolvedAccountId]?.allowFrom ??
-        cfg.channels?.bluebubbles?.allowFrom;
+      : (cfg.channels?.bluebubbles?.accounts?.[resolvedAccountId]?.allowFrom ??
+        cfg.channels?.bluebubbles?.allowFrom);
   return patchScopedAccountConfig({
     cfg,
     channelKey: channel,

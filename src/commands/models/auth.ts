@@ -33,6 +33,7 @@ import type {
 import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
 import { openUrl } from "../onboard-helpers.js";
@@ -317,10 +318,7 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const provider =
-    resolveRequestedProviderOrThrow(tokenProviders, opts.provider ?? "anthropic") ??
-    tokenProviders.find((candidate) => normalizeProviderId(candidate.id) === "anthropic") ??
-    tokenProviders[0] ??
-    null;
+    resolveRequestedProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0] ?? null;
   if (!provider) {
     throw new Error("No token-capable provider is available.");
   }
@@ -370,9 +368,23 @@ export async function modelsAuthPasteTokenCommand(
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) => {
+      const trimmed = value?.trim();
+      if (!trimmed) {
+        return "Required";
+      }
+      if (provider === "anthropic") {
+        return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
+      }
+      return undefined;
+    },
   });
-  const token = String(tokenInput ?? "").trim();
+  const token =
+    provider === "anthropic"
+      ? String(tokenInput ?? "")
+          .replaceAll(/\s+/g, "")
+          .trim()
+      : String(tokenInput ?? "").trim();
 
   const expires =
     opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
@@ -394,6 +406,12 @@ export async function modelsAuthPasteTokenCommand(
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
+  if (provider === "anthropic") {
+    runtime.log("Anthropic setup-token auth is a legacy/manual path in OpenClaw.");
+    runtime.log(
+      "Anthropic told OpenClaw users this path requires Extra Usage on the Claude account.",
+    );
+  }
 }
 
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {

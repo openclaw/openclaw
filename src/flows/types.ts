@@ -19,6 +19,8 @@ export type FlowOption<Value extends string = string> = {
   hint?: string;
   group?: FlowOptionGroup;
   docs?: FlowDocsLink;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
 };
 
 export type FlowContribution<Value extends string = string> = {

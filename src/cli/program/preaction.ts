@@ -27,8 +27,9 @@ function setProcessTitleForCommand(actionCommand: Command) {
   process.title = `${cliName}-${name}`;
 }
 
-// Commands that need channel plugins loaded
+// Commands that need plugins loaded before execution.
 const PLUGIN_REQUIRED_COMMANDS = new Set([
+  "agent",
   "message",
   "channels",
   "directory",

@@ -1,4 +1,8 @@
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import {
+  splitSystemPromptCacheBoundary,
+  stripSystemPromptCacheBoundary,
+} from "./system-prompt-cache-boundary.js";
 
 export type AnthropicServiceTier = "auto" | "standard_only";
 
@@ -46,13 +50,57 @@ function applyAnthropicCacheControlToSystem(
     return;
   }
 
+  const normalizedBlocks: Array<unknown> = [];
+  for (const block of system) {
+    if (!block || typeof block !== "object") {
+      normalizedBlocks.push(block);
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type !== "text" || typeof record.text !== "string") {
+      normalizedBlocks.push(block);
+      continue;
+    }
+    const split = splitSystemPromptCacheBoundary(record.text);
+    if (!split) {
+      if (record.cache_control === undefined) {
+        record.cache_control = cacheControl;
+      }
+      normalizedBlocks.push(record);
+      continue;
+    }
+
+    const { cache_control: existingCacheControl, ...rest } = record;
+    if (split.stablePrefix) {
+      normalizedBlocks.push({
+        ...rest,
+        text: split.stablePrefix,
+        cache_control: existingCacheControl ?? cacheControl,
+      });
+    }
+    if (split.dynamicSuffix) {
+      normalizedBlocks.push({
+        ...rest,
+        text: split.dynamicSuffix,
+      });
+    }
+  }
+
+  system.splice(0, system.length, ...normalizedBlocks);
+}
+
+function stripAnthropicSystemPromptBoundary(system: unknown): void {
+  if (!Array.isArray(system)) {
+    return;
+  }
+
   for (const block of system) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const record = block as Record<string, unknown>;
-    if (record.type === "text" && record.cache_control === undefined) {
-      record.cache_control = cacheControl;
+    if (record.type === "text" && typeof record.text === "string") {
+      record.text = stripSystemPromptCacheBoundary(record.text);
     }
   }
 }
@@ -136,11 +184,16 @@ export function applyAnthropicPayloadPolicyToParams(
     payloadObj.service_tier = policy.serviceTier;
   }
 
+  if (policy.cacheControl) {
+    applyAnthropicCacheControlToSystem(payloadObj.system, policy.cacheControl);
+  } else {
+    stripAnthropicSystemPromptBoundary(payloadObj.system);
+  }
+
   if (!policy.cacheControl) {
     return;
   }
 
-  applyAnthropicCacheControlToSystem(payloadObj.system, policy.cacheControl);
   // Preserve Anthropic cache-write scope by only tagging the trailing user turn.
   applyAnthropicCacheControlToMessages(payloadObj.messages, policy.cacheControl);
 }

@@ -332,6 +332,24 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
   });
+
+  it("omits disable-model-invocation skills from available_skills for freshly loaded entries", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "hidden-skill");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "hidden-skill",
+      description: "Hidden from the prompt",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, resolveTestSkillDirs(workspaceDir));
+
+    expect(prompt).not.toContain("hidden-skill");
+    expect(prompt).not.toContain("Hidden from the prompt");
+    expect(prompt).not.toContain(path.join(skillDir, "SKILL.md"));
+  });
 });
 
 describe("applySkillEnvOverrides", () => {

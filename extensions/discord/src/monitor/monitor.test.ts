@@ -460,7 +460,7 @@ describe("discord component interactions", () => {
           channels: { discord: { replyToMode: "first", groupPolicy: "allowlist" } },
         } as OpenClawConfig,
         discordConfig: createDiscordConfig({ groupPolicy: "allowlist" }),
-        guildEntries: { g1: { channels: { "guild-channel": { allow: true, enabled: false } } } },
+        guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
       }),
     );
     const { interaction, reply } = createComponentButtonInteraction({
@@ -494,7 +494,7 @@ describe("discord component interactions", () => {
           channels: { discord: { replyToMode: "first", groupPolicy: "allowlist" } },
         } as OpenClawConfig,
         discordConfig: createDiscordConfig({ groupPolicy: "allowlist" }),
-        guildEntries: { g1: { channels: { "guild-channel": { allow: false } } } },
+        guildEntries: { g1: { channels: { "guild-channel": { enabled: false } } } },
       }),
     );
     const { interaction, reply } = createComponentButtonInteraction({

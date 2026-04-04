@@ -57,17 +57,18 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
-import { getBearerToken, resolveHttpBrowserOriginPolicy } from "./http-utils.js";
+import {
+  authorizeGatewayHttpRequestOrReply,
+  getBearerToken,
+  resolveHttpBrowserOriginPolicy,
+} from "./http-utils.js";
 import { handleOpenAiModelsHttpRequest } from "./models-http.js";
 import { resolveRequestClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
-import {
-  authorizeCanvasRequest,
-  enforcePluginRouteGatewayAuth,
-  isCanvasPath,
-} from "./server/http-auth.js";
+import { authorizeCanvasRequest, isCanvasPath } from "./server/http-auth.js";
+import { resolvePluginRouteRuntimeOperatorScopes } from "./server/plugin-route-runtime-scopes.js";
 import {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
@@ -307,6 +308,7 @@ function buildPluginRequestStages(params: {
     return [];
   }
   let pluginGatewayAuthSatisfied = false;
+  let pluginRequestOperatorScopes: string[] | undefined;
   return [
     {
       name: "plugin-auth",
@@ -323,7 +325,7 @@ function buildPluginRequestStages(params: {
         ) {
           return false;
         }
-        const pluginAuthOk = await enforcePluginRouteGatewayAuth({
+        const requestAuth = await authorizeGatewayHttpRequestOrReply({
           req: params.req,
           res: params.res,
           auth: params.resolvedAuth,
@@ -331,10 +333,14 @@ function buildPluginRequestStages(params: {
           allowRealIpFallback: params.allowRealIpFallback,
           rateLimiter: params.rateLimiter,
         });
-        if (!pluginAuthOk) {
+        if (!requestAuth) {
           return true;
         }
         pluginGatewayAuthSatisfied = true;
+        pluginRequestOperatorScopes = resolvePluginRouteRuntimeOperatorScopes(
+          params.req,
+          requestAuth,
+        );
         return false;
       },
     },
@@ -346,6 +352,7 @@ function buildPluginRequestStages(params: {
         return (
           params.handlePluginRequest?.(params.req, params.res, pathContext, {
             gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
+            gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
           }) ?? false
         );
       },
@@ -939,7 +946,8 @@ export function createGatewayHttpServer(opts: {
           run: () =>
             handleControlUiAvatarRequest(req, res, {
               basePath: controlUiBasePath,
-              resolveAvatar: (agentId) => resolveAgentAvatar(configSnapshot, agentId),
+              resolveAvatar: (agentId) =>
+                resolveAgentAvatar(configSnapshot, agentId, { includeUiOverride: true }),
             }),
         });
         requestStages.push({

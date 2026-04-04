@@ -1,4 +1,4 @@
-import { createPatchedAccountSetupAdapter } from "openclaw/plugin-sdk/setup";
+import { createPatchedAccountSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 
 const channel = "zalouser" as const;
 

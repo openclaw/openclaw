@@ -74,8 +74,8 @@ const mocks = vi.hoisted(() => {
     loadConfig: vi.fn().mockReturnValue({
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-5", fallbacks: [] },
-          models: { "anthropic/claude-opus-4-5": { alias: "Opus" } },
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+          models: { "anthropic/claude-opus-4-6": { alias: "Opus" } },
         },
       },
       models: { providers: {} },
@@ -211,7 +211,7 @@ describe("modelsStatusCommand auth overview", () => {
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
 
     expect(mocks.resolveOpenClawAgentDir).toHaveBeenCalled();
-    expect(payload.defaultModel).toBe("anthropic/claude-opus-4-5");
+    expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-agent/auth-profiles.json");
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);

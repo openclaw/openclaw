@@ -607,6 +607,8 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
+    expectSourceOmitsSnippet("command-auth", "../../extensions/");
+    expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -839,6 +841,7 @@ describe("plugin-sdk subpath exports", () => {
 
     expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
     expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
+    expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
     expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
@@ -856,10 +859,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
 
-    expectSourceMentions("channel-reply-pipeline", ["createChannelReplyPipeline"]);
-    expect("createTypingCallbacks" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixContext" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixOptions" in channelReplyPipelineSdk).toBe(false);
+    expectSourceMentions("channel-reply-pipeline", [
+      "createChannelReplyPipeline",
+      "createTypingCallbacks",
+      "createReplyPrefixContext",
+      "createReplyPrefixOptions",
+    ]);
+    expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
+    expect(typeof channelReplyPipelineSdk.createReplyPrefixContext).toBe("function");
+    expect(typeof channelReplyPipelineSdk.createReplyPrefixOptions).toBe("function");
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {

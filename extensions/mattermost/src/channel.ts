@@ -21,6 +21,14 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { mattermostApprovalAuth } from "./approval-auth.js";
+import {
+  chunkTextForOutbound,
+  createAccountStatusSink,
+  DEFAULT_ACCOUNT_ID,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  type ChannelPlugin,
+} from "./channel-api.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { collectMattermostMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
@@ -42,14 +50,6 @@ import { sendMessageMattermost } from "./mattermost/send.js";
 import { collectMattermostSlashCallbackPaths } from "./mattermost/slash-commands.js";
 import { resolveMattermostOpaqueTarget } from "./mattermost/target-resolution.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
-import {
-  chunkTextForOutbound,
-  createAccountStatusSink,
-  DEFAULT_ACCOUNT_ID,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  type ChannelPlugin,
-} from "./runtime-api.js";
 import { getMattermostRuntime } from "./runtime.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
 import { mattermostSetupAdapter } from "./setup-core.js";

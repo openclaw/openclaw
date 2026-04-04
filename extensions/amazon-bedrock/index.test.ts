@@ -8,10 +8,12 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
 
-type RegisteredProviderPlugin = ReturnType<typeof registerSingleProviderPlugin>;
+type RegisteredProviderPlugin = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 /** Register the amazon-bedrock plugin with an optional pluginConfig override. */
-function registerWithConfig(pluginConfig?: Record<string, unknown>): RegisteredProviderPlugin {
+async function registerWithConfig(
+  pluginConfig?: Record<string, unknown>,
+): Promise<RegisteredProviderPlugin> {
   const providers: RegisteredProviderPlugin[] = [];
   const noopLogger = { info() {}, warn() {}, error() {}, debug() {} };
   const api = buildPluginApi({
@@ -30,7 +32,7 @@ function registerWithConfig(pluginConfig?: Record<string, unknown>): RegisteredP
       },
     },
   });
-  amazonBedrockPlugin.register(api);
+  await amazonBedrockPlugin.register(api);
   const provider = providers[0];
   if (!provider) throw new Error("provider registration missing");
   return provider;
@@ -89,8 +91,8 @@ function callWrappedStream(
 }
 
 describe("amazon-bedrock provider plugin", () => {
-  it("marks Claude 4.6 Bedrock models as adaptive by default", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+  it("marks Claude 4.6 Bedrock models as adaptive by default", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
     expect(
       provider.resolveDefaultThinkingLevel?.({
@@ -106,8 +108,8 @@ describe("amazon-bedrock provider plugin", () => {
     ).toBeUndefined();
   });
 
-  it("owns Anthropic-style replay policy for Claude Bedrock models", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+  it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
     expect(
       provider.buildReplayPolicy?.({
@@ -127,8 +129,8 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
-  it("disables prompt caching for non-Anthropic Bedrock models", () => {
-    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+  it("disables prompt caching for non-Anthropic Bedrock models", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
     const wrapped = provider.wrapStreamFn?.({
       provider: "amazon-bedrock",
       modelId: "amazon.nova-micro-v1:0",
@@ -181,8 +183,8 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   describe("guardrail payload injection", () => {
-    it("does not inject guardrailConfig when guardrail is absent from plugin config", () => {
-      const provider = registerWithConfig(undefined);
+    it("does not inject guardrailConfig when guardrail is absent from plugin config", async () => {
+      const provider = await registerWithConfig(undefined);
       const result = callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
 
       expect(result).not.toHaveProperty("_capturedPayload");
@@ -190,8 +192,8 @@ describe("amazon-bedrock provider plugin", () => {
       expect(result).toMatchObject({ cacheRetention: "none" });
     });
 
-    it("injects all four fields when guardrail config includes optional fields", () => {
-      const provider = registerWithConfig({
+    it("injects all four fields when guardrail config includes optional fields", async () => {
+      const provider = await registerWithConfig({
         guardrail: {
           guardrailIdentifier: "my-guardrail-id",
           guardrailVersion: "1",
@@ -211,8 +213,8 @@ describe("amazon-bedrock provider plugin", () => {
       });
     });
 
-    it("injects only required fields when optional fields are omitted", () => {
-      const provider = registerWithConfig({
+    it("injects only required fields when optional fields are omitted", async () => {
+      const provider = await registerWithConfig({
         guardrail: {
           guardrailIdentifier: "abc123",
           guardrailVersion: "DRAFT",
@@ -228,8 +230,8 @@ describe("amazon-bedrock provider plugin", () => {
       });
     });
 
-    it("injects guardrailConfig for Anthropic models without cacheRetention: none", () => {
-      const provider = registerWithConfig({
+    it("injects guardrailConfig for Anthropic models without cacheRetention: none", async () => {
+      const provider = await registerWithConfig({
         guardrail: {
           guardrailIdentifier: "guardrail-anthropic",
           guardrailVersion: "2",
@@ -252,8 +254,8 @@ describe("amazon-bedrock provider plugin", () => {
       expect(result).not.toHaveProperty("cacheRetention", "none");
     });
 
-    it("injects guardrailConfig for non-Anthropic models with cacheRetention: none", () => {
-      const provider = registerWithConfig({
+    it("injects guardrailConfig for non-Anthropic models with cacheRetention: none", async () => {
+      const provider = await registerWithConfig({
         guardrail: {
           guardrailIdentifier: "guardrail-nova",
           guardrailVersion: "3",

@@ -77,6 +77,15 @@ The setup code is a base64-encoded JSON payload that contains:
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
 - `bootstrapToken`: a short-lived single-device bootstrap token used for the initial pairing handshake
 
+That bootstrap token carries the built-in pairing bootstrap profile:
+
+- primary handed-off `node` token stays `scopes: []`
+- any handed-off `operator` token stays bounded to the bootstrap allowlist:
+  `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`
+- bootstrap scope checks are role-prefixed, not one flat scope pool:
+  operator scope entries only satisfy operator requests, and non-operator roles
+  must still request scopes under their own role prefix
+
 Treat the setup code like a password while it is valid.
 
 ### Approve a node device
@@ -100,8 +109,11 @@ Stored under `~/.openclaw/devices/`:
 
 ### Notes
 
-- The legacy `node.pair.*` API (CLI: `openclaw nodes pending/approve`) is a
+- The legacy `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|rename`) is a
   separate gateway-owned pairing store. WS nodes still require device pairing.
+- The pairing record is the durable source of truth for approved roles. Active
+  device tokens stay bounded to that approved role set; a stray token entry
+  outside the approved roles does not create new access.
 
 ## Related docs
 

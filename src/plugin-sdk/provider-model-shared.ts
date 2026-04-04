@@ -4,6 +4,22 @@
 // without recursing through provider-specific facades.
 
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
+import {
+  buildAnthropicReplayPolicyForModel,
+  buildGoogleGeminiReplayPolicy,
+  buildHybridAnthropicOrOpenAIReplayPolicy,
+  buildOpenAICompatibleReplayPolicy,
+  buildPassthroughGeminiSanitizingReplayPolicy,
+  buildStrictAnthropicReplayPolicy,
+  resolveTaggedReasoningOutputMode,
+  sanitizeGoogleGeminiReplayHistory,
+} from "../plugins/provider-replay-helpers.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type {
+  ProviderReasoningOutputModeContext,
+  ProviderReplayPolicyContext,
+  ProviderSanitizeReplayHistoryContext,
+} from "./plugin-entry.js";
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
 export type {
@@ -30,9 +46,15 @@ export {
 } from "../plugins/provider-model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
 export {
+  buildAnthropicReplayPolicyForModel,
+  buildGoogleGeminiReplayPolicy,
+  buildHybridAnthropicOrOpenAIReplayPolicy,
   buildOpenAICompatibleReplayPolicy,
+  buildPassthroughGeminiSanitizingReplayPolicy,
+  resolveTaggedReasoningOutputMode,
+  sanitizeGoogleGeminiReplayHistory,
   buildStrictAnthropicReplayPolicy,
-} from "../plugins/provider-replay-helpers.js";
+};
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -103,4 +125,63 @@ export function normalizeNativeXaiModelId(id: string): string {
     return "grok-4.20-beta-latest-non-reasoning";
   }
   return id;
+}
+
+export type ProviderReplayFamily =
+  | "openai-compatible"
+  | "anthropic-by-model"
+  | "google-gemini"
+  | "passthrough-gemini"
+  | "hybrid-anthropic-openai";
+
+type ProviderReplayFamilyHooks = Pick<
+  ProviderPlugin,
+  "buildReplayPolicy" | "sanitizeReplayHistory" | "resolveReasoningOutputMode"
+>;
+
+type BuildProviderReplayFamilyHooksOptions =
+  | { family: "openai-compatible" }
+  | { family: "anthropic-by-model" }
+  | { family: "google-gemini" }
+  | { family: "passthrough-gemini" }
+  | {
+      family: "hybrid-anthropic-openai";
+      anthropicModelDropThinkingBlocks?: boolean;
+    };
+
+export function buildProviderReplayFamilyHooks(
+  options: BuildProviderReplayFamilyHooksOptions,
+): ProviderReplayFamilyHooks {
+  switch (options.family) {
+    case "openai-compatible":
+      return {
+        buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
+          buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+      };
+    case "anthropic-by-model":
+      return {
+        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
+          buildAnthropicReplayPolicyForModel(modelId),
+      };
+    case "google-gemini":
+      return {
+        buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
+        sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
+          sanitizeGoogleGeminiReplayHistory(ctx),
+        resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
+          resolveTaggedReasoningOutputMode(),
+      };
+    case "passthrough-gemini":
+      return {
+        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
+          buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+      };
+    case "hybrid-anthropic-openai":
+      return {
+        buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
+          buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
+            anthropicModelDropThinkingBlocks: options.anthropicModelDropThinkingBlocks,
+          }),
+      };
+  }
 }

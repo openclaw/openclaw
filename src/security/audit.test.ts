@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  collectFeishuSecurityAuditFindings,
   collectDiscordSecurityAuditFindings,
   collectSlackSecurityAuditFindings,
   collectSynologyChatSecurityAuditFindings,
@@ -41,7 +42,7 @@ const execDockerRawUnavailable: NonNullable<SecurityAuditOptions["execDockerRawF
 };
 
 function stubChannelPlugin(params: {
-  id: "discord" | "slack" | "synology-chat" | "telegram" | "zalouser";
+  id: "discord" | "feishu" | "slack" | "synology-chat" | "telegram" | "zalouser";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
   inspectAccount?: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
@@ -59,23 +60,27 @@ function stubChannelPlugin(params: {
       ? (collectDiscordSecurityAuditFindings as NonNullable<
           ChannelPlugin["security"]
         >["collectAuditFindings"])
-      : params.id === "slack"
-        ? (collectSlackSecurityAuditFindings as NonNullable<
+      : params.id === "feishu"
+        ? (collectFeishuSecurityAuditFindings as NonNullable<
             ChannelPlugin["security"]
           >["collectAuditFindings"])
-        : params.id === "synology-chat"
-          ? (collectSynologyChatSecurityAuditFindings as NonNullable<
+        : params.id === "slack"
+          ? (collectSlackSecurityAuditFindings as NonNullable<
               ChannelPlugin["security"]
             >["collectAuditFindings"])
-          : params.id === "telegram"
-            ? (collectTelegramSecurityAuditFindings as NonNullable<
+          : params.id === "synology-chat"
+            ? (collectSynologyChatSecurityAuditFindings as NonNullable<
                 ChannelPlugin["security"]
               >["collectAuditFindings"])
-            : params.id === "zalouser"
-              ? (collectZalouserSecurityAuditFindings as NonNullable<
+            : params.id === "telegram"
+              ? (collectTelegramSecurityAuditFindings as NonNullable<
                   ChannelPlugin["security"]
                 >["collectAuditFindings"])
-              : undefined);
+              : params.id === "zalouser"
+                ? (collectZalouserSecurityAuditFindings as NonNullable<
+                    ChannelPlugin["security"]
+                  >["collectAuditFindings"])
+                : undefined);
   const defaultCommands =
     params.commands ??
     (params.id === "discord" || params.id === "telegram"
@@ -159,6 +164,15 @@ const discordPlugin = stubChannelPlugin({
   },
 });
 
+const feishuPlugin = stubChannelPlugin({
+  id: "feishu",
+  label: "Feishu",
+  resolveAccount: (cfg) => {
+    const base = cfg.channels?.feishu ?? {};
+    return { config: { ...base } };
+  },
+});
+
 const slackPlugin = stubChannelPlugin({
   id: "slack",
   label: "Slack",
@@ -236,6 +250,7 @@ const synologyChatPlugin = stubChannelPlugin({
 
 const BASE_AUDIT_CHANNEL_PLUGINS = [
   discordPlugin,
+  feishuPlugin,
   slackPlugin,
   telegramPlugin,
   zalouserPlugin,
@@ -1548,6 +1563,28 @@ describe("security audit", () => {
         ],
       },
       {
+        name: "home credential bind is treated as dangerous",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                docker: {
+                  binds: [path.join(isolatedHome, ".docker", "config.json") + ":/mnt/docker:ro"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        expectedFindings: [
+          {
+            checkId: "sandbox.dangerous_bind_mount",
+            severity: "critical",
+            title: "Dangerous bind mount in sandbox config",
+          },
+        ],
+      },
+      {
         name: "container namespace join network mode",
         cfg: {
           agents: {
@@ -2309,7 +2346,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2330,7 +2367,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2373,7 +2410,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2388,7 +2425,7 @@ describe("security audit", () => {
               guilds: {
                 "123": {
                   channels: {
-                    general: { allow: true },
+                    general: { enabled: true },
                   },
                 },
               },
@@ -2957,7 +2994,7 @@ describe("security audit", () => {
             guilds: {
               "123": {
                 channels: {
-                  general: { allow: true },
+                  general: { enabled: true },
                 },
               },
             },
@@ -3759,7 +3796,7 @@ describe("security audit", () => {
               guilds: {
                 "1234567890": {
                   channels: {
-                    "7777777777": { allow: true },
+                    "7777777777": { enabled: true },
                   },
                 },
               },

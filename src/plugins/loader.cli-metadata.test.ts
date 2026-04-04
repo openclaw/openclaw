@@ -189,6 +189,224 @@ module.exports = {
     );
   });
 
+  it("skips bundled channel full entries that do not provide a dedicated cli-metadata entry", async () => {
+    const bundledRoot = makeTempDir();
+    const pluginDir = path.join(bundledRoot, "bundled-skip-channel");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/bundled-skip-channel",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "bundled-skip-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["bundled-skip-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "bundled-skip-channel",
+  register() {
+    throw new Error("bundled channel full entry should not load during CLI metadata capture");
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          allow: ["bundled-skip-channel"],
+          entries: {
+            "bundled-skip-channel": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
+      "bundled-skip-channel",
+    );
+    expect(registry.plugins.find((entry) => entry.id === "bundled-skip-channel")?.status).toBe(
+      "loaded",
+    );
+  });
+
+  it("prefers bundled channel cli-metadata entries over full channel entries", async () => {
+    const bundledRoot = makeTempDir();
+    const pluginDir = path.join(bundledRoot, "bundled-cli-channel");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const cliMarker = path.join(pluginDir, "cli-loaded.txt");
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/bundled-cli-channel",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "bundled-cli-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["bundled-cli-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "bundled-cli-channel",
+  register() {
+    throw new Error("bundled channel full entry should not load during CLI metadata capture");
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "cli-metadata.cjs"),
+      `module.exports = {
+  id: "bundled-cli-channel",
+  register(api) {
+    require("node:fs").writeFileSync(${JSON.stringify(cliMarker)}, "loaded", "utf-8");
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "bundled-cli-channel",
+          description: "Bundled channel CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          allow: ["bundled-cli-channel"],
+          entries: {
+            "bundled-cli-channel": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(fs.existsSync(cliMarker)).toBe(true);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "bundled-cli-channel",
+    );
+  });
+
+  it("skips bundled non-channel full entries that do not provide a dedicated cli-metadata entry", async () => {
+    const bundledRoot = makeTempDir();
+    const pluginDir = path.join(bundledRoot, "bundled-skip-provider");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/bundled-skip-provider",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "bundled-skip-provider",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "bundled-skip-provider",
+  register() {
+    throw new Error("bundled provider full entry should not load during CLI metadata capture");
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          allow: ["bundled-skip-provider"],
+          entries: {
+            "bundled-skip-provider": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(false);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
+      "bundled-skip-provider",
+    );
+    expect(registry.plugins.find((entry) => entry.id === "bundled-skip-provider")?.status).toBe(
+      "loaded",
+    );
+  });
+
   it("collects channel CLI metadata during full plugin loads", () => {
     useNoBundledPlugins();
     const pluginDir = makeTempDir();

@@ -5,8 +5,11 @@ export type BundledPluginContractSnapshot = {
   cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
+  realtimeTranscriptionProviderIds: string[];
+  realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  videoGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
@@ -37,8 +40,13 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
     cliBackendIds: uniqueStrings(manifest.cliBackends),
     providerIds: uniqueStrings(manifest.providers),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
+    realtimeTranscriptionProviderIds: uniqueStrings(
+      manifest.contracts?.realtimeTranscriptionProviders,
+    ),
+    realtimeVoiceProviderIds: uniqueStrings(manifest.contracts?.realtimeVoiceProviders),
     mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
     imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
+    videoGenerationProviderIds: uniqueStrings(manifest.contracts?.videoGenerationProviders),
     webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
     webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
     toolNames: uniqueStrings(manifest.contracts?.tools),
@@ -48,8 +56,11 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.cliBackendIds.length > 0 ||
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
+        entry.realtimeTranscriptionProviderIds.length > 0 ||
+        entry.realtimeVoiceProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.videoGenerationProviderIds.length > 0 ||
         entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0 ||
         entry.toolNames.length > 0,
@@ -68,12 +79,24 @@ export const BUNDLED_PROVIDER_PLUGIN_IDS = collectPluginIds((entry) => entry.pro
 
 export const BUNDLED_SPEECH_PLUGIN_IDS = collectPluginIds((entry) => entry.speechProviderIds);
 
+export const BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS = collectPluginIds(
+  (entry) => entry.realtimeTranscriptionProviderIds,
+);
+
+export const BUNDLED_REALTIME_VOICE_PLUGIN_IDS = collectPluginIds(
+  (entry) => entry.realtimeVoiceProviderIds,
+);
+
 export const BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS = collectPluginIds(
   (entry) => entry.mediaUnderstandingProviderIds,
 );
 
 export const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = collectPluginIds(
   (entry) => entry.imageGenerationProviderIds,
+);
+
+export const BUNDLED_VIDEO_GENERATION_PLUGIN_IDS = collectPluginIds(
+  (entry) => entry.videoGenerationProviderIds,
 );
 
 export const BUNDLED_WEB_FETCH_PLUGIN_IDS = collectPluginIds((entry) => entry.webFetchProviderIds);
@@ -84,8 +107,11 @@ export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
       (entry) =>
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
+        entry.realtimeTranscriptionProviderIds.length > 0 ||
+        entry.realtimeVoiceProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.videoGenerationProviderIds.length > 0 ||
         entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0,
     ).map((entry) => entry.pluginId),

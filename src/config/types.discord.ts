@@ -38,7 +38,6 @@ export type DiscordDmConfig = {
 };
 
 export type DiscordGuildChannelConfig = {
-  allow?: boolean;
   requireMention?: boolean;
   /**
    * If true, drop messages that mention another user/role but not this one (not @everyone/@here).

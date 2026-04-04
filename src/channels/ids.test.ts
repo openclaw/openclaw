@@ -19,10 +19,10 @@ function collectBundledChatChannelAliases(): Record<string, ChatChannelId> {
         ? entry.packageManifest.channel
         : undefined;
     const rawId = channel?.id?.trim();
-    if (!rawId || !CHAT_CHANNEL_ORDER.includes(rawId as ChatChannelId)) {
+    if (!rawId || !CHAT_CHANNEL_ORDER.includes(rawId)) {
       continue;
     }
-    const channelId = rawId as ChatChannelId;
+    const channelId = rawId;
     if (!channel) {
       continue;
     }

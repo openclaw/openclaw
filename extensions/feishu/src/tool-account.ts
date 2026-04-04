@@ -36,7 +36,10 @@ function resolveImplicitToolAccountId(params: {
   }
 
   const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
-  if (contextualAccountId && listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
+  if (
+    contextualAccountId &&
+    listFeishuAccountIds(params.api.config).includes(contextualAccountId)
+  ) {
     const contextualAccount = resolveFeishuAccount({
       cfg: params.api.config,
       accountId: contextualAccountId,

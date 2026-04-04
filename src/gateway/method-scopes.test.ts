@@ -9,6 +9,16 @@ import {
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
+const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
+
+function setPluginGatewayMethodScope(method: string, scope: "operator.read" | "operator.write") {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayMethodScopes = {
+    [method]: scope,
+  };
+  setActivePluginRegistry(registry);
+}
+
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
@@ -22,7 +32,7 @@ describe("method scope resolution", () => {
     ["sessions.abort", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
-    ["node.pair.approve", ["operator.write"]],
+    ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
@@ -50,6 +60,14 @@ describe("method scope resolution", () => {
       "operator.write",
     ]);
   });
+
+  it("keeps reserved admin namespaces admin-only even if a plugin scope is narrower", () => {
+    setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
+
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(RESERVED_ADMIN_PLUGIN_METHOD)).toEqual([
+      "operator.admin",
+    ]);
+  });
 });
 
 describe("operator scope authorization", () => {
@@ -67,9 +85,15 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+  });
+
+  it("requires pairing scope for node pairing approvals", () => {
     expect(authorizeOperatorScopesForMethod("node.pair.approve", ["operator.pairing"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("node.pair.approve", ["operator.write"])).toEqual({
       allowed: false,
-      missingScope: "operator.write",
+      missingScope: "operator.pairing",
     });
   });
 
@@ -95,6 +119,17 @@ describe("operator scope authorization", () => {
 
   it("requires admin for unknown methods", () => {
     expect(authorizeOperatorScopesForMethod("unknown.method", ["operator.read"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+  });
+
+  it("requires admin for reserved admin namespaces even if a plugin registered a narrower scope", () => {
+    setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
+
+    expect(
+      authorizeOperatorScopesForMethod(RESERVED_ADMIN_PLUGIN_METHOD, ["operator.read"]),
+    ).toEqual({
       allowed: false,
       missingScope: "operator.admin",
     });
@@ -134,5 +169,12 @@ describe("core gateway method classification", () => {
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toEqual([]);
+  });
+});
+
+describe("CLI default operator scopes", () => {
+  it("includes operator.talk.secrets for node-role device pairing approvals", async () => {
+    const { CLI_DEFAULT_OPERATOR_SCOPES } = await import("./method-scopes.js");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.talk.secrets");
   });
 });

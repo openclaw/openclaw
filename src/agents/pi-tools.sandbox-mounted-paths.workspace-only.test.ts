@@ -34,7 +34,7 @@ function resolveApplyPatchTool(
     workspaceDir: params.workspaceDir,
     config: params.config,
     modelProvider: "openai",
-    modelId: "gpt-5.2",
+    modelId: "gpt-5.4",
   });
   const applyPatchTool = tools.find((t) => t.name === "apply_patch") as ToolWithExecute | undefined;
   if (!applyPatchTool) {

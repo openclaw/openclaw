@@ -22,10 +22,13 @@ Under the hood, requests are executed as a normal Gateway agent run (same codepa
 
 Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api):
 
-- use `Authorization: Bearer <token>` with the normal Gateway auth config
+- use the matching Gateway HTTP auth path:
+  - shared-secret auth (`gateway.auth.mode="token"` or `"password"`): `Authorization: Bearer <token-or-password>`
+  - trusted-proxy auth (`gateway.auth.mode="trusted-proxy"`): identity-aware proxy headers from a configured non-loopback trusted proxy source
+  - private-ingress open auth (`gateway.auth.mode="none"`): no auth header
 - treat the endpoint as full operator access for the gateway instance
 - for shared-secret auth modes (`token` and `password`), ignore narrower bearer-declared `x-openclaw-scopes` values and restore the normal full operator defaults
-- for trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`), still honor the declared operator scopes on the request
+- for trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`), honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set
 - select agents with `model: "openclaw"`, `model: "openclaw/default"`, `model: "openclaw/<agentId>"`, or `x-openclaw-agent-id`
 - use `x-openclaw-model` when you want to override the selected agent's backend model
 - use `x-openclaw-session-key` for explicit session routing
@@ -36,11 +39,14 @@ Auth matrix:
 - `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
   - proves possession of the shared gateway operator secret
   - ignores narrower `x-openclaw-scopes`
-  - restores the full default operator scope set
+  - restores the full default operator scope set:
+    `operator.admin`, `operator.approvals`, `operator.pairing`,
+    `operator.read`, `operator.talk.secrets`, `operator.write`
   - treats chat turns on this endpoint as owner-sender turns
 - trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
-  - honor the declared `x-openclaw-scopes` header
-  - only get owner semantics when `operator.admin` is actually present in those declared scopes
+  - honor `x-openclaw-scopes` when the header is present
+  - fall back to the normal operator default scope set when the header is absent
+  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 
@@ -156,8 +162,17 @@ Current behavior:
 
 - File content is decoded and added to the **system prompt**, not the user message,
   so it stays ephemeral (not persisted in session history).
-- PDFs are parsed for text. If little text is found, the first pages are rasterized
-  into images and passed to the model.
+- Decoded file text is wrapped as **untrusted external content** before it is added,
+  so file bytes are treated as data, not trusted instructions.
+- The injected block uses explicit boundary markers like
+  `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` /
+  `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` and includes a
+  `Source: External` metadata line.
+- This file-input path intentionally omits the long `SECURITY NOTICE:` banner to
+  preserve prompt budget; the boundary markers and metadata still stay in place.
+- PDFs are parsed for text first. If little text is found, the first pages are
+  rasterized into images and passed to the model, and the injected file block uses
+  the placeholder `[PDF content rendered to images]`.
 
 PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
 PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
@@ -277,6 +292,9 @@ Event types currently emitted:
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts.
+OpenClaw normalizes common OpenAI-style aliases before those counters reach
+downstream status/session surfaces, including `input_tokens` / `output_tokens`
+and `prompt_tokens` / `completion_tokens`.
 
 ## Errors
 

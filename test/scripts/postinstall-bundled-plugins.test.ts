@@ -68,7 +68,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     const spawnSync = vi.fn();
@@ -82,7 +82,7 @@ describe("bundled plugin postinstall", () => {
         "--omit=dev",
         "--no-save",
         "--package-lock=false",
-        "acpx@0.4.0",
+        "acpx@0.4.1",
       ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
@@ -96,7 +96,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
@@ -115,7 +115,7 @@ describe("bundled plugin postinstall", () => {
         "--omit=dev",
         "--no-save",
         "--package-lock=false",
-        "acpx@0.4.0",
+        "acpx@0.4.1",
       ]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
@@ -123,7 +123,7 @@ describe("bundled plugin postinstall", () => {
 
     expect(spawnSync).toHaveBeenCalledWith(
       "npm",
-      ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.0"],
+      ["install", "--omit=dev", "--no-save", "--package-lock=false", "acpx@0.4.1"],
       {
         cwd: packageRoot,
         encoding: "utf8",
@@ -143,7 +143,7 @@ describe("bundled plugin postinstall", () => {
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
       dependencies: {
-        acpx: "0.4.0",
+        acpx: "0.4.1",
       },
     });
     await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });

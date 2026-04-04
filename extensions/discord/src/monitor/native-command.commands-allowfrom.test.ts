@@ -39,7 +39,7 @@ function createConfig(): OpenClawConfig {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },
@@ -222,7 +222,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },

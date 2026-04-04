@@ -1,4 +1,4 @@
-import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import {
   getChannelSurface,
   hasOwnProperty,

@@ -20,4 +20,16 @@ describe("boundary vitest config", () => {
     expect(config.test?.include).toEqual(boundaryTestFiles);
     expect(config.test?.setupFiles).toEqual(["test/setup.ts"]);
   });
+
+  it("narrows boundary includes to matching CLI file filters", () => {
+    const config = createBoundaryVitestConfig({}, [
+      "node",
+      "vitest",
+      "run",
+      "src/infra/openclaw-root.test.ts",
+    ]);
+
+    expect(config.test?.include).toEqual(["src/infra/openclaw-root.test.ts"]);
+    expect(config.test?.passWithNoTests).toBe(true);
+  });
 });

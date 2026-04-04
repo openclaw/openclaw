@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 
@@ -15,7 +16,7 @@ const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw sub
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
-let mockConfig: Record<string, unknown> = {
+let mockConfig: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -35,9 +36,6 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({ hasHooks: () => false }),
-}));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
@@ -57,35 +55,84 @@ vi.mock("./tools/agent-step.js", () => ({
   readLatestAssistantReply: (params?: unknown) => readLatestAssistantReplyMock(params),
 }));
 
-vi.mock("./subagent-announce-delivery.runtime.js", () => ({
-  createBoundDeliveryRouter: () => ({
-    resolveDestination: () => ({ mode: "none" }),
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
+    callGateway: (request: unknown) => callGatewayMock(request),
+    loadConfig: () => mockConfig,
+    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+    resolveAgentIdFromSessionKey: (sessionKey: string) =>
+      resolveAgentIdFromSessionKeyMock(sessionKey),
+    resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
+    resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
+    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+    queueEmbeddedPiMessage: (sessionId: string, text: string) =>
+      queueEmbeddedPiMessageMock(sessionId, text),
   }),
-  resolveConversationIdFromTargets: () => "",
-  resolveExternalBestEffortDeliveryTarget: (params: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string;
-  }) => ({
-    deliver: Boolean(params.channel && params.to),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    threadId: params.threadId,
-  }),
-  resolveQueueSettings: (params: {
-    cfg?: {
-      messages?: {
-        queue?: {
-          byChannel?: Record<string, string>;
-        };
-      };
-    };
-    channel?: string;
-  }) => ({
-    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
-  }),
+);
+
+vi.mock("./subagent-announce-delivery.js", () => ({
+  deliverSubagentAnnouncement: async (params: {
+    targetRequesterSessionKey: string;
+    triggerMessage: string;
+    requesterIsSubagent?: boolean;
+    requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string };
+    requesterSessionOrigin?: { provider?: string; channel?: string };
+    bestEffortDeliver?: boolean;
+  }) => {
+    const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
+    const requesterEntry = (store?.[params.targetRequesterSessionKey] ?? {}) as
+      | { sessionId?: string; origin?: { provider?: string; channel?: string } }
+      | undefined;
+    const sessionId = requesterEntry?.sessionId?.trim();
+    const queueChannel =
+      requesterEntry?.origin?.provider ??
+      requesterEntry?.origin?.channel ??
+      params.requesterSessionOrigin?.provider ??
+      params.requesterSessionOrigin?.channel;
+
+    if (sessionId && queueChannel === "discord" && isEmbeddedPiRunActiveMock(sessionId)) {
+      queueEmbeddedPiMessageMock(
+        sessionId,
+        `[Internal task completion event]\n${params.triggerMessage}`,
+      );
+      return { delivered: true, path: "queue" };
+    }
+
+    await callGatewayMock({
+      method: "agent",
+      params: {
+        sessionKey: params.targetRequesterSessionKey,
+        message: params.triggerMessage,
+        deliver: false,
+        bestEffortDeliver: params.bestEffortDeliver,
+        ...(params.requesterIsSubagent
+          ? {}
+          : {
+              channel: params.requesterOrigin?.channel,
+              to: params.requesterOrigin?.to,
+              accountId: params.requesterOrigin?.accountId,
+              threadId: params.requesterOrigin?.threadId,
+            }),
+      },
+    });
+
+    return { delivered: true, path: "direct" };
+  },
+  loadRequesterSessionEntry: (sessionKey: string) => {
+    const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
+    const entry = store?.[sessionKey];
+    return { entry };
+  },
+  loadSessionEntryByKey: (sessionKey: string) => {
+    const store = loadSessionStoreMock("/tmp/sessions.json") as Record<string, unknown>;
+    return store?.[sessionKey] ?? { sessionId: sessionKey };
+  },
+  resolveAnnounceOrigin: (entry: { origin?: unknown } | undefined, requesterOrigin?: unknown) =>
+    requesterOrigin ?? entry?.origin,
+  resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
+    params.requesterOrigin,
+  resolveSubagentAnnounceTimeoutMs: () => 10_000,
+  runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));
 
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
@@ -328,5 +375,45 @@ describe("subagent announce seam flow", () => {
     expect(params.to).toBeUndefined();
     expect(params.accountId).toBeUndefined();
     expect(params.threadId).toBeUndefined();
+  });
+
+  it("inherits session lastChannel/lastTo for completion announce when requesterOrigin lacks to", async () => {
+    loadSessionStoreMock.mockImplementation(() => ({
+      "agent:main:main": {
+        sessionId: "session-tg-group",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+        lastAccountId: "bot:123",
+      },
+    }));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:tg",
+      childRunId: "run-tg-group-completion",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "telegram" },
+      requesterDisplayKey: "main",
+      task: "telegram group task",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "task done",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const agentCall = agentSpy.mock.calls[0]?.[0];
+    expect(agentCall?.params).toEqual(
+      expect.objectContaining({
+        deliver: true,
+        channel: "telegram",
+        to: "-1001234567890",
+      }),
+    );
   });
 });

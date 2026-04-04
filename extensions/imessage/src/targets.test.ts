@@ -213,7 +213,7 @@ describe("parseIMessageAllowFromEntries", () => {
     });
   });
 
-  it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {
+  it('writes open policy state to the named account and stores inherited allowFrom with "*"', () => {
     const next = imessageDmPolicy.setPolicy(
       {
         channels: {
