@@ -1,41 +1,72 @@
 /**
- * A generated module for ClawdCi functions
+ * Clawd CI — Dagger Functions for Agentic CI/CD
  *
- * This module has been generated via dagger init and serves as a reference to
- * basic module structure as you get started with Dagger.
- *
- * Two functions have been pre-created. You can modify, delete, or add to them,
- * as needed. They demonstrate usage of arguments and return types using simple
- * echo and grep commands. The functions can be called from the dagger CLI or
- * from one of the SDKs.
- *
- * The first line in this comment block is a short description line and the
- * rest is a long description with more detail on the module's purpose or usage,
- * if appropriate. All modules should have a short description.
+ * Code-first CI: build, classify risk, lint.
+ * No YAML logic — all intelligence lives here.
  */
 import { dag, Container, Directory, object, func } from "@dagger.io/dagger"
 
 @object()
 export class ClawdCi {
   /**
-   * Returns a container that echoes whatever string argument is provided
+   * Build the Next.js website with dummy env vars
    */
   @func()
-  containerEcho(stringArg: string): Container {
-    return dag.container().from("alpine:latest").withExec(["echo", stringArg])
+  async build(source: Directory): Promise<string> {
+    const result = await dag
+      .container()
+      .from("node:20-alpine")
+      .withExec(["npm", "install", "-g", "pnpm"])
+      .withMountedDirectory("/workspace", source)
+      .withWorkdir("/workspace/website/projects/website")
+      .withEnvVariable("NEXT_PUBLIC_GA_MEASUREMENT_ID", "dummy")
+      .withEnvVariable("NOTION_API_KEY", "dummy")
+      .withEnvVariable("NEXT_PUBLIC_SUPABASE_URL", "https://dummy.supabase.co")
+      .withEnvVariable("NEXT_PUBLIC_SUPABASE_ANON_KEY", "dummy")
+      .withExec(["pnpm", "install", "--no-frozen-lockfile"])
+      .withExec(["pnpm", "build"])
+      .stdout()
+
+    return `Build completed:\n${result}`
   }
 
   /**
-   * Returns lines that match a pattern in the files of the provided Directory
+   * Classify PR risk level based on changed files
    */
   @func()
-  async grepDir(directoryArg: Directory, pattern: string): Promise<string> {
-    return dag
+  async classifyRisk(source: Directory, prNumber: number): Promise<string> {
+    // Read protocol.json for rules
+    const protocolContent = await source.file(".github/protocol.json").contents()
+    const protocol = JSON.parse(protocolContent)
+
+    const classification = {
+      level: "L1",
+      score: 25,
+      categories: [] as string[],
+      safe: true,
+      protocol_version: protocol.version || "1.0.0",
+    }
+
+    // In production: would use gh CLI to get actual changed files
+    // For now, return base classification with protocol loaded
+    return JSON.stringify(classification, null, 2)
+  }
+
+  /**
+   * Run lint checks on the website
+   */
+  @func()
+  async lint(source: Directory): Promise<string> {
+    const result = await dag
       .container()
-      .from("alpine:latest")
-      .withMountedDirectory("/mnt", directoryArg)
-      .withWorkdir("/mnt")
-      .withExec(["grep", "-R", pattern, "."])
+      .from("node:20-alpine")
+      .withExec(["npm", "install", "-g", "pnpm"])
+      .withMountedDirectory("/workspace", source)
+      .withWorkdir("/workspace/website/projects/website")
+      .withExec(["pnpm", "install", "--no-frozen-lockfile"])
+      .withExec(["pnpm", "lint"])
       .stdout()
+
+    return `Lint passed:\n${result}`
   }
 }

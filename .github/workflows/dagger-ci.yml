@@ -4,19 +4,26 @@ on:
   push:
     branches: [main]
 
+env:
+  DAGGER_NO_NAG: 1
+
 jobs:
   dagger:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Install Dagger
-        uses: dagger/dagger-for-github@v7
-        with:
-          version: latest
+        run: curl -fsSL https://dl.dagger.io/dagger/install.sh | sh
+        env:
+          BIN_DIR: /usr/local/bin
+
       - name: Build Website
         run: dagger call build --source=.
+
       - name: Classify Risk
         if: github.event_name == 'pull_request'
         run: dagger call classify-risk --source=. --pr-number=${{ github.event.pull_request.number }}
+
       - name: Lint
         run: dagger call lint --source=.
