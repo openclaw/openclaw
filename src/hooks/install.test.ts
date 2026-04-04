@@ -328,18 +328,17 @@ describe("installHooksFromPath", () => {
 });
 
 describe("installHooksFromNpmSpec", () => {
-  it("forwards dangerous force unsafe install through npm-spec archive params", async () => {
+  it("does not expose dangerous force unsafe install through npm-spec archive params", async () => {
     const installFromValidatedNpmSpecArchiveSpy = vi
       .spyOn(hookInstallRuntime, "installFromValidatedNpmSpecArchive")
       .mockImplementation(
         async (
           params: Parameters<typeof hookInstallRuntime.installFromValidatedNpmSpecArchive>[0],
         ) => {
-          expect(params.archiveInstallParams).toEqual(
-            expect.objectContaining({
-              dangerouslyForceUnsafeInstall: true,
-            }),
-          );
+          expect(
+            "dangerouslyForceUnsafeInstall" in
+              (params.archiveInstallParams as Record<string, unknown>),
+          ).toBe(false);
           return {
             ok: true,
             hookPackId: "test-hooks",
@@ -353,7 +352,6 @@ describe("installHooksFromNpmSpec", () => {
     try {
       const result = await installHooksFromNpmSpec({
         spec: "@openclaw/test-hooks@0.0.1",
-        dangerouslyForceUnsafeInstall: true,
       });
 
       expect(result.ok).toBe(true);
