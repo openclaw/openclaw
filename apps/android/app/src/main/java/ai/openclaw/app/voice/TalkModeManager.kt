@@ -14,9 +14,9 @@ import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.util.Log
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
 import java.util.Locale
@@ -57,6 +57,8 @@ class TalkModeManager(
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private val json = Json { ignoreUnknownKeys = true }
+  private val talkSpeakClient = TalkSpeakClient(session = session, json = json)
+  private val talkAudioPlayer = TalkAudioPlayer(context)
 
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
@@ -655,16 +657,30 @@ class TalkModeManager(
     requestAudioFocusForTts()
 
     try {
-      val ttsStarted = SystemClock.elapsedRealtime()
-      speakWithSystemTts(cleaned, directive, playbackToken)
-      Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
+      val started = SystemClock.elapsedRealtime()
+      when (val result = talkSpeakClient.synthesize(text = cleaned, directive = directive)) {
+        is TalkSpeakResult.Success -> {
+          ensurePlaybackActive(playbackToken)
+          talkAudioPlayer.play(result.audio)
+          ensurePlaybackActive(playbackToken)
+          Log.d(tag, "talk.speak ok durMs=${SystemClock.elapsedRealtime() - started}")
+        }
+        is TalkSpeakResult.FallbackToLocal -> {
+          Log.d(tag, "talk.speak unavailable; using local TTS: ${result.message}")
+          speakWithSystemTts(cleaned, directive, playbackToken)
+          Log.d(tag, "system tts ok durMs=${SystemClock.elapsedRealtime() - started}")
+        }
+        is TalkSpeakResult.Failure -> {
+          throw IllegalStateException(result.message)
+        }
+      }
     } catch (err: Throwable) {
       if (isPlaybackCancelled(err, playbackToken)) {
         Log.d(tag, "assistant speech cancelled")
         return
       }
       _statusText.value = "Speak failed: ${err.message ?: err::class.simpleName}"
-      Log.w(tag, "system tts failed: ${err.message ?: err::class.simpleName}")
+      Log.w(tag, "talk playback failed: ${err.message ?: err::class.simpleName}")
     } finally {
 
       _isSpeaking.value = false
@@ -756,6 +772,7 @@ class TalkModeManager(
 
   private fun stopSpeaking(resetInterrupt: Boolean = true) {
     if (!_isSpeaking.value) {
+      talkAudioPlayer.stop()
       stopTextToSpeechPlayback()
       abandonAudioFocus()
       return
@@ -763,6 +780,7 @@ class TalkModeManager(
     if (resetInterrupt) {
       lastInterruptedAtSeconds = null
     }
+    talkAudioPlayer.stop()
     stopTextToSpeechPlayback()
     _isSpeaking.value = false
     abandonAudioFocus()
