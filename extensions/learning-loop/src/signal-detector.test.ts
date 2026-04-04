@@ -139,4 +139,31 @@ describe("SignalDetector", () => {
 
     expect(signals).toEqual([]);
   });
+
+  it("does not infer bogus skill or tool ids from ordinary prose", () => {
+    const detector = new SignalDetector();
+
+    const signals = detector.detect([
+      {
+        role: "assistant",
+        content: "Error: the tool call failed because the provider was unavailable.",
+      },
+      {
+        role: "user",
+        content: "Actually, the skills are documented elsewhere.",
+      },
+    ]);
+
+    expect(signals).toHaveLength(2);
+    expect(signals[0]).toMatchObject({
+      type: "execution_failure",
+      section: "Troubleshooting",
+      toolName: undefined,
+    });
+    expect(signals[1]).toMatchObject({
+      type: "user_correction",
+      section: "Instructions",
+      skillName: undefined,
+    });
+  });
 });

@@ -94,9 +94,22 @@ const CORRECTION_PATTERNS = [
   /\b(?:use|prefer)\b.+\brather than\b/i,
 ];
 
-// Patterns to attribute a signal to a specific skill name (looks for SKILL.md references)
-const SKILL_ATTRIBUTION_PATTERN = /(?:skill|SKILL\.md|\.agents\/skills\/)[\\/]?([a-zA-Z0-9_-]+)/i;
-const TOOL_ATTRIBUTION_PATTERN = /tool[_\s]*(?:call|name|use)?[:\s]*["']?([a-zA-Z0-9_-]+)["']?/i;
+const ATTRIBUTABLE_ID = String.raw`([a-zA-Z0-9_][a-zA-Z0-9_-]*)`;
+
+// Attribute only from explicit skill references to avoid matching ordinary prose
+const SKILL_ATTRIBUTION_PATTERNS = [
+  new RegExp(
+    String.raw`(?:^|[^a-zA-Z0-9_-])(?:\.agents[\\/])?skills[\\/]${ATTRIBUTABLE_ID}[\\/]SKILL\.md\b`,
+    "i",
+  ),
+  new RegExp(String.raw`\bskill\s+name\s*[:=]\s*["']?${ATTRIBUTABLE_ID}["']?`, "i"),
+];
+
+// Attribute only from labeled tool identifiers, not phrases like "tool call failed"
+const TOOL_ATTRIBUTION_PATTERNS = [
+  new RegExp(String.raw`\btool\s+name\s*[:=]\s*["']?${ATTRIBUTABLE_ID}["']?`, "i"),
+  new RegExp(String.raw`\btool\s+call\s*[:=]\s*["']?${ATTRIBUTABLE_ID}["']?`, "i"),
+];
 
 // ============================================================================
 // Detector
@@ -169,15 +182,15 @@ export class SignalDetector {
       type === "execution_failure" ? "Troubleshooting" : "Instructions";
 
     // Try to attribute to a skill
-    const skillMatch = SKILL_ATTRIBUTION_PATTERN.exec(text);
-    const toolMatch = TOOL_ATTRIBUTION_PATTERN.exec(text);
+    const skillName = extractAttributedId(text, SKILL_ATTRIBUTION_PATTERNS);
+    const toolName = extractAttributedId(text, TOOL_ATTRIBUTION_PATTERNS);
 
     return {
       type,
       section,
       excerpt,
-      skillName: skillMatch?.[1],
-      toolName: toolMatch?.[1] ?? msg.name,
+      skillName,
+      toolName: toolName ?? msg.name,
     };
   }
 
@@ -202,4 +215,14 @@ export class SignalDetector {
 
 function extractText(msg: Message): string {
   return extractMessageText(msg.content);
+}
+
+function extractAttributedId(text: string, patterns: RegExp[]): string | undefined {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return undefined;
 }
