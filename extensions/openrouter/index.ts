@@ -5,6 +5,18 @@ import {
   type ProviderRuntimeModel,
   type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  applyOpenrouterConfig,
+  buildOpenrouterProvider,
+  buildProviderReplayFamilyHooks,
+  buildProviderStreamFamilyHooks,
+  createProviderApiKeyAuthMethod,
+  DEFAULT_CONTEXT_TOKENS,
+  getOpenRouterModelCapabilities,
+  loadOpenRouterModelCapabilities,
+  OPENROUTER_DEFAULT_MODEL_REF,
+  openrouterMediaUnderstandingProvider,
+} from "./register.runtime.js";
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -20,19 +32,7 @@ export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
   description: "Bundled OpenRouter provider plugin",
-  async register(api) {
-    const {
-      buildProviderReplayFamilyHooks,
-      buildProviderStreamFamilyHooks,
-      createProviderApiKeyAuthMethod,
-      DEFAULT_CONTEXT_TOKENS,
-      getOpenRouterModelCapabilities,
-      loadOpenRouterModelCapabilities,
-      OPENROUTER_DEFAULT_MODEL_REF,
-      openrouterMediaUnderstandingProvider,
-      applyOpenrouterConfig,
-      buildOpenrouterProvider,
-    } = await import("./register.runtime.js");
+  register(api) {
     const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
       family: "passthrough-gemini",
     });

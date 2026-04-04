@@ -789,9 +789,7 @@ describe("applyExtraParamsToAgent", () => {
     void agent.streamFn?.(model, context, {});
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toEqual({
-      reasoning: { effort: "none", summary: "auto" },
-    });
+    expect(payloads[0]).not.toHaveProperty("reasoning");
   });
 
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {

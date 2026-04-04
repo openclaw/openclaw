@@ -69,6 +69,7 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -1698,6 +1699,7 @@ export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
 
 export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;
 export type ImageGenerationProviderPlugin = ImageGenerationProvider;
+export type VideoGenerationProviderPlugin = VideoGenerationProvider;
 
 export type OpenClawPluginGatewayMethod = {
   method: string;
@@ -2035,6 +2037,8 @@ export type OpenClawPluginApi = {
   registerMediaUnderstandingProvider: (provider: MediaUnderstandingProviderPlugin) => void;
   /** Register an image generation provider (image generation capability). */
   registerImageGenerationProvider: (provider: ImageGenerationProviderPlugin) => void;
+  /** Register a video generation provider (video generation capability). */
+  registerVideoGenerationProvider: (provider: VideoGenerationProviderPlugin) => void;
   /** Register a web fetch provider (web fetch capability). */
   registerWebFetchProvider: (provider: WebFetchProviderPlugin) => void;
   /** Register a web search provider (web search capability). */

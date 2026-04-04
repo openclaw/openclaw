@@ -295,6 +295,8 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
     case "moonshot":
     case "kimi":
       return "moonshot";
+    case "qwen":
+    case "qwencloud":
     case "modelstudio":
     case "dashscope":
       return "modelstudio";

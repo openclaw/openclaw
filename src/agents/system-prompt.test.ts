@@ -125,6 +125,9 @@ describe("buildAgentSystemPrompt", () => {
       "Use exec/process only for commands that start now and continue running in the background.",
     );
     expect(prompt).toContain(
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
+    );
+    expect(prompt).toContain(
       "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
     );
     expect(prompt).toContain("You have no independent goals");
@@ -177,17 +180,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("allow-once|allow-always|deny");
   });
 
-  it("keeps manual /approve instructions for telegram runtime prompts", () => {
+  it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: { channel: "telegram", capabilities: ["inlineButtons"] },
     });
 
     expect(prompt).toContain(
-      "When exec returns approval-pending, include the concrete /approve command from tool output",
+      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
     );
     expect(prompt).not.toContain(
-      "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear",
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
     );
   });
 
@@ -294,6 +300,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain(
       "Use exec/process only for commands that start now and continue running in the background.",
+    );
+    expect(prompt).toContain(
+      "For long-running work that starts now, start it once and rely on automatic completion wake when it is enabled and the command emits output or fails; otherwise use process to confirm completion, and use it for logs, status, input, or intervention.",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
@@ -648,7 +657,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("channel=telegram");
-    expect(prompt.toLowerCase()).toContain("capabilities=inlinebuttons");
+    expect(prompt).toContain("capabilities=inlinebuttons");
   });
 
   it("includes agent id in runtime when provided", () => {

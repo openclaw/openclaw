@@ -50,6 +50,12 @@ Notes:
 - Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the
   effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for
   that file.
+- For long-running work that starts now, start it once and rely on automatic
+  completion wake when it is enabled and the command emits output or fails.
+  Use `process` for logs, status, input, or intervention; do not emulate
+  scheduling with sleep loops, timeout loops, or repeated polling.
+- For work that should happen later or on a schedule, use cron instead of
+  `exec` sleep/delay patterns.
 
 ## Config
 
@@ -170,6 +176,9 @@ Background + poll:
 {"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>"}
 ```
+
+Polling is for on-demand status, not waiting loops. If automatic completion wake
+is enabled, the command can wake the session when it emits output or fails.
 
 Send keys (tmux-style):
 

@@ -28,7 +28,8 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `normalizeConfig`, `resolveDynamicModel`, `prepareDynamicModel`,
+  `normalizeConfig`, `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `resolveDynamicModel`, `prepareDynamicModel`,
   `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
   `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
@@ -53,7 +54,9 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
-- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it; OpenClaw checks the matched provider first, then other hook-capable provider plugins until one actually changes the config
+- `applyNativeStreamingUsageCompat`: provider applies endpoint-driven native streaming-usage compat rewrites for config providers
+- `resolveConfigApiKey`: provider resolves env-marker auth for config providers without forcing full runtime auth loading
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
@@ -136,8 +139,12 @@ Current bundled examples:
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
-  `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
+  `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
+- `qwen`: plugin-owned catalogs for text models plus shared
+  media-understanding and video-generation provider registrations for its
+  multimodal surfaces; Qwen video generation uses the Standard DashScope video
+  endpoints with bundled Wan models such as `wan2.6-t2v` and `wan2.7-r2v`
 - `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
 - `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
@@ -161,8 +168,8 @@ surface.
 - Key selection order preserves priority and deduplicates values.
 - Requests are retried with the next key only on rate-limit responses (for
   example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many
-concurrent requests`, `ThrottlingException`, or periodic usage-limit
-  messages).
+concurrent requests`, `ThrottlingException`, `concurrency limit reached`,
+  `workers_ai ... quota limit exceeded`, or periodic usage-limit messages).
 - Non-rate-limit failures fail immediately; no key rotation is attempted.
 - When all candidate keys fail, the final error is returned from the last attempt.
 
@@ -251,7 +258,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ### Other subscription-style hosted options
 
-- [Qwen / Model Studio](/providers/qwen_modelstudio): Alibaba Cloud Standard pay-as-you-go and Coding Plan subscription endpoints
+- [Qwen Cloud](/providers/qwen): Qwen Cloud provider surface plus Alibaba DashScope and Coding Plan endpoint mapping
 - [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
 - [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
@@ -360,8 +367,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `kimi/kimi-code`
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Example model: `qianfan/deepseek-v3.2`
-- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
-- Example model: `modelstudio/qwen3.5-plus`
+- Qwen Cloud: `qwen` (`QWEN_API_KEY`, `MODELSTUDIO_API_KEY`, or `DASHSCOPE_API_KEY`)
+- Example model: `qwen/qwen3.5-plus`
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
 - Example model: `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 - StepFun: `stepfun` / `stepfun-plan` (`STEPFUN_API_KEY`)

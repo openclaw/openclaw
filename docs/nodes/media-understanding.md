@@ -160,7 +160,7 @@ working option**:
    - Bundled fallback order:
      - Audio: OpenAI → Groq → Deepgram → Google → Mistral
      - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
-     - Video: Google → Moonshot
+     - Video: Google → Qwen → Moonshot
 
 To disable auto-detection, set:
 
@@ -202,6 +202,7 @@ lists, OpenClaw can infer defaults:
 - `moonshot`: **image + video**
 - `openrouter`: **image**
 - `google` (Gemini API): **image + audio + video**
+- `qwen`: **image + video**
 - `mistral`: **audio**
 - `zai`: **image**
 - `groq`: **audio**
@@ -214,11 +215,11 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                                                             | Notes                                                                                                                                    |
-| ---------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Z.AI, config providers | Vendor plugins register image support; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                          | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                |
-| Video      | Google, Moonshot                                                                 | Provider video understanding via vendor plugins.                                                                                         |
+| Capability | Provider integration                                                                   | Notes                                                                                                                                    |
+| ---------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                                | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                |
+| Video      | Google, Qwen, Moonshot                                                                 | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                         |
 
 MiniMax note:
 
@@ -244,6 +245,22 @@ Per‑capability `attachments` controls which attachments are processed:
 - `prefer`: `first`, `last`, `path`, `url`
 
 When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
+
+File-attachment extraction behavior:
+
+- Extracted file text is wrapped as **untrusted external content** before it is
+  appended to the media prompt.
+- The injected block uses explicit boundary markers like
+  `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` /
+  `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` and includes a
+  `Source: External` metadata line.
+- This attachment-extraction path intentionally omits the long
+  `SECURITY NOTICE:` banner to avoid bloating the media prompt; the boundary
+  markers and metadata still remain.
+- If a file has no extractable text, OpenClaw injects `[No extractable text]`.
+- If a PDF falls back to rendered page images in this path, the media prompt keeps
+  the placeholder `[PDF content rendered to images; images not forwarded to model]`
+  because this attachment-extraction step forwards text blocks, not the rendered PDF images.
 
 ## Config examples
 

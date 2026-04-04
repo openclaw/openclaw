@@ -137,7 +137,9 @@ Pairing details: [Pairing](/channels/pairing).
 
 The Android Chat tab supports session selection (default `main`, plus other existing sessions):
 
-- History: `chat.history`
+- History: `chat.history` (display-normalized; inline directive tags are
+  stripped from visible text, pure `NO_REPLY` assistant rows are omitted, and
+  oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 
