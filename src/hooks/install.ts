@@ -454,6 +454,7 @@ export async function installHooksFromPath(
   }
   const { resolvedPath: resolved, stat } = pathResult;
   const forwardParams = buildHookInstallForwardParams({
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     hooksDir: params.hooksDir,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
