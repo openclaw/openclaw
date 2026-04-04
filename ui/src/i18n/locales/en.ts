@@ -613,7 +613,15 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
+    gatewayUrlPlaceholder: "ws://127.0.0.1:18789",
+    tokenPlaceholder: "OPENCLAW_GATEWAY_TOKEN (optional)",
     passwordPlaceholder: "optional",
+    showToken: "Show token",
+    hideToken: "Hide token",
+    toggleTokenVisibility: "Toggle token visibility",
+    showPassword: "Show password",
+    hidePassword: "Hide password",
+    togglePasswordVisibility: "Toggle password visibility",
   },
   chat: {
     disconnected: "Disconnected from gateway.",

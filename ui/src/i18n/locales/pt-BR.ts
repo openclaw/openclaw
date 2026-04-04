@@ -622,7 +622,15 @@ export const pt_BR: TranslationMap = {
   },
   login: {
     subtitle: "Painel do Gateway",
+    gatewayUrlPlaceholder: "ws://127.0.0.1:18789",
+    tokenPlaceholder: "OPENCLAW_GATEWAY_TOKEN (opcional)",
     passwordPlaceholder: "opcional",
+    showToken: "Mostrar token",
+    hideToken: "Ocultar token",
+    toggleTokenVisibility: "Alternar visibilidade do token",
+    showPassword: "Mostrar senha",
+    hidePassword: "Ocultar senha",
+    togglePasswordVisibility: "Alternar visibilidade da senha",
   },
   chat: {
     disconnected: "Desconectado do gateway.",
