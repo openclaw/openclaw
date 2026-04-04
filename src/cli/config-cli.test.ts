@@ -19,15 +19,19 @@ const mockWriteConfigFile = vi.fn<
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-  writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
-    mockWriteConfigFile(cfg, options),
-  replaceConfigFile: (params: {
-    nextConfig: OpenClawConfig;
-    writeOptions?: { unsetPaths?: string[][] };
-  }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
+    writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
+      mockWriteConfigFile(cfg, options),
+    replaceConfigFile: (params: {
+      nextConfig: OpenClawConfig;
+      writeOptions?: { unsetPaths?: string[][] };
+    }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
+  };
+});
 
 vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
@@ -444,6 +448,13 @@ describe("config cli", () => {
 
   describe("config schema", () => {
     it("prints the generated JSON schema as plain text", async () => {
+      const { computeBaseConfigSchemaResponse } = await import("../config/schema-base.js");
+      mockReadBestEffortRuntimeConfigSchema.mockResolvedValueOnce(
+        computeBaseConfigSchemaResponse({
+          generatedAt: "2026-03-25T00:00:00.000Z",
+        }),
+      );
+
       await runConfigCommand(["config", "schema"]);
 
       expect(mockExit).not.toHaveBeenCalled();
@@ -454,23 +465,28 @@ describe("config cli", () => {
       const payload = JSON.parse(String(raw)) as {
         properties?: Record<string, unknown>;
       };
+      const gateway = payload.properties?.gateway as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const gatewayPort = gateway?.properties?.port as
+        | { title?: string; description?: string }
+        | undefined;
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.channels).toEqual({
-        type: "object",
-        properties: {
-          telegram: {
-            type: "object",
-            properties: {
-              token: { type: "string" },
-            },
-          },
-        },
+      expect(gatewayPort).toMatchObject({
+        title: "Gateway Port",
+        description: expect.stringContaining("TCP port used by the gateway listener"),
       });
-      expect(payload.properties?.plugins).toEqual({
-        type: "object",
+      expect(payload.properties?.channels).toMatchObject({
+        title: "Channels",
+        properties: {},
+        additionalProperties: true,
+      });
+      expect(payload.properties?.plugins).toMatchObject({
+        title: "Plugins",
+        description: expect.stringContaining("Plugin system controls"),
         properties: {
           entries: {
-            type: "object",
+            title: "Plugin Entries",
           },
         },
       });
