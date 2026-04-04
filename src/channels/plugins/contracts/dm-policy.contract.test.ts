@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isSignalSenderAllowed, type SignalSender } from "../../../../extensions/signal/api.js";
+import {
+  isSignalSenderAllowed,
+  type SignalSender,
+} from "../../../../test/helpers/channels/policy-contract.js";
 import { isAllowedBlueBubblesSender } from "../../../plugin-sdk/bluebubbles-policy.js";
 import { isMattermostSenderAllowed } from "../../../plugin-sdk/mattermost-policy.js";
 import {

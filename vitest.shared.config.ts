@@ -1,11 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
-} from "./scripts/lib/bundled-plugin-paths.mjs";
-import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+} from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -95,17 +95,20 @@ export const sharedVitestConfig = {
       "scripts/test-projects.mjs",
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
+      "vitest.acp.config.ts",
       "vitest.boundary.config.ts",
       "vitest.bundled.config.ts",
       "vitest.config.ts",
       "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",
+      "vitest.extension-channels.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
       "vitest.live.config.ts",
       "vitest.performance-config.ts",
       "vitest.scoped-config.ts",
       "vitest.shared.config.ts",
+      "vitest.ui.config.ts",
       "vitest.unit.config.ts",
       "vitest.unit-paths.mjs",
     ],

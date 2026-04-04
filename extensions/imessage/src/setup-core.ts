@@ -193,12 +193,7 @@ export const imessageSetupStatusBase = {
   configuredScore: 1,
   unconfiguredScore: 0,
   resolveConfigured: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
-    accountId
-      ? resolveIMessageAccount({ cfg, accountId }).configured
-      : listIMessageAccountIds(cfg).some(
-          (listedAccountId) =>
-            resolveIMessageAccount({ cfg, accountId: listedAccountId }).configured,
-        ),
+    resolveIMessageAccount({ cfg, accountId }).configured,
 };
 
 export function createIMessageSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {

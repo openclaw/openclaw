@@ -1,3 +1,7 @@
+import {
+  applyChannelDoctorCompatibilityMigrations,
+  collectChannelLegacyConfigRules,
+} from "../channels/plugins/legacy-config.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./legacy.migrations.js";
 import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
 import type { LegacyConfigIssue } from "./types.js";
@@ -21,7 +25,7 @@ export function findLegacyConfigIssues(raw: unknown, sourceRaw?: unknown): Legac
   const sourceRoot =
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
-  for (const rule of LEGACY_CONFIG_RULES) {
+  for (const rule of [...LEGACY_CONFIG_RULES, ...collectChannelLegacyConfigRules()]) {
     const cursor = getPathValue(root, rule.path);
     if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       if (rule.requireSourceLiteral) {
@@ -51,8 +55,10 @@ export function applyLegacyMigrations(raw: unknown): {
   for (const migration of LEGACY_CONFIG_MIGRATIONS) {
     migration.apply(next, changes);
   }
+  const compat = applyChannelDoctorCompatibilityMigrations(next);
+  changes.push(...compat.changes);
   if (changes.length === 0) {
     return { next: null, changes: [] };
   }
-  return { next, changes };
+  return { next: compat.next, changes };
 }

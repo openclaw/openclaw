@@ -15,6 +15,7 @@
 
 import { EventEmitter } from "node:events";
 import WebSocket, { type ClientOptions } from "ws";
+import { buildOpenAIWebSocketWarmUpPayload } from "./openai-ws-request.js";
 import {
   buildProviderRequestTlsClientOptions,
   resolveProviderRequestPolicyConfig,
@@ -34,6 +35,7 @@ export interface ResponseObject {
   output: OutputItem[];
   usage?: UsageInfo;
   error?: { code: string; message: string };
+  incomplete_details?: { reason?: string };
 }
 
 export interface UsageInfo {
@@ -160,9 +162,16 @@ export interface RateLimitUpdatedEvent {
 
 export interface ErrorEvent {
   type: "error";
-  code: string;
-  message: string;
+  status?: number;
+  code?: string;
+  message?: string;
   param?: string;
+  error?: {
+    type?: string;
+    code?: string;
+    message?: string;
+    param?: string;
+  };
 }
 
 export type OpenAIWebSocketEvent =
@@ -276,6 +285,19 @@ export interface OpenAIWebSocketManagerOptions {
   request?: ProviderRequestTransportOverrides;
 }
 
+export type OpenAIWebSocketConnectionState =
+  | "idle"
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "closed";
+
+export interface OpenAIWebSocketCloseInfo {
+  code: number;
+  reason: string;
+  retryable: boolean;
+}
+
 type InternalEvents = {
   message: [event: OpenAIWebSocketEvent];
   open: [];
@@ -309,6 +331,8 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
 
   /** The ID of the most recent completed response on this connection. */
   private _previousResponseId: string | null = null;
+  private _connectionState: OpenAIWebSocketConnectionState = "idle";
+  private _lastCloseInfo: OpenAIWebSocketCloseInfo | null = null;
 
   private readonly wsUrl: string;
   private readonly maxRetries: number;
@@ -336,6 +360,14 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     return this._previousResponseId;
   }
 
+  get connectionState(): OpenAIWebSocketConnectionState {
+    return this._connectionState;
+  }
+
+  get lastCloseInfo(): OpenAIWebSocketCloseInfo | null {
+    return this._lastCloseInfo;
+  }
+
   /**
    * Opens a WebSocket connection to the OpenAI Responses API.
    * Resolves when the connection is established (open event fires).
@@ -345,6 +377,8 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     this.apiKey = apiKey;
     this.closed = false;
     this.retryCount = 0;
+    this._connectionState = "connecting";
+    this._lastCloseInfo = null;
     return this._openConnection();
   }
 
@@ -384,6 +418,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
    */
   close(): void {
     this.closed = true;
+    this._connectionState = "closed";
     this._cancelRetryTimer();
     if (this.ws) {
       this.ws.removeAllListeners();
@@ -432,6 +467,8 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
 
       const onOpen = () => {
         this.retryCount = 0;
+        this._connectionState = "open";
+        this._lastCloseInfo = null;
         resolve();
         this.emit("open");
       };
@@ -446,15 +483,26 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
         if (this.listenerCount("error") > 0) {
           this.emit("error", err);
         }
+        if (this._connectionState === "connecting" || this._connectionState === "reconnecting") {
+          this._connectionState = "closed";
+        }
         reject(err);
       };
 
       const onClose = (code: number, reason: Buffer) => {
         const reasonStr = reason.toString();
+        const closeInfo = {
+          code,
+          reason: reasonStr,
+          retryable: isRetryableWebSocketClose(code),
+        } satisfies OpenAIWebSocketCloseInfo;
+        this._lastCloseInfo = closeInfo;
         this.emit("close", code, reasonStr);
 
-        if (!this.closed) {
+        if (!this.closed && closeInfo.retryable) {
           this._scheduleReconnect();
+        } else {
+          this._connectionState = "closed";
         }
       };
 
@@ -474,6 +522,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
       return;
     }
     if (this.retryCount >= this.maxRetries) {
+      this._connectionState = "closed";
       this._safeEmitError(
         new Error(`OpenAIWebSocketManager: max reconnect retries (${this.maxRetries}) exceeded.`),
       );
@@ -483,6 +532,7 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     const delayMs =
       this.backoffDelaysMs[Math.min(this.retryCount, this.backoffDelaysMs.length - 1)] ?? 1000;
     this.retryCount++;
+    this._connectionState = "reconnecting";
 
     this.retryTimer = setTimeout(() => {
       if (this.closed) {
@@ -558,13 +608,33 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
    * Pass tools/instructions to prime the connection for the upcoming session.
    */
   warmUp(params: { model: string; tools?: FunctionToolDefinition[]; instructions?: string }): void {
-    const event: WarmUpEvent = {
-      type: "response.create",
-      generate: false,
-      model: params.model,
-      ...(params.tools ? { tools: params.tools } : {}),
-      ...(params.instructions ? { instructions: params.instructions } : {}),
-    };
+    const event = buildOpenAIWebSocketWarmUpPayload(params);
     this.send(event);
   }
+}
+export function getOpenAIWebSocketErrorDetails(event: ErrorEvent): {
+  status?: number;
+  type?: string;
+  code?: string;
+  message?: string;
+  param?: string;
+} {
+  return {
+    status: typeof event.status === "number" ? event.status : undefined,
+    type: event.error?.type,
+    code: event.error?.code ?? event.code,
+    message: event.error?.message ?? event.message,
+    param: event.error?.param ?? event.param,
+  };
+}
+
+function isRetryableWebSocketClose(code: number): boolean {
+  return (
+    code === 1001 ||
+    code === 1005 ||
+    code === 1006 ||
+    code === 1011 ||
+    code === 1012 ||
+    code === 1013
+  );
 }

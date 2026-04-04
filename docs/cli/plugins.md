@@ -48,6 +48,7 @@ capabilities.
 ```bash
 openclaw plugins install <package>                      # ClawHub first, then npm
 openclaw plugins install clawhub:<package>              # ClawHub only
+openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
 openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
@@ -57,6 +58,10 @@ openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
+
+`--force` reuses the existing install target and overwrites an already-installed
+plugin or hook pack in place. Use it when you are intentionally reinstalling
+the same id from a new local path, archive, ClawHub package, or npm artifact.
 
 `--dangerously-force-unsafe-install` is a break-glass option for false positives
 in the built-in dangerous-code scanner. It allows the install to continue even
@@ -156,6 +161,9 @@ Use `--link` to avoid copying a local directory (adds to `plugins.load.paths`):
 ```bash
 openclaw plugins install -l ./my-plugin
 ```
+
+`--force` is not supported with `--link` because linked installs reuse the
+source path instead of copying over a managed install target.
 
 Use `--pin` on npm installs to save the resolved exact spec (`name@version`) in
 `plugins.installs` while keeping the default behavior unpinned.

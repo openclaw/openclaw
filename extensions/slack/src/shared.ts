@@ -119,7 +119,7 @@ export function setSlackChannelAllowlist(
   accountId: string,
   channelKeys: string[],
 ): OpenClawConfig {
-  const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
+  const channels = Object.fromEntries(channelKeys.map((key) => [key, { enabled: true }]));
   return patchChannelConfigForAccount({
     cfg,
     channel: SLACK_CHANNEL,

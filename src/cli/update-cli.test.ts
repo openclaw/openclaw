@@ -3,16 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
-
-const TEST_BUNDLED_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/discord/runtime-api.js",
-  "dist/extensions/slack/helper-api.js",
-  "dist/extensions/telegram/thread-bindings-runtime.js",
-] as const;
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -751,6 +746,12 @@ describe("update-cli", () => {
     const brewRoot = path.join(brewPrefix, "lib", "node_modules");
     const pkgRoot = path.join(brewRoot, "openclaw");
     const brewNpm = path.join(brewPrefix, "bin", "npm");
+    const win32PrefixNpm = path.join(brewPrefix, "npm.cmd");
+    const owningNpmCommands = new Set(
+      [brewNpm, path.resolve(brewNpm), win32PrefixNpm, path.resolve(win32PrefixNpm)].map(
+        (candidate) => path.normalize(candidate),
+      ),
+    );
     const pathNpmRoot = createCaseDir("nvm-root");
     mockPackageInstallStatus(pkgRoot);
     pathExists.mockResolvedValue(false);
@@ -776,7 +777,11 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
-      if (argv[0] === brewNpm && argv[1] === "root" && argv[2] === "-g") {
+      if (
+        owningNpmCommands.has(path.normalize(String(argv[0] ?? ""))) &&
+        argv[1] === "root" &&
+        argv[2] === "-g"
+      ) {
         return {
           stdout: `${brewRoot}\n`,
           stderr: "",
@@ -808,13 +813,25 @@ describe("update-cli", () => {
       .mock.calls.find(
         ([argv]) =>
           Array.isArray(argv) &&
-          path.normalize(String(argv[0] ?? "")) === path.normalize(brewNpm) &&
+          owningNpmCommands.has(path.normalize(String(argv[0] ?? ""))) &&
           argv[1] === "i" &&
           argv[2] === "-g" &&
           argv[3] === "openclaw@latest",
       );
 
     expect(installCall).toBeDefined();
+    const installCommand = String(installCall?.[0][0] ?? "");
+    expect(installCommand).not.toBe("npm");
+    expect(path.isAbsolute(installCommand)).toBe(true);
+    expect(path.normalize(installCommand)).toContain(path.normalize(brewPrefix));
+    expect(path.normalize(installCommand)).toMatch(
+      new RegExp(
+        `${path
+          .normalize(path.join(brewPrefix, path.sep))
+          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*npm(?:\\.cmd)?$`,
+        "i",
+      ),
+    );
     expect(installCall?.[1]).toEqual(
       expect.objectContaining({
         timeoutMs: expect.any(Number),

@@ -545,6 +545,19 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
+  it("does not mangle raw when a sensitive field value is empty string", () => {
+    const config = {
+      gateway: { auth: { token: "" } },
+      other: "",
+    };
+    const raw = '{ "gateway": { "auth": { "token": "" } }, "other": "" }';
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toBe(raw);
+    expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
+  });
+
   it("redacts parsed and resolved objects", () => {
     const snapshot = makeSnapshot({
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },

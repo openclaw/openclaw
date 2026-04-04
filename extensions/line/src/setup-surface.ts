@@ -57,8 +57,7 @@ const lineDmPolicy: ChannelSetupDmPolicy = {
         },
   getCurrent: (cfg, accountId) =>
     resolveLineAccount({ cfg, accountId: accountId ?? resolveDefaultLineAccountId(cfg) }).config
-      .dmPolicy ??
-    "pairing",
+      .dmPolicy ?? "pairing",
   setPolicy: (cfg, policy, accountId) =>
     patchLineAccountConfig({
       cfg,
@@ -95,15 +94,14 @@ export const lineSetupWizard: ChannelSetupWizard = {
     unconfiguredScore: 0,
     includeStatusLine: true,
     resolveConfigured: ({ cfg, accountId }) =>
-      accountId
-        ? isLineConfigured(cfg, accountId)
-        : listLineAccountIds(cfg).some((resolvedAccountId) => isLineConfigured(cfg, resolvedAccountId)),
+      isLineConfigured(cfg, accountId ?? resolveDefaultLineAccountId(cfg)),
     resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listLineAccountIds(cfg).length || 0}`],
   }),
   introNote: {
     title: "LINE Messaging API",
     lines: LINE_SETUP_HELP_LINES,
-    shouldShow: ({ cfg, accountId }) => !isLineConfigured(cfg, accountId),
+    shouldShow: ({ cfg, accountId }) =>
+      !isLineConfigured(cfg, accountId ?? resolveDefaultLineAccountId(cfg)),
   },
   credentials: [
     {

@@ -24,6 +24,7 @@ import {
   requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
 } from "./command-gates.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
@@ -84,7 +85,11 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
       cfg: params.cfg,
       channel: params.command.channel,
       channelId,
-      accountId: params.ctx.AccountId,
+      accountId: resolveChannelAccountId({
+        cfg: params.cfg,
+        ctx: params.ctx,
+        command: params.command,
+      }),
       gatewayClientScopes: params.ctx.GatewayClientScopes,
       target: resolveConfigWriteTargetFromPath(parsedWritePath),
     });

@@ -177,7 +177,6 @@ function createAllowedGuildEntries(requireMention = false) {
       id: GUILD_ID,
       channels: {
         [CHANNEL_ID]: {
-          allow: true,
           enabled: true,
           requireMention,
         },
@@ -250,7 +249,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: false,
               },
             },
@@ -272,7 +270,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
             id: GUILD_ID,
             channels: {
               [CHANNEL_ID]: {
-                allow: true,
                 enabled: true,
                 requireMention: false,
               },

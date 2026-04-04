@@ -791,6 +791,116 @@ describe("config strict validation", () => {
     });
   });
 
+  it("accepts legacy nested channel allow aliases via auto-migration and reports legacyIssues", async () => {
+    await withTempHome(async (home) => {
+      await writeOpenClawConfig(home, {
+        channels: {
+          slack: {
+            channels: {
+              ops: {
+                allow: false,
+              },
+            },
+            accounts: {
+              work: {
+                channels: {
+                  general: {
+                    allow: true,
+                  },
+                },
+              },
+            },
+          },
+          googlechat: {
+            groups: {
+              "spaces/aaa": {
+                allow: false,
+              },
+            },
+            accounts: {
+              work: {
+                groups: {
+                  "spaces/bbb": {
+                    allow: true,
+                  },
+                },
+              },
+            },
+          },
+          discord: {
+            guilds: {
+              "100": {
+                channels: {
+                  general: {
+                    allow: false,
+                  },
+                },
+              },
+            },
+            accounts: {
+              work: {
+                guilds: {
+                  "200": {
+                    channels: {
+                      help: {
+                        allow: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.slack.accounts")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.googlechat.accounts")).toBe(
+        true,
+      );
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord")).toBe(true);
+      expect(snap.legacyIssues.some((issue) => issue.path === "channels.discord.accounts")).toBe(
+        true,
+      );
+      expect(snap.sourceConfig.channels?.slack?.channels?.ops).toMatchObject({
+        enabled: false,
+      });
+      expect(snap.sourceConfig.channels?.googlechat?.groups?.["spaces/aaa"]).toMatchObject({
+        enabled: false,
+      });
+      expect(snap.sourceConfig.channels?.discord?.guilds?.["100"]?.channels?.general).toMatchObject(
+        {
+          enabled: false,
+        },
+      );
+      expect(
+        (snap.sourceConfig.channels?.slack?.channels?.ops as Record<string, unknown> | undefined)
+          ?.allow,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.googlechat?.groups?.["spaces/aaa"] as
+            | Record<string, unknown>
+            | undefined
+        )?.allow,
+      ).toBeUndefined();
+      expect(
+        (
+          snap.sourceConfig.channels?.discord?.guilds?.["100"]?.channels?.general as
+            | Record<string, unknown>
+            | undefined
+        )?.allow,
+      ).toBeUndefined();
+    });
+  });
+
   it("accepts telegram groupMentionsOnly via auto-migration and reports legacyIssues", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
