@@ -546,7 +546,7 @@ Options:
 - `--skip-ui`
 - `--cloudflare-ai-gateway-account-id <id>`
 - `--cloudflare-ai-gateway-gateway-id <id>`
-- `--node-manager <npm|pnpm|bun>` (node manager for skills; pnpm recommended, bun also supported)
+- `--node-manager <npm|pnpm|yarn|bun>` (node manager for skills; pnpm recommended, bun and yarn also supported)
 - `--json`
 
 ### `configure`
@@ -770,11 +770,18 @@ List and inspect available skills plus readiness info.
 Subcommands:
 
 - `skills search [query...]`: search ClawHub skills.
+- `skills search --limit <n> --json`: cap search results or emit machine-readable output.
 - `skills install <slug>`: install a skill from ClawHub into the active workspace.
+- `skills install <slug> --version <version>`: install a specific ClawHub version.
+- `skills install <slug> --force`: overwrite an existing workspace skill folder.
 - `skills update <slug|--all>`: update tracked ClawHub skills.
 - `skills list`: list skills (default when no subcommand).
+- `skills list --json`: emit machine-readable skill inventory.
+- `skills list --verbose`: include missing requirements in the table.
 - `skills info <name>`: show details for one skill.
+- `skills info <name> --json`: emit machine-readable details.
 - `skills check`: summary of ready vs missing requirements.
+- `skills check --json`: emit machine-readable readiness output.
 
 Options:
 
