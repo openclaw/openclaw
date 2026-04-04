@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- MiniMax: advertise image input on bundled `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` model definitions so image-capable flows can route through the M2.7 family correctly. (#54843) Thanks @MerlinMiao88888888.
 - Agents/exec approvals: let `exec-approvals.json` agent security override stricter gateway tool defaults so approved subagents can use `security: "full"` without falling back to allowlist enforcement again. (#60310) Thanks @lml2468.
 - Tasks/maintenance: mark stale cron runs and CLI tasks backed only by long-lived chat sessions as lost again so task cleanup does not keep dead work alive indefinitely. (#60310) Thanks @lml2468.
 - Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep compat routes on compat shaping, fix Responses WebSocket warm-up behavior, keep stable session and turn metadata, and fall back more gracefully after early WebSocket failures.
