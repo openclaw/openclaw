@@ -179,6 +179,11 @@ Docs: https://docs.openclaw.ai
 - QQBot/voice: lazy-load `silk-wasm` in `audio-convert.ts` so qqbot still starts when the optional voice dependency is missing, while voice encode/decode degrades gracefully instead of crashing at module load time. (#58829) Thanks @WideLee.
 - WhatsApp/groups: fix bot waking up on self-number quoted replies in groups with `selfChatMode` enabled. (#60148) Thanks @lurebat
 - Device pairing: require `operator.pairing` or `operator.admin` for internal `/pair` setup-code, QR, and cleanup commands so lower-privilege gateway callers cannot mint or revoke pairing bootstrap material. (#60491) Thanks @eleqtrizit.
+- Agents/failover: unify structured and raw provider error classification so provider-specific `400`/`422` payloads no longer get forced into generic format failures before retry, billing, or compaction logic can inspect them. (#58856) Thanks @aaron-he-zhu.
+- Auth profiles/store: coerce misplaced SecretRef objects out of plaintext `key` and `token` fields during store load so agents without ACP runtime stop crashing on `.trim()` after upgrade. (#58923) Thanks @openperf.
+- ACPX/runtime: repair `queue owner unavailable` session recovery by replacing dead named sessions and resuming the backend session when ACPX exposes a stable session id, so the first ACP prompt no longer inherits a dead handle. (#58669) Thanks @neeravmakwana
+- ACPX/runtime: retry dead-session queue-owner repair without `--resume-session` when the reported ACPX session id is stale, so recovery still creates a fresh named session instead of failing session init. Thanks @obviyus.
+- Tools/web_search (Kimi): replay native Moonshot `$web_search` arguments verbatim, disable thinking for `kimi-k2.5`, and add Moonshot region/model setup prompts so bundled Kimi web search works again. (#59356) Thanks @Innocent-children.
 
 ## 2026.3.31
 
