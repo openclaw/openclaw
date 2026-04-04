@@ -109,8 +109,8 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), message_id: 43 } as Partial<Message>) },
       "telegram:123:43",
     ],
-    // fallback when no message is present (chat-only context)
-    [{ chat: { id: 999 } }, "telegram:unknown"],
+    // fallback when no message is present (chat-only context — no messageId suffix)
+    [{ chat: { id: 999 } }, "telegram:999"],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);
   });
