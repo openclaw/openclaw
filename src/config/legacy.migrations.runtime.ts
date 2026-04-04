@@ -317,6 +317,36 @@ const HEARTBEAT_RULE: LegacyConfigRule = {
     "top-level heartbeat is not a valid config path; use agents.defaults.heartbeat (cadence/target/model settings) or channels.defaults.heartbeat (showOk/showAlerts/useIndicator).",
 };
 
+const LEGACY_ACP_STREAM_RULES: LegacyConfigRule[] = [
+  {
+    path: ["acp", "stream", "maxTurnChars"],
+    message:
+      "acp.stream.maxTurnChars was renamed; use acp.stream.maxOutputChars instead (auto-migrated on load).",
+  },
+  {
+    path: ["acp", "stream", "maxToolSummaryChars"],
+    message:
+      "acp.stream.maxToolSummaryChars was renamed; use acp.stream.maxSessionUpdateChars instead (auto-migrated on load).",
+  },
+  {
+    path: ["acp", "stream", "maxStatusChars"],
+    message: "acp.stream.maxStatusChars was removed with no replacement (auto-removed on load).",
+  },
+  {
+    path: ["acp", "stream", "maxMetaEventsPerTurn"],
+    message:
+      "acp.stream.maxMetaEventsPerTurn was removed with no replacement (auto-removed on load).",
+  },
+  {
+    path: ["acp", "stream", "metaMode"],
+    message: "acp.stream.metaMode was removed with no replacement (auto-removed on load).",
+  },
+  {
+    path: ["acp", "stream", "showUsage"],
+    message: "acp.stream.showUsage was removed with no replacement (auto-removed on load).",
+  },
+];
+
 const X_SEARCH_RULE: LegacyConfigRule = {
   path: ["tools", "web", "x_search", "apiKey"],
   message:
@@ -386,6 +416,68 @@ function migrateLegacySandboxPerSession(
   }
 }
 
+function migrateLegacyAcpStream(stream: Record<string, unknown>, changes: string[]): void {
+  if (
+    Object.prototype.hasOwnProperty.call(stream, "maxTurnChars") &&
+    typeof stream.maxTurnChars === "number"
+  ) {
+    if (stream.maxOutputChars === undefined) {
+      stream.maxOutputChars = stream.maxTurnChars;
+      changes.push("Moved acp.stream.maxTurnChars → acp.stream.maxOutputChars.");
+    } else {
+      changes.push("Removed acp.stream.maxTurnChars (acp.stream.maxOutputChars already set).");
+    }
+    delete stream.maxTurnChars;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(stream, "maxToolSummaryChars") &&
+    typeof stream.maxToolSummaryChars === "number"
+  ) {
+    if (stream.maxSessionUpdateChars === undefined) {
+      stream.maxSessionUpdateChars = stream.maxToolSummaryChars;
+      changes.push("Moved acp.stream.maxToolSummaryChars → acp.stream.maxSessionUpdateChars.");
+    } else {
+      changes.push(
+        "Removed acp.stream.maxToolSummaryChars (acp.stream.maxSessionUpdateChars already set).",
+      );
+    }
+    delete stream.maxToolSummaryChars;
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(stream, "maxStatusChars") &&
+    typeof stream.maxStatusChars === "number"
+  ) {
+    delete stream.maxStatusChars;
+    changes.push("Removed acp.stream.maxStatusChars (no replacement).");
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(stream, "maxMetaEventsPerTurn") &&
+    typeof stream.maxMetaEventsPerTurn === "number"
+  ) {
+    delete stream.maxMetaEventsPerTurn;
+    changes.push("Removed acp.stream.maxMetaEventsPerTurn (no replacement).");
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(stream, "metaMode") &&
+    typeof stream.metaMode === "string"
+  ) {
+    delete stream.metaMode;
+    changes.push("Removed acp.stream.metaMode (no replacement).");
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(stream, "showUsage") &&
+    typeof stream.showUsage === "boolean"
+  ) {
+    delete stream.showUsage;
+    changes.push("Removed acp.stream.showUsage (no replacement).");
+  }
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "agents.sandbox.perSession->scope",
@@ -434,6 +526,19 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME: LegacyConfigMigrationSpec[] = [
       }
       Object.assign(raw, migrated.config);
       changes.push(...migrated.changes);
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "acp.stream-v2026.3.2-keys",
+    describe: "Migrate removed ACP stream keys from v2026.3.2 to supported config",
+    legacyRules: LEGACY_ACP_STREAM_RULES,
+    apply: (raw, changes) => {
+      const acp = getRecord(raw.acp);
+      const stream = getRecord(acp?.stream);
+      if (!stream) {
+        return;
+      }
+      migrateLegacyAcpStream(stream, changes);
     },
   }),
   defineLegacyConfigMigration({
