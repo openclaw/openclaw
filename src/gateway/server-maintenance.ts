@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import { pruneStaleAgentEventState } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -102,6 +103,10 @@ export function startGatewayMaintenanceTimers(params: {
         }
       }
     }
+
+    // Safety-net: prune module-level seqByRun / runContextById in agent-events
+    // that may leak if lifecycle cleanup is missed (e.g. dropped events).
+    pruneStaleAgentEventState(AGENT_RUN_SEQ_MAX);
 
     for (const [runId, entry] of params.chatAbortControllers) {
       if (now <= entry.expiresAtMs) {

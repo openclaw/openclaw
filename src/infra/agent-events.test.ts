@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, test } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
+  getAgentEventStateSize,
   getAgentRunContext,
   onAgentEvent,
+  pruneStaleAgentEventState,
   registerAgentRunContext,
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
@@ -132,6 +134,64 @@ describe("agent-events sequencing", () => {
     stop();
 
     expect(receivedSessionKey).toBe("session-main");
+  });
+
+  test("clearAgentRunContext also cleans seqByRun entries", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-seq", { sessionKey: "main" });
+
+    // Emit events to populate seqByRun
+    emitAgentEvent({ runId: "run-seq", stream: "lifecycle", data: {} });
+    emitAgentEvent({ runId: "run-seq", stream: "lifecycle", data: {} });
+    expect(getAgentEventStateSize().seqByRun).toBeGreaterThanOrEqual(1);
+
+    // Clear should remove both context and seq
+    clearAgentRunContext("run-seq");
+    expect(getAgentRunContext("run-seq")).toBeUndefined();
+
+    // Next emit for same runId should restart at seq=1
+    const seqs: number[] = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-seq") {
+        seqs.push(evt.seq);
+      }
+    });
+    emitAgentEvent({ runId: "run-seq", stream: "lifecycle", data: {} });
+    stop();
+    expect(seqs).toEqual([1]);
+  });
+
+  test("pruneStaleAgentEventState removes oldest entries beyond limit", async () => {
+    resetAgentRunContextForTest();
+
+    // Populate 5 runs
+    for (let i = 0; i < 5; i++) {
+      registerAgentRunContext(`prune-${i}`, { sessionKey: `s-${i}` });
+      emitAgentEvent({ runId: `prune-${i}`, stream: "lifecycle", data: {} });
+    }
+    expect(getAgentEventStateSize().seqByRun).toBe(5);
+    expect(getAgentEventStateSize().runContextById).toBe(5);
+
+    // Prune to max 3 — should remove the 2 oldest (FIFO)
+    const removed = pruneStaleAgentEventState(3);
+    expect(removed).toBe(2);
+    expect(getAgentEventStateSize().seqByRun).toBe(3);
+    expect(getAgentEventStateSize().runContextById).toBe(3);
+
+    // The first two should be gone
+    expect(getAgentRunContext("prune-0")).toBeUndefined();
+    expect(getAgentRunContext("prune-1")).toBeUndefined();
+    // The last three should still exist
+    expect(getAgentRunContext("prune-2")).toBeDefined();
+    expect(getAgentRunContext("prune-3")).toBeDefined();
+    expect(getAgentRunContext("prune-4")).toBeDefined();
+  });
+
+  test("pruneStaleAgentEventState is a no-op when under limit", async () => {
+    resetAgentRunContextForTest();
+    emitAgentEvent({ runId: "small-run", stream: "lifecycle", data: {} });
+    const removed = pruneStaleAgentEventState(1000);
+    expect(removed).toBe(0);
   });
 
   test("keeps notifying later listeners when one throws", async () => {

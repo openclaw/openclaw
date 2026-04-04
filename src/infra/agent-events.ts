@@ -158,11 +158,46 @@ export function getAgentRunContext(runId: string) {
 }
 
 export function clearAgentRunContext(runId: string) {
-  getAgentEventState().runContextById.delete(runId);
+  const state = getAgentEventState();
+  state.runContextById.delete(runId);
+  state.seqByRun.delete(runId);
+}
+
+/**
+ * Safety-net pruning for `seqByRun` — keeps only the most recent entries when
+ * the map grows beyond `maxEntries`. Called from the gateway maintenance timer
+ * so stale run-IDs cannot accumulate indefinitely even if lifecycle cleanup is
+ * missed. Because entries lack timestamps, pruning is FIFO (Map insertion
+ * order).
+ */
+export function pruneStaleAgentEventState(maxEntries: number): number {
+  const state = getAgentEventState();
+  if (state.seqByRun.size <= maxEntries) {
+    return 0;
+  }
+  const excess = state.seqByRun.size - maxEntries;
+  let removed = 0;
+  for (const runId of state.seqByRun.keys()) {
+    state.seqByRun.delete(runId);
+    state.runContextById.delete(runId);
+    removed += 1;
+    if (removed >= excess) {
+      break;
+    }
+  }
+  return removed;
+}
+
+/** Returns the current size of internal agent-event state maps (for instrumentation). */
+export function getAgentEventStateSize(): { seqByRun: number; runContextById: number } {
+  const state = getAgentEventState();
+  return { seqByRun: state.seqByRun.size, runContextById: state.runContextById.size };
 }
 
 export function resetAgentRunContextForTest() {
-  getAgentEventState().runContextById.clear();
+  const state = getAgentEventState();
+  state.runContextById.clear();
+  state.seqByRun.clear();
 }
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
