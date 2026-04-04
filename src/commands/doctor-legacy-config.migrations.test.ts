@@ -333,6 +333,44 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("migrates Matrix room allow aliases to enabled", () => {
+    const res = normalizeCompatibilityConfigValues(
+      asLegacyConfig({
+        channels: {
+          matrix: {
+            groups: {
+              "!ops:example.org": {
+                allow: true,
+              },
+            },
+            accounts: {
+              work: {
+                rooms: {
+                  "!legacy:example.org": {
+                    allow: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
+      enabled: true,
+    });
+    expect(res.config.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+      enabled: false,
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (true).",
+        "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (false).",
+      ]),
+    );
+  });
+
   it("moves missing default account from single-account top-level config when named accounts already exist", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {

@@ -7612,6 +7612,21 @@
       ],
       "label": "@openclaw/openai-provider Config",
       "help": "Plugin-defined config payload for openai.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.openai.config.personalityOverlay",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "enumValues": [
+        "friendly",
+        "off"
+      ],
+      "defaultValue": "friendly",
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
