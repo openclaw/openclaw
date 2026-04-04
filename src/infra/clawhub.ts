@@ -81,7 +81,13 @@ export type ClawHubPackageVersion = {
     createdAt: number;
     changelog: string;
     distTags?: string[];
-    files?: unknown;
+    files?: Array<{
+      path: string;
+      size: number;
+      sha256: string;
+      contentType?: string;
+    }>;
+    sha256hash?: string | null;
     compatibility?: ClawHubPackageCompatibility | null;
     capabilities?: ClawHubPackageDetail["package"] extends infer T
       ? T extends { capabilities?: infer C }
@@ -407,6 +413,55 @@ export function resolveClawHubBaseUrl(baseUrl?: string): string {
 export function formatSha256Integrity(bytes: Uint8Array): string {
   const digest = createHash("sha256").update(bytes).digest("base64");
   return `sha256-${digest}`;
+}
+
+export function normalizeClawHubSha256Integrity(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const prefixedBase64 = /^sha256-([A-Za-z0-9+/]+={0,1})$/.exec(trimmed);
+  if (prefixedBase64?.[1]) {
+    try {
+      const decoded = Buffer.from(prefixedBase64[1], "base64");
+      if (decoded.length === 32) {
+        return `sha256-${decoded.toString("base64")}`;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  const prefixedHex = /^sha256:([A-Fa-f0-9]{64})$/.exec(trimmed);
+  if (prefixedHex?.[1]) {
+    return `sha256-${Buffer.from(prefixedHex[1], "hex").toString("base64")}`;
+  }
+  if (/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
+    return `sha256-${Buffer.from(trimmed, "hex").toString("base64")}`;
+  }
+  return null;
+}
+
+export function normalizeClawHubSha256Hex(value: string): string | null {
+  const trimmed = value.trim();
+  if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
+    return null;
+  }
+  return trimmed.toLowerCase();
+}
+
+export function computeClawHubFileIntegritySha256(
+  files: Array<{ path: string; sha256: string }>,
+): string {
+  // ClawHub computes the legacy package fingerprint from the sorted
+  // "path:sha256" payload in convex/lib/skills.ts hashSkillFiles().
+  const payload = files
+    .filter((file) => Boolean(file.path) && Boolean(file.sha256))
+    .map((file) => ({ path: file.path, sha256: file.sha256 }))
+    .toSorted((left, right) => left.path.localeCompare(right.path))
+    .map((file) => `${file.path}:${file.sha256}`)
+    .join("\n");
+  return createHash("sha256").update(payload, "utf8").digest("hex");
 }
 
 export function parseClawHubPluginSpec(raw: string): {

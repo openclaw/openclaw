@@ -4,8 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  computeClawHubFileIntegritySha256,
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  normalizeClawHubSha256Integrity,
+  normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
   resolveClawHubAuthToken,
   resolveLatestVersionFromPackage,
@@ -90,6 +93,30 @@ describe("clawhub helpers", () => {
     expect(satisfiesGatewayMinimum("OpenClaw 2026.3.22", "2026.3.0")).toBe(true);
     expect(satisfiesGatewayMinimum("2026.2.9", "2026.3.0")).toBe(false);
     expect(satisfiesGatewayMinimum("unknown", "2026.3.0")).toBe(false);
+  });
+
+  it("normalizes raw ClawHub SHA-256 hashes into integrity strings", () => {
+    const hex = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81";
+    const integrity = "sha256-A5BYxvLAy0ksUzsKTRTvd8wPeKvMztUofYShogEc+4E=";
+    const unpaddedIntegrity = "sha256-A5BYxvLAy0ksUzsKTRTvd8wPeKvMztUofYShogEc+4E";
+    expect(normalizeClawHubSha256Integrity(hex)).toBe(integrity);
+    expect(normalizeClawHubSha256Integrity(`sha256:${hex}`)).toBe(integrity);
+    expect(normalizeClawHubSha256Integrity(integrity)).toBe(integrity);
+    expect(normalizeClawHubSha256Integrity(unpaddedIntegrity)).toBe(integrity);
+    expect(normalizeClawHubSha256Integrity(`sha256=${hex}`)).toBeNull();
+    expect(normalizeClawHubSha256Integrity("sha256-a=")).toBeNull();
+    expect(normalizeClawHubSha256Integrity("not-a-hash")).toBeNull();
+  });
+
+  it("normalizes ClawHub SHA-256 hex values and mirrors the upstream file-list fingerprint", () => {
+    expect(normalizeClawHubSha256Hex("AA".repeat(32))).toBe("aa".repeat(32));
+    expect(normalizeClawHubSha256Hex("not-a-hash")).toBeNull();
+    expect(
+      computeClawHubFileIntegritySha256([
+        { path: "b.txt", sha256: "22".repeat(32) },
+        { path: "a.txt", sha256: "11".repeat(32) },
+      ]),
+    ).toBe("2c5f39fed1cfc81a03cb45ec44a05f9f9e1156f9c1e5d84c970a873e89de9ebe");
   });
 
   it("resolves ClawHub auth token from config.json", async () => {
