@@ -332,6 +332,42 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
 
   const choiceMap = new Map<string, ChoiceHandler>([
     [
+      "setup-token",
+      {
+        providerId: "anthropic",
+        label: "Anthropic setup-token",
+        async runNonInteractive(ctx) {
+          const token = normalizeText(ctx.opts.token);
+          if (!token) {
+            ctx.runtime.error("Anthropic setup-token auth requires --token.");
+            ctx.runtime.exit(1);
+            return null;
+          }
+          upsertAuthProfile({
+            profileId: (ctx.opts.tokenProfileId as string | undefined) ?? "anthropic:default",
+            credential: {
+              type: "token",
+              provider: "anthropic",
+              token,
+            } as never,
+            agentDir: ctx.agentDir,
+          });
+          const withProfile = providerApiKeyAuthRuntime.applyAuthProfileConfig(
+            ctx.config as never,
+            {
+              profileId: (ctx.opts.tokenProfileId as string | undefined) ?? "anthropic:default",
+              provider: "anthropic",
+              mode: "token",
+            },
+          );
+          return providerApiKeyAuthRuntime.applyPrimaryModel(
+            withProfile,
+            "anthropic/claude-sonnet-4-6",
+          );
+        },
+      },
+    ],
+    [
       "apiKey",
       createApiKeyChoice({
         providerId: "anthropic",
@@ -1059,22 +1095,27 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
-  it("rejects legacy Anthropic token onboarding", async () => {
+  it("stores legacy Anthropic setup-token onboarding again when explicitly selected", async () => {
     await withOnboardEnv("openclaw-onboard-token-", async ({ configPath, runtime }) => {
       const cleanToken = `sk-ant-oat01-${"a".repeat(80)}`;
       const token = `${cleanToken.slice(0, 30)}\r${cleanToken.slice(30)}`;
 
-      await expect(
-        runNonInteractiveSetupWithDefaults(runtime, {
-          authChoice: "token",
-          tokenProvider: "anthropic",
-          token,
-          tokenProfileId: "anthropic:default",
-        }),
-      ).rejects.toThrow('Auth choice "token" is no longer supported for Anthropic onboarding.');
+      await runNonInteractiveSetupWithDefaults(runtime, {
+        authChoice: "token",
+        tokenProvider: "anthropic",
+        token,
+        tokenProfileId: "anthropic:default",
+      });
 
-      await expect(fs.access(configPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toBeUndefined();
+      const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+      expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
+      expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-sonnet-4-6");
+      expect(ensureAuthProfileStore().profiles["anthropic:default"]).toMatchObject({
+        provider: "anthropic",
+        type: "token",
+        token: cleanToken,
+      });
     });
   });
 
