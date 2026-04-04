@@ -208,6 +208,14 @@ Provider-specific config (API keys, base URLs, modes) lives under
 `plugins.entries.<plugin>.config.webSearch.*`. See the provider pages for
 examples.
 
+`web_fetch` fallback provider selection is separate:
+
+- choose it with `tools.web.fetch.provider`
+- or omit that field and let OpenClaw auto-detect the first ready web-fetch
+  provider from available credentials
+- today the bundled web-fetch provider is Firecrawl, configured under
+  `plugins.entries.firecrawl.config.webFetch.*`
+
 When you choose **Kimi** during `openclaw onboard` or
 `openclaw configure --section web`, OpenClaw can also ask for:
 

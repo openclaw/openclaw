@@ -1,6 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+vi.mock("./models-config.js", () => ({
+  ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
+}));
+vi.mock("./agent-paths.js", () => ({
+  resolveOpenClawAgentDir: () => "/tmp/openclaw",
+}));
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
+}));
 import {
   __setModelCatalogImportForTest,
   findModelInCatalog,
@@ -89,7 +98,7 @@ describe("loadModelCatalog", () => {
     }
   });
 
-  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.4 exists", async () => {
+  it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.4",
@@ -107,15 +116,19 @@ describe("loadModelCatalog", () => {
     ]);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
-    expect(result).toContainEqual(
+    expect(result).not.toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",
       }),
     );
-    const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
-    expect(spark?.name).toBe("gpt-5.3-codex-spark");
-    expect(spark?.reasoning).toBe(true);
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        name: "GPT-5.3 Codex",
+      }),
+    );
   });
 
   it("filters stale openai gpt-5.3-codex-spark built-ins from the catalog", async () => {
@@ -167,7 +180,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
+  it("does not synthesize gpt-5.4 OpenAI forward-compat entries from template models", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.2",
@@ -213,46 +226,19 @@ describe("loadModelCatalog", () => {
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig });
 
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-pro",
-        name: "gpt-5.4-pro",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        name: "gpt-5.4-mini",
-      }),
-    );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-nano",
-        name: "gpt-5.4-nano",
-      }),
-    );
+    expect(
+      result.some((entry) => entry.provider === "openai" && entry.id.startsWith("gpt-5.4")),
+    ).toBe(false);
     expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.4",
+        name: "GPT-5.3 Codex",
       }),
     );
-    expect(result).toContainEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        id: "gpt-5.4-mini",
-      }),
-    );
+    expect(
+      result.some((entry) => entry.provider === "openai-codex" && entry.id === "gpt-5.4-mini"),
+    ).toBe(false);
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {

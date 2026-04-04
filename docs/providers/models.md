@@ -24,7 +24,7 @@ model as `provider/model`.
 
 ## Supported providers (starter set)
 
-- [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)

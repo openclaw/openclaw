@@ -12,6 +12,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         properties: {
           lastTouchedVersion: {
             type: "string",
+            title: "Config Last Touched Version",
+            description: "Auto-set when OpenClaw writes the config.",
           },
           lastTouchedAt: {
             anyOf: [
@@ -20,9 +22,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               {},
             ],
+            title: "Config Last Touched At",
+            description: "ISO timestamp of the last config write (auto-set).",
           },
         },
         additionalProperties: false,
+        title: "Metadata",
+        description:
+          "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
       },
       env: {
         type: "object",
@@ -32,14 +39,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Shell Environment Import Enabled",
+                description:
+                  "Enables loading environment variables from the user shell profile during startup initialization. Keep enabled for developer machines, or disable in locked-down service environments with explicit env management.",
               },
               timeoutMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Shell Environment Import Timeout (ms)",
+                description:
+                  "Maximum time in milliseconds allowed for shell environment resolution before fallback behavior applies. Use tighter timeouts for faster startup, or increase when shell initialization is heavy.",
               },
             },
             additionalProperties: false,
+            title: "Shell Environment Import",
+            description:
+              "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
           },
           vars: {
             type: "object",
@@ -49,26 +65,44 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             additionalProperties: {
               type: "string",
             },
+            title: "Environment Variable Overrides",
+            description:
+              "Explicit key/value environment variable overrides merged into runtime process environment for OpenClaw. Use this for deterministic env configuration instead of relying only on shell profile side effects.",
           },
         },
         additionalProperties: {
           type: "string",
         },
+        title: "Environment",
+        description:
+          "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
       },
       wizard: {
         type: "object",
         properties: {
           lastRunAt: {
             type: "string",
+            title: "Wizard Last Run Timestamp",
+            description:
+              "ISO timestamp for when the setup wizard most recently completed on this host. Use this to confirm setup recency during support and operational audits.",
           },
           lastRunVersion: {
             type: "string",
+            title: "Wizard Last Run Version",
+            description:
+              "OpenClaw version recorded at the time of the most recent wizard run on this config. Use this when diagnosing behavior differences across version-to-version setup changes.",
           },
           lastRunCommit: {
             type: "string",
+            title: "Wizard Last Run Commit",
+            description:
+              "Source commit identifier recorded for the last wizard execution in development builds. Use this to correlate setup behavior with exact source state during debugging.",
           },
           lastRunCommand: {
             type: "string",
+            title: "Wizard Last Run Command",
+            description:
+              "Command invocation recorded for the latest wizard run to preserve execution context. Use this to reproduce setup steps when verifying setup regressions.",
           },
           lastRunMode: {
             anyOf: [
@@ -81,35 +115,56 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "remote",
               },
             ],
+            title: "Wizard Last Run Mode",
+            description:
+              'Wizard execution mode recorded as "local" or "remote" for the most recent setup flow. Use this to understand whether setup targeted direct local runtime or remote gateway topology.',
           },
         },
         additionalProperties: false,
+        title: "Setup Wizard State",
+        description:
+          "Setup wizard state tracking fields that record the most recent guided setup run details. Keep these fields for observability and troubleshooting of setup flows across upgrades.",
       },
       diagnostics: {
         type: "object",
         properties: {
           enabled: {
             type: "boolean",
+            title: "Diagnostics Enabled",
+            description:
+              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
           },
           flags: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Diagnostics Flags",
+            description:
+              'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
           },
           stuckSessionWarnMs: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Stuck Session Warning Threshold (ms)",
+            description:
+              "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
           },
           otel: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "OpenTelemetry Enabled",
+                description:
+                  "Enables OpenTelemetry export pipeline for traces, metrics, and logs based on configured endpoint/protocol settings. Keep disabled unless your collector endpoint and auth are fully configured.",
               },
               endpoint: {
                 type: "string",
+                title: "OpenTelemetry Endpoint",
+                description:
+                  "Collector endpoint URL used for OpenTelemetry export transport, including scheme and port. Use a reachable, trusted collector endpoint and monitor ingestion errors after rollout.",
               },
               protocol: {
                 anyOf: [
@@ -122,6 +177,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "grpc",
                   },
                 ],
+                title: "OpenTelemetry Protocol",
+                description:
+                  'OTel transport protocol for telemetry export: "http/protobuf" or "grpc" depending on collector support. Use the protocol your observability backend expects to avoid dropped telemetry payloads.',
               },
               headers: {
                 type: "object",
@@ -131,55 +189,96 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 additionalProperties: {
                   type: "string",
                 },
+                title: "OpenTelemetry Headers",
+                description:
+                  "Additional HTTP/gRPC metadata headers sent with OpenTelemetry export requests, often used for tenant auth or routing. Keep secrets in env-backed values and avoid unnecessary header sprawl.",
               },
               serviceName: {
                 type: "string",
+                title: "OpenTelemetry Service Name",
+                description:
+                  "Service name reported in telemetry resource attributes to identify this gateway instance in observability backends. Use stable names so dashboards and alerts remain consistent over deployments.",
               },
               traces: {
                 type: "boolean",
+                title: "OpenTelemetry Traces Enabled",
+                description:
+                  "Enable trace signal export to the configured OpenTelemetry collector endpoint. Keep enabled when latency/debug tracing is needed, and disable if you only want metrics/logs.",
               },
               metrics: {
                 type: "boolean",
+                title: "OpenTelemetry Metrics Enabled",
+                description:
+                  "Enable metrics signal export to the configured OpenTelemetry collector endpoint. Keep enabled for runtime health dashboards, and disable only if metric volume must be minimized.",
               },
               logs: {
                 type: "boolean",
+                title: "OpenTelemetry Logs Enabled",
+                description:
+                  "Enable log signal export through OpenTelemetry in addition to local logging sinks. Use this when centralized log correlation is required across services and agents.",
               },
               sampleRate: {
                 type: "number",
                 minimum: 0,
                 maximum: 1,
+                title: "OpenTelemetry Trace Sample Rate",
+                description:
+                  "Trace sampling rate (0-1) controlling how much trace traffic is exported to observability backends. Lower rates reduce overhead/cost, while higher rates improve debugging fidelity.",
               },
               flushIntervalMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "OpenTelemetry Flush Interval (ms)",
+                description:
+                  "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
               },
             },
             additionalProperties: false,
+            title: "OpenTelemetry",
+            description:
+              "OpenTelemetry export settings for traces, metrics, and logs emitted by gateway components. Use this when integrating with centralized observability backends and distributed tracing pipelines.",
           },
           cacheTrace: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Cache Trace Enabled",
+                description: "Log cache trace snapshots for embedded agent runs (default: false).",
               },
               filePath: {
                 type: "string",
+                title: "Cache Trace File Path",
+                description:
+                  "JSONL output path for cache trace logs (default: $OPENCLAW_STATE_DIR/logs/cache-trace.jsonl).",
               },
               includeMessages: {
                 type: "boolean",
+                title: "Cache Trace Include Messages",
+                description: "Include full message payloads in trace output (default: true).",
               },
               includePrompt: {
                 type: "boolean",
+                title: "Cache Trace Include Prompt",
+                description: "Include prompt text in trace output (default: true).",
               },
               includeSystem: {
                 type: "boolean",
+                title: "Cache Trace Include System",
+                description: "Include system prompt in trace output (default: true).",
               },
             },
             additionalProperties: false,
+            title: "Cache Trace",
+            description:
+              "Cache-trace logging settings for observing cache decisions and payload context in embedded runs. Enable this temporarily for debugging and disable afterward to reduce sensitive log footprint.",
           },
         },
         additionalProperties: false,
+        title: "Diagnostics",
+        description:
+          "Diagnostics controls for targeted tracing, telemetry export, and cache inspection during debugging. Keep baseline diagnostics minimal in production and enable deeper signals only when investigating issues.",
       },
       logging: {
         type: "object",
@@ -215,9 +314,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "trace",
               },
             ],
+            title: "Log Level",
+            description:
+              'Primary log level threshold for runtime logger output: "silent", "fatal", "error", "warn", "info", "debug", or "trace". Keep "info" or "warn" for production, and use debug/trace only during investigation.',
           },
           file: {
             type: "string",
+            title: "Log File Path",
+            description:
+              "Optional file path for persisted log output in addition to or instead of console logging. Use a managed writable path and align retention/rotation with your operational policy.",
           },
           maxFileBytes: {
             type: "integer",
@@ -255,6 +360,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "trace",
               },
             ],
+            title: "Console Log Level",
+            description:
+              'Console-specific log threshold: "silent", "fatal", "error", "warn", "info", "debug", or "trace" for terminal output control. Use this to keep local console quieter while retaining richer file logging if needed.',
           },
           consoleStyle: {
             anyOf: [
@@ -271,6 +379,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "json",
               },
             ],
+            title: "Console Log Style",
+            description:
+              'Console output format style: "pretty", "compact", or "json" based on operator and ingestion needs. Use json for machine parsing pipelines and pretty/compact for human-first terminal workflows.',
           },
           redactSensitive: {
             anyOf: [
@@ -283,15 +394,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "tools",
               },
             ],
+            title: "Sensitive Data Redaction Mode",
+            description:
+              'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
           },
           redactPatterns: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Custom Redaction Patterns",
+            description:
+              "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
           },
         },
         additionalProperties: false,
+        title: "Logging",
+        description:
+          "Logging behavior controls for severity, output destinations, formatting, and sensitive-data redaction. Keep levels and redaction strict enough for production while preserving useful diagnostics.",
       },
       cli: {
         type: "object",
@@ -314,12 +434,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "off",
                   },
                 ],
+                title: "CLI Banner Tagline Mode",
+                description:
+                  'Controls tagline style in the CLI startup banner: "random" (default) picks from the rotating tagline pool, "default" always shows the neutral default tagline, and "off" hides tagline text while keeping the banner version line.',
               },
             },
             additionalProperties: false,
+            title: "CLI Banner",
+            description:
+              "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
           },
         },
         additionalProperties: false,
+        title: "CLI",
+        description:
+          "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
       },
       update: {
         type: "object",
@@ -339,81 +468,132 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "dev",
               },
             ],
+            title: "Update Channel",
+            description: 'Update channel for git + npm installs ("stable", "beta", or "dev").',
           },
           checkOnStart: {
             type: "boolean",
+            title: "Update Check on Start",
+            description: "Check for npm updates when the gateway starts (default: true).",
           },
           auto: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Auto Update Enabled",
+                description: "Enable background auto-update for package installs (default: false).",
               },
               stableDelayHours: {
                 type: "number",
                 minimum: 0,
                 maximum: 168,
+                title: "Auto Update Stable Delay (hours)",
+                description: "Minimum delay before stable-channel auto-apply starts (default: 6).",
               },
               stableJitterHours: {
                 type: "number",
                 minimum: 0,
                 maximum: 168,
+                title: "Auto Update Stable Jitter (hours)",
+                description: "Extra stable-channel rollout spread window in hours (default: 12).",
               },
               betaCheckIntervalHours: {
                 type: "number",
                 exclusiveMinimum: 0,
                 maximum: 24,
+                title: "Auto Update Beta Check Interval (hours)",
+                description: "How often beta-channel checks run in hours (default: 1).",
               },
             },
             additionalProperties: false,
           },
         },
         additionalProperties: false,
+        title: "Updates",
+        description:
+          "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
       },
       browser: {
         type: "object",
         properties: {
           enabled: {
             type: "boolean",
+            title: "Browser Enabled",
+            description:
+              "Enables browser capability wiring in the gateway so browser tools and CDP-driven workflows can run. Disable when browser automation is not needed to reduce surface area and startup work.",
           },
           evaluateEnabled: {
             type: "boolean",
+            title: "Browser Evaluate Enabled",
+            description:
+              "Enables browser-side evaluate helpers for runtime script evaluation capabilities where supported. Keep disabled unless your workflows require evaluate semantics beyond snapshots/navigation.",
           },
           cdpUrl: {
             type: "string",
+            title: "Browser CDP URL",
+            description:
+              "Remote CDP websocket URL used to attach to an externally managed browser instance. Use this for centralized browser hosts and keep URL access restricted to trusted network paths.",
           },
           remoteCdpTimeoutMs: {
             type: "integer",
             minimum: 0,
             maximum: 9007199254740991,
+            title: "Remote CDP Timeout (ms)",
+            description:
+              "Timeout in milliseconds for connecting to a remote CDP endpoint before failing the browser attach attempt. Increase for high-latency tunnels, or lower for faster failure detection.",
           },
           remoteCdpHandshakeTimeoutMs: {
             type: "integer",
             minimum: 0,
             maximum: 9007199254740991,
+            title: "Remote CDP Handshake Timeout (ms)",
+            description:
+              "Timeout in milliseconds for post-connect CDP handshake readiness checks against remote browser targets. Raise this for slow-start remote browsers and lower to fail fast in automation loops.",
           },
           color: {
             type: "string",
+            title: "Browser Accent Color",
+            description:
+              "Default accent color used for browser profile/UI cues where colored identity hints are displayed. Use consistent colors to help operators identify active browser profile context quickly.",
           },
           executablePath: {
             type: "string",
+            title: "Browser Executable Path",
+            description:
+              "Explicit browser executable path when auto-discovery is insufficient for your host environment. Use absolute stable paths so launch behavior stays deterministic across restarts.",
           },
           headless: {
             type: "boolean",
+            title: "Browser Headless Mode",
+            description:
+              "Forces browser launch in headless mode when the local launcher starts browser instances. Keep headless enabled for server environments and disable only when visible UI debugging is required.",
           },
           noSandbox: {
             type: "boolean",
+            title: "Browser No-Sandbox Mode",
+            description:
+              "Disables Chromium sandbox isolation flags for environments where sandboxing fails at runtime. Keep this off whenever possible because process isolation protections are reduced.",
           },
           attachOnly: {
             type: "boolean",
+            title: "Browser Attach-only Mode",
+            description:
+              "Restricts browser mode to attach-only behavior without starting local browser processes. Use this when all browser sessions are externally managed by a remote CDP provider.",
           },
           cdpPortRangeStart: {
             type: "integer",
             minimum: 1,
             maximum: 65535,
+            title: "Browser CDP Port Range Start",
+            description:
+              "Starting local CDP port used for auto-allocated browser profile ports. Increase this when host-level port defaults conflict with other local services.",
           },
           defaultProfile: {
             type: "string",
+            title: "Browser Default Profile",
+            description:
+              "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
           },
           snapshotDefaults: {
             type: "object",
@@ -421,30 +601,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               mode: {
                 type: "string",
                 const: "efficient",
+                title: "Browser Snapshot Mode",
+                description:
+                  "Default snapshot extraction mode controlling how page content is transformed for agent consumption. Choose the mode that balances readability, fidelity, and token footprint for your workflows.",
               },
             },
             additionalProperties: false,
+            title: "Browser Snapshot Defaults",
+            description:
+              "Default snapshot capture configuration used when callers do not provide explicit snapshot options. Tune this for consistent capture behavior across channels and automation paths.",
           },
           ssrfPolicy: {
             type: "object",
             properties: {
               dangerouslyAllowPrivateNetwork: {
                 type: "boolean",
+                title: "Browser Dangerously Allow Private Network",
+                description:
+                  "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
               },
               allowedHostnames: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Browser Allowed Hostnames",
+                description:
+                  "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
               },
               hostnameAllowlist: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Browser Hostname Allowlist",
+                description:
+                  "Legacy/alternate hostname allowlist field used by SSRF policy consumers for explicit host exceptions. Use stable exact hostnames and avoid wildcard-like broad patterns.",
               },
             },
             additionalProperties: false,
+            title: "Browser SSRF Policy",
+            description:
+              "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
           },
           profiles: {
             type: "object",
@@ -459,12 +657,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "integer",
                   minimum: 1,
                   maximum: 65535,
+                  title: "Browser Profile CDP Port",
+                  description:
+                    "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
                 },
                 cdpUrl: {
                   type: "string",
+                  title: "Browser Profile CDP URL",
+                  description:
+                    "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
                 },
                 userDataDir: {
                   type: "string",
+                  title: "Browser Profile User Data Dir",
+                  description:
+                    "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
                 },
                 driver: {
                   anyOf: [
@@ -481,18 +688,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       const: "existing-session",
                     },
                   ],
+                  title: "Browser Profile Driver",
+                  description:
+                    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for host-local Chrome DevTools MCP attachment.',
                 },
                 attachOnly: {
                   type: "boolean",
+                  title: "Browser Profile Attach-only Mode",
+                  description:
+                    "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
                 },
                 color: {
                   type: "string",
                   pattern: "^#?[0-9a-fA-F]{6}$",
+                  title: "Browser Profile Accent Color",
+                  description:
+                    "Per-profile accent color for visual differentiation in dashboards and browser-related UI hints. Use distinct colors for high-signal operator recognition of active profiles.",
                 },
               },
               required: ["color"],
               additionalProperties: false,
             },
+            title: "Browser Profiles",
+            description:
+              "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
           },
           extraArgs: {
             type: "array",
@@ -502,6 +721,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           },
         },
         additionalProperties: false,
+        title: "Browser",
+        description:
+          "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
       },
       ui: {
         type: "object",
@@ -509,6 +731,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           seamColor: {
             type: "string",
             pattern: "^#?[0-9a-fA-F]{6}$",
+            title: "Accent Color",
+            description:
+              "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
           },
           assistant: {
             type: "object",
@@ -516,16 +741,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               name: {
                 type: "string",
                 maxLength: 50,
+                title: "Assistant Name",
+                description:
+                  "Display name shown for the assistant in UI views, chat chrome, and status contexts. Keep this stable so operators can reliably identify which assistant persona is active.",
               },
               avatar: {
                 type: "string",
                 maxLength: 200,
+                title: "Assistant Avatar",
+                description:
+                  "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
               },
             },
             additionalProperties: false,
+            title: "Assistant Appearance",
+            description:
+              "Assistant display identity settings for name and avatar shown in UI surfaces. Keep these values aligned with your operator-facing persona and support expectations.",
           },
         },
         additionalProperties: false,
+        title: "UI",
+        description:
+          "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
       },
       secrets: {
         type: "object",
@@ -748,6 +985,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               required: ["provider", "mode"],
               additionalProperties: false,
             },
+            title: "Auth Profiles",
+            description: "Named auth profiles (provider + mode + optional email).",
           },
           order: {
             type: "object",
@@ -760,6 +999,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "string",
               },
             },
+            title: "Auth Profile Order",
+            description: "Ordered auth profile IDs per provider (used for automatic failover).",
           },
           cooldowns: {
             type: "object",
@@ -767,6 +1008,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               billingBackoffHours: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Billing Backoff (hours)",
+                description:
+                  "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
               },
               billingBackoffHoursByProvider: {
                 type: "object",
@@ -777,75 +1021,118 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "number",
                   exclusiveMinimum: 0,
                 },
+                title: "Billing Backoff Overrides",
+                description: "Optional per-provider overrides for billing backoff (hours).",
               },
               billingMaxHours: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Billing Backoff Cap (hours)",
+                description: "Cap (hours) for billing backoff (default: 24).",
               },
               authPermanentBackoffMinutes: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Auth-Permanent Backoff (minutes)",
+                description:
+                  "Base backoff (minutes) for high-confidence auth_permanent failures (default: 10). Keep this shorter than billing so providers recover automatically after transient upstream auth incidents.",
               },
               authPermanentMaxMinutes: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Auth-Permanent Backoff Cap (minutes)",
+                description: "Cap (minutes) for auth_permanent backoff (default: 60).",
               },
               failureWindowHours: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Failover Window (hours)",
+                description: "Failure window (hours) for backoff counters (default: 24).",
               },
               overloadedProfileRotations: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Overloaded Profile Rotations",
+                description:
+                  "Maximum same-provider auth-profile rotations allowed for overloaded errors before switching to model fallback (default: 1).",
               },
               overloadedBackoffMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Overloaded Backoff (ms)",
+                description:
+                  "Fixed delay in milliseconds before retrying an overloaded provider/profile rotation (default: 0).",
               },
               rateLimitedProfileRotations: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Rate-Limited Profile Rotations",
+                description:
+                  "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
               },
             },
             additionalProperties: false,
+            title: "Auth Cooldowns",
+            description:
+              "Cooldown/backoff controls for temporary profile suppression after billing-related failures and retry windows. Use these to prevent rapid re-selection of profiles that are still blocked.",
           },
         },
         additionalProperties: false,
+        title: "Auth",
+        description:
+          "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
       },
       acp: {
         type: "object",
         properties: {
           enabled: {
             type: "boolean",
+            title: "ACP Enabled",
+            description:
+              "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
           },
           dispatch: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "ACP Dispatch Enabled",
+                description:
+                  "Independent dispatch gate for ACP session turns (default: true). Set false to keep ACP commands available while blocking ACP turn execution.",
               },
             },
             additionalProperties: false,
           },
           backend: {
             type: "string",
+            title: "ACP Backend",
+            description:
+              "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
           },
           defaultAgent: {
             type: "string",
+            title: "ACP Default Agent",
+            description:
+              "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
           },
           allowedAgents: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "ACP Allowed Agents",
+            description:
+              "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
           },
           maxConcurrentSessions: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "ACP Max Concurrent Sessions",
+            description: "Maximum concurrently active ACP sessions across this gateway process.",
           },
           stream: {
             type: "object",
@@ -854,14 +1141,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "ACP Stream Coalesce Idle (ms)",
+                description:
+                  "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
               },
               maxChunkChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "ACP Stream Max Chunk Chars",
+                description:
+                  "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
               },
               repeatSuppression: {
                 type: "boolean",
+                title: "ACP Stream Repeat Suppression",
+                description:
+                  "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
               },
               deliveryMode: {
                 anyOf: [
@@ -874,6 +1170,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "final_only",
                   },
                 ],
+                title: "ACP Stream Delivery Mode",
+                description:
+                  "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
               },
               hiddenBoundarySeparator: {
                 anyOf: [
@@ -894,16 +1193,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "paragraph",
                   },
                 ],
+                title: "ACP Stream Hidden Boundary Separator",
+                description:
+                  "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
               },
               maxOutputChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "ACP Stream Max Output Chars",
+                description:
+                  "Maximum assistant output characters projected per ACP turn before truncation notice is emitted.",
               },
               maxSessionUpdateChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "ACP Stream Max Session Update Chars",
+                description:
+                  "Maximum characters for projected ACP session/update lines (tool/status updates).",
               },
               tagVisibility: {
                 type: "object",
@@ -913,9 +1221,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 additionalProperties: {
                   type: "boolean",
                 },
+                title: "ACP Stream Tag Visibility",
+                description:
+                  "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
               },
             },
             additionalProperties: false,
+            title: "ACP Stream",
+            description:
+              "ACP streaming projection controls for chunk sizing, metadata visibility, and deduped delivery behavior.",
           },
           runtime: {
             type: "object",
@@ -924,15 +1238,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "ACP Runtime TTL (minutes)",
+                description:
+                  "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
               },
               installCommand: {
                 type: "string",
+                title: "ACP Runtime Install Command",
+                description:
+                  "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
               },
             },
             additionalProperties: false,
           },
         },
         additionalProperties: false,
+        title: "ACP",
+        description:
+          "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.",
       },
       models: {
         type: "object",
@@ -948,6 +1271,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "replace",
               },
             ],
+            title: "Model Catalog Mode",
+            description:
+              'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
           },
           providers: {
             type: "object",
@@ -960,6 +1286,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 baseUrl: {
                   type: "string",
                   minLength: 1,
+                  title: "Model Provider Base URL",
+                  description:
+                    "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
                 },
                 apiKey: {
                   anyOf: [
@@ -1026,6 +1355,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       ],
                     },
                   ],
+                  title: "Model Provider API Key",
+                  description:
+                    "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
                 },
                 auth: {
                   anyOf: [
@@ -1046,6 +1378,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       const: "token",
                     },
                   ],
+                  title: "Model Provider Auth Mode",
+                  description:
+                    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
                 },
                 api: {
                   type: "string",
@@ -1060,9 +1395,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     "ollama",
                     "azure-openai-responses",
                   ],
+                  title: "Model Provider API Adapter",
+                  description:
+                    "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
                 },
                 injectNumCtxForOpenAICompat: {
                   type: "boolean",
+                  title: "Model Provider Inject num_ctx (OpenAI Compat)",
+                  description:
+                    "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
                 },
                 headers: {
                   type: "object",
@@ -1135,9 +1476,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  title: "Model Provider Headers",
+                  description:
+                    "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
                 },
                 authHeader: {
                   type: "boolean",
+                  title: "Model Provider Authorization Header",
+                  description:
+                    "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
                 },
                 request: {
                   type: "object",
@@ -1213,6 +1560,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                         ],
                       },
+                      title: "Model Provider Request Headers",
+                      description:
+                        "Extra headers merged into provider requests after default attribution and auth resolution.",
                     },
                     auth: {
                       anyOf: [
@@ -1222,6 +1572,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             mode: {
                               type: "string",
                               const: "provider-default",
+                              title: "Model Provider Request Auth Mode",
+                              description:
+                                'Auth override mode: "provider-default", "authorization-bearer", or "header".',
                             },
                           },
                           required: ["mode"],
@@ -1233,6 +1586,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             mode: {
                               type: "string",
                               const: "authorization-bearer",
+                              title: "Model Provider Request Auth Mode",
+                              description:
+                                'Auth override mode: "provider-default", "authorization-bearer", or "header".',
                             },
                             token: {
                               anyOf: [
@@ -1299,6 +1655,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                   ],
                                 },
                               ],
+                              title: "Model Provider Request Bearer Token",
+                              description:
+                                "Bearer token used when auth mode is authorization-bearer.",
                             },
                           },
                           required: ["mode", "token"],
@@ -1310,10 +1669,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             mode: {
                               type: "string",
                               const: "header",
+                              title: "Model Provider Request Auth Mode",
+                              description:
+                                'Auth override mode: "provider-default", "authorization-bearer", or "header".',
                             },
                             headerName: {
                               type: "string",
                               minLength: 1,
+                              title: "Model Provider Request Auth Header Name",
+                              description: "Custom auth header name used when auth mode is header.",
                             },
                             value: {
                               anyOf: [
@@ -1380,15 +1744,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                   ],
                                 },
                               ],
+                              title: "Model Provider Request Auth Header Value",
+                              description:
+                                "Custom auth header value used when auth mode is header.",
                             },
                             prefix: {
                               type: "string",
+                              title: "Model Provider Request Auth Header Prefix",
+                              description:
+                                "Optional prefix prepended to request.auth.value when auth mode is header.",
                             },
                           },
                           required: ["mode", "headerName", "value"],
                           additionalProperties: false,
                         },
                       ],
+                      title: "Model Provider Request Auth Override",
+                      description:
+                        "Override provider request authentication behavior for this provider.",
                     },
                     proxy: {
                       anyOf: [
@@ -1398,6 +1771,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             mode: {
                               type: "string",
                               const: "env-proxy",
+                              title: "Model Provider Request Proxy Mode",
+                              description:
+                                'Proxy override mode for model-provider requests: "env-proxy" or "explicit-proxy".',
                             },
                             tls: {
                               type: "object",
@@ -1467,6 +1843,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS CA",
+                                  description:
+                                    "Custom CA bundle used to verify the proxy TLS certificate chain.",
                                 },
                                 cert: {
                                   anyOf: [
@@ -1533,6 +1912,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS Cert",
+                                  description:
+                                    "Client TLS certificate presented to the proxy when mutual TLS is required.",
                                 },
                                 key: {
                                   anyOf: [
@@ -1599,6 +1981,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS Key",
+                                  description:
+                                    "Private key paired with request.proxy.tls.cert for proxy mutual TLS.",
                                 },
                                 passphrase: {
                                   anyOf: [
@@ -1665,15 +2050,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS Passphrase",
+                                  description:
+                                    "Optional passphrase used to decrypt request.proxy.tls.key.",
                                 },
                                 serverName: {
                                   type: "string",
+                                  title: "Model Provider Request Proxy TLS Server Name",
+                                  description:
+                                    "Optional SNI/server-name override used when establishing TLS to the proxy.",
                                 },
                                 insecureSkipVerify: {
                                   type: "boolean",
+                                  title: "Model Provider Request Proxy TLS Skip Verify",
+                                  description:
+                                    "Skips proxy TLS certificate verification. Use only for controlled development environments.",
                                 },
                               },
                               additionalProperties: false,
+                              title: "Model Provider Request Proxy TLS",
+                              description:
+                                "Optional TLS settings used when connecting to the configured proxy.",
                             },
                           },
                           required: ["mode"],
@@ -1685,10 +2082,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             mode: {
                               type: "string",
                               const: "explicit-proxy",
+                              title: "Model Provider Request Proxy Mode",
+                              description:
+                                'Proxy override mode for model-provider requests: "env-proxy" or "explicit-proxy".',
                             },
                             url: {
                               type: "string",
                               minLength: 1,
+                              title: "Model Provider Request Proxy URL",
+                              description:
+                                "Explicit proxy URL used when request.proxy.mode is explicit-proxy. Credentials embedded in the URL are treated as sensitive and redacted from snapshots.",
                             },
                             tls: {
                               type: "object",
@@ -1758,6 +2161,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS CA",
+                                  description:
+                                    "Custom CA bundle used to verify the proxy TLS certificate chain.",
                                 },
                                 cert: {
                                   anyOf: [
@@ -1824,6 +2230,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS Cert",
+                                  description:
+                                    "Client TLS certificate presented to the proxy when mutual TLS is required.",
                                 },
                                 key: {
                                   anyOf: [
@@ -1890,6 +2299,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS Key",
+                                  description:
+                                    "Private key paired with request.proxy.tls.cert for proxy mutual TLS.",
                                 },
                                 passphrase: {
                                   anyOf: [
@@ -1956,21 +2368,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                       ],
                                     },
                                   ],
+                                  title: "Model Provider Request Proxy TLS Passphrase",
+                                  description:
+                                    "Optional passphrase used to decrypt request.proxy.tls.key.",
                                 },
                                 serverName: {
                                   type: "string",
+                                  title: "Model Provider Request Proxy TLS Server Name",
+                                  description:
+                                    "Optional SNI/server-name override used when establishing TLS to the proxy.",
                                 },
                                 insecureSkipVerify: {
                                   type: "boolean",
+                                  title: "Model Provider Request Proxy TLS Skip Verify",
+                                  description:
+                                    "Skips proxy TLS certificate verification. Use only for controlled development environments.",
                                 },
                               },
                               additionalProperties: false,
+                              title: "Model Provider Request Proxy TLS",
+                              description:
+                                "Optional TLS settings used when connecting to the configured proxy.",
                             },
                           },
                           required: ["mode", "url"],
                           additionalProperties: false,
                         },
                       ],
+                      title: "Model Provider Request Proxy",
+                      description:
+                        'Optional proxy override for model-provider requests. Use "env-proxy" to honor environment proxy settings or "explicit-proxy" to route through a specific proxy URL.',
                     },
                     tls: {
                       type: "object",
@@ -2040,6 +2467,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               ],
                             },
                           ],
+                          title: "Model Provider Request TLS CA",
+                          description:
+                            "Custom CA bundle used to verify the upstream TLS certificate chain.",
                         },
                         cert: {
                           anyOf: [
@@ -2106,6 +2536,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               ],
                             },
                           ],
+                          title: "Model Provider Request TLS Cert",
+                          description:
+                            "Client TLS certificate presented to the upstream endpoint when mutual TLS is required.",
                         },
                         key: {
                           anyOf: [
@@ -2172,6 +2605,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               ],
                             },
                           ],
+                          title: "Model Provider Request TLS Key",
+                          description:
+                            "Private key paired with request.tls.cert for upstream mutual TLS.",
                         },
                         passphrase: {
                           anyOf: [
@@ -2238,18 +2674,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               ],
                             },
                           ],
+                          title: "Model Provider Request TLS Passphrase",
+                          description: "Optional passphrase used to decrypt request.tls.key.",
                         },
                         serverName: {
                           type: "string",
+                          title: "Model Provider Request TLS Server Name",
+                          description:
+                            "Optional SNI/server-name override used when establishing upstream TLS.",
                         },
                         insecureSkipVerify: {
                           type: "boolean",
+                          title: "Model Provider Request TLS Skip Verify",
+                          description:
+                            "Skips upstream TLS certificate verification. Use only for controlled development environments.",
                         },
                       },
                       additionalProperties: false,
+                      title: "Model Provider Request TLS",
+                      description:
+                        "Optional TLS settings used when connecting directly to the upstream model endpoint.",
                     },
                   },
                   additionalProperties: false,
+                  title: "Model Provider Request Overrides",
+                  description:
+                    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
                 },
                 models: {
                   type: "array",
@@ -2431,47 +2881,77 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     required: ["id", "name"],
                     additionalProperties: false,
                   },
+                  title: "Model Provider Model List",
+                  description:
+                    "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
                 },
               },
               required: ["baseUrl", "models"],
               additionalProperties: false,
             },
+            title: "Model Providers",
+            description:
+              "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
           },
           bedrockDiscovery: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Bedrock Discovery Enabled",
+                description:
+                  "Enables periodic Bedrock model discovery and catalog refresh for Bedrock-backed providers. Keep disabled unless Bedrock is actively used and IAM permissions are correctly configured.",
               },
               region: {
                 type: "string",
+                title: "Bedrock Discovery Region",
+                description:
+                  "AWS region used for Bedrock discovery calls when discovery is enabled for your deployment. Use the region where your Bedrock models are provisioned to avoid empty discovery results.",
               },
               providerFilter: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Bedrock Discovery Provider Filter",
+                description:
+                  "Optional provider allowlist filter for Bedrock discovery so only selected providers are refreshed. Use this to limit discovery scope in multi-provider environments.",
               },
               refreshInterval: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Bedrock Discovery Refresh Interval (s)",
+                description:
+                  "Refresh cadence for Bedrock discovery polling in seconds to detect newly available models over time. Use longer intervals in production to reduce API cost and control-plane noise.",
               },
               defaultContextWindow: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Bedrock Default Context Window",
+                description:
+                  "Fallback context-window value applied to discovered models when provider metadata lacks explicit limits. Use realistic defaults to avoid oversized prompts that exceed true provider constraints.",
               },
               defaultMaxTokens: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Bedrock Default Max Tokens",
+                description:
+                  "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
               },
             },
             additionalProperties: false,
+            title: "Bedrock Model Discovery",
+            description:
+              "Automatic AWS Bedrock model discovery settings used to synthesize provider model entries from account visibility. Keep discovery scoped and refresh intervals conservative to reduce API churn.",
           },
         },
         additionalProperties: false,
+        title: "Models",
+        description:
+          "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
       },
       nodeHost: {
         type: "object",
@@ -2481,18 +2961,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Node Browser Proxy Enabled",
+                description:
+                  "Expose the local browser control server through node proxy routing so remote clients can use this host's browser capabilities. Keep disabled unless remote automation explicitly depends on it.",
               },
               allowProfiles: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Node Browser Proxy Allowed Profiles",
+                description:
+                  "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to preserve the default full profile surface, including profile create/delete routes. When set, OpenClaw enforces least-privilege profile access and blocks persistent profile create/delete through the proxy.",
               },
             },
             additionalProperties: false,
+            title: "Node Browser Proxy",
+            description:
+              "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
           },
         },
         additionalProperties: false,
+        title: "Node Host",
+        description:
+          "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
       },
       agents: {
         type: "object",
@@ -2517,12 +3009,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       primary: {
                         type: "string",
+                        title: "Primary Model",
+                        description: "Primary model (provider/model).",
                       },
                       fallbacks: {
                         type: "array",
                         items: {
                           type: "string",
                         },
+                        title: "Model Fallbacks",
+                        description:
+                          "Ordered fallback models (provider/model). Used when the primary model fails.",
                       },
                     },
                     additionalProperties: false,
@@ -2539,12 +3036,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       primary: {
                         type: "string",
+                        title: "Image Model",
+                        description:
+                          "Optional image model (provider/model) used when the primary model lacks image input.",
                       },
                       fallbacks: {
                         type: "array",
                         items: {
                           type: "string",
                         },
+                        title: "Image Model Fallbacks",
+                        description: "Ordered fallback image models (provider/model).",
                       },
                     },
                     additionalProperties: false,
@@ -2552,6 +3054,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 ],
               },
               imageGenerationModel: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      primary: {
+                        type: "string",
+                        title: "Image Generation Model",
+                        description:
+                          "Optional image-generation model (provider/model) used by the shared image generation capability.",
+                      },
+                      fallbacks: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                        title: "Image Generation Model Fallbacks",
+                        description: "Ordered fallback image-generation models (provider/model).",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              videoGenerationModel: {
                 anyOf: [
                   {
                     type: "string",
@@ -2583,12 +3112,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       primary: {
                         type: "string",
+                        title: "PDF Model",
+                        description:
+                          "Optional PDF model (provider/model) for the PDF analysis tool. Defaults to imageModel, then session model.",
                       },
                       fallbacks: {
                         type: "array",
                         items: {
                           type: "string",
                         },
+                        title: "PDF Model Fallbacks",
+                        description: "Ordered fallback PDF models (provider/model).",
                       },
                     },
                     additionalProperties: false,
@@ -2598,11 +3132,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               pdfMaxBytesMb: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "PDF Max Size (MB)",
+                description: "Maximum PDF file size in megabytes for the PDF tool (default: 10).",
               },
               pdfMaxPages: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "PDF Max Pages",
+                description:
+                  "Maximum number of PDF pages to process for the PDF tool (default: 20).",
               },
               models: {
                 type: "object",
@@ -2628,18 +3167,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   additionalProperties: false,
                 },
+                title: "Models",
+                description: "Configured model catalog (keys are full provider/model IDs).",
               },
               workspace: {
                 type: "string",
+                title: "Workspace",
+                description:
+                  "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
               },
               skills: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Skills",
+                description:
+                  "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
               },
               repoRoot: {
                 type: "string",
+                title: "Repo Root",
+                description:
+                  "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
               },
               skipBootstrap: {
                 type: "boolean",
@@ -2648,11 +3198,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Bootstrap Max Chars",
+                description:
+                  "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
               },
               bootstrapTotalMaxChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Bootstrap Total Max Chars",
+                description:
+                  "Max total characters across all injected workspace bootstrap files (default: 150000).",
               },
               bootstrapPromptTruncationWarning: {
                 anyOf: [
@@ -2669,6 +3225,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "always",
                   },
                 ],
+                title: "Bootstrap Prompt Truncation Warning",
+                description:
+                  'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
               },
               userTimezone: {
                 type: "string",
@@ -2691,6 +3250,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               envelopeTimezone: {
                 type: "string",
+                title: "Envelope Timezone",
+                description:
+                  'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
               },
               envelopeTimestamp: {
                 anyOf: [
@@ -2703,6 +3265,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "off",
                   },
                 ],
+                title: "Envelope Timestamp",
+                description: 'Include absolute timestamps in message envelopes ("on" or "off").',
               },
               envelopeElapsed: {
                 anyOf: [
@@ -2715,6 +3279,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "off",
                   },
                 ],
+                title: "Envelope Elapsed",
+                description: 'Include elapsed time in message envelopes ("on" or "off").',
               },
               contextTokens: {
                 type: "integer",
@@ -2968,12 +3534,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   required: ["command"],
                   additionalProperties: false,
                 },
+                title: "CLI Backends",
+                description: "Optional CLI backends for text-only fallback (claude-cli, etc.).",
               },
               memorySearch: {
                 type: "object",
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable Memory Search",
+                    description:
+                      "Master toggle for memory search indexing and retrieval behavior on this agent profile. Keep enabled for semantic recall, and disable when you want fully stateless responses.",
                   },
                   sources: {
                     type: "array",
@@ -2989,12 +3560,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                       ],
                     },
+                    title: "Memory Search Sources",
+                    description:
+                      'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
                   },
                   extraPaths: {
                     type: "array",
                     items: {
                       type: "string",
                     },
+                    title: "Extra Memory Paths",
+                    description:
+                      "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
                   },
                   qmd: {
                     type: "object",
@@ -3017,15 +3594,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           required: ["path"],
                           additionalProperties: false,
                         },
+                        title: "QMD Extra Collections",
+                        description:
+                          "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
                       },
                     },
                     additionalProperties: false,
+                    title: "Memory Search QMD Collections",
+                    description:
+                      "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
                   },
                   multimodal: {
                     type: "object",
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "Enable Memory Search Multimodal",
+                        description:
+                          "Enables image/audio memory indexing from extraPaths. This currently requires Gemini embedding-2, keeps the default memory roots Markdown-only, disables memory-search fallback providers, and uploads matching binary content to the configured remote embedding provider.",
                       },
                       modalities: {
                         type: "array",
@@ -3045,32 +3631,50 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             },
                           ],
                         },
+                        title: "Memory Search Multimodal Modalities",
+                        description:
+                          'Selects which multimodal file types are indexed from extraPaths: "image", "audio", or "all". Keep this narrow to avoid indexing large binary corpora unintentionally.',
                       },
                       maxFileBytes: {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                        title: "Memory Search Multimodal Max File Bytes",
+                        description:
+                          "Sets the maximum bytes allowed per multimodal file before it is skipped during memory indexing. Use this to cap upload cost and indexing latency, or raise it for short high-quality audio clips.",
                       },
                     },
                     additionalProperties: false,
+                    title: "Memory Search Multimodal",
+                    description:
+                      'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memorySearch.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
                   },
                   experimental: {
                     type: "object",
                     properties: {
                       sessionMemory: {
                         type: "boolean",
+                        title: "Memory Search Session Index (Experimental)",
+                        description:
+                          "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
                       },
                     },
                     additionalProperties: false,
                   },
                   provider: {
                     type: "string",
+                    title: "Memory Search Provider",
+                    description:
+                      'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
                   },
                   remote: {
                     type: "object",
                     properties: {
                       baseUrl: {
                         type: "string",
+                        title: "Remote Embedding Base URL",
+                        description:
+                          "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
                       },
                       apiKey: {
                         anyOf: [
@@ -3137,6 +3741,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             ],
                           },
                         ],
+                        title: "Remote Embedding API Key",
+                        description:
+                          "Supplies a dedicated API key for remote embedding calls used by memory indexing and query-time embeddings. Use this when memory embeddings should use different credentials than global defaults or environment variables.",
                       },
                       headers: {
                         type: "object",
@@ -3146,30 +3753,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         additionalProperties: {
                           type: "string",
                         },
+                        title: "Remote Embedding Headers",
+                        description:
+                          "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
                       },
                       batch: {
                         type: "object",
                         properties: {
                           enabled: {
                             type: "boolean",
+                            title: "Remote Batch Embedding Enabled",
+                            description:
+                              "Enables provider batch APIs for embedding jobs when supported (OpenAI/Gemini), improving throughput on larger index runs. Keep this enabled unless debugging provider batch failures or running very small workloads.",
                           },
                           wait: {
                             type: "boolean",
+                            title: "Remote Batch Wait for Completion",
+                            description:
+                              "Waits for batch embedding jobs to fully finish before the indexing operation completes. Keep this enabled for deterministic indexing state; disable only if you accept delayed consistency.",
                           },
                           concurrency: {
                             type: "integer",
                             exclusiveMinimum: 0,
                             maximum: 9007199254740991,
+                            title: "Remote Batch Concurrency",
+                            description:
+                              "Limits how many embedding batch jobs run at the same time during indexing (default: 2). Increase carefully for faster bulk indexing, but watch provider rate limits and queue errors.",
                           },
                           pollIntervalMs: {
                             type: "integer",
                             minimum: 0,
                             maximum: 9007199254740991,
+                            title: "Remote Batch Poll Interval (ms)",
+                            description:
+                              "Controls how often the system polls provider APIs for batch job status in milliseconds (default: 2000). Use longer intervals to reduce API chatter, or shorter intervals for faster completion detection.",
                           },
                           timeoutMinutes: {
                             type: "integer",
                             exclusiveMinimum: 0,
                             maximum: 9007199254740991,
+                            title: "Remote Batch Timeout (min)",
+                            description:
+                              "Sets the maximum wait time for a full embedding batch operation in minutes (default: 60). Increase for very large corpora or slower providers, and lower it to fail fast in automation-heavy flows.",
                           },
                         },
                         additionalProperties: false,
@@ -3179,20 +3804,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   fallback: {
                     type: "string",
+                    title: "Memory Search Fallback",
+                    description:
+                      'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
                   },
                   model: {
                     type: "string",
+                    title: "Memory Search Model",
+                    description:
+                      "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
                   },
                   outputDimensionality: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Memory Search Output Dimensionality",
+                    description:
+                      "Gemini embedding-2 only: chooses the output vector size for memory embeddings. Use 768, 1536, or 3072 (default), and expect a full reindex when you change it because stored vector dimensions must stay consistent.",
                   },
                   local: {
                     type: "object",
                     properties: {
                       modelPath: {
                         type: "string",
+                        title: "Local Embedding Model Path",
+                        description:
+                          "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
                       },
                       modelCacheDir: {
                         type: "string",
@@ -3209,6 +3846,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       path: {
                         type: "string",
+                        title: "Memory Search Index Path",
+                        description:
+                          "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
                       },
                       fts: {
                         type: "object",
@@ -3233,9 +3873,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         properties: {
                           enabled: {
                             type: "boolean",
+                            title: "Memory Search Vector Index",
+                            description:
+                              "Enables the sqlite-vec extension used for vector similarity queries in memory search (default: true). Keep this enabled for normal semantic recall; disable only for debugging or fallback-only operation.",
                           },
                           extensionPath: {
                             type: "string",
+                            title: "Memory Search Vector Extension Path",
+                            description:
+                              "Overrides the auto-discovered sqlite-vec extension library path (`.dylib`, `.so`, or `.dll`). Use this when your runtime cannot find sqlite-vec automatically or you pin a known-good build.",
                           },
                         },
                         additionalProperties: false,
@@ -3250,11 +3896,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                        title: "Memory Chunk Tokens",
+                        description:
+                          "Chunk size in tokens used when splitting memory sources before embedding/indexing. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
                       },
                       overlap: {
                         type: "integer",
                         minimum: 0,
                         maximum: 9007199254740991,
+                        title: "Memory Chunk Overlap Tokens",
+                        description:
+                          "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
                       },
                     },
                     additionalProperties: false,
@@ -3264,17 +3916,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       onSessionStart: {
                         type: "boolean",
+                        title: "Index on Session Start",
+                        description:
+                          "Triggers a memory index sync when a session starts so early turns see fresh memory content. Keep enabled when startup freshness matters more than initial turn latency.",
                       },
                       onSearch: {
                         type: "boolean",
+                        title: "Index on Search (Lazy)",
+                        description:
+                          "Uses lazy sync by scheduling reindex on search after content changes are detected. Keep enabled for lower idle overhead, or disable if you require pre-synced indexes before any query.",
                       },
                       watch: {
                         type: "boolean",
+                        title: "Watch Memory Files",
+                        description:
+                          "Watches memory files and schedules index updates from file-change events (chokidar). Enable for near-real-time freshness; disable on very large workspaces if watch churn is too noisy.",
                       },
                       watchDebounceMs: {
                         type: "integer",
                         minimum: 0,
                         maximum: 9007199254740991,
+                        title: "Memory Watch Debounce (ms)",
+                        description:
+                          "Debounce window in milliseconds for coalescing rapid file-watch events before reindex runs. Increase to reduce churn on frequently-written files, or lower for faster freshness.",
                       },
                       intervalMinutes: {
                         type: "integer",
@@ -3288,14 +3952,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             type: "integer",
                             minimum: 0,
                             maximum: 9007199254740991,
+                            title: "Session Delta Bytes",
+                            description:
+                              "Requires at least this many newly appended bytes before session transcript changes trigger reindex (default: 100000). Increase to reduce frequent small reindexes, or lower for faster transcript freshness.",
                           },
                           deltaMessages: {
                             type: "integer",
                             minimum: 0,
                             maximum: 9007199254740991,
+                            title: "Session Delta Messages",
+                            description:
+                              "Requires at least this many appended transcript messages before reindex is triggered (default: 50). Lower this for near-real-time transcript recall, or raise it to reduce indexing churn.",
                           },
                           postCompactionForce: {
                             type: "boolean",
+                            title: "Force Reindex After Compaction",
+                            description:
+                              "Forces a session memory-search reindex after compaction-triggered transcript updates (default: true). Keep enabled when compacted summaries must be immediately searchable, or disable to reduce write-time indexing pressure.",
                           },
                         },
                         additionalProperties: false,
@@ -3310,43 +3983,67 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                        title: "Memory Search Max Results",
+                        description:
+                          "Maximum number of memory hits returned from search before downstream reranking and prompt injection. Raise for broader recall, or lower for tighter prompts and faster responses.",
                       },
                       minScore: {
                         type: "number",
                         minimum: 0,
                         maximum: 1,
+                        title: "Memory Search Min Score",
+                        description:
+                          "Minimum relevance score threshold for including memory results in final recall output. Increase to reduce weak/noisy matches, or lower when you need more permissive retrieval.",
                       },
                       hybrid: {
                         type: "object",
                         properties: {
                           enabled: {
                             type: "boolean",
+                            title: "Memory Search Hybrid",
+                            description:
+                              "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
                           },
                           vectorWeight: {
                             type: "number",
                             minimum: 0,
                             maximum: 1,
+                            title: "Memory Search Vector Weight",
+                            description:
+                              "Controls how strongly semantic similarity influences hybrid ranking (0-1). Increase when paraphrase matching matters more than exact terms; decrease for stricter keyword emphasis.",
                           },
                           textWeight: {
                             type: "number",
                             minimum: 0,
                             maximum: 1,
+                            title: "Memory Search Text Weight",
+                            description:
+                              "Controls how strongly BM25 keyword relevance influences hybrid ranking (0-1). Increase for exact-term matching; decrease when semantic matches should rank higher.",
                           },
                           candidateMultiplier: {
                             type: "integer",
                             exclusiveMinimum: 0,
                             maximum: 9007199254740991,
+                            title: "Memory Search Hybrid Candidate Multiplier",
+                            description:
+                              "Expands the candidate pool before reranking (default: 4). Raise this for better recall on noisy corpora, but expect more compute and slightly slower searches.",
                           },
                           mmr: {
                             type: "object",
                             properties: {
                               enabled: {
                                 type: "boolean",
+                                title: "Memory Search MMR Re-ranking",
+                                description:
+                                  "Adds MMR reranking to diversify results and reduce near-duplicate snippets in a single answer window. Enable when recall looks repetitive; keep off for strict score ordering.",
                               },
                               lambda: {
                                 type: "number",
                                 minimum: 0,
                                 maximum: 1,
+                                title: "Memory Search MMR Lambda",
+                                description:
+                                  "Sets MMR relevance-vs-diversity balance (0 = most diverse, 1 = most relevant, default: 0.7). Lower values reduce repetition; higher values keep tightly relevant but may duplicate.",
                               },
                             },
                             additionalProperties: false,
@@ -3356,11 +4053,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             properties: {
                               enabled: {
                                 type: "boolean",
+                                title: "Memory Search Temporal Decay",
+                                description:
+                                  "Applies recency decay so newer memory can outrank older memory when scores are close. Enable when timeliness matters; keep off for timeless reference knowledge.",
                               },
                               halfLifeDays: {
                                 type: "integer",
                                 exclusiveMinimum: 0,
                                 maximum: 9007199254740991,
+                                title: "Memory Search Temporal Decay Half-life (Days)",
+                                description:
+                                  "Controls how fast older memory loses rank when temporal decay is enabled (half-life in days, default: 30). Lower values prioritize recent context more aggressively.",
                               },
                             },
                             additionalProperties: false,
@@ -3376,17 +4079,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "Memory Search Embedding Cache",
+                        description:
+                          "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
                       },
                       maxEntries: {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                        title: "Memory Search Embedding Cache Max Entries",
+                        description:
+                          "Sets a best-effort upper bound on cached embeddings kept in SQLite for memory search. Use this when controlling disk growth matters more than peak reindex speed.",
                       },
                     },
                     additionalProperties: false,
                   },
                 },
                 additionalProperties: false,
+                title: "Memory Search",
+                description:
+                  "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
               },
               contextPruning: {
                 type: "object",
@@ -3507,26 +4219,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: "safeguard",
                       },
                     ],
+                    title: "Compaction Mode",
+                    description:
+                      'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
                   },
                   reserveTokens: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "Compaction Reserve Tokens",
+                    description:
+                      "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
                   },
                   keepRecentTokens: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Compaction Keep Recent Tokens",
+                    description:
+                      "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
                   },
                   reserveTokensFloor: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "Compaction Reserve Token Floor",
+                    description:
+                      "Minimum floor enforced for reserveTokens in Pi compaction paths (0 disables the floor guard). Use a non-zero floor to avoid over-aggressive compression under fluctuating token estimates.",
                   },
                   maxHistoryShare: {
                     type: "number",
                     minimum: 0.1,
                     maximum: 0.9,
+                    title: "Compaction Max History Share",
+                    description:
+                      "Maximum fraction of total context budget allowed for retained history after compaction (range 0.1-0.9). Use lower shares for more generation headroom or higher shares for deeper historical continuity.",
                   },
                   customInstructions: {
                     type: "string",
@@ -3546,57 +4273,93 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: "custom",
                       },
                     ],
+                    title: "Compaction Identifier Policy",
+                    description:
+                      'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), "off" disables this prefix, and "custom" uses identifierInstructions. Keep "strict" unless you have a specific compatibility need.',
                   },
                   identifierInstructions: {
                     type: "string",
+                    title: "Compaction Identifier Instructions",
+                    description:
+                      'Custom identifier-preservation instruction text used when identifierPolicy="custom". Keep this explicit and safety-focused so compaction summaries do not rewrite opaque IDs, URLs, hosts, or ports.',
                   },
                   recentTurnsPreserve: {
                     type: "integer",
                     minimum: 0,
                     maximum: 12,
+                    title: "Compaction Preserve Recent Turns",
+                    description:
+                      "Number of most recent user/assistant turns kept verbatim outside safeguard summarization (default: 3). Raise this to preserve exact recent dialogue context, or lower it to maximize compaction savings.",
                   },
                   qualityGuard: {
                     type: "object",
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "Compaction Quality Guard Enabled",
+                        description:
+                          "Enables summary quality audits and regeneration retries for safeguard compaction. Default: false, so safeguard mode alone does not turn on retry behavior.",
                       },
                       maxRetries: {
                         type: "integer",
                         minimum: 0,
                         maximum: 9007199254740991,
+                        title: "Compaction Quality Guard Max Retries",
+                        description:
+                          "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
                       },
                     },
                     additionalProperties: false,
+                    title: "Compaction Quality Guard",
+                    description:
+                      "Optional quality-audit retry settings for safeguard compaction summaries. Leave this disabled unless you explicitly want summary audits and one-shot regeneration on failed checks.",
                   },
                   postIndexSync: {
                     type: "string",
                     enum: ["off", "async", "await"],
+                    title: "Compaction Post-Index Sync",
+                    description:
+                      'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
                   },
                   postCompactionSections: {
                     type: "array",
                     items: {
                       type: "string",
                     },
+                    title: "Post-Compaction Context Sections",
+                    description:
+                      'AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset to use "Session Startup"/"Red Lines" with legacy fallback to "Every Session"/"Safety"; set to [] to disable reinjection entirely.',
                   },
                   model: {
                     type: "string",
+                    title: "Compaction Model Override",
+                    description:
+                      "Optional provider/model override used only for compaction summarization. Set this when you want compaction to run on a different model than the session default, and leave it unset to keep using the primary agent model.",
                   },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Compaction Timeout (Seconds)",
+                    description:
+                      "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 900). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
                   },
                   memoryFlush: {
                     type: "object",
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "Compaction Memory Flush Enabled",
+                        description:
+                          "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
                       },
                       softThresholdTokens: {
                         type: "integer",
                         minimum: 0,
                         maximum: 9007199254740991,
+                        title: "Compaction Memory Flush Soft Threshold",
+                        description:
+                          "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
                       },
                       forceFlushTranscriptBytes: {
                         anyOf: [
@@ -3609,21 +4372,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             type: "string",
                           },
                         ],
+                        title: "Compaction Memory Flush Transcript Size Threshold",
+                        description:
+                          'Forces pre-compaction memory flush when transcript file size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
                       },
                       prompt: {
                         type: "string",
+                        title: "Compaction Memory Flush Prompt",
+                        description:
+                          "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
                       },
                       systemPrompt: {
                         type: "string",
+                        title: "Compaction Memory Flush System Prompt",
+                        description:
+                          "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
                       },
                     },
                     additionalProperties: false,
+                    title: "Compaction Memory Flush",
+                    description:
+                      "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
                   },
                   notifyUser: {
                     type: "boolean",
+                    title: "Compaction Notify User",
+                    description:
+                      "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
                   },
                 },
                 additionalProperties: false,
+                title: "Compaction",
+                description:
+                  "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
               },
               embeddedPi: {
                 type: "object",
@@ -3643,9 +4424,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: "ignore",
                       },
                     ],
+                    title: "Embedded Pi Project Settings Policy",
+                    description:
+                      'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
                   },
                 },
                 additionalProperties: false,
+                title: "Embedded Pi",
+                description:
+                  "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
               },
               thinkingDefault: {
                 anyOf: [
@@ -3810,16 +4597,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: "custom",
                       },
                     ],
+                    title: "Human Delay Mode",
+                    description: 'Delay style for block replies ("off", "natural", "custom").',
                   },
                   minMs: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "Human Delay Min (ms)",
+                    description: "Minimum delay in ms for custom humanDelay (default: 800).",
                   },
                   maxMs: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "Human Delay Max (ms)",
+                    description: "Maximum delay in ms for custom humanDelay (default: 2500).",
                   },
                 },
                 additionalProperties: false,
@@ -3837,6 +4630,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Image Max Dimension (px)",
+                description:
+                  "Max image side length in pixels when sanitizing transcript/tool-result image payloads (default: 1200).",
               },
               typingIntervalSeconds: {
                 type: "integer",
@@ -3907,6 +4703,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: "block",
                       },
                     ],
+                    title: "Heartbeat Direct Policy",
+                    description:
+                      'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
                   },
                   to: {
                     type: "string",
@@ -3924,6 +4723,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   suppressToolErrorWarnings: {
                     type: "boolean",
+                    title: "Heartbeat Suppress Tool Error Warnings",
+                    description: "Suppress tool error warning payloads during heartbeat runs.",
                   },
                   lightContext: {
                     type: "boolean",
@@ -4219,6 +5020,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       dangerouslyAllowContainerNamespaceJoin: {
                         type: "boolean",
+                        title: "Sandbox Docker Allow Container Namespace Join",
+                        description:
+                          "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
                       },
                     },
                     additionalProperties: false,
@@ -4471,6 +5275,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       network: {
                         type: "string",
+                        title: "Sandbox Browser Network",
+                        description:
+                          "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
                       },
                       cdpPort: {
                         type: "integer",
@@ -4479,6 +5286,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       cdpSourceRange: {
                         type: "string",
+                        title: "Sandbox Browser CDP Source Port Range",
+                        description:
+                          "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
                       },
                       vncPort: {
                         type: "integer",
@@ -4537,6 +5347,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
             },
             additionalProperties: false,
+            title: "Agent Defaults",
+            description:
+              "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
           },
           list: {
             type: "array",
@@ -4583,19 +5396,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 thinkingDefault: {
                   type: "string",
                   enum: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"],
+                  title: "Agent Thinking Default",
+                  description:
+                    "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
                 },
                 reasoningDefault: {
                   type: "string",
                   enum: ["on", "off", "stream"],
+                  title: "Agent Reasoning Default",
+                  description:
+                    "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
                 },
                 fastModeDefault: {
                   type: "boolean",
+                  title: "Agent Fast Mode Default",
+                  description:
+                    "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
                 },
                 skills: {
                   type: "array",
                   items: {
                     type: "string",
                   },
+                  title: "Agent Skill Filter",
+                  description:
+                    "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
                 },
                 memorySearch: {
                   type: "object",
@@ -5092,6 +5917,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           const: "block",
                         },
                       ],
+                      title: "Heartbeat Direct Policy",
+                      description:
+                        'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
                     },
                     to: {
                       type: "string",
@@ -5109,6 +5937,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     suppressToolErrorWarnings: {
                       type: "boolean",
+                      title: "Agent Heartbeat Suppress Tool Error Warnings",
+                      description: "Suppress tool error warning payloads during heartbeat runs.",
                     },
                     lightContext: {
                       type: "boolean",
@@ -5133,6 +5963,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     avatar: {
                       type: "string",
+                      title: "Identity Avatar",
+                      description:
+                        "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
                     },
                   },
                   additionalProperties: false,
@@ -5400,6 +6233,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         dangerouslyAllowContainerNamespaceJoin: {
                           type: "boolean",
+                          title: "Agent Sandbox Docker Allow Container Namespace Join",
+                          description:
+                            "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
                         },
                       },
                       additionalProperties: false,
@@ -5652,6 +6488,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         network: {
                           type: "string",
+                          title: "Agent Sandbox Browser Network",
+                          description: "Per-agent override for sandbox browser Docker network.",
                         },
                         cdpPort: {
                           type: "integer",
@@ -5660,6 +6498,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         cdpSourceRange: {
                           type: "string",
+                          title: "Agent Sandbox Browser CDP Source Port Range",
+                          description: "Per-agent override for CDP source CIDR allowlist.",
                         },
                         vncPort: {
                           type: "integer",
@@ -5745,6 +6585,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           const: "full",
                         },
                       ],
+                      title: "Agent Tool Profile",
+                      description:
+                        "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
                     },
                     allow: {
                       type: "array",
@@ -5757,6 +6600,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       items: {
                         type: "string",
                       },
+                      title: "Agent Tool Allowlist Additions",
+                      description:
+                        "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
                     },
                     deny: {
                       type: "array",
@@ -5813,6 +6659,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         additionalProperties: false,
                       },
+                      title: "Agent Tool Policy by Provider",
+                      description:
+                        "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
                     },
                     elevated: {
                       type: "object",
@@ -6056,6 +6905,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: {
                           type: "string",
                           const: "embedded",
+                          title: "Agent Runtime Type",
+                          description:
+                            'Runtime type for this agent: "embedded" (default OpenClaw runtime) or "acp" (ACP harness defaults).',
                         },
                       },
                       required: ["type"],
@@ -6067,39 +6919,66 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         type: {
                           type: "string",
                           const: "acp",
+                          title: "Agent Runtime Type",
+                          description:
+                            'Runtime type for this agent: "embedded" (default OpenClaw runtime) or "acp" (ACP harness defaults).',
                         },
                         acp: {
                           type: "object",
                           properties: {
                             agent: {
                               type: "string",
+                              title: "Agent ACP Harness Agent",
+                              description:
+                                "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
                             },
                             backend: {
                               type: "string",
+                              title: "Agent ACP Backend",
+                              description:
+                                "Optional ACP backend override for this agent's ACP sessions (falls back to global acp.backend).",
                             },
                             mode: {
                               type: "string",
                               enum: ["persistent", "oneshot"],
+                              title: "Agent ACP Mode",
+                              description:
+                                "Optional ACP session mode default for this agent (persistent or oneshot).",
                             },
                             cwd: {
                               type: "string",
+                              title: "Agent ACP Working Directory",
+                              description:
+                                "Optional default working directory for this agent's ACP sessions.",
                             },
                           },
                           additionalProperties: false,
+                          title: "Agent ACP Runtime",
+                          description:
+                            "ACP runtime defaults for this agent when runtime.type=acp. Binding-level ACP overrides still take precedence per conversation.",
                         },
                       },
                       required: ["type"],
                       additionalProperties: false,
                     },
                   ],
+                  title: "Agent Runtime",
+                  description:
+                    "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
                 },
               },
               required: ["id"],
               additionalProperties: false,
             },
+            title: "Agent List",
+            description:
+              "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
           },
         },
         additionalProperties: false,
+        title: "Agents",
+        description:
+          "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
       },
       tools: {
         type: "object",
@@ -6123,24 +7002,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "full",
               },
             ],
+            title: "Tool Profile",
+            description:
+              "Global tool profile name used to select a predefined tool policy baseline before applying allow/deny overrides. Use this for consistent environment posture across agents and keep profile names stable.",
           },
           allow: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Tool Allowlist",
+            description:
+              "Absolute tool allowlist that replaces profile-derived defaults for strict environments. Use this only when you intentionally run a tightly curated subset of tool capabilities.",
           },
           alsoAllow: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Tool Allowlist Additions",
+            description:
+              "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
           },
           deny: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Tool Denylist",
+            description:
+              "Global tool denylist that blocks listed tools even when profile or provider rules would allow them. Use deny rules for emergency lockouts and long-term defense-in-depth.",
           },
           byProvider: {
             type: "object",
@@ -6191,6 +7082,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               additionalProperties: false,
             },
+            title: "Tool Policy by Provider",
+            description:
+              "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
           },
           web: {
             type: "object",
@@ -6200,23 +7094,35 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable Web Search Tool",
+                    description:
+                      "Enable managed web_search and optional Codex-native search for eligible models.",
                   },
                   provider: {
                     type: "string",
+                    title: "Web Search Provider",
+                    description:
+                      "Search provider id. Auto-detected from available API keys if omitted.",
                   },
                   maxResults: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Web Search Max Results",
+                    description: "Number of results to return (1-10).",
                   },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Web Search Timeout (sec)",
+                    description: "Timeout in seconds for web_search requests.",
                   },
                   cacheTtlMinutes: {
                     type: "number",
                     minimum: 0,
+                    title: "Web Search Cache TTL (min)",
+                    description: "Cache TTL in minutes for web_search results.",
                   },
                   apiKey: {
                     anyOf: [
@@ -6289,6 +7195,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "Enable Native Codex Web Search",
+                        description: "Enable native Codex web search for Codex-capable models.",
                       },
                       mode: {
                         anyOf: [
@@ -6301,8 +7209,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             const: "live",
                           },
                         ],
+                        title: "Codex Web Search Mode",
+                        description: 'Native Codex web search mode: "cached" (default) or "live".',
                       },
-                      allowedDomains: {},
+                      allowedDomains: {
+                        title: "Codex Allowed Domains",
+                        description:
+                          "Optional domain allowlist passed to the native Codex web_search tool.",
+                      },
                       contextSize: {
                         anyOf: [
                           {
@@ -6318,6 +7232,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             const: "high",
                           },
                         ],
+                        title: "Codex Search Context Size",
+                        description:
+                          'Native Codex search context size hint: "low", "medium", or "high".',
                       },
                       userLocation: {},
                     },
@@ -6331,44 +7248,66 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable Web Fetch Tool",
+                    description: "Enable the web_fetch tool (lightweight HTTP fetch).",
                   },
                   provider: {
                     type: "string",
+                    title: "Web Fetch Provider",
+                    description: "Web fetch fallback provider id.",
                   },
                   maxChars: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Web Fetch Max Chars",
+                    description: "Max characters returned by web_fetch (truncated).",
                   },
                   maxCharsCap: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Web Fetch Hard Max Chars",
+                    description:
+                      "Hard cap for web_fetch maxChars (applies to config and tool calls).",
                   },
                   maxResponseBytes: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Web Fetch Max Download Size (bytes)",
+                    description: "Max download size before truncation.",
                   },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Web Fetch Timeout (sec)",
+                    description: "Timeout in seconds for web_fetch requests.",
                   },
                   cacheTtlMinutes: {
                     type: "number",
                     minimum: 0,
+                    title: "Web Fetch Cache TTL (min)",
+                    description: "Cache TTL in minutes for web_fetch results.",
                   },
                   maxRedirects: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "Web Fetch Max Redirects",
+                    description: "Maximum redirects allowed for web_fetch (default: 3).",
                   },
                   userAgent: {
                     type: "string",
+                    title: "Web Fetch User-Agent",
+                    description: "Override User-Agent header for web_fetch requests.",
                   },
                   readability: {
                     type: "boolean",
+                    title: "Web Fetch Readability Extraction",
+                    description:
+                      "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
                   },
                   firecrawl: {
                     type: "object",
@@ -6495,6 +7434,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
             },
             additionalProperties: false,
+            title: "Web Tools",
+            description:
+              "Web-tool policy grouping for search/fetch providers, limits, and fallback behavior tuning. Keep enabled settings aligned with API key availability and outbound networking policy.",
           },
           media: {
             type: "object",
@@ -7744,17 +8686,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   additionalProperties: false,
                 },
+                title: "Media Understanding Shared Models",
+                description:
+                  "Shared fallback model list used by media understanding tools when modality-specific model lists are not set. Keep this aligned with available multimodal providers to avoid runtime fallback churn.",
               },
               concurrency: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Media Understanding Concurrency",
+                description:
+                  "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
               },
               image: {
                 type: "object",
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable Image Understanding",
+                    description:
+                      "Enable image understanding so attached or referenced images can be interpreted into textual context. Disable if you need text-only operation or want to avoid image-processing cost.",
                   },
                   scope: {
                     type: "object",
@@ -7830,24 +8781,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                    title: "Image Understanding Scope",
+                    description:
+                      "Scope selector for when image understanding is attempted (for example only explicit requests versus broader auto-detection). Keep narrow scope in busy channels to control token and API spend.",
                   },
                   maxBytes: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Image Understanding Max Bytes",
+                    description:
+                      "Maximum accepted image payload size in bytes before the item is skipped or truncated by policy. Keep limits realistic for your provider caps and infrastructure bandwidth.",
                   },
                   maxChars: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Image Understanding Max Chars",
+                    description:
+                      "Maximum characters returned from image understanding output after model response normalization. Use tighter limits to reduce prompt bloat and larger limits for detail-heavy OCR tasks.",
                   },
                   prompt: {
                     type: "string",
+                    title: "Image Understanding Prompt",
+                    description:
+                      "Instruction template used for image understanding requests to shape extraction style and detail level. Keep prompts deterministic so outputs stay consistent across turns and channels.",
                   },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Image Understanding Timeout (sec)",
+                    description:
+                      "Timeout in seconds for each image understanding request before it is aborted. Increase for high-resolution analysis and lower it for latency-sensitive operator workflows.",
                   },
                   language: {
                     type: "string",
@@ -9058,6 +10024,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                    title: "Image Understanding Attachment Policy",
+                    description:
+                      "Attachment handling policy for image inputs, including which message attachments qualify for image analysis. Use restrictive settings in untrusted channels to reduce unexpected processing.",
                   },
                   models: {
                     type: "array",
@@ -10304,6 +11273,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       additionalProperties: false,
                     },
+                    title: "Image Understanding Models",
+                    description:
+                      "Ordered model preferences specifically for image understanding when you want to override shared media models. Put the most reliable multimodal model first to reduce fallback attempts.",
                   },
                   echoTranscript: {
                     type: "boolean",
@@ -10319,6 +11291,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable Audio Understanding",
+                    description:
+                      "Enable audio understanding so voice notes or audio clips can be transcribed/summarized for agent context. Disable when audio ingestion is outside policy or unnecessary for your workflows.",
                   },
                   scope: {
                     type: "object",
@@ -10394,27 +11369,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                    title: "Audio Understanding Scope",
+                    description:
+                      "Scope selector for when audio understanding runs across inbound messages and attachments. Keep focused scopes in high-volume channels to reduce cost and avoid accidental transcription.",
                   },
                   maxBytes: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Audio Understanding Max Bytes",
+                    description:
+                      "Maximum accepted audio payload size in bytes before processing is rejected or clipped by policy. Set this based on expected recording length and upstream provider limits.",
                   },
                   maxChars: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Audio Understanding Max Chars",
+                    description:
+                      "Maximum characters retained from audio understanding output to prevent oversized transcript injection. Increase for long-form dictation, or lower to keep conversational turns compact.",
                   },
                   prompt: {
                     type: "string",
+                    title: "Audio Understanding Prompt",
+                    description:
+                      "Instruction template guiding audio understanding output style, such as concise summary versus near-verbatim transcript. Keep wording consistent so downstream automations can rely on output format.",
                   },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Audio Understanding Timeout (sec)",
+                    description:
+                      "Timeout in seconds for audio understanding execution before the operation is cancelled. Use longer timeouts for long recordings and tighter ones for interactive chat responsiveness.",
                   },
                   language: {
                     type: "string",
+                    title: "Audio Understanding Language",
+                    description:
+                      "Preferred language hint for audio understanding/transcription when provider support is available. Set this to improve recognition accuracy for known primary languages.",
                   },
                   providerOptions: {
                     type: "object",
@@ -10542,6 +11535,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                             },
                           ],
                         },
+                        title: "Audio Request Headers",
+                        description:
+                          "Additional HTTP headers merged into audio provider requests after provider defaults. Use this for tenant routing or proxy integration headers, and keep secrets in env-backed values.",
                       },
                       auth: {
                         anyOf: [
@@ -10551,6 +11547,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               mode: {
                                 type: "string",
                                 const: "provider-default",
+                                title: "Audio Request Auth Mode",
+                                description:
+                                  'Auth override mode for audio requests: "provider-default" keeps the normal provider auth, "authorization-bearer" forces an Authorization bearer token, and "header" sends a custom header/value pair.',
                               },
                             },
                             required: ["mode"],
@@ -10562,6 +11561,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               mode: {
                                 type: "string",
                                 const: "authorization-bearer",
+                                title: "Audio Request Auth Mode",
+                                description:
+                                  'Auth override mode for audio requests: "provider-default" keeps the normal provider auth, "authorization-bearer" forces an Authorization bearer token, and "header" sends a custom header/value pair.',
                               },
                               token: {
                                 anyOf: [
@@ -10628,6 +11630,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                     ],
                                   },
                                 ],
+                                title: "Audio Request Bearer Token",
+                                description:
+                                  "Bearer token used when audio request auth.mode is authorization-bearer. Keep this in secret storage rather than inline config.",
                               },
                             },
                             required: ["mode", "token"],
@@ -10639,10 +11644,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               mode: {
                                 type: "string",
                                 const: "header",
+                                title: "Audio Request Auth Mode",
+                                description:
+                                  'Auth override mode for audio requests: "provider-default" keeps the normal provider auth, "authorization-bearer" forces an Authorization bearer token, and "header" sends a custom header/value pair.',
                               },
                               headerName: {
                                 type: "string",
                                 minLength: 1,
+                                title: "Audio Request Auth Header Name",
+                                description:
+                                  "Header name used when audio request auth.mode is header. Match the exact upstream expectation, such as x-api-key or authorization.",
                               },
                               value: {
                                 anyOf: [
@@ -10709,15 +11720,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                     ],
                                   },
                                 ],
+                                title: "Audio Request Auth Header Value",
+                                description:
+                                  "Header value used when audio request auth.mode is header. Keep secrets in env-backed values and avoid duplicating provider-default auth unnecessarily.",
                               },
                               prefix: {
                                 type: "string",
+                                title: "Audio Request Auth Header Prefix",
+                                description:
+                                  "Optional prefix prepended to the custom auth header value, such as Bearer. Leave unset when the upstream expects the raw credential only.",
                               },
                             },
                             required: ["mode", "headerName", "value"],
                             additionalProperties: false,
                           },
                         ],
+                        title: "Audio Request Auth Override",
+                        description:
+                          "Optional auth override for audio provider requests. Use this when the upstream expects a non-default bearer token or custom auth header shape.",
                       },
                       proxy: {
                         anyOf: [
@@ -10727,6 +11747,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               mode: {
                                 type: "string",
                                 const: "env-proxy",
+                                title: "Audio Request Proxy Mode",
+                                description:
+                                  'Proxy mode for audio requests: "env-proxy" uses environment proxy settings, while "explicit-proxy" uses the configured proxy URL only for this request path.',
                               },
                               tls: {
                                 type: "object",
@@ -11003,6 +12026,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                   },
                                 },
                                 additionalProperties: false,
+                                title: "Audio Request Proxy TLS",
+                                description:
+                                  "TLS settings applied when connecting to the configured audio proxy, such as custom CA trust for an internal proxy gateway.",
                               },
                             },
                             required: ["mode"],
@@ -11014,10 +12040,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               mode: {
                                 type: "string",
                                 const: "explicit-proxy",
+                                title: "Audio Request Proxy Mode",
+                                description:
+                                  'Proxy mode for audio requests: "env-proxy" uses environment proxy settings, while "explicit-proxy" uses the configured proxy URL only for this request path.',
                               },
                               url: {
                                 type: "string",
                                 minLength: 1,
+                                title: "Audio Request Proxy URL",
+                                description:
+                                  "Explicit proxy URL for audio provider traffic when proxy.mode is explicit-proxy. Keep credentials out of inline URLs when possible and prefer secret-backed env injection.",
                               },
                               tls: {
                                 type: "object",
@@ -11294,12 +12326,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                   },
                                 },
                                 additionalProperties: false,
+                                title: "Audio Request Proxy TLS",
+                                description:
+                                  "TLS settings applied when connecting to the configured audio proxy, such as custom CA trust for an internal proxy gateway.",
                               },
                             },
                             required: ["mode", "url"],
                             additionalProperties: false,
                           },
                         ],
+                        title: "Audio Request Proxy",
+                        description:
+                          "Proxy transport override for audio requests. Use env-proxy to respect process proxy settings, or explicit-proxy to force a dedicated proxy URL for this provider path.",
                       },
                       tls: {
                         type: "object",
@@ -11576,9 +12614,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                         },
                         additionalProperties: false,
+                        title: "Audio Request TLS",
+                        description:
+                          "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
                       },
                     },
                     additionalProperties: false,
+                    title: "Audio Request Overrides",
+                    description:
+                      "Low-level HTTP request overrides for audio providers, including custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
                   },
                   attachments: {
                     type: "object",
@@ -11622,6 +12666,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                    title: "Audio Understanding Attachment Policy",
+                    description:
+                      "Attachment policy for audio inputs indicating which uploaded files are eligible for audio processing. Keep restrictive defaults in mixed-content channels to avoid unintended audio workloads.",
                   },
                   models: {
                     type: "array",
@@ -12868,12 +13915,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       additionalProperties: false,
                     },
+                    title: "Audio Understanding Models",
+                    description:
+                      "Ordered model preferences specifically for audio understanding, used before shared media model fallback. Choose models optimized for transcription quality in your primary language/domain.",
                   },
                   echoTranscript: {
                     type: "boolean",
+                    title: "Echo Transcript to Chat",
+                    description:
+                      "Echo the audio transcript back to the originating chat before agent processing. When enabled, users immediately see what was heard from their voice note, helping them verify transcription accuracy before the agent acts on it. Default: false.",
                   },
                   echoFormat: {
                     type: "string",
+                    title: "Transcript Echo Format",
+                    description:
+                      "Format string for the echoed transcript message. Use `{transcript}` as a placeholder for the transcribed text. Default: '📝 \"{transcript}\"'.",
                   },
                 },
                 additionalProperties: false,
@@ -12883,6 +13939,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable Video Understanding",
+                    description:
+                      "Enable video understanding so clips can be summarized into text for downstream reasoning and responses. Disable when processing video is out of policy or too expensive for your deployment.",
                   },
                   scope: {
                     type: "object",
@@ -12958,24 +14017,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                    title: "Video Understanding Scope",
+                    description:
+                      "Scope selector controlling when video understanding is attempted across incoming events. Narrow scope in noisy channels, and broaden only where video interpretation is core to workflow.",
                   },
                   maxBytes: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Video Understanding Max Bytes",
+                    description:
+                      "Maximum accepted video payload size in bytes before policy rejection or trimming occurs. Tune this to provider and infrastructure limits to avoid repeated timeout/failure loops.",
                   },
                   maxChars: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Video Understanding Max Chars",
+                    description:
+                      "Maximum characters retained from video understanding output to control prompt growth. Raise for dense scene descriptions and lower when concise summaries are preferred.",
                   },
                   prompt: {
                     type: "string",
+                    title: "Video Understanding Prompt",
+                    description:
+                      "Instruction template for video understanding describing desired summary granularity and focus areas. Keep this stable so output quality remains predictable across model/provider fallbacks.",
                   },
                   timeoutSeconds: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Video Understanding Timeout (sec)",
+                    description:
+                      "Timeout in seconds for each video understanding request before cancellation. Use conservative values in interactive channels and longer values for offline or batch-heavy processing.",
                   },
                   language: {
                     type: "string",
@@ -14186,6 +15260,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                    title: "Video Understanding Attachment Policy",
+                    description:
+                      "Attachment eligibility policy for video analysis, defining which message files can trigger video processing. Keep this explicit in shared channels to prevent accidental large media workloads.",
                   },
                   models: {
                     type: "array",
@@ -15432,6 +16509,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       additionalProperties: false,
                     },
+                    title: "Video Understanding Models",
+                    description:
+                      "Ordered model preferences specifically for video understanding before shared media fallback applies. Prioritize models with strong multimodal video support to minimize degraded summaries.",
                   },
                   echoTranscript: {
                     type: "boolean",
@@ -15450,6 +16530,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Enable Link Understanding",
+                description:
+                  "Enable automatic link understanding pre-processing so URLs can be summarized before agent reasoning. Keep enabled for richer context, and disable when strict minimal processing is required.",
               },
               scope: {
                 type: "object",
@@ -15525,16 +16608,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Link Understanding Scope",
+                description:
+                  "Controls when link understanding runs relative to conversation context and message type. Keep scope conservative to avoid unnecessary fetches on messages where links are not actionable.",
               },
               maxLinks: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Link Understanding Max Links",
+                description:
+                  "Maximum number of links expanded per turn during link understanding. Use lower values to control latency/cost in chatty threads and higher values when multi-link context is critical.",
               },
               timeoutSeconds: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Link Understanding Timeout (sec)",
+                description:
+                  "Per-link understanding timeout budget in seconds before unresolved links are skipped. Keep this bounded to avoid long stalls when external sites are slow or unreachable.",
               },
               models: {
                 type: "array",
@@ -15564,6 +16656,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   required: ["command"],
                   additionalProperties: false,
                 },
+                title: "Link Understanding Models",
+                description:
+                  "Preferred model list for link understanding tasks, evaluated in order as fallbacks when supported. Use lightweight models first for routine summarization and heavier models only when needed.",
               },
             },
             additionalProperties: false,
@@ -15574,6 +16669,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               visibility: {
                 type: "string",
                 enum: ["self", "tree", "agent", "all"],
+                title: "Session Tools Visibility",
+                description:
+                  'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_send. ("tree" default = current session + spawned subagent sessions; "self" = only current; "agent" = any session in the current agent id; "all" = any session; cross-agent still requires tools.agentToAgent).',
               },
             },
             additionalProperties: false,
@@ -15583,38 +16681,59 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Tool-loop Detection",
+                description:
+                  "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
               },
               historySize: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Tool-loop History Size",
+                description: "Tool history window size for loop detection (default: 30).",
               },
               warningThreshold: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Tool-loop Warning Threshold",
+                description:
+                  "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
               },
               criticalThreshold: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Tool-loop Critical Threshold",
+                description:
+                  "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
               },
               globalCircuitBreakerThreshold: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Tool-loop Global Circuit Breaker Threshold",
+                description: "Global no-progress breaker threshold (default: 30).",
               },
               detectors: {
                 type: "object",
                 properties: {
                   genericRepeat: {
                     type: "boolean",
+                    title: "Tool-loop Generic Repeat Detection",
+                    description:
+                      "Enable generic repeated same-tool/same-params loop detection (default: true).",
                   },
                   knownPollNoProgress: {
                     type: "boolean",
+                    title: "Tool-loop Poll No-Progress Detection",
+                    description:
+                      "Enable known poll tool no-progress loop detection (default: true).",
                   },
                   pingPong: {
                     type: "boolean",
+                    title: "Tool-loop Ping-Pong Detection",
+                    description: "Enable ping-pong loop detection (default: true).",
                   },
                 },
                 additionalProperties: false,
@@ -15627,27 +16746,43 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               allowCrossContextSend: {
                 type: "boolean",
+                title: "Allow Cross-Context Messaging",
+                description: "Legacy override: allow cross-context sends across all providers.",
               },
               crossContext: {
                 type: "object",
                 properties: {
                   allowWithinProvider: {
                     type: "boolean",
+                    title: "Allow Cross-Context (Same Provider)",
+                    description:
+                      "Allow sends to other channels within the same provider (default: true).",
                   },
                   allowAcrossProviders: {
                     type: "boolean",
+                    title: "Allow Cross-Context (Across Providers)",
+                    description: "Allow sends across different providers (default: false).",
                   },
                   marker: {
                     type: "object",
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "Cross-Context Marker",
+                        description:
+                          "Add a visible origin marker when sending cross-context (default: true).",
                       },
                       prefix: {
                         type: "string",
+                        title: "Cross-Context Marker Prefix",
+                        description:
+                          'Text prefix for cross-context markers (supports "{channel}").',
                       },
                       suffix: {
                         type: "string",
+                        title: "Cross-Context Marker Suffix",
+                        description:
+                          'Text suffix for cross-context markers (supports "{channel}").',
                       },
                     },
                     additionalProperties: false,
@@ -15660,6 +16795,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable Message Broadcast",
+                    description: "Enable broadcast action (default: true).",
                   },
                 },
                 additionalProperties: false,
@@ -15672,21 +16809,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Enable Agent-to-Agent Tool",
+                description:
+                  "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
               },
               allow: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Agent-to-Agent Target Allowlist",
+                description:
+                  "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
               },
             },
             additionalProperties: false,
+            title: "Agent-to-Agent Tool Access",
+            description:
+              "Policy for allowing agent-to-agent tool calls and constraining which target agents can be reached. Keep disabled or tightly scoped unless cross-agent orchestration is intentionally enabled.",
           },
           elevated: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Enable Elevated Tool Access",
+                description:
+                  "Enables elevated tool execution path when sender and policy checks pass. Keep disabled in public/shared channels and enable only for trusted owner-operated contexts.",
               },
               allowFrom: {
                 type: "object",
@@ -15706,9 +16855,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     ],
                   },
                 },
+                title: "Elevated Tool Allow Rules",
+                description:
+                  "Sender allow rules for elevated tools, usually keyed by channel/provider identity formats. Use narrow, explicit identities so elevated commands cannot be triggered by unintended users.",
               },
             },
             additionalProperties: false,
+            title: "Elevated Tool Access",
+            description:
+              "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
           },
           exec: {
             type: "object",
@@ -15716,38 +16871,61 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               host: {
                 type: "string",
                 enum: ["auto", "sandbox", "gateway", "node"],
+                title: "Exec Target",
+                description:
+                  'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
               },
               security: {
                 type: "string",
                 enum: ["deny", "allowlist", "full"],
+                title: "Exec Security",
+                description:
+                  "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
               },
               ask: {
                 type: "string",
                 enum: ["off", "on-miss", "always"],
+                title: "Exec Ask",
+                description:
+                  "Approval strategy for when exec commands require human confirmation before running. Use stricter ask behavior in shared channels and lower-friction settings in private operator contexts.",
               },
               node: {
                 type: "string",
+                title: "Exec Node Binding",
+                description:
+                  "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
               },
               pathPrepend: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Exec PATH Prepend",
+                description: "Directories to prepend to PATH for exec runs (gateway/sandbox).",
               },
               safeBins: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Exec Safe Bins",
+                description:
+                  "Allow stdin-only safe binaries to run without explicit allowlist entries.",
               },
               strictInlineEval: {
                 type: "boolean",
+                title: "Require Inline-Eval Approval",
+                description:
+                  "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
               },
               safeBinTrustedDirs: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Exec Safe Bin Trusted Dirs",
+                description:
+                  "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
               },
               safeBinProfiles: {
                 type: "object",
@@ -15782,6 +16960,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   additionalProperties: false,
                 },
+                title: "Exec Safe Bin Profiles",
+                description:
+                  "Optional per-binary safe-bin profiles (positional limits + allowed/denied flags).",
               },
               backgroundMs: {
                 type: "integer",
@@ -15800,36 +16981,57 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               notifyOnExit: {
                 type: "boolean",
+                title: "Exec Notify On Exit",
+                description:
+                  "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
               },
               notifyOnExitEmptySuccess: {
                 type: "boolean",
+                title: "Exec Notify On Empty Success",
+                description:
+                  "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
               },
               applyPatch: {
                 type: "object",
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Enable apply_patch",
+                    description:
+                      "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
                   },
                   workspaceOnly: {
                     type: "boolean",
+                    title: "apply_patch Workspace-Only",
+                    description:
+                      "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
                   },
                   allowModels: {
                     type: "array",
                     items: {
                       type: "string",
                     },
+                    title: "apply_patch Model Allowlist",
+                    description:
+                      'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
                   },
                 },
                 additionalProperties: false,
               },
             },
             additionalProperties: false,
+            title: "Exec Tool",
+            description:
+              "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
           },
           fs: {
             type: "object",
             properties: {
               workspaceOnly: {
                 type: "boolean",
+                title: "Workspace-only FS tools",
+                description:
+                  "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
               },
             },
             additionalProperties: false,
@@ -15860,9 +17062,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Subagent Tool Allow/Deny Policy",
+                description:
+                  "Allow/deny tool policy applied to spawned subagent runtimes for per-subagent hardening. Keep this narrower than parent scope when subagents run semi-autonomous workflows.",
               },
             },
             additionalProperties: false,
+            title: "Subagent Tool Policy",
+            description:
+              "Tool policy wrapper for spawned subagents to restrict or expand tool availability compared to parent defaults. Use this to keep delegated agent capabilities scoped to task intent.",
           },
           sandbox: {
             type: "object",
@@ -15890,9 +17098,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Sandbox Tool Allow/Deny Policy",
+                description:
+                  "Allow/deny tool policy applied when agents run in sandboxed execution environments. Keep policies minimal so sandbox tasks cannot escalate into unnecessary external actions.",
               },
             },
             additionalProperties: false,
+            title: "Sandbox Tool Policy",
+            description:
+              "Tool policy wrapper for sandboxed agent executions so sandbox runs can have distinct capability boundaries. Use this to enforce stronger safety in sandbox contexts.",
           },
           sessions_spawn: {
             type: "object",
@@ -15923,6 +17137,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           },
         },
         additionalProperties: false,
+        title: "Tools",
+        description:
+          "Global tool access policy and capability configuration across web, exec, media, messaging, and elevated surfaces. Use this section to constrain risky capabilities before broad rollout.",
       },
       bindings: {
         type: "array",
@@ -15934,9 +17151,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: {
                   type: "string",
                   const: "route",
+                  title: "Binding Type",
+                  description:
+                    'Binding kind. Use "route" (or omit for legacy route entries) for normal routing, and "acp" for persistent ACP conversation bindings.',
                 },
                 agentId: {
                   type: "string",
+                  title: "Binding Agent ID",
+                  description:
+                    "Target agent ID that receives traffic when the corresponding binding match rule is satisfied. Use valid configured agent IDs only so routing does not fail at runtime.",
                 },
                 comment: {
                   type: "string",
@@ -15946,9 +17169,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   properties: {
                     channel: {
                       type: "string",
+                      title: "Binding Channel",
+                      description:
+                        "Channel/provider identifier this binding applies to, such as `telegram`, `discord`, or a plugin channel ID. Use the configured channel key exactly so binding evaluation works reliably.",
                     },
                     accountId: {
                       type: "string",
+                      title: "Binding Account ID",
+                      description:
+                        "Optional account selector for multi-account channel setups so the binding applies only to one identity. Use this when account scoping is required for the route and leave unset otherwise.",
                     },
                     peer: {
                       type: "object",
@@ -15972,29 +17201,50 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               const: "dm",
                             },
                           ],
+                          title: "Binding Peer Kind",
+                          description:
+                            'Peer conversation type: "direct", "group", "channel", or legacy "dm" (deprecated alias for direct). Prefer "direct" for new configs and keep kind aligned with channel semantics.',
                         },
                         id: {
                           type: "string",
+                          title: "Binding Peer ID",
+                          description:
+                            "Conversation identifier used with peer matching, such as a chat ID, channel ID, or group ID from the provider. Keep this exact to avoid silent non-matches.",
                         },
                       },
                       required: ["kind", "id"],
                       additionalProperties: false,
+                      title: "Binding Peer Match",
+                      description:
+                        "Optional peer matcher for specific conversations including peer kind and peer id. Use this when only one direct/group/channel target should be pinned to an agent.",
                     },
                     guildId: {
                       type: "string",
+                      title: "Binding Guild ID",
+                      description:
+                        "Optional Discord-style guild/server ID constraint for binding evaluation in multi-server deployments. Use this when the same peer identifiers can appear across different guilds.",
                     },
                     teamId: {
                       type: "string",
+                      title: "Binding Team ID",
+                      description:
+                        "Optional team/workspace ID constraint used by providers that scope chats under teams. Add this when you need bindings isolated to one workspace context.",
                     },
                     roles: {
                       type: "array",
                       items: {
                         type: "string",
                       },
+                      title: "Binding Roles",
+                      description:
+                        "Optional role-based filter list used by providers that attach roles to chat context. Use this to route privileged or operational role traffic to specialized agents.",
                     },
                   },
                   required: ["channel"],
                   additionalProperties: false,
+                  title: "Binding Match Rule",
+                  description:
+                    "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
                 },
               },
               required: ["agentId", "match"],
@@ -16006,9 +17256,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: {
                   type: "string",
                   const: "acp",
+                  title: "Binding Type",
+                  description:
+                    'Binding kind. Use "route" (or omit for legacy route entries) for normal routing, and "acp" for persistent ACP conversation bindings.',
                 },
                 agentId: {
                   type: "string",
+                  title: "Binding Agent ID",
+                  description:
+                    "Target agent ID that receives traffic when the corresponding binding match rule is satisfied. Use valid configured agent IDs only so routing does not fail at runtime.",
                 },
                 comment: {
                   type: "string",
@@ -16018,9 +17274,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   properties: {
                     channel: {
                       type: "string",
+                      title: "Binding Channel",
+                      description:
+                        "Channel/provider identifier this binding applies to, such as `telegram`, `discord`, or a plugin channel ID. Use the configured channel key exactly so binding evaluation works reliably.",
                     },
                     accountId: {
                       type: "string",
+                      title: "Binding Account ID",
+                      description:
+                        "Optional account selector for multi-account channel setups so the binding applies only to one identity. Use this when account scoping is required for the route and leave unset otherwise.",
                     },
                     peer: {
                       type: "object",
@@ -16044,29 +17306,50 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               const: "dm",
                             },
                           ],
+                          title: "Binding Peer Kind",
+                          description:
+                            'Peer conversation type: "direct", "group", "channel", or legacy "dm" (deprecated alias for direct). Prefer "direct" for new configs and keep kind aligned with channel semantics.',
                         },
                         id: {
                           type: "string",
+                          title: "Binding Peer ID",
+                          description:
+                            "Conversation identifier used with peer matching, such as a chat ID, channel ID, or group ID from the provider. Keep this exact to avoid silent non-matches.",
                         },
                       },
                       required: ["kind", "id"],
                       additionalProperties: false,
+                      title: "Binding Peer Match",
+                      description:
+                        "Optional peer matcher for specific conversations including peer kind and peer id. Use this when only one direct/group/channel target should be pinned to an agent.",
                     },
                     guildId: {
                       type: "string",
+                      title: "Binding Guild ID",
+                      description:
+                        "Optional Discord-style guild/server ID constraint for binding evaluation in multi-server deployments. Use this when the same peer identifiers can appear across different guilds.",
                     },
                     teamId: {
                       type: "string",
+                      title: "Binding Team ID",
+                      description:
+                        "Optional team/workspace ID constraint used by providers that scope chats under teams. Add this when you need bindings isolated to one workspace context.",
                     },
                     roles: {
                       type: "array",
                       items: {
                         type: "string",
                       },
+                      title: "Binding Roles",
+                      description:
+                        "Optional role-based filter list used by providers that attach roles to chat context. Use this to route privileged or operational role traffic to specialized agents.",
                     },
                   },
                   required: ["channel"],
                   additionalProperties: false,
+                  title: "Binding Match Rule",
+                  description:
+                    "Match rule object for deciding when a binding applies, including channel and optional account/peer constraints. Keep rules narrow to avoid accidental agent takeover across contexts.",
                 },
                 acp: {
                   type: "object",
@@ -16074,18 +17357,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     mode: {
                       type: "string",
                       enum: ["persistent", "oneshot"],
+                      title: "ACP Binding Mode",
+                      description:
+                        "ACP session mode override for this binding (persistent or oneshot).",
                     },
                     label: {
                       type: "string",
+                      title: "ACP Binding Label",
+                      description:
+                        "Human-friendly label for ACP status/diagnostics in this bound conversation.",
                     },
                     cwd: {
                       type: "string",
+                      title: "ACP Binding Working Directory",
+                      description:
+                        "Working directory override for ACP sessions created from this binding.",
                     },
                     backend: {
                       type: "string",
+                      title: "ACP Binding Backend",
+                      description:
+                        "ACP backend override for this binding (falls back to agent runtime ACP backend, then global acp.backend).",
                     },
                   },
                   additionalProperties: false,
+                  title: "ACP Binding Overrides",
+                  description:
+                    "Optional per-binding ACP overrides for bindings[].type=acp. This layer overrides agents.list[].runtime.acp defaults for the matched conversation.",
                 },
               },
               required: ["type", "agentId", "match"],
@@ -16093,6 +17391,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
           ],
         },
+        title: "Bindings",
+        description:
+          "Top-level binding rules for routing and persistent ACP conversation ownership. Use type=route for normal routing and type=acp for persistent ACP harness bindings.",
       },
       broadcast: {
         type: "object",
@@ -16100,6 +17401,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           strategy: {
             type: "string",
             enum: ["parallel", "sequential"],
+            title: "Broadcast Strategy",
+            description:
+              'Delivery order for broadcast fan-out: "parallel" sends to all targets concurrently, while "sequential" sends one-by-one. Use "parallel" for speed and "sequential" for stricter ordering/backpressure control.',
           },
         },
         additionalProperties: {
@@ -16107,7 +17411,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           items: {
             type: "string",
           },
+          title: "Broadcast Destination List",
+          description:
+            "Per-source broadcast destination list where each key is a source peer ID and the value is an array of destination peer IDs. Keep lists intentional to avoid accidental message amplification.",
         },
+        title: "Broadcast",
+        description:
+          "Broadcast routing map for sending the same outbound message to multiple peer IDs per source conversation. Keep this minimal and audited because one source can fan out to many destinations.",
       },
       audio: {
         type: "object",
@@ -16120,41 +17430,68 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 items: {
                   type: "string",
                 },
+                title: "Audio Transcription Command",
+                description:
+                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
               },
               timeoutSeconds: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Audio Transcription Timeout (sec)",
+                description:
+                  "Maximum time allowed for the transcription command to finish before it is aborted. Increase this for longer recordings, and keep it tight in latency-sensitive deployments.",
               },
             },
             required: ["command"],
             additionalProperties: false,
+            title: "Audio Transcription",
+            description:
+              "Command-based transcription settings for converting audio files into text before agent handling. Keep a simple, deterministic command path here so failures are easy to diagnose in logs.",
           },
         },
         additionalProperties: false,
+        title: "Audio",
+        description:
+          "Global audio ingestion settings used before higher-level tools process speech or media content. Configure this when you need deterministic transcription behavior for voice notes and clips.",
       },
       media: {
         type: "object",
         properties: {
           preserveFilenames: {
             type: "boolean",
+            title: "Preserve Media Filenames",
+            description:
+              "When enabled, uploaded media keeps its original filename instead of a generated temp-safe name. Turn this on when downstream automations depend on stable names, and leave off to reduce accidental filename leakage.",
           },
           ttlHours: {
             type: "integer",
             minimum: 1,
             maximum: 168,
+            title: "Media Retention TTL (hours)",
+            description:
+              "Optional retention window in hours for persisted inbound media cleanup across the full media tree. Leave unset to preserve legacy behavior, or set values like 24 (1 day) or 168 (7 days) when you want automatic cleanup.",
           },
         },
         additionalProperties: false,
+        title: "Media",
+        description:
+          "Top-level media behavior shared across providers and tools that handle inbound files. Keep defaults unless you need stable filenames for external processing pipelines or longer-lived inbound media retention.",
       },
       messages: {
         type: "object",
         properties: {
           messagePrefix: {
             type: "string",
+            title: "Inbound Message Prefix",
+            description:
+              "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
           responsePrefix: {
             type: "string",
+            title: "Outbound Response Prefix",
+            description:
+              "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
           },
           groupChat: {
             type: "object",
@@ -16164,14 +17501,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 items: {
                   type: "string",
                 },
+                title: "Group Mention Patterns",
+                description:
+                  "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
               },
               historyLimit: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Group History Limit",
+                description:
+                  "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
               },
             },
             additionalProperties: false,
+            title: "Group Chat Rules",
+            description:
+              "Group-message handling controls including mention triggers and history window sizing. Keep mention patterns narrow so group channels do not trigger on every message.",
           },
           queue: {
             type: "object",
@@ -16207,6 +17553,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "interrupt",
                   },
                 ],
+                title: "Queue Mode",
+                description:
+                  'Queue behavior mode: "steer", "followup", "collect", "steer-backlog", "steer+backlog", "queue", or "interrupt". Keep conservative modes unless you intentionally need aggressive interruption/backlog semantics.',
               },
               byChannel: {
                 type: "object",
@@ -16533,11 +17882,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Queue Mode by Channel",
+                description:
+                  "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel’s traffic pattern needs different queue behavior than global defaults.",
               },
               debounceMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Queue Debounce (ms)",
+                description:
+                  "Global queue debounce window in milliseconds before processing buffered inbound messages. Use higher values to coalesce rapid bursts, or lower values for reduced response latency.",
               },
               debounceMsByChannel: {
                 type: "object",
@@ -16549,11 +17904,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   minimum: 0,
                   maximum: 9007199254740991,
                 },
+                title: "Queue Debounce by Channel (ms)",
+                description:
+                  "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
               },
               cap: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Queue Capacity",
+                description:
+                  "Maximum number of queued inbound items retained before drop policy applies. Keep caps bounded in noisy channels so memory usage remains predictable.",
               },
               drop: {
                 anyOf: [
@@ -16570,9 +17931,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "summarize",
                   },
                 ],
+                title: "Queue Drop Strategy",
+                description:
+                  'Drop strategy when queue cap is exceeded: "old", "new", or "summarize". Use summarize when preserving intent matters, or old/new when deterministic dropping is preferred.',
               },
             },
             additionalProperties: false,
+            title: "Inbound Queue",
+            description:
+              "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
           },
           inbound: {
             type: "object",
@@ -16581,6 +17948,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Inbound Message Debounce (ms)",
+                description:
+                  "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
               },
               byChannel: {
                 type: "object",
@@ -16592,25 +17962,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   minimum: 0,
                   maximum: 9007199254740991,
                 },
+                title: "Inbound Debounce by Channel (ms)",
+                description:
+                  "Per-channel inbound debounce overrides keyed by provider id in milliseconds. Use this where some providers send message fragments more aggressively than others.",
               },
             },
             additionalProperties: false,
+            title: "Inbound Debounce",
+            description:
+              "Direct inbound debounce settings used before queue/turn processing starts. Configure this for provider-specific rapid message bursts from the same sender.",
           },
           ackReaction: {
             type: "string",
+            title: "Ack Reaction Emoji",
+            description: "Emoji reaction used to acknowledge inbound messages (empty disables).",
           },
           ackReactionScope: {
             type: "string",
             enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+            title: "Ack Reaction Scope",
+            description:
+              'When to send ack reactions ("group-mentions", "group-all", "direct", "all", "off", "none"). "off"/"none" disables ack reactions entirely.',
           },
           removeAckAfterReply: {
             type: "boolean",
+            title: "Remove Ack Reaction After Reply",
+            description:
+              "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
           },
           statusReactions: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Enable Status Reactions",
+                description:
+                  "Enable lifecycle status reactions on supported channels. Slack and Discord treat unset as enabled when ack reactions are active; Telegram requires this to be true before lifecycle reactions are used.",
               },
               emojis: {
                 type: "object",
@@ -16644,6 +18031,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Status Reaction Emojis",
+                description:
+                  "Override default status reaction emojis. Keys: thinking, compacting, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
               },
               timing: {
                 type: "object",
@@ -16675,12 +18065,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Status Reaction Timing",
+                description:
+                  "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
               },
             },
             additionalProperties: false,
+            title: "Status Reactions",
+            description:
+              "Lifecycle status reactions that update the emoji on the trigger message as the agent progresses (queued → thinking → tool → done/error).",
           },
           suppressToolErrors: {
             type: "boolean",
+            title: "Suppress Tool Error Warnings",
+            description:
+              "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
           },
           tts: {
             type: "object",
@@ -16806,6 +18205,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           ],
                         },
                       ],
+                      title: "TTS Provider API Key",
+                      description:
+                        "Provider API key used by that speech provider when its plugin requires authenticated TTS access.",
                     },
                   },
                   additionalProperties: {
@@ -16835,7 +18237,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  title: "TTS Provider Config",
+                  description:
+                    "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
                 },
+                title: "TTS Provider Settings",
+                description:
+                  "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
               },
               prefsPath: {
                 type: "string",
@@ -16852,9 +18260,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
             },
             additionalProperties: false,
+            title: "Message Text-to-Speech",
+            description:
+              "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
           },
         },
         additionalProperties: false,
+        title: "Messages",
+        description:
+          "Message formatting, acknowledgment, queueing, debounce, and status reaction behavior for inbound/outbound chat flows. Use this section when channel responsiveness or message UX needs adjustment.",
       },
       commands: {
         default: {
@@ -16876,6 +18290,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "auto",
               },
             ],
+            title: "Native Commands",
+            description:
+              "Registers native slash/menu commands with channels that support command registration (Discord, Slack, Telegram). Keep enabled for discoverability unless you intentionally run text-only command workflows.",
           },
           nativeSkills: {
             default: "auto",
@@ -16888,36 +18305,63 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "auto",
               },
             ],
+            title: "Native Skill Commands",
+            description:
+              "Registers native skill commands so users can invoke skills directly from provider command menus where supported. Keep aligned with your skill policy so exposed commands match what operators expect.",
           },
           text: {
             type: "boolean",
+            title: "Text Commands",
+            description:
+              "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
           },
           bash: {
             type: "boolean",
+            title: "Allow Bash Chat Command",
+            description:
+              "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
           },
           bashForegroundMs: {
             type: "integer",
             minimum: 0,
             maximum: 30000,
+            title: "Bash Foreground Window (ms)",
+            description:
+              "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
           },
           config: {
             type: "boolean",
+            title: "Allow /config",
+            description:
+              "Allow /config chat command to read/write config on disk (default: false).",
           },
           mcp: {
             type: "boolean",
+            title: "Allow /mcp",
+            description:
+              "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
           },
           plugins: {
             type: "boolean",
+            title: "Allow /plugins",
+            description:
+              "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
           },
           debug: {
             type: "boolean",
+            title: "Allow /debug",
+            description: "Allow /debug chat command for runtime-only overrides (default: false).",
           },
           restart: {
             default: true,
             type: "boolean",
+            title: "Allow Restart",
+            description: "Allow /restart and gateway restart tool actions (default: true).",
           },
           useAccessGroups: {
             type: "boolean",
+            title: "Use Access Groups",
+            description: "Enforce access-group allowlists/policies for commands.",
           },
           ownerAllowFrom: {
             type: "array",
@@ -16931,14 +18375,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
               ],
             },
+            title: "Command Owners",
+            description:
+              "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
           },
           ownerDisplay: {
             default: "raw",
             type: "string",
             enum: ["raw", "hash"],
+            title: "Owner ID Display",
+            description:
+              "Controls how owner IDs are rendered in the system prompt. Allowed values: raw, hash. Default: raw.",
           },
           ownerDisplaySecret: {
             type: "string",
+            title: "Owner ID Hash Secret",
+            description:
+              "Optional secret used to HMAC hash owner IDs when ownerDisplay=hash. Prefer env substitution.",
           },
           allowFrom: {
             type: "object",
@@ -16958,10 +18411,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 ],
               },
             },
+            title: "Command Elevated Access Rules",
+            description:
+              "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
           },
         },
         required: ["native", "nativeSkills", "restart", "ownerDisplay"],
         additionalProperties: false,
+        title: "Commands",
+        description:
+          "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
       },
       approvals: {
         type: "object",
@@ -16971,6 +18430,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Forward Exec Approvals",
+                description:
+                  "Enables forwarding of exec approval requests to configured delivery destinations (default: false). Keep disabled in low-risk setups and enable only when human approval responders need channel-visible prompts.",
               },
               mode: {
                 anyOf: [
@@ -16987,18 +18449,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "both",
                   },
                 ],
+                title: "Approval Forwarding Mode",
+                description:
+                  'Controls where approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths. Use "session" as baseline and expand only when operational workflow requires redundancy.',
               },
               agentFilter: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Approval Agent Filter",
+                description:
+                  'Optional allowlist of agent IDs eligible for forwarded approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius and avoid notifying channels for unrelated agents.',
               },
               sessionFilter: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Approval Session Filter",
+                description:
+                  'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded to shared destinations.',
               },
               targets: {
                 type: "array",
@@ -17008,13 +18479,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     channel: {
                       type: "string",
                       minLength: 1,
+                      title: "Approval Target Channel",
+                      description:
+                        "Channel/provider ID used for forwarded approval delivery, such as discord, slack, or a plugin channel id. Use valid channel IDs only so approvals do not silently fail due to unknown routes.",
                     },
                     to: {
                       type: "string",
                       minLength: 1,
+                      title: "Approval Target Destination",
+                      description:
+                        "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider). Verify semantics per provider because destination format differs across channel integrations.",
                     },
                     accountId: {
                       type: "string",
+                      title: "Approval Target Account ID",
+                      description:
+                        "Optional account selector for multi-account channel setups when approvals must route through a specific account context. Use this only when the target channel has multiple configured identities.",
                     },
                     threadId: {
                       anyOf: [
@@ -17025,20 +18505,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "number",
                         },
                       ],
+                      title: "Approval Target Thread ID",
+                      description:
+                        "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
                     },
                   },
                   required: ["channel", "to"],
                   additionalProperties: false,
                 },
+                title: "Approval Forwarding Targets",
+                description:
+                  "Explicit delivery targets used when forwarding mode includes targets, each with channel and destination details. Keep target lists least-privilege and validate each destination before enabling broad forwarding.",
               },
             },
             additionalProperties: false,
+            title: "Exec Approval Forwarding",
+            description:
+              "Groups exec-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Configure here when approval prompts must reach operational channels instead of only the origin thread.",
           },
           plugin: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Forward Plugin Approvals",
+                description:
+                  "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
               },
               mode: {
                 anyOf: [
@@ -17055,18 +18547,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "both",
                   },
                 ],
+                title: "Plugin Approval Forwarding Mode",
+                description:
+                  'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
               },
               agentFilter: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Plugin Approval Agent Filter",
+                description:
+                  'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.',
               },
               sessionFilter: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Plugin Approval Session Filter",
+                description:
+                  'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.',
               },
               targets: {
                 type: "array",
@@ -17076,13 +18577,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     channel: {
                       type: "string",
                       minLength: 1,
+                      title: "Plugin Approval Target Channel",
+                      description:
+                        "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.",
                     },
                     to: {
                       type: "string",
                       minLength: 1,
+                      title: "Plugin Approval Target Destination",
+                      description:
+                        "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).",
                     },
                     accountId: {
                       type: "string",
+                      title: "Plugin Approval Target Account ID",
+                      description:
+                        "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
                     },
                     threadId: {
                       anyOf: [
@@ -17093,17 +18603,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           type: "number",
                         },
                       ],
+                      title: "Plugin Approval Target Thread ID",
+                      description:
+                        "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
                     },
                   },
                   required: ["channel", "to"],
                   additionalProperties: false,
                 },
+                title: "Plugin Approval Forwarding Targets",
+                description:
+                  "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
               },
             },
             additionalProperties: false,
+            title: "Plugin Approval Forwarding",
+            description:
+              "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.",
           },
         },
         additionalProperties: false,
+        title: "Approvals",
+        description:
+          "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
       },
       session: {
         type: "object",
@@ -17119,6 +18641,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "global",
               },
             ],
+            title: "Session Scope",
+            description:
+              'Sets base session grouping strategy: "per-sender" isolates by sender and "global" shares one session per channel context. Keep "per-sender" for safer multi-user behavior unless deliberate shared context is required.',
           },
           dmScope: {
             anyOf: [
@@ -17139,6 +18664,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "per-account-channel-peer",
               },
             ],
+            title: "DM Session Scope",
+            description:
+              'DM session scoping: "main" keeps continuity, while "per-peer", "per-channel-peer", and "per-account-channel-peer" increase isolation. Use isolated modes for shared inboxes or multi-account deployments.',
           },
           identityLinks: {
             type: "object",
@@ -17151,17 +18679,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "string",
               },
             },
+            title: "Session Identity Links",
+            description:
+              "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
           },
           resetTriggers: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Session Reset Triggers",
+            description:
+              "Lists message triggers that force a session reset when matched in inbound content. Use sparingly for explicit reset phrases so context is not dropped unexpectedly during normal conversation.",
           },
           idleMinutes: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Session Idle Minutes",
+            description:
+              "Applies a legacy idle reset window in minutes for session reuse behavior across inactivity gaps. Use this only for compatibility and prefer structured reset policies under session.reset/session.resetByType.",
           },
           reset: {
             type: "object",
@@ -17177,19 +18714,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "idle",
                   },
                 ],
+                title: "Session Reset Mode",
+                description:
+                  'Selects reset strategy: "daily" resets at a configured hour and "idle" resets after inactivity windows. Keep one clear mode per policy to avoid surprising context turnover patterns.',
               },
               atHour: {
                 type: "integer",
                 minimum: 0,
                 maximum: 23,
+                title: "Session Daily Reset Hour",
+                description:
+                  "Sets local-hour boundary (0-23) for daily reset mode so sessions roll over at predictable times. Use with mode=daily and align to operator timezone expectations for human-readable behavior.",
               },
               idleMinutes: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Session Reset Idle Minutes",
+                description:
+                  "Sets inactivity window before reset for idle mode and can also act as secondary guard with daily mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
               },
             },
             additionalProperties: false,
+            title: "Session Reset Policy",
+            description:
+              "Defines the default reset policy object used when no type-specific or channel-specific override applies. Set this first, then layer resetByType or resetByChannel only where behavior must differ.",
           },
           resetByType: {
             type: "object",
@@ -17221,6 +18770,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Session Reset (Direct)",
+                description:
+                  "Defines reset policy for direct chats and supersedes the base session.reset configuration for that type. Use this as the canonical direct-message override instead of the legacy dm alias.",
               },
               dm: {
                 type: "object",
@@ -17249,6 +18801,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Session Reset (DM Deprecated Alias)",
+                description:
+                  "Deprecated alias for direct reset behavior kept for backward compatibility with older configs. Use session.resetByType.direct instead so future tooling and validation remain consistent.",
               },
               group: {
                 type: "object",
@@ -17277,6 +18832,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Session Reset (Group)",
+                description:
+                  "Defines reset policy for group chat sessions where continuity and noise patterns differ from DMs. Use shorter idle windows for busy groups if context drift becomes a problem.",
               },
               thread: {
                 type: "object",
@@ -17305,9 +18863,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Session Reset (Thread)",
+                description:
+                  "Defines reset policy for thread-scoped sessions, including focused channel thread workflows. Use this when thread sessions should expire faster or slower than other chat types.",
               },
             },
             additionalProperties: false,
+            title: "Session Reset by Chat Type",
+            description:
+              "Overrides reset behavior by chat type (direct, group, thread) when defaults are not sufficient. Use this when group/thread traffic needs different reset cadence than direct messages.",
           },
           resetByChannel: {
             type: "object",
@@ -17342,14 +18906,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               additionalProperties: false,
             },
+            title: "Session Reset by Channel",
+            description:
+              "Provides channel-specific reset overrides keyed by provider/channel id for fine-grained behavior control. Use this only when one channel needs exceptional reset behavior beyond type-level policies.",
           },
           store: {
             type: "string",
+            title: "Session Store Path",
+            description:
+              "Sets the session storage file path used to persist session records across restarts. Use an explicit path only when you need custom disk layout, backup routing, or mounted-volume storage.",
           },
           typingIntervalSeconds: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Session Typing Interval (seconds)",
+            description:
+              "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
           },
           typingMode: {
             anyOf: [
@@ -17370,14 +18943,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "message",
               },
             ],
+            title: "Session Typing Mode",
+            description:
+              'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
           parentForkMaxTokens: {
             type: "integer",
             minimum: 0,
             maximum: 9007199254740991,
+            title: "Session Parent Fork Max Tokens",
+            description:
+              "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
           },
           mainKey: {
             type: "string",
+            title: "Session Main Key",
+            description:
+              'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
           },
           sendPolicy: {
             type: "object",
@@ -17393,6 +18975,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "deny",
                   },
                 ],
+                title: "Session Send Policy Default Action",
+                description:
+                  'Sets fallback action when no sendPolicy rule matches: "allow" or "deny". Keep "allow" for simpler setups, or choose "deny" when you require explicit allow rules for every destination.',
               },
               rules: {
                 type: "array",
@@ -17410,12 +18995,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           const: "deny",
                         },
                       ],
+                      title: "Session Send Rule Action",
+                      description:
+                        'Defines rule decision as "allow" or "deny" when the corresponding match criteria are satisfied. Use deny-first ordering when enforcing strict boundaries with explicit allow exceptions.',
                     },
                     match: {
                       type: "object",
                       properties: {
                         channel: {
                           type: "string",
+                          title: "Session Send Rule Channel",
+                          description:
+                            "Matches rule application to a specific channel/provider id (for example discord, telegram, slack). Use this when one channel should permit or deny delivery independently of others.",
                         },
                         chatType: {
                           anyOf: [
@@ -17436,23 +19027,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                               const: "dm",
                             },
                           ],
+                          title: "Session Send Rule Chat Type",
+                          description:
+                            "Matches rule application to chat type (direct, group, thread) so behavior varies by conversation form. Use this when DM and group destinations require different safety boundaries.",
                         },
                         keyPrefix: {
                           type: "string",
+                          title: "Session Send Rule Key Prefix",
+                          description:
+                            "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
                         },
                         rawKeyPrefix: {
                           type: "string",
+                          title: "Session Send Rule Raw Key Prefix",
+                          description:
+                            "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
                         },
                       },
                       additionalProperties: false,
+                      title: "Session Send Rule Match",
+                      description:
+                        "Defines optional rule match conditions that can combine channel, chatType, and key-prefix constraints. Keep matches narrow so policy intent stays readable and debugging remains straightforward.",
                     },
                   },
                   required: ["action"],
                   additionalProperties: false,
                 },
+                title: "Session Send Policy Rules",
+                description:
+                  'Ordered allow/deny rules evaluated before the default action, for example `{ action: "deny", match: { channel: "discord" } }`. Put most specific rules first so broad rules do not shadow exceptions.',
               },
             },
             additionalProperties: false,
+            title: "Session Send Policy",
+            description:
+              "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
           },
           agentToAgent: {
             type: "object",
@@ -17461,26 +19070,44 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 minimum: 0,
                 maximum: 5,
+                title: "Agent-to-Agent Ping-Pong Turns",
+                description:
+                  "Max reply-back turns between requester and target agents during agent-to-agent exchanges (0-5). Use lower values to hard-limit chatter loops and preserve predictable run completion.",
               },
             },
             additionalProperties: false,
+            title: "Session Agent-to-Agent",
+            description:
+              "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
           },
           threadBindings: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Thread Binding Enabled",
+                description:
+                  "Global master switch for thread-bound session routing features and focused thread delivery behavior. Keep enabled for modern thread workflows unless you need to disable thread binding globally.",
               },
               idleHours: {
                 type: "number",
                 minimum: 0,
+                title: "Thread Binding Idle Timeout (hours)",
+                description:
+                  "Default inactivity window in hours for thread-bound sessions across providers/channels (0 disables idle auto-unfocus). Default: 24.",
               },
               maxAgeHours: {
                 type: "number",
                 minimum: 0,
+                title: "Thread Binding Max Age (hours)",
+                description:
+                  "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
               },
             },
             additionalProperties: false,
+            title: "Session Thread Bindings",
+            description:
+              "Shared defaults for thread-bound session routing behavior across providers that support thread focus workflows. Configure global defaults here and override per channel only when behavior differs.",
           },
           maintenance: {
             type: "object",
@@ -17488,6 +19115,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               mode: {
                 type: "string",
                 enum: ["enforce", "warn"],
+                title: "Session Maintenance Mode",
+                description:
+                  'Determines whether maintenance policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds.',
               },
               pruneAfter: {
                 anyOf: [
@@ -17498,16 +19128,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "number",
                   },
                 ],
+                title: "Session Prune After",
+                description:
+                  "Removes entries older than this duration (for example `30d` or `12h`) during maintenance passes. Use this as the primary age-retention control and align it with data retention policy.",
               },
               pruneDays: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Session Prune Days (Deprecated)",
+                description:
+                  "Deprecated age-retention field kept for compatibility with legacy configs using day counts. Use session.maintenance.pruneAfter instead so duration syntax and behavior are consistent.",
               },
               maxEntries: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Session Max Entries",
+                description:
+                  "Caps total session entry count retained in the store to prevent unbounded growth over time. Use lower limits for constrained environments, or higher limits when longer history is required.",
               },
               rotateBytes: {
                 anyOf: [
@@ -17518,6 +19157,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "number",
                   },
                 ],
+                title: "Session Rotate Size",
+                description:
+                  "Rotates the session store when file size exceeds a threshold such as `10mb` or `1gb`. Use this to bound single-file growth and keep backup/restore operations manageable.",
               },
               resetArchiveRetention: {
                 anyOf: [
@@ -17532,6 +19174,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: false,
                   },
                 ],
+                title: "Session Reset Archive Retention",
+                description:
+                  "Retention for reset transcript archives (`*.reset.<timestamp>`). Accepts a duration (for example `30d`), or `false` to disable cleanup. Defaults to pruneAfter so reset artifacts do not grow forever.",
               },
               maxDiskBytes: {
                 anyOf: [
@@ -17542,6 +19187,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "number",
                   },
                 ],
+                title: "Session Max Disk Budget",
+                description:
+                  "Optional per-agent sessions-directory disk budget (for example `500mb`). Use this to cap session storage per agent; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup.",
               },
               highWaterBytes: {
                 anyOf: [
@@ -17552,26 +19200,44 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "number",
                   },
                 ],
+                title: "Session Disk High-water Target",
+                description:
+                  "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
               },
             },
             additionalProperties: false,
+            title: "Session Maintenance",
+            description:
+              "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
           },
         },
         additionalProperties: false,
+        title: "Session",
+        description:
+          "Global session routing, reset, delivery policy, and maintenance controls for conversation history behavior. Keep defaults unless you need stricter isolation, retention, or delivery constraints.",
       },
       cron: {
         type: "object",
         properties: {
           enabled: {
             type: "boolean",
+            title: "Cron Enabled",
+            description:
+              "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",
           },
           store: {
             type: "string",
+            title: "Cron Store Path",
+            description:
+              "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
           },
           maxConcurrentRuns: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Cron Max Concurrent Runs",
+            description:
+              "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
           },
           retry: {
             type: "object",
@@ -17580,6 +19246,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 minimum: 0,
                 maximum: 10,
+                title: "Cron Retry Max Attempts",
+                description:
+                  "Max retries for one-shot jobs on transient errors before permanent disable (default: 3).",
               },
               backoffMs: {
                 minItems: 1,
@@ -17590,6 +19259,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   minimum: 0,
                   maximum: 9007199254740991,
                 },
+                title: "Cron Retry Backoff (ms)",
+                description:
+                  "Backoff delays in ms for each retry attempt (default: [30000, 60000, 300000]). Use shorter values for faster retries.",
               },
               retryOn: {
                 minItems: 1,
@@ -17598,13 +19270,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                   enum: ["rate_limit", "overloaded", "network", "timeout", "server_error"],
                 },
+                title: "Cron Retry Error Types",
+                description:
+                  "Error types to retry: rate_limit, overloaded, network, timeout, server_error. Use to restrict which errors trigger retries; omit to retry all transient types.",
               },
             },
             additionalProperties: false,
+            title: "Cron Retry Policy",
+            description:
+              "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
           },
           webhook: {
             type: "string",
             format: "uri",
+            title: "Cron Legacy Webhook (Deprecated)",
+            description:
+              'Deprecated legacy fallback webhook URL used only for old jobs with `notify=true`. Migrate to per-job delivery using `delivery.mode="webhook"` plus `delivery.to`, and avoid relying on this global field.',
           },
           webhookToken: {
             anyOf: [
@@ -17671,6 +19352,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 ],
               },
             ],
+            title: "Cron Webhook Bearer Token",
+            description:
+              "Bearer token attached to cron webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
           },
           sessionRetention: {
             anyOf: [
@@ -17682,6 +19366,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: false,
               },
             ],
+            title: "Cron Session Retention",
+            description:
+              "Controls how long completed cron run sessions are kept before pruning (`24h`, `7d`, `1h30m`, or `false` to disable pruning; default: `24h`). Use shorter retention to reduce storage growth on high-frequency schedules.",
           },
           runLog: {
             type: "object",
@@ -17695,14 +19382,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "number",
                   },
                 ],
+                title: "Cron Run Log Max Bytes",
+                description:
+                  "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
               },
               keepLines: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Cron Run Log Keep Lines",
+                description:
+                  "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
               },
             },
             additionalProperties: false,
+            title: "Cron Run Log Pruning",
+            description:
+              "Pruning controls for per-job cron run history files under `cron/runs/<jobId>.jsonl`, including size and line retention.",
           },
           failureAlert: {
             type: "object",
@@ -17751,50 +19447,83 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
           },
         },
         additionalProperties: false,
+        title: "Cron",
+        description:
+          "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
       },
       hooks: {
         type: "object",
         properties: {
           enabled: {
             type: "boolean",
+            title: "Hooks Enabled",
+            description:
+              "Enables the hooks endpoint and mapping execution pipeline for inbound webhook requests. Keep disabled unless you are actively routing external events into the gateway.",
           },
           path: {
             type: "string",
+            title: "Hooks Endpoint Path",
+            description:
+              "HTTP path used by the hooks endpoint (for example `/hooks`) on the gateway control server. Use a non-guessable path and combine it with token validation for defense in depth.",
           },
           token: {
             type: "string",
+            title: "Hooks Auth Token",
+            description:
+              "Shared bearer token checked by hooks ingress for request authentication before mappings run. Treat holders as full-trust callers for the hook ingress surface, not as a separate non-owner role. Use environment substitution and rotate regularly when webhook endpoints are internet-accessible.",
           },
           defaultSessionKey: {
             type: "string",
+            title: "Hooks Default Session Key",
+            description:
+              "Fallback session key used for hook deliveries when a request does not provide one through allowed channels. Use a stable but scoped key to avoid mixing unrelated automation conversations.",
           },
           allowRequestSessionKey: {
             type: "boolean",
+            title: "Hooks Allow Request Session Key",
+            description:
+              "Allows callers to supply a session key in hook requests when true, enabling caller-controlled routing. Keep false unless trusted integrators explicitly need custom session threading.",
           },
           allowedSessionKeyPrefixes: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Hooks Allowed Session Key Prefixes",
+            description:
+              "Allowlist of accepted session-key prefixes for inbound hook requests when caller-provided keys are enabled. Use narrow prefixes to prevent arbitrary session-key injection.",
           },
           allowedAgentIds: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Hooks Allowed Agent IDs",
+            description:
+              "Allowlist of agent IDs that hook mappings are allowed to target when selecting execution agents. Use this to constrain automation events to dedicated service agents and reduce blast radius if a hook token is exposed.",
           },
           maxBodyBytes: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Hooks Max Body Bytes",
+            description:
+              "Maximum accepted webhook payload size in bytes before the request is rejected. Keep this bounded to reduce abuse risk and protect memory usage under bursty integrations.",
           },
           presets: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Hooks Presets",
+            description:
+              "Named hook preset bundles applied at load time to seed standard mappings and behavior defaults. Keep preset usage explicit so operators can audit which automations are active.",
           },
           transformsDir: {
             type: "string",
+            title: "Hooks Transforms Directory",
+            description:
+              "Base directory for hook transform modules referenced by mapping transform.module paths. Use a controlled repo directory so dynamic imports remain reviewable and predictable.",
           },
           mappings: {
             type: "array",
@@ -17803,18 +19532,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               properties: {
                 id: {
                   type: "string",
+                  title: "Hook Mapping ID",
+                  description:
+                    "Optional stable identifier for a hook mapping entry used for auditing, troubleshooting, and targeted updates. Use unique IDs so logs and config diffs can reference mappings unambiguously.",
                 },
                 match: {
                   type: "object",
                   properties: {
                     path: {
                       type: "string",
+                      title: "Hook Mapping Match Path",
+                      description:
+                        "Path match condition for a hook mapping, usually compared against the inbound request path. Use this to split automation behavior by webhook endpoint path families.",
                     },
                     source: {
                       type: "string",
+                      title: "Hook Mapping Match Source",
+                      description:
+                        "Source match condition for a hook mapping, typically set by trusted upstream metadata or adapter logic. Use stable source identifiers so routing remains deterministic across retries.",
                     },
                   },
                   additionalProperties: false,
+                  title: "Hook Mapping Match",
+                  description:
+                    "Grouping object for mapping match predicates such as path and source before action routing is applied. Keep match criteria specific so unrelated webhook traffic does not trigger automations.",
                 },
                 action: {
                   anyOf: [
@@ -17827,6 +19568,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       const: "agent",
                     },
                   ],
+                  title: "Hook Mapping Action",
+                  description:
+                    'Mapping action type: "wake" triggers agent wake flow, while "agent" sends directly to agent handling. Use "agent" for immediate execution and "wake" when heartbeat-driven processing is preferred.',
                 },
                 wakeMode: {
                   anyOf: [
@@ -17839,116 +19583,209 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       const: "next-heartbeat",
                     },
                   ],
+                  title: "Hook Mapping Wake Mode",
+                  description:
+                    'Wake scheduling mode: "now" wakes immediately, while "next-heartbeat" defers until the next heartbeat cycle. Use deferred mode for lower-priority automations that can tolerate slight delay.',
                 },
                 name: {
                   type: "string",
+                  title: "Hook Mapping Name",
+                  description:
+                    "Human-readable mapping display name used in diagnostics and operator-facing config UIs. Keep names concise and descriptive so routing intent is obvious during incident review.",
                 },
                 agentId: {
                   type: "string",
+                  title: "Hook Mapping Agent ID",
+                  description:
+                    "Target agent ID for mapping execution when action routing should not use defaults. Use dedicated automation agents to isolate webhook behavior from interactive operator sessions.",
                 },
                 sessionKey: {
                   type: "string",
+                  title: "Hook Mapping Session Key",
+                  description:
+                    "Explicit session key override for mapping-delivered messages to control thread continuity. Use stable scoped keys so repeated events correlate without leaking into unrelated conversations.",
                 },
                 messageTemplate: {
                   type: "string",
+                  title: "Hook Mapping Message Template",
+                  description:
+                    "Template for synthesizing structured mapping input into the final message content sent to the target action path. Keep templates deterministic so downstream parsing and behavior remain stable.",
                 },
                 textTemplate: {
                   type: "string",
+                  title: "Hook Mapping Text Template",
+                  description:
+                    "Text-only fallback template used when rich payload rendering is not desired or not supported. Use this to provide a concise, consistent summary string for chat delivery surfaces.",
                 },
                 deliver: {
                   type: "boolean",
+                  title: "Hook Mapping Deliver Reply",
+                  description:
+                    "Controls whether mapping execution results are delivered back to a channel destination versus being processed silently. Disable delivery for background automations that should not post user-facing output.",
                 },
                 allowUnsafeExternalContent: {
                   type: "boolean",
+                  title: "Hook Mapping Allow Unsafe External Content",
+                  description:
+                    "When true, mapping content may include less-sanitized external payload data in generated messages. Keep false by default and enable only for trusted sources with reviewed transform logic.",
                 },
                 channel: {
                   type: "string",
                   minLength: 1,
+                  title: "Hook Mapping Delivery Channel",
+                  description:
+                    'Delivery channel override for mapping outputs (for example "last", "telegram", "discord", "slack", "signal", "imessage", or "msteams"). Keep channel overrides explicit to avoid accidental cross-channel sends.',
                 },
                 to: {
                   type: "string",
+                  title: "Hook Mapping Delivery Destination",
+                  description:
+                    "Destination identifier inside the selected channel when mapping replies should route to a fixed target. Verify provider-specific destination formats before enabling production mappings.",
                 },
                 model: {
                   type: "string",
+                  title: "Hook Mapping Model Override",
+                  description:
+                    "Optional model override for mapping-triggered runs when automation should use a different model than agent defaults. Use this sparingly so behavior remains predictable across mapping executions.",
                 },
                 thinking: {
                   type: "string",
+                  title: "Hook Mapping Thinking Override",
+                  description:
+                    "Optional thinking-effort override for mapping-triggered runs to tune latency versus reasoning depth. Keep low or minimal for high-volume hooks unless deeper reasoning is clearly required.",
                 },
                 timeoutSeconds: {
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
+                  title: "Hook Mapping Timeout (sec)",
+                  description:
+                    "Maximum runtime allowed for mapping action execution before timeout handling applies. Use tighter limits for high-volume webhook sources to prevent queue pileups.",
                 },
                 transform: {
                   type: "object",
                   properties: {
                     module: {
                       type: "string",
+                      title: "Hook Transform Module",
+                      description:
+                        "Relative transform module path loaded from hooks.transformsDir to rewrite incoming payloads before delivery. Keep modules local, reviewed, and free of path traversal patterns.",
                     },
                     export: {
                       type: "string",
+                      title: "Hook Transform Export",
+                      description:
+                        "Named export to invoke from the transform module; defaults to module default export when omitted. Set this when one file hosts multiple transform handlers.",
                     },
                   },
                   required: ["module"],
                   additionalProperties: false,
+                  title: "Hook Mapping Transform",
+                  description:
+                    "Transform configuration block defining module/export preprocessing before mapping action handling. Use transforms only from reviewed code paths and keep behavior deterministic for repeatable automation.",
                 },
               },
               additionalProperties: false,
             },
+            title: "Hook Mappings",
+            description:
+              "Ordered mapping rules that match inbound hook requests and choose wake or agent actions with optional delivery routing. Use specific mappings first to avoid broad pattern rules capturing everything.",
           },
           gmail: {
             type: "object",
             properties: {
               account: {
                 type: "string",
+                title: "Gmail Hook Account",
+                description:
+                  "Google account identifier used for Gmail watch/subscription operations in this hook integration. Use a dedicated automation mailbox account to isolate operational permissions.",
               },
               label: {
                 type: "string",
+                title: "Gmail Hook Label",
+                description:
+                  "Optional Gmail label filter limiting which labeled messages trigger hook events. Keep filters narrow to avoid flooding automations with unrelated inbox traffic.",
               },
               topic: {
                 type: "string",
+                title: "Gmail Hook Pub/Sub Topic",
+                description:
+                  "Google Pub/Sub topic name used by Gmail watch to publish change notifications for this account. Ensure the topic IAM grants Gmail publish access before enabling watches.",
               },
               subscription: {
                 type: "string",
+                title: "Gmail Hook Subscription",
+                description:
+                  "Pub/Sub subscription consumed by the gateway to receive Gmail change notifications from the configured topic. Keep subscription ownership clear so multiple consumers do not race unexpectedly.",
               },
               pushToken: {
                 type: "string",
+                title: "Gmail Hook Push Token",
+                description:
+                  "Shared secret token required on Gmail push hook callbacks before processing notifications. Use env substitution and rotate if callback endpoints are exposed externally.",
               },
               hookUrl: {
                 type: "string",
+                title: "Gmail Hook Callback URL",
+                description:
+                  "Public callback URL Gmail or intermediaries invoke to deliver notifications into this hook pipeline. Keep this URL protected with token validation and restricted network exposure.",
               },
               includeBody: {
                 type: "boolean",
+                title: "Gmail Hook Include Body",
+                description:
+                  "When true, fetch and include email body content for downstream mapping/agent processing. Keep false unless body text is required, because this increases payload size and sensitivity.",
               },
               maxBytes: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Gmail Hook Max Body Bytes",
+                description:
+                  "Maximum Gmail payload bytes processed per event when includeBody is enabled. Keep conservative limits to reduce oversized message processing cost and risk.",
               },
               renewEveryMinutes: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Gmail Hook Renew Interval (min)",
+                description:
+                  "Renewal cadence in minutes for Gmail watch subscriptions to prevent expiration. Set below provider expiration windows and monitor renew failures in logs.",
               },
               allowUnsafeExternalContent: {
                 type: "boolean",
+                title: "Gmail Hook Allow Unsafe External Content",
+                description:
+                  "Allows less-sanitized external Gmail content to pass into processing when enabled. Keep disabled for safer defaults, and enable only for trusted mail streams with controlled transforms.",
               },
               serve: {
                 type: "object",
                 properties: {
                   bind: {
                     type: "string",
+                    title: "Gmail Hook Server Bind Address",
+                    description:
+                      "Bind address for the local Gmail callback HTTP server used when serving hooks directly. Keep loopback-only unless external ingress is intentionally required.",
                   },
                   port: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Gmail Hook Server Port",
+                    description:
+                      "Port for the local Gmail callback HTTP server when serve mode is enabled. Use a dedicated port to avoid collisions with gateway/control interfaces.",
                   },
                   path: {
                     type: "string",
+                    title: "Gmail Hook Server Path",
+                    description:
+                      "HTTP path on the local Gmail callback server where push notifications are accepted. Keep this consistent with subscription configuration to avoid dropped events.",
                   },
                 },
                 additionalProperties: false,
+                title: "Gmail Hook Local Server",
+                description:
+                  "Local callback server settings block for directly receiving Gmail notifications without a separate ingress layer. Enable only when this process should terminate webhook traffic itself.",
               },
               tailscale: {
                 type: "object",
@@ -17968,18 +19805,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: "funnel",
                       },
                     ],
+                    title: "Gmail Hook Tailscale Mode",
+                    description:
+                      'Tailscale exposure mode for Gmail callbacks: "off", "serve", or "funnel". Use "serve" for private tailnet delivery and "funnel" only when public internet ingress is required.',
                   },
                   path: {
                     type: "string",
+                    title: "Gmail Hook Tailscale Path",
+                    description:
+                      "Path published by Tailscale Serve/Funnel for Gmail callback forwarding when enabled. Keep it aligned with Gmail webhook config so requests reach the expected handler.",
                   },
                   target: {
                     type: "string",
+                    title: "Gmail Hook Tailscale Target",
+                    description:
+                      "Local service target forwarded by Tailscale Serve/Funnel (for example http://127.0.0.1:8787). Use explicit loopback targets to avoid ambiguous routing.",
                   },
                 },
                 additionalProperties: false,
+                title: "Gmail Hook Tailscale",
+                description:
+                  "Tailscale exposure configuration block for publishing Gmail callbacks through Serve/Funnel routes. Use private tailnet modes before enabling any public ingress path.",
               },
               model: {
                 type: "string",
+                title: "Gmail Hook Model Override",
+                description:
+                  "Optional model override for Gmail-triggered runs when mailbox automations should use dedicated model behavior. Keep unset to inherit agent defaults unless mailbox tasks need specialization.",
               },
               thinking: {
                 anyOf: [
@@ -18004,15 +19856,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "high",
                   },
                 ],
+                title: "Gmail Hook Thinking Override",
+                description:
+                  'Thinking effort override for Gmail-driven agent runs: "off", "minimal", "low", "medium", or "high". Keep modest defaults for routine inbox automations to control cost and latency.',
               },
             },
             additionalProperties: false,
+            title: "Gmail Hook",
+            description:
+              "Gmail push integration settings used for Pub/Sub notifications and optional local callback serving. Keep this scoped to dedicated Gmail automation accounts where possible.",
           },
           internal: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Internal Hooks Enabled",
+                description:
+                  "Enables processing for internal hooks and configured entries in the internal hook runtime. Keep disabled unless internal hooks are intentionally configured.",
               },
               entries: {
                 type: "object",
@@ -18037,6 +19898,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                   additionalProperties: {},
                 },
+                title: "Internal Hook Entries",
+                description:
+                  "Configured internal hook entry records used to register concrete runtime handlers and metadata. Keep entries explicit and versioned so production behavior is auditable.",
               },
               load: {
                 type: "object",
@@ -18046,9 +19910,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     items: {
                       type: "string",
                     },
+                    title: "Internal Hook Extra Directories",
+                    description:
+                      "Additional directories searched for internal hook modules beyond default load paths. Keep this minimal and controlled to reduce accidental module shadowing.",
                   },
                 },
                 additionalProperties: false,
+                title: "Internal Hook Loader",
+                description:
+                  "Internal hook loader settings controlling where handler modules are discovered at startup. Use constrained load roots to reduce accidental module conflicts or shadowing.",
               },
               installs: {
                 type: "object",
@@ -18155,23 +20025,38 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   required: ["source"],
                   additionalProperties: false,
                 },
+                title: "Internal Hook Install Records",
+                description:
+                  "Install metadata for internal hook modules, including source and resolved artifacts for repeatable deployments. Use this as operational provenance and avoid manual drift edits.",
               },
             },
             additionalProperties: false,
+            title: "Internal Hooks",
+            description:
+              "Internal hook runtime settings for bundled/custom event handlers loaded from module paths. Use this for trusted in-process automations and keep handler loading tightly scoped.",
           },
         },
         additionalProperties: false,
+        title: "Hooks",
+        description:
+          "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
       },
       web: {
         type: "object",
         properties: {
           enabled: {
             type: "boolean",
+            title: "Web Channel Enabled",
+            description:
+              "Enables the web channel runtime and related websocket lifecycle behavior. Keep disabled when web chat is unused to reduce active connection management overhead.",
           },
           heartbeatSeconds: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Web Channel Heartbeat Interval (sec)",
+            description:
+              "Heartbeat interval in seconds for web channel connectivity and liveness maintenance. Use shorter intervals for faster detection, or longer intervals to reduce keepalive chatter.",
           },
           reconnect: {
             type: "object",
@@ -18179,32 +20064,56 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               initialMs: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Web Reconnect Initial Delay (ms)",
+                description:
+                  "Initial reconnect delay in milliseconds before the first retry after disconnection. Use modest delays to recover quickly without immediate retry storms.",
               },
               maxMs: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Web Reconnect Max Delay (ms)",
+                description:
+                  "Maximum reconnect backoff cap in milliseconds to bound retry delay growth over repeated failures. Use a reasonable cap so recovery remains timely after prolonged outages.",
               },
               factor: {
                 type: "number",
                 exclusiveMinimum: 0,
+                title: "Web Reconnect Backoff Factor",
+                description:
+                  "Exponential backoff multiplier used between reconnect attempts in web channel retry loops. Keep factor above 1 and tune with jitter for stable large-fleet reconnect behavior.",
               },
               jitter: {
                 type: "number",
                 minimum: 0,
                 maximum: 1,
+                title: "Web Reconnect Jitter",
+                description:
+                  "Randomization factor (0-1) applied to reconnect delays to desynchronize clients after outage events. Keep non-zero jitter in multi-client deployments to reduce synchronized spikes.",
               },
               maxAttempts: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Web Reconnect Max Attempts",
+                description:
+                  "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
               },
             },
             additionalProperties: false,
+            title: "Web Channel Reconnect Policy",
+            description:
+              "Reconnect backoff policy for web channel reconnect attempts after transport failure. Keep bounded retries and jitter tuned to avoid thundering-herd reconnect behavior.",
           },
         },
         additionalProperties: false,
+        title: "Web Channel",
+        description:
+          "Web channel runtime settings for heartbeat and reconnect behavior when operating web-based chat surfaces. Use reconnect values tuned to your network reliability profile and expected uptime needs.",
       },
       channels: {
+        title: "Channels",
+        description:
+          "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
         properties: {},
         required: [],
         additionalProperties: true,
@@ -18217,12 +20126,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Wide-area Discovery Enabled",
+                description:
+                  "Enables wide-area discovery signaling when your environment needs non-local gateway discovery. Keep disabled unless cross-network discovery is operationally required.",
               },
               domain: {
                 type: "string",
+                title: "Wide-area Discovery Domain",
+                description:
+                  "Optional unicast DNS-SD domain for wide-area discovery, such as openclaw.internal. Use this when you intentionally publish gateway discovery beyond local mDNS scopes.",
               },
             },
             additionalProperties: false,
+            title: "Wide-area Discovery",
+            description:
+              "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
           },
           mdns: {
             type: "object",
@@ -18230,38 +20148,64 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               mode: {
                 type: "string",
                 enum: ["off", "minimal", "full"],
+                title: "mDNS Discovery Mode",
+                description:
+                  'mDNS broadcast mode ("minimal" default, "full" includes cliPath/sshPort, "off" disables mDNS).',
               },
             },
             additionalProperties: false,
+            title: "mDNS Discovery",
+            description:
+              "mDNS discovery configuration group for local network advertisement and discovery behavior tuning. Keep minimal mode for routine LAN discovery unless extra metadata is required.",
           },
         },
         additionalProperties: false,
+        title: "Discovery",
+        description:
+          "Service discovery settings for local mDNS advertisement and optional wide-area presence signaling. Keep discovery scoped to expected networks to avoid leaking service metadata.",
       },
       canvasHost: {
         type: "object",
         properties: {
           enabled: {
             type: "boolean",
+            title: "Canvas Host Enabled",
+            description:
+              "Enables the canvas host server process and routes for serving canvas files. Keep disabled when canvas workflows are inactive to reduce exposed local services.",
           },
           root: {
             type: "string",
+            title: "Canvas Host Root Directory",
+            description:
+              "Filesystem root directory served by canvas host for canvas content and static assets. Use a dedicated directory and avoid broad repo roots for least-privilege file exposure.",
           },
           port: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Canvas Host Port",
+            description:
+              "TCP port used by the canvas host HTTP server when canvas hosting is enabled. Choose a non-conflicting port and align firewall/proxy policy accordingly.",
           },
           liveReload: {
             type: "boolean",
+            title: "Canvas Host Live Reload",
+            description:
+              "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
           },
         },
         additionalProperties: false,
+        title: "Canvas Host",
+        description:
+          "Canvas host settings for serving canvas assets and local live-reload behavior used by canvas-enabled workflows. Keep disabled unless canvas-hosted assets are actively used.",
       },
       talk: {
         type: "object",
         properties: {
           provider: {
             type: "string",
+            title: "Talk Active Provider",
+            description: 'Active Talk provider id (for example "elevenlabs").',
           },
           providers: {
             type: "object",
@@ -18273,6 +20217,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               properties: {
                 voiceId: {
                   type: "string",
+                  title: "Talk Provider Voice ID",
+                  description: "Provider default voice ID for Talk mode.",
                 },
                 voiceAliases: {
                   type: "object",
@@ -18282,12 +20228,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   additionalProperties: {
                     type: "string",
                   },
+                  title: "Talk Provider Voice Aliases",
+                  description: "Optional provider voice alias map for Talk directives.",
                 },
                 modelId: {
                   type: "string",
+                  title: "Talk Provider Model ID",
+                  description: "Provider default model ID for Talk mode.",
                 },
                 outputFormat: {
                   type: "string",
+                  title: "Talk Provider Output Format",
+                  description: "Provider default output format for Talk mode.",
                 },
                 apiKey: {
                   anyOf: [
@@ -18354,21 +20306,35 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       ],
                     },
                   ],
+                  title: "Talk Provider API Key",
+                  description: "Provider API key for Talk mode.",
                 },
               },
               additionalProperties: {},
             },
+            title: "Talk Provider Settings",
+            description:
+              "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
           },
           interruptOnSpeech: {
             type: "boolean",
+            title: "Talk Interrupt on Speech",
+            description:
+              "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
           },
           silenceTimeoutMs: {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Talk Silence Timeout (ms)",
+            description:
+              "Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (700 ms on macOS and Android, 900 ms on iOS).",
           },
         },
         additionalProperties: false,
+        title: "Talk",
+        description:
+          "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
       },
       gateway: {
         type: "object",
@@ -18377,6 +20343,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
+            title: "Gateway Port",
+            description:
+              "TCP port used by the gateway listener for API, control UI, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
           },
           mode: {
             anyOf: [
@@ -18389,6 +20358,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "remote",
               },
             ],
+            title: "Gateway Mode",
+            description:
+              'Gateway operation mode: "local" runs channels and agent runtime on this host, while "remote" connects through remote transport. Keep "local" unless you intentionally run a split remote gateway topology.',
           },
           bind: {
             anyOf: [
@@ -18413,39 +20385,68 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "tailnet",
               },
             ],
+            title: "Gateway Bind Mode",
+            description:
+              'Network bind profile: "auto", "lan", "loopback", "custom", or "tailnet" to control interface exposure. Keep "loopback" or "auto" for safest local operation unless external clients must connect.',
           },
           customBindHost: {
             type: "string",
+            title: "Gateway Custom Bind Host",
+            description:
+              "Explicit bind host/IP used when gateway.bind is set to custom for manual interface targeting. Use a precise address and avoid wildcard binds unless external exposure is required.",
           },
           controlUi: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Control UI Enabled",
+                description:
+                  "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
               },
               basePath: {
                 type: "string",
+                title: "Control UI Base Path",
+                description: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
               },
               root: {
                 type: "string",
+                title: "Control UI Assets Root",
+                description:
+                  "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
               },
               allowedOrigins: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Control UI Allowed Origins",
+                description:
+                  'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
               },
               dangerouslyAllowHostHeaderOriginFallback: {
                 type: "boolean",
+                title: "Dangerously Allow Host-Header Origin Fallback",
+                description:
+                  "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
               },
               allowInsecureAuth: {
                 type: "boolean",
+                title: "Insecure Control UI Auth Toggle",
+                description:
+                  "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
               },
               dangerouslyDisableDeviceAuth: {
                 type: "boolean",
+                title: "Dangerously Disable Control UI Device Auth",
+                description:
+                  "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
               },
             },
             additionalProperties: false,
+            title: "Control UI",
+            description:
+              "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
           },
           auth: {
             type: "object",
@@ -18469,6 +20470,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "trusted-proxy",
                   },
                 ],
+                title: "Gateway Auth Mode",
+                description:
+                  'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
               },
               token: {
                 anyOf: [
@@ -18535,6 +20539,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     ],
                   },
                 ],
+                title: "Gateway Token",
+                description:
+                  "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
               },
               password: {
                 anyOf: [
@@ -18601,9 +20608,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     ],
                   },
                 ],
+                title: "Gateway Password",
+                description: "Required for Tailscale funnel.",
               },
               allowTailscale: {
                 type: "boolean",
+                title: "Gateway Auth Allow Tailscale Identity",
+                description:
+                  "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
               },
               rateLimit: {
                 type: "object",
@@ -18622,6 +20634,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Gateway Auth Rate Limit",
+                description:
+                  "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
               },
               trustedProxy: {
                 type: "object",
@@ -18645,18 +20660,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 required: ["userHeader"],
                 additionalProperties: false,
+                title: "Gateway Trusted Proxy Auth",
+                description:
+                  "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
               },
             },
             additionalProperties: false,
+            title: "Gateway Auth",
+            description:
+              "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
           },
           trustedProxies: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Gateway Trusted Proxy CIDRs",
+            description:
+              "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
           },
           allowRealIpFallback: {
             type: "boolean",
+            title: "Gateway Allow x-real-ip Fallback",
+            description:
+              "Enables x-real-ip fallback when x-forwarded-for is missing in proxy scenarios. Keep disabled unless your ingress stack requires this compatibility behavior.",
           },
           tools: {
             type: "object",
@@ -18666,15 +20693,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 items: {
                   type: "string",
                 },
+                title: "Gateway Tool Denylist",
+                description:
+                  "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
               },
               allow: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Gateway Tool Allowlist",
+                description:
+                  "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
               },
             },
             additionalProperties: false,
+            title: "Gateway Tool Exposure Policy",
+            description:
+              "Gateway-level tool exposure allow/deny policy that can restrict runtime tool availability independent of agent/tool profiles. Use this for coarse emergency controls and production hardening.",
           },
           webchat: {
             type: "object",
@@ -18683,6 +20719,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 500000,
+                title: "WebChat History Max Chars",
+                description:
+                  "Max characters per text field in chat.history responses before truncation (default: 12000).",
               },
             },
             additionalProperties: false,
@@ -18691,16 +20730,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             type: "integer",
             minimum: 0,
             maximum: 9007199254740991,
+            title: "Gateway Channel Health Check Interval (min)",
+            description:
+              "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
           },
           channelStaleEventThresholdMinutes: {
             type: "integer",
             minimum: 1,
             maximum: 9007199254740991,
+            title: "Gateway Channel Stale Event Threshold (min)",
+            description:
+              "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
           },
           channelMaxRestartsPerHour: {
             type: "integer",
             minimum: 1,
             maximum: 9007199254740991,
+            title: "Gateway Channel Max Restarts Per Hour",
+            description:
+              "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
           },
           tailscale: {
             type: "object",
@@ -18720,18 +20768,29 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "funnel",
                   },
                 ],
+                title: "Gateway Tailscale Mode",
+                description:
+                  'Tailscale publish mode: "off", "serve", or "funnel" for private or public exposure paths. Use "serve" for tailnet-only access and "funnel" only when public internet reachability is required.',
               },
               resetOnExit: {
                 type: "boolean",
+                title: "Gateway Tailscale Reset on Exit",
+                description:
+                  "Resets Tailscale Serve/Funnel state on gateway exit to avoid stale published routes after shutdown. Keep enabled unless another controller manages publish lifecycle outside the gateway.",
               },
             },
             additionalProperties: false,
+            title: "Gateway Tailscale",
+            description:
+              "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
           },
           remote: {
             type: "object",
             properties: {
               url: {
                 type: "string",
+                title: "Remote Gateway URL",
+                description: "Remote Gateway WebSocket URL (ws:// or wss://).",
               },
               transport: {
                 anyOf: [
@@ -18744,6 +20803,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "direct",
                   },
                 ],
+                title: "Remote Gateway Transport",
+                description:
+                  'Remote connection transport: "direct" uses configured URL connectivity, while "ssh" tunnels through SSH. Use SSH when you need encrypted tunnel semantics without exposing remote ports.',
               },
               token: {
                 anyOf: [
@@ -18810,6 +20872,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     ],
                   },
                 ],
+                title: "Remote Gateway Token",
+                description:
+                  "Bearer token used to authenticate this client to a remote gateway in token-auth deployments. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
               },
               password: {
                 anyOf: [
@@ -18876,18 +20941,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     ],
                   },
                 ],
+                title: "Remote Gateway Password",
+                description:
+                  "Password credential used for remote gateway authentication when password mode is enabled. Keep this secret managed externally and avoid plaintext values in committed config.",
               },
               tlsFingerprint: {
                 type: "string",
+                title: "Remote Gateway TLS Fingerprint",
+                description:
+                  "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",
               },
               sshTarget: {
                 type: "string",
+                title: "Remote Gateway SSH Target",
+                description:
+                  "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
               },
               sshIdentity: {
                 type: "string",
+                title: "Remote Gateway SSH Identity",
+                description: "Optional SSH identity file path (passed to ssh -i).",
               },
             },
             additionalProperties: false,
+            title: "Remote Gateway",
+            description:
+              "Remote gateway connection settings for direct or SSH transport when this instance proxies to another runtime host. Use remote mode only when split-host operation is intentionally configured.",
           },
           reload: {
             type: "object",
@@ -18911,40 +20990,69 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "hybrid",
                   },
                 ],
+                title: "Config Reload Mode",
+                description:
+                  'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
               },
               debounceMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Config Reload Debounce (ms)",
+                description: "Debounce window (ms) before applying config changes.",
               },
               deferralTimeoutMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Restart Deferral Timeout (ms)",
+                description:
+                  "Maximum time (ms) to wait for in-flight operations to complete before forcing a SIGUSR1 restart. Default: 300000 (5 minutes). Lower values risk aborting active subagent LLM calls.",
               },
             },
             additionalProperties: false,
+            title: "Config Reload",
+            description:
+              "Live config-reload policy for how edits are applied and when full restarts are triggered. Keep hybrid behavior for safest operational updates unless debugging reload internals.",
           },
           tls: {
             type: "object",
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Gateway TLS Enabled",
+                description:
+                  "Enables TLS termination at the gateway listener so clients connect over HTTPS/WSS directly. Keep enabled for direct internet exposure or any untrusted network boundary.",
               },
               autoGenerate: {
                 type: "boolean",
+                title: "Gateway TLS Auto-Generate Cert",
+                description:
+                  "Auto-generates a local TLS certificate/key pair when explicit files are not configured. Use only for local/dev setups and replace with real certificates for production traffic.",
               },
               certPath: {
                 type: "string",
+                title: "Gateway TLS Certificate Path",
+                description:
+                  "Filesystem path to the TLS certificate file used by the gateway when TLS is enabled. Use managed certificate paths and keep renewal automation aligned with this location.",
               },
               keyPath: {
                 type: "string",
+                title: "Gateway TLS Key Path",
+                description:
+                  "Filesystem path to the TLS private key file used by the gateway when TLS is enabled. Keep this key file permission-restricted and rotate per your security policy.",
               },
               caPath: {
                 type: "string",
+                title: "Gateway TLS CA Path",
+                description:
+                  "Optional CA bundle path for client verification or custom trust-chain requirements at the gateway edge. Use this when private PKI or custom certificate chains are part of deployment.",
               },
             },
             additionalProperties: false,
+            title: "Gateway TLS",
+            description:
+              "TLS certificate and key settings for terminating HTTPS directly in the gateway process. Use explicit certificates in production and avoid plaintext exposure on untrusted networks.",
           },
           http: {
             type: "object",
@@ -18957,57 +21065,90 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       enabled: {
                         type: "boolean",
+                        title: "OpenAI Chat Completions Endpoint",
+                        description:
+                          "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
                       },
                       maxBodyBytes: {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                        title: "OpenAI Chat Completions Max Body Bytes",
+                        description:
+                          "Max request body size in bytes for `/v1/chat/completions` (default: 20MB).",
                       },
                       maxImageParts: {
                         type: "integer",
                         minimum: 0,
                         maximum: 9007199254740991,
+                        title: "OpenAI Chat Completions Max Image Parts",
+                        description:
+                          "Max number of `image_url` parts accepted from the latest user message (default: 8).",
                       },
                       maxTotalImageBytes: {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                        title: "OpenAI Chat Completions Max Total Image Bytes",
+                        description:
+                          "Max cumulative decoded bytes across all `image_url` parts in one request (default: 20MB).",
                       },
                       images: {
                         type: "object",
                         properties: {
                           allowUrl: {
                             type: "boolean",
+                            title: "OpenAI Chat Completions Allow Image URLs",
+                            description:
+                              "Allow server-side URL fetches for `image_url` parts (default: false; data URIs remain supported). Set this to `false` to disable URL fetching entirely.",
                           },
                           urlAllowlist: {
                             type: "array",
                             items: {
                               type: "string",
                             },
+                            title: "OpenAI Chat Completions Image URL Allowlist",
+                            description:
+                              "Optional hostname allowlist for `image_url` URL fetches; supports exact hosts and `*.example.com` wildcards. Empty or omitted lists mean no hostname allowlist restriction.",
                           },
                           allowedMimes: {
                             type: "array",
                             items: {
                               type: "string",
                             },
+                            title: "OpenAI Chat Completions Image MIME Allowlist",
+                            description:
+                              "Allowed MIME types for `image_url` parts (case-insensitive list).",
                           },
                           maxBytes: {
                             type: "integer",
                             exclusiveMinimum: 0,
                             maximum: 9007199254740991,
+                            title: "OpenAI Chat Completions Image Max Bytes",
+                            description:
+                              "Max bytes per fetched/decoded `image_url` image (default: 10MB).",
                           },
                           maxRedirects: {
                             type: "integer",
                             minimum: 0,
                             maximum: 9007199254740991,
+                            title: "OpenAI Chat Completions Image Max Redirects",
+                            description:
+                              "Max HTTP redirects allowed when fetching `image_url` URLs (default: 3).",
                           },
                           timeoutMs: {
                             type: "integer",
                             exclusiveMinimum: 0,
                             maximum: 9007199254740991,
+                            title: "OpenAI Chat Completions Image Timeout (ms)",
+                            description:
+                              "Timeout in milliseconds for `image_url` URL fetches (default: 10000).",
                           },
                         },
                         additionalProperties: false,
+                        title: "OpenAI Chat Completions Image Limits",
+                        description:
+                          "Image fetch/validation controls for OpenAI-compatible `image_url` parts.",
                       },
                     },
                     additionalProperties: false,
@@ -19131,6 +21272,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "Gateway HTTP Endpoints",
+                description:
+                  "HTTP endpoint feature toggles under the gateway API surface for compatibility routes and optional integrations. Enable endpoints intentionally and monitor access patterns after rollout.",
               },
               securityHeaders: {
                 type: "object",
@@ -19145,12 +21289,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: false,
                       },
                     ],
+                    title: "Strict Transport Security Header",
+                    description:
+                      "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
                   },
                 },
                 additionalProperties: false,
+                title: "Gateway HTTP Security Headers",
+                description:
+                  "Optional HTTP response security headers applied by the gateway process itself. Prefer setting these at your reverse proxy when TLS terminates there.",
               },
             },
             additionalProperties: false,
+            title: "Gateway HTTP API",
+            description:
+              "Gateway HTTP API configuration grouping endpoint toggles and transport-facing API exposure controls. Keep only required endpoints enabled to reduce attack surface.",
           },
           push: {
             type: "object",
@@ -19163,20 +21316,35 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     properties: {
                       baseUrl: {
                         type: "string",
+                        title: "Gateway APNs Relay Base URL",
+                        description:
+                          "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
                       },
                       timeoutMs: {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                        title: "Gateway APNs Relay Timeout (ms)",
+                        description:
+                          "Timeout in milliseconds for relay send requests from the gateway to the APNs relay (default: 10000). Increase for slower relays or networks, or lower to fail wake attempts faster.",
                       },
                     },
                     additionalProperties: false,
+                    title: "Gateway APNs Relay",
+                    description:
+                      "External relay settings for relay-backed APNs sends. The gateway uses this relay for push.test, wake nudges, and reconnect wakes after a paired official iOS build publishes a relay-backed registration.",
                   },
                 },
                 additionalProperties: false,
+                title: "Gateway APNs Delivery",
+                description:
+                  "APNs delivery settings for iOS devices paired to this gateway. Use relay settings for official/TestFlight builds that register through the external push relay.",
               },
             },
             additionalProperties: false,
+            title: "Gateway Push Delivery",
+            description:
+              "Push-delivery settings used by the gateway when it needs to wake or notify paired devices. Configure relay-backed APNs here for official iOS builds; direct APNs auth remains env-based for local/manual builds.",
           },
           nodes: {
             type: "object",
@@ -19199,9 +21367,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         const: "off",
                       },
                     ],
+                    title: "Gateway Node Browser Mode",
+                    description:
+                      'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
                   },
                   node: {
                     type: "string",
+                    title: "Gateway Node Browser Pin",
+                    description: "Pin browser routing to a specific node id or name (optional).",
                   },
                 },
                 additionalProperties: false,
@@ -19211,18 +21384,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 items: {
                   type: "string",
                 },
+                title: "Gateway Node Allowlist (Extra Commands)",
+                description:
+                  "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
               },
               denyCommands: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Gateway Node Denylist",
+                description:
+                  "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
               },
             },
             additionalProperties: false,
           },
         },
         additionalProperties: false,
+        title: "Gateway",
+        description:
+          "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
       },
       memory: {
         type: "object",
@@ -19238,6 +21420,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "qmd",
               },
             ],
+            title: "Memory Backend",
+            description:
+              'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
           },
           citations: {
             anyOf: [
@@ -19254,27 +21439,45 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 const: "off",
               },
             ],
+            title: "Memory Citations Mode",
+            description:
+              'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
           },
           qmd: {
             type: "object",
             properties: {
               command: {
                 type: "string",
+                title: "QMD Binary",
+                description:
+                  "Sets the executable path for the `qmd` binary used by the QMD backend (default: resolved from PATH). Use an explicit absolute path when multiple qmd installs exist or PATH differs across environments.",
               },
               mcporter: {
                 type: "object",
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "QMD MCPorter Enabled",
+                    description:
+                      "Routes QMD through an mcporter daemon instead of spawning qmd per request, reducing cold-start overhead for larger models. Keep disabled unless mcporter is installed and configured.",
                   },
                   serverName: {
                     type: "string",
+                    title: "QMD MCPorter Server Name",
+                    description:
+                      "Names the mcporter server target used for QMD calls (default: qmd). Change only when your mcporter setup uses a custom server name for qmd mcp keep-alive.",
                   },
                   startDaemon: {
                     type: "boolean",
+                    title: "QMD MCPorter Start Daemon",
+                    description:
+                      "Automatically starts the mcporter daemon when mcporter-backed QMD mode is enabled (default: true). Keep enabled unless process lifecycle is managed externally by your service supervisor.",
                   },
                 },
                 additionalProperties: false,
+                title: "QMD MCPorter",
+                description:
+                  "Routes QMD work through mcporter (MCP runtime) instead of spawning `qmd` for each call. Use this when cold starts are expensive on large models; keep direct process mode for simpler local setups.",
               },
               searchMode: {
                 anyOf: [
@@ -19291,13 +21494,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     const: "vsearch",
                   },
                 ],
+                title: "QMD Search Mode",
+                description:
+                  'Selects the QMD retrieval path: "query" uses standard query flow, "search" uses search-oriented retrieval, and "vsearch" emphasizes vector retrieval. Keep default unless tuning relevance quality.',
               },
               searchTool: {
                 type: "string",
                 minLength: 1,
+                title: "QMD Search Tool Override",
+                description:
+                  "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
               },
               includeDefaultMemory: {
                 type: "boolean",
+                title: "QMD Include Default Memory",
+                description:
+                  "Automatically indexes default memory files (MEMORY.md and memory/**/*.md) into QMD collections. Keep enabled unless you want indexing controlled only through explicit custom paths.",
               },
               paths: {
                 type: "array",
@@ -19317,20 +21529,32 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   required: ["path"],
                   additionalProperties: false,
                 },
+                title: "QMD Extra Paths",
+                description:
+                  "Adds custom directories or files to include in QMD indexing, each with an optional name and glob pattern. Use this for project-specific knowledge locations that are outside default memory paths.",
               },
               sessions: {
                 type: "object",
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "QMD Session Indexing",
+                    description:
+                      "Indexes session transcripts into QMD so recall can include prior conversation content (experimental, default: false). Enable only when transcript memory is required and you accept larger index churn.",
                   },
                   exportDir: {
                     type: "string",
+                    title: "QMD Session Export Directory",
+                    description:
+                      "Overrides where sanitized session exports are written before QMD indexing. Use this when default state storage is constrained or when exports must land on a managed volume.",
                   },
                   retentionDays: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Session Retention (days)",
+                    description:
+                      "Defines how long exported session files are kept before automatic pruning, in days (default: unlimited). Set a finite value for storage hygiene or compliance retention policies.",
                   },
                 },
                 additionalProperties: false,
@@ -19340,35 +21564,59 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 properties: {
                   interval: {
                     type: "string",
+                    title: "QMD Update Interval",
+                    description:
+                      "Sets how often QMD refreshes indexes from source content (duration string, default: 5m). Shorter intervals improve freshness but increase background CPU and I/O.",
                   },
                   debounceMs: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Update Debounce (ms)",
+                    description:
+                      "Sets the minimum delay between consecutive QMD refresh attempts in milliseconds (default: 15000). Increase this if frequent file changes cause update thrash or unnecessary background load.",
                   },
                   onBoot: {
                     type: "boolean",
+                    title: "QMD Update on Startup",
+                    description:
+                      "Runs an initial QMD update once during gateway startup (default: true). Keep enabled so recall starts from a fresh baseline; disable only when startup speed is more important than immediate freshness.",
                   },
                   waitForBootSync: {
                     type: "boolean",
+                    title: "QMD Wait for Boot Sync",
+                    description:
+                      "Blocks startup completion until the initial boot-time QMD sync finishes (default: false). Enable when you need fully up-to-date recall before serving traffic, and keep off for faster boot.",
                   },
                   embedInterval: {
                     type: "string",
+                    title: "QMD Embed Interval",
+                    description:
+                      "Sets how often QMD recomputes embeddings (duration string, default: 60m; set 0 to disable periodic embeds). Lower intervals improve freshness but increase embedding workload and cost.",
                   },
                   commandTimeoutMs: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Command Timeout (ms)",
+                    description:
+                      "Sets timeout for QMD maintenance commands such as collection list/add in milliseconds (default: 30000). Increase when running on slower disks or remote filesystems that delay command completion.",
                   },
                   updateTimeoutMs: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Update Timeout (ms)",
+                    description:
+                      "Sets maximum runtime for each `qmd update` cycle in milliseconds (default: 120000). Raise this for larger collections; lower it when you want quicker failure detection in automation.",
                   },
                   embedTimeoutMs: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Embed Timeout (ms)",
+                    description:
+                      "Sets maximum runtime for each `qmd embed` cycle in milliseconds (default: 120000). Increase for heavier embedding workloads or slower hardware, and lower to fail fast under tight SLAs.",
                   },
                 },
                 additionalProperties: false,
@@ -19380,21 +21628,33 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Max Results",
+                    description:
+                      "Limits how many QMD hits are returned into the agent loop for each recall request (default: 6). Increase for broader recall context, or lower to keep prompts tighter and faster.",
                   },
                   maxSnippetChars: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Max Snippet Chars",
+                    description:
+                      "Caps per-result snippet length extracted from QMD hits in characters (default: 700). Lower this when prompts bloat quickly, and raise only if answers consistently miss key details.",
                   },
                   maxInjectedChars: {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Max Injected Chars",
+                    description:
+                      "Caps how much QMD text can be injected into one turn across all hits. Use lower values to control prompt bloat and latency; raise only when context is consistently truncated.",
                   },
                   timeoutMs: {
                     type: "integer",
                     minimum: 0,
                     maximum: 9007199254740991,
+                    title: "QMD Search Timeout (ms)",
+                    description:
+                      "Sets per-query QMD search timeout in milliseconds (default: 4000). Increase for larger indexes or slower environments, and lower to keep request latency bounded.",
                   },
                 },
                 additionalProperties: false,
@@ -19473,12 +21733,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   },
                 },
                 additionalProperties: false,
+                title: "QMD Surface Scope",
+                description:
+                  "Defines which sessions/channels are eligible for QMD recall using session.sendPolicy-style rules. Keep default direct-only scope unless you intentionally want cross-chat memory sharing.",
               },
             },
             additionalProperties: false,
           },
         },
         additionalProperties: false,
+        title: "Memory",
+        description: "Memory backend configuration (global).",
       },
       mcp: {
         type: "object",
@@ -19551,9 +21816,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               additionalProperties: {},
             },
+            title: "MCP Servers",
+            description:
+              "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
           },
         },
         additionalProperties: false,
+        title: "MCP",
+        description:
+          "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
       },
       skills: {
         type: "object",
@@ -19575,11 +21846,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               },
               watch: {
                 type: "boolean",
+                title: "Watch Skills",
+                description:
+                  "Enable filesystem watching for skill-definition changes so updates can be applied without full process restart. Keep enabled in development workflows and disable in immutable production images.",
               },
               watchDebounceMs: {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+                title: "Skills Watch Debounce (ms)",
+                description:
+                  "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
               },
             },
             additionalProperties: false,
@@ -19749,18 +22026,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         properties: {
           enabled: {
             type: "boolean",
+            title: "Enable Plugins",
+            description:
+              "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
           },
           allow: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Plugin Allowlist",
+            description:
+              "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
           },
           deny: {
             type: "array",
             items: {
               type: "string",
             },
+            title: "Plugin Denylist",
+            description:
+              "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
           },
           load: {
             type: "object",
@@ -19770,21 +22056,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 items: {
                   type: "string",
                 },
+                title: "Plugin Load Paths",
+                description:
+                  "Additional plugin files or directories scanned by the loader beyond built-in defaults. Use dedicated extension directories and avoid broad paths with unrelated executable content.",
               },
             },
             additionalProperties: false,
+            title: "Plugin Loader",
+            description:
+              "Plugin loader configuration group for specifying filesystem paths where plugins are discovered. Keep load paths explicit and reviewed to avoid accidental untrusted extension loading.",
           },
           slots: {
             type: "object",
             properties: {
               memory: {
                 type: "string",
+                title: "Memory Plugin",
+                description:
+                  'Select the active memory plugin by id, or "none" to disable memory plugins.',
               },
               contextEngine: {
                 type: "string",
+                title: "Context Engine Plugin",
+                description:
+                  "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
               },
             },
             additionalProperties: false,
+            title: "Plugin Slots",
+            description:
+              "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
           },
           entries: {
             type: "object",
@@ -19796,30 +22097,48 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
               properties: {
                 enabled: {
                   type: "boolean",
+                  title: "Plugin Enabled",
+                  description:
+                    "Per-plugin enablement override for a specific entry, applied on top of global plugin policy (restart required). Use this to stage plugin rollout gradually across environments.",
                 },
                 hooks: {
                   type: "object",
                   properties: {
                     allowPromptInjection: {
                       type: "boolean",
+                      title: "Allow Prompt Injection Hooks",
+                      description:
+                        "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
                     },
                   },
                   additionalProperties: false,
+                  title: "Plugin Hook Policy",
+                  description:
+                    "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
                 },
                 subagent: {
                   type: "object",
                   properties: {
                     allowModelOverride: {
                       type: "boolean",
+                      title: "Allow Plugin Subagent Model Override",
+                      description:
+                        "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
                     },
                     allowedModels: {
                       type: "array",
                       items: {
                         type: "string",
                       },
+                      title: "Plugin Subagent Allowed Models",
+                      description:
+                        'Allowed override targets for trusted plugin subagent runs as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
                     },
                   },
                   additionalProperties: false,
+                  title: "Plugin Subagent Policy",
+                  description:
+                    "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
                 },
                 config: {
                   type: "object",
@@ -19827,10 +22146,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     type: "string",
                   },
                   additionalProperties: {},
+                  title: "Plugin Config",
+                  description:
+                    "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
                 },
               },
               additionalProperties: false,
             },
+            title: "Plugin Entries",
+            description:
+              "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
           },
           installs: {
             type: "object",
@@ -19867,39 +22192,68 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       const: "marketplace",
                     },
                   ],
+                  title: "Plugin Install Source",
+                  description: 'Install source ("npm", "archive", or "path").',
                 },
                 spec: {
                   type: "string",
+                  title: "Plugin Install Spec",
+                  description: "Original npm spec used for install (if source is npm).",
                 },
                 sourcePath: {
                   type: "string",
+                  title: "Plugin Install Source Path",
+                  description: "Original archive/path used for install (if any).",
                 },
                 installPath: {
                   type: "string",
+                  title: "Plugin Install Path",
+                  description: "Resolved install directory for the installed plugin bundle.",
                 },
                 version: {
                   type: "string",
+                  title: "Plugin Install Version",
+                  description: "Version recorded at install time (if available).",
                 },
                 resolvedName: {
                   type: "string",
+                  title: "Plugin Resolved Package Name",
+                  description: "Resolved npm package name from the fetched artifact.",
                 },
                 resolvedVersion: {
                   type: "string",
+                  title: "Plugin Resolved Package Version",
+                  description:
+                    "Resolved npm package version from the fetched artifact (useful for non-pinned specs).",
                 },
                 resolvedSpec: {
                   type: "string",
+                  title: "Plugin Resolved Package Spec",
+                  description:
+                    "Resolved exact npm spec (<name>@<version>) from the fetched artifact.",
                 },
                 integrity: {
                   type: "string",
+                  title: "Plugin Resolved Integrity",
+                  description:
+                    "Resolved npm dist integrity hash for the fetched artifact (if reported by npm).",
                 },
                 shasum: {
                   type: "string",
+                  title: "Plugin Resolved Shasum",
+                  description:
+                    "Resolved npm dist shasum for the fetched artifact (if reported by npm).",
                 },
                 resolvedAt: {
                   type: "string",
+                  title: "Plugin Resolution Time",
+                  description:
+                    "ISO timestamp when npm package metadata was last resolved for this install record.",
                 },
                 installedAt: {
                   type: "string",
+                  title: "Plugin Install Time",
+                  description: "ISO timestamp of last install/update.",
                 },
                 clawhubUrl: {
                   type: "string",
@@ -19937,20 +22291,35 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 },
                 marketplaceName: {
                   type: "string",
+                  title: "Plugin Marketplace Name",
+                  description:
+                    "Marketplace display name recorded for marketplace-backed plugin installs (if available).",
                 },
                 marketplaceSource: {
                   type: "string",
+                  title: "Plugin Marketplace Source",
+                  description:
+                    "Original marketplace source used to resolve the install (for example a repo path or Git URL).",
                 },
                 marketplacePlugin: {
                   type: "string",
+                  title: "Plugin Marketplace Plugin",
+                  description:
+                    "Plugin entry name inside the source marketplace, used for later updates.",
                 },
               },
               required: ["source"],
               additionalProperties: false,
             },
+            title: "Plugin Install Records",
+            description:
+              "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
           },
         },
         additionalProperties: false,
+        title: "Plugins",
+        description:
+          "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
       },
     },
     required: ["commands"],
@@ -22635,6 +25004,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.imageGenerationModel.fallbacks": {
       label: "Image Generation Model Fallbacks",
       help: "Ordered fallback image-generation models (provider/model).",
+      tags: ["reliability", "media"],
+    },
+    "agents.defaults.videoGenerationModel.primary": {
+      label: "Video Generation Model",
+      help: "Optional video-generation model (provider/model) used by the shared video generation capability.",
+      tags: ["media"],
+    },
+    "agents.defaults.videoGenerationModel.fallbacks": {
+      label: "Video Generation Model Fallbacks",
+      help: "Ordered fallback video-generation models (provider/model).",
       tags: ["reliability", "media"],
     },
     "agents.defaults.pdfModel.primary": {
