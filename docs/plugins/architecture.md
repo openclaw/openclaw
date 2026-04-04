@@ -35,6 +35,7 @@ native OpenClaw plugin registers against one or more capability types:
 | Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | `openai`                             |
 | Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`                   |
 | Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`, `fal`, `minimax` |
+| Video generation      | `api.registerVideoGenerationProvider(...)`    | `qwen`                               |
 | Web search            | `api.registerWebSearchProvider(...)`          | `google`                             |
 | Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`                  |
 

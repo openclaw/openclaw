@@ -129,27 +129,27 @@ Those belong in your plugin code and `package.json`.
 
 ## Top-level field reference
 
-| Field                               | Required | Type                             | What it means                                                                                                                |
-| ----------------------------------- | -------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `id`                                | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                          |
-| `configSchema`                      | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                 |
-| `enabledByDefault`                  | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default. |
-| `legacyPluginIds`                   | No       | `string[]`                       | Legacy ids that normalize to this canonical plugin id.                                                                       |
-| `autoEnableWhenConfiguredProviders` | No       | `string[]`                       | Provider ids that should auto-enable this plugin when auth, config, or model refs mention them.                              |
-| `kind`                              | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                 |
-| `channels`                          | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                  |
-| `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                           |
-| `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                  |
-| `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                  |
-| `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                      |
-| `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                |
-| `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, media-understanding, image-generation, web search, and tool ownership.        |
-| `channelConfigs`                    | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                   |
-| `skills`                            | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                      |
-| `name`                              | No       | `string`                         | Human-readable plugin name.                                                                                                  |
-| `description`                       | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                      |
-| `version`                           | No       | `string`                         | Informational plugin version.                                                                                                |
-| `uiHints`                           | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                            |
+| Field                               | Required | Type                             | What it means                                                                                                                           |
+| ----------------------------------- | -------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                                     |
+| `configSchema`                      | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                            |
+| `enabledByDefault`                  | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.            |
+| `legacyPluginIds`                   | No       | `string[]`                       | Legacy ids that normalize to this canonical plugin id.                                                                                  |
+| `autoEnableWhenConfiguredProviders` | No       | `string[]`                       | Provider ids that should auto-enable this plugin when auth, config, or model refs mention them.                                         |
+| `kind`                              | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                            |
+| `channels`                          | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                             |
+| `providers`                         | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                      |
+| `modelSupport`                      | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                             |
+| `cliBackends`                       | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                             |
+| `providerAuthEnvVars`               | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                                 |
+| `providerAuthChoices`               | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                           |
+| `contracts`                         | No       | `object`                         | Static bundled capability snapshot for speech, media-understanding, image-generation, video-generation, web search, and tool ownership. |
+| `channelConfigs`                    | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                              |
+| `skills`                            | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                 |
+| `name`                              | No       | `string`                         | Human-readable plugin name.                                                                                                             |
+| `description`                       | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                                 |
+| `version`                           | No       | `string`                         | Informational plugin version.                                                                                                           |
+| `uiHints`                           | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                       |
 
 ## providerAuthChoices reference
 
