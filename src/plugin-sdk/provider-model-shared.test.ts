@@ -20,7 +20,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     });
   });
 
-  it("maps google-gemini replay families", () => {
+  it("maps google-gemini replay families", async () => {
     const hooks = buildProviderReplayFamilyHooks({
       family: "google-gemini",
     });
@@ -37,7 +37,7 @@ describe("buildProviderReplayFamilyHooks", () => {
       allowSyntheticToolResults: true,
     });
 
-    const sanitized = hooks.sanitizeReplayHistory?.({
+    const sanitized = await hooks.sanitizeReplayHistory?.({
       provider: "google",
       modelApi: "google-generative-ai",
       modelId: "gemini-3.1-pro-preview",
