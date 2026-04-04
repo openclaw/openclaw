@@ -290,11 +290,19 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointResultFlagsInsecureLanCleartextGateway() {
+  fun parseGatewayEndpointResultAcceptsLanCleartextGateway() {
     val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
 
-    assertNull(parsed.config)
-    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, parsed.error)
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "192.168.1.20",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://192.168.1.20:18789",
+      ),
+      parsed.config,
+    )
+    assertNull(parsed.error)
   }
 
   @Test

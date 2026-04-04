@@ -88,6 +88,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/skills: clear stale ClawHub results immediately when the search query changes, so debounced searches cannot keep outdated install targets visible. Related #60134.
 - Fetch/redirects: normalize guarded redirect method rewriting and loop detection so SSRF-guarded requests match platform redirect behavior without missing loops back to the original URL. (#59121) Thanks @eleqtrizit.
 - Discord/ack reactions: keep automatic ACK reaction auth on the active hydrated Discord account so SecretRef-backed and non-default-account reactions stop falling back to stale default config resolution. (#60081) Thanks @FunJim.
+- Android/gateway: allow `ws://` private-LAN pairing again while still requiring TLS for Tailscale and public mobile gateway endpoints.
 - Telegram/model switching: render non-default `/model` callback confirmations with HTML formatting so Telegram shows the selected model in bold instead of raw `**...**` markers. (#60042) Thanks @GitZhangChi.
 - Plugins/update: allow `openclaw plugins update` to use `--dangerously-force-unsafe-install` for built-in dangerous-code false positives during plugin updates. (#60066) Thanks @huntharo.
 - Gateway/auth: disconnect shared-auth websocket sessions only for effective auth rotations on restart-capable config writes, and keep `config.set` auth edits from dropping still-valid live sessions. (#60387) Thanks @mappel-nv.
