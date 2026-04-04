@@ -920,6 +920,10 @@ UI/WebSocket authentication. OpenClaw verifies the identity by resolving the
 and matching it to the header. This only triggers for requests that hit loopback
 and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
 injected by Tailscale.
+For this async identity check path, failed attempts for the same `{scope, ip}`
+are serialized before the limiter records the failure. Concurrent bad retries
+from one Serve client can therefore lock out the second attempt immediately
+instead of racing through as two plain mismatches.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
 do **not** use Tailscale identity-header auth. They still follow the gateway's
 configured HTTP auth mode.

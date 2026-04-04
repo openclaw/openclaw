@@ -146,6 +146,10 @@ request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
 `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret
 credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or
 `"password"`.
+For that async Serve identity path, failed auth attempts for the same client IP
+and auth scope are serialized before rate-limit writes. Concurrent bad retries
+from the same browser can therefore show `retry later` on the second request
+instead of two plain mismatches racing in parallel.
 Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
 code may run on that host, require token/password auth.
 

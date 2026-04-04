@@ -120,6 +120,10 @@ Common signatures:
 - That cached-token retry reuses the cached scope set stored with the paired
   device token. Explicit `deviceToken` / explicit `scopes` callers keep their
   requested scope set instead.
+- On the async Tailscale Serve Control UI path, failed attempts for the same
+  `{scope, ip}` are serialized before the limiter records the failure. Two bad
+  concurrent retries from the same client can therefore surface `retry later`
+  on the second attempt instead of two plain mismatches.
 - `too many failed authentication attempts (retry later)` from a browser-origin
   loopback client → repeated failures from that same normalized `Origin` are
   locked out temporarily; another localhost origin uses a separate bucket.
