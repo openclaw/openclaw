@@ -206,7 +206,13 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
     }
 
     // End of tasks block (either empty line or new top-level content)
+    // Don't exit for task fields (interval:, prompt:, - name:)
+    const isTaskField =
+      trimmed.startsWith("interval:") ||
+      trimmed.startsWith("prompt:") ||
+      trimmed.startsWith("- name:");
     if (
+      !isTaskField &&
       !trimmed.startsWith(" ") &&
       !trimmed.startsWith("\t") &&
       trimmed &&
