@@ -232,6 +232,8 @@ function createStreamFnWithExtraParams(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
   model?: ProviderRuntimeModel,
+  agentId?: string,
+  agentName?: string,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -265,6 +267,18 @@ function createStreamFnWithExtraParams(
         : undefined;
   if (typeof cachedContent === "string" && cachedContent.trim()) {
     streamParams.cachedContent = cachedContent.trim();
+  }
+
+  // Inject per-agent requestMetadata for Bedrock cost attribution (#60602).
+  // When the provider is amazon-bedrock and an agentId is known, attach
+  // requestMetadata so it flows through pi-ai's streamBedrock() into AWS
+  // ConverseStream API calls. AWS Cost Explorer can then group costs by
+  // these metadata keys.
+  if (provider === "amazon-bedrock" && agentId) {
+    (streamParams as Record<string, unknown>).requestMetadata = {
+      "openclaw:agentId": agentId,
+      ...(agentName ? { "openclaw:agentName": agentName } : {}),
+    };
   }
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
@@ -349,6 +363,8 @@ type ApplyExtraParamsContext = {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  agentId?: string;
+  agentName?: string;
   agentDir?: string;
   workspaceDir?: string;
   thinkingLevel?: ThinkLevel;
@@ -364,6 +380,8 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     ctx.effectiveExtraParams,
     ctx.provider,
     ctx.model,
+    ctx.agentId,
+    ctx.agentName,
   );
 
   if (wrappedStreamFn) {
@@ -474,6 +492,10 @@ export function applyExtraParamsToAgent(
     cfg,
     provider,
     modelId,
+    agentId,
+    agentName: agentId
+      ? cfg?.agents?.list?.find((a) => a.id === agentId)?.name
+      : undefined,
     agentDir,
     workspaceDir,
     thinkingLevel,
@@ -483,6 +505,7 @@ export function applyExtraParamsToAgent(
     override,
   };
 
+  applyPrePluginStreamWrappers(wrapperContext);
   const providerStreamBase = agent.streamFn;
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
@@ -498,9 +521,6 @@ export function applyExtraParamsToAgent(
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
-  // Apply caller/config extra params outside provider defaults so explicit values
-  // like `openaiWsWarmup=false` can override provider-added defaults.
-  applyPrePluginStreamWrappers(wrapperContext);
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
   applyPostPluginStreamWrappers({
