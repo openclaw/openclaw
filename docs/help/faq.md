@@ -1005,6 +1005,24 @@ for usage/billing and raise limits as needed.
 
   </Accordion>
 
+  <Accordion title="A subagent finished, but the completion update went to the wrong place or never posted. What should I check?">
+    Check the resolved requester route first:
+
+    - Completion-mode subagent delivery prefers any bound thread or conversation route when one exists.
+    - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
+    - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
+    - Invalid or stale targets can still force queue fallback or final delivery failure.
+
+    Debug:
+
+    ```bash
+    openclaw tasks show <runId-or-sessionKey>
+    ```
+
+    Docs: [Sub-agents](/tools/subagents), [Background Tasks](/automation/tasks), [Session Tools](/concepts/session-tool).
+
+  </Accordion>
+
   <Accordion title="Cron or reminders do not fire. What should I check?">
     Cron runs inside the Gateway process. If the Gateway is not running continuously,
     scheduled jobs will not run.

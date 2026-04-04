@@ -1,18 +1,5 @@
-import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveMainSessionKey,
-  resolveStorePath,
-} from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
-import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
-import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
-import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -31,7 +18,21 @@ import {
 } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
-import { isEmbeddedPiRunActive, queueEmbeddedPiMessage } from "./pi-embedded.js";
+import {
+  callGateway,
+  createBoundDeliveryRouter,
+  getGlobalHookRunner,
+  isEmbeddedPiRunActive,
+  loadConfig,
+  loadSessionStore,
+  queueEmbeddedPiMessage,
+  resolveAgentIdFromSessionKey,
+  resolveConversationIdFromTargets,
+  resolveExternalBestEffortDeliveryTarget,
+  resolveMainSessionKey,
+  resolveQueueSettings,
+  resolveStorePath,
+} from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
