@@ -518,7 +518,7 @@ export async function spawnSubagentDirect(
       await callSubagentGateway({
         method: "sessions.patch",
         params: { key: childSessionKey, ...patch },
-        timeoutMs: 10_000,
+        timeoutMs: startupWaitTimeoutMs,
       });
       return undefined;
     } catch (err) {
