@@ -1,9 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildMatrixApprovalReactionHint,
+  clearMatrixApprovalReactionTargetsForTest,
   listMatrixApprovalReactionBindings,
+  registerMatrixApprovalReactionTarget,
   resolveMatrixApprovalReactionTarget,
+  unregisterMatrixApprovalReactionTarget,
 } from "./approval-reactions.js";
+
+afterEach(() => {
+  clearMatrixApprovalReactionTargetsForTest();
+});
 
 describe("matrix approval reactions", () => {
   it("lists reactions in stable decision order", () => {
@@ -20,73 +27,81 @@ describe("matrix approval reactions", () => {
     );
   });
 
-  it("resolves a reaction back to the approval decision exposed in the prompt text", () => {
-    const text = [
-      "Approval required.",
-      "",
-      "Run:",
-      "```txt",
-      "/approve req-123 allow-once",
-      "```",
-      "",
-      "Other options:",
-      "```txt",
-      "/approve req-123 allow-always",
-      "/approve req-123 deny",
-      "```",
-    ].join("\n");
+  it("resolves a registered approval anchor event back to an approval decision", () => {
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    });
 
-    expect(resolveMatrixApprovalReactionTarget(text, "✅")).toEqual({
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).toEqual({
       approvalId: "req-123",
       decision: "allow-once",
     });
-    expect(resolveMatrixApprovalReactionTarget(text, "♾️")).toEqual({
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "♾️",
+      }),
+    ).toEqual({
       approvalId: "req-123",
       decision: "allow-always",
     });
-    expect(resolveMatrixApprovalReactionTarget(text, "❌")).toEqual({
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "❌",
+      }),
+    ).toEqual({
       approvalId: "req-123",
       decision: "deny",
     });
   });
 
-  it("ignores reactions that are not available in the prompt text", () => {
-    const text = [
-      "Approval required.",
-      "",
-      "Run:",
-      "```txt",
-      "/approve req-123 allow-once",
-      "```",
-      "",
-      "Other options:",
-      "```txt",
-      "/approve req-123 deny",
-      "```",
-    ].join("\n");
+  it("ignores reactions that are not allowed on the registered approval anchor event", () => {
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      allowedDecisions: ["allow-once", "deny"],
+    });
 
-    expect(resolveMatrixApprovalReactionTarget(text, "♾️")).toBeNull();
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "♾️",
+      }),
+    ).toBeNull();
   });
 
-  it("reuses the shared command parser for mention and legacy alias forms", () => {
-    const text = [
-      "Approval required.",
-      "",
-      "Run:",
-      "```txt",
-      "/approve@claw req-123 allow-once",
-      "```",
-      "",
-      "Other options:",
-      "```txt",
-      "/approve req-123 always",
-      "/approve req-123 deny",
-      "```",
-    ].join("\n");
-
-    expect(resolveMatrixApprovalReactionTarget(text, "♾️")).toEqual({
+  it("stops resolving reactions after the approval anchor event is unregistered", () => {
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
       approvalId: "req-123",
-      decision: "allow-always",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
+    unregisterMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+    });
+
+    expect(
+      resolveMatrixApprovalReactionTarget({
+        roomId: "!ops:example.org",
+        eventId: "$approval-msg",
+        reactionKey: "✅",
+      }),
+    ).toBeNull();
   });
 });

@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearMatrixApprovalReactionTargetsForTest,
+  registerMatrixApprovalReactionTarget,
+} from "../../approval-reactions.js";
+import type { CoreConfig } from "../../types.js";
 import { handleInboundMatrixReaction } from "./reaction-events.js";
 
 const resolveMatrixExecApproval = vi.fn();
@@ -11,9 +16,10 @@ vi.mock("../../exec-approval-resolver.js", () => ({
 
 beforeEach(() => {
   resolveMatrixExecApproval.mockReset();
+  clearMatrixApprovalReactionTargetsForTest();
 });
 
-function buildConfig() {
+function buildConfig(): CoreConfig {
   return {
     channels: {
       matrix: {
@@ -28,7 +34,7 @@ function buildConfig() {
         },
       },
     },
-  };
+  } as CoreConfig;
 }
 
 function buildCore() {
@@ -52,26 +58,17 @@ function buildCore() {
 describe("matrix approval reactions", () => {
   it("resolves approval reactions instead of enqueueing a generic reaction event", async () => {
     const core = buildCore();
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      allowedDecisions: ["allow-once", "allow-always", "deny"],
+    });
     const client = {
       getEvent: vi.fn().mockResolvedValue({
         event_id: "$approval-msg",
         sender: "@bot:example.org",
-        content: {
-          body: [
-            "Approval required.",
-            "",
-            "Run:",
-            "```txt",
-            "/approve req-123 allow-once",
-            "```",
-            "",
-            "Other options:",
-            "```txt",
-            "/approve req-123 allow-always",
-            "/approve req-123 deny",
-            "```",
-          ].join("\n"),
-        },
+        content: { body: "approval prompt" },
       }),
     } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
 
@@ -156,14 +153,22 @@ describe("matrix approval reactions", () => {
   it("still resolves approval reactions when generic reaction notifications are off", async () => {
     const core = buildCore();
     const cfg = buildConfig();
-    cfg.channels.matrix.reactionNotifications = "off";
+    const matrixCfg = cfg.channels?.matrix;
+    if (!matrixCfg) {
+      throw new Error("matrix config missing");
+    }
+    matrixCfg.reactionNotifications = "off";
+    registerMatrixApprovalReactionTarget({
+      roomId: "!ops:example.org",
+      eventId: "$approval-msg",
+      approvalId: "req-123",
+      allowedDecisions: ["deny"],
+    });
     const client = {
       getEvent: vi.fn().mockResolvedValue({
         event_id: "$approval-msg",
         sender: "@bot:example.org",
-        content: {
-          body: "/approve req-123 deny",
-        },
+        content: { body: "approval prompt" },
       }),
     } as unknown as Parameters<typeof handleInboundMatrixReaction>[0]["client"];
 

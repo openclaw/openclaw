@@ -28,30 +28,13 @@ export function resolveMatrixReactionNotificationMode(params: {
   return accountConfig.reactionNotifications ?? matrixConfig?.reactionNotifications ?? "own";
 }
 
-function readTargetEventText(event: MatrixRawEvent | null): string {
-  if (!event?.content || typeof event.content !== "object") {
-    return "";
-  }
-  const content = event.content as {
-    body?: unknown;
-    "m.new_content"?: {
-      body?: unknown;
-    };
-  };
-  const body =
-    typeof content.body === "string"
-      ? content.body
-      : typeof content["m.new_content"]?.body === "string"
-        ? content["m.new_content"].body
-        : "";
-  return body.trim();
-}
-
 async function maybeResolveMatrixApprovalReaction(params: {
   cfg: CoreConfig;
   accountId: string;
   senderId: string;
+  roomId: string;
   reactionKey: string;
+  targetEventId: string;
   targetEvent: MatrixRawEvent | null;
   targetSender: string;
   selfUserId: string;
@@ -69,10 +52,11 @@ async function maybeResolveMatrixApprovalReaction(params: {
   ) {
     return false;
   }
-  const target = resolveMatrixApprovalReactionTarget(
-    readTargetEventText(params.targetEvent),
-    params.reactionKey,
-  );
+  const target = resolveMatrixApprovalReactionTarget({
+    roomId: params.roomId,
+    eventId: params.targetEventId,
+    reactionKey: params.reactionKey,
+  });
   if (!target) {
     return false;
   }
@@ -138,7 +122,9 @@ export async function handleInboundMatrixReaction(params: {
       cfg: params.cfg,
       accountId: params.accountId,
       senderId: params.senderId,
+      roomId: params.roomId,
       reactionKey: reaction.key,
+      targetEventId: reaction.eventId,
       targetEvent: targetEvent as MatrixRawEvent | null,
       targetSender,
       selfUserId: params.selfUserId,

@@ -15,6 +15,8 @@ import { matrixNativeApprovalAdapter } from "./approval-native.js";
 import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
+  registerMatrixApprovalReactionTarget,
+  unregisterMatrixApprovalReactionTarget,
 } from "./approval-reactions.js";
 import {
   isMatrixExecApprovalClientEnabled,
@@ -32,7 +34,8 @@ type ApprovalRequest = ExecApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved;
 type PendingMessage = {
   roomId: string;
-  messageId: string;
+  messageIds: readonly string[];
+  reactionEventId: string;
 };
 
 type PreparedMatrixTarget = {
@@ -41,6 +44,7 @@ type PreparedMatrixTarget = {
   threadId?: string;
 };
 type PendingApprovalContent = {
+  approvalId: string;
   text: string;
   allowedDecisions: readonly ("allow-once" | "allow-always" | "deny")[];
 };
@@ -60,6 +64,10 @@ export type MatrixExecApprovalHandlerDeps = {
   deleteMessage?: typeof deleteMatrixMessage;
   repairDirectRooms?: typeof repairMatrixDirectRooms;
 };
+
+function normalizePendingMessageIds(entry: PendingMessage): string[] {
+  return Array.from(new Set(entry.messageIds.map((messageId) => messageId.trim()).filter(Boolean)));
+}
 
 function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string }): boolean {
   return isMatrixExecApprovalClientEnabled(params);
@@ -96,6 +104,7 @@ function buildPendingApprovalContent(params: {
   const hint = buildMatrixApprovalReactionHint(allowedDecisions);
   const text = payload.text ?? "";
   return {
+    approvalId: params.request.id,
     text: hint ? `${text}\n\n${hint}` : text,
     allowedDecisions,
   };
@@ -191,10 +200,25 @@ export class MatrixExecApprovalHandler {
           client: this.opts.client,
           threadId: preparedTarget.threadId,
         });
+        const messageIds = Array.from(
+          new Set(
+            (result.messageIds ?? [result.messageId])
+              .map((messageId) => messageId.trim())
+              .filter(Boolean),
+          ),
+        );
+        const reactionEventId =
+          result.primaryMessageId?.trim() || messageIds[0] || result.messageId.trim();
+        registerMatrixApprovalReactionTarget({
+          roomId: result.roomId,
+          eventId: reactionEventId,
+          approvalId: pendingContent.approvalId,
+          allowedDecisions: pendingContent.allowedDecisions,
+        });
         await Promise.allSettled(
           listMatrixApprovalReactionBindings(pendingContent.allowedDecisions).map(
             async ({ emoji }) => {
-              await this.reactMessage(result.roomId, result.messageId, emoji, {
+              await this.reactMessage(result.roomId, reactionEventId, emoji, {
                 cfg: this.opts.cfg as CoreConfig,
                 accountId: this.opts.accountId,
                 client: this.opts.client,
@@ -204,7 +228,8 @@ export class MatrixExecApprovalHandler {
         );
         return {
           roomId: result.roomId,
-          messageId: result.messageId,
+          messageIds,
+          reactionEventId,
         };
       },
       finalizeResolved: async ({ request, resolved, entries }) => {
@@ -275,11 +300,29 @@ export class MatrixExecApprovalHandler {
     const text = buildResolvedApprovalText({ request, resolved });
     await Promise.allSettled(
       entries.map(async (entry) => {
-        await this.editMessage(entry.roomId, entry.messageId, text, {
-          cfg: this.opts.cfg as CoreConfig,
-          accountId: this.opts.accountId,
-          client: this.opts.client,
+        unregisterMatrixApprovalReactionTarget({
+          roomId: entry.roomId,
+          eventId: entry.reactionEventId,
         });
+        const [primaryMessageId, ...staleMessageIds] = normalizePendingMessageIds(entry);
+        if (!primaryMessageId) {
+          return;
+        }
+        await Promise.allSettled([
+          this.editMessage(entry.roomId, primaryMessageId, text, {
+            cfg: this.opts.cfg as CoreConfig,
+            accountId: this.opts.accountId,
+            client: this.opts.client,
+          }),
+          ...staleMessageIds.map(async (messageId) => {
+            await this.deleteMessage(entry.roomId, messageId, {
+              cfg: this.opts.cfg as CoreConfig,
+              accountId: this.opts.accountId,
+              client: this.opts.client,
+              reason: "approval resolved",
+            });
+          }),
+        ]);
       }),
     );
   }
@@ -287,12 +330,20 @@ export class MatrixExecApprovalHandler {
   private async clearPending(entries: PendingMessage[]): Promise<void> {
     await Promise.allSettled(
       entries.map(async (entry) => {
-        await this.deleteMessage(entry.roomId, entry.messageId, {
-          cfg: this.opts.cfg as CoreConfig,
-          accountId: this.opts.accountId,
-          client: this.opts.client,
-          reason: "approval expired",
+        unregisterMatrixApprovalReactionTarget({
+          roomId: entry.roomId,
+          eventId: entry.reactionEventId,
         });
+        await Promise.allSettled(
+          normalizePendingMessageIds(entry).map(async (messageId) => {
+            await this.deleteMessage(entry.roomId, messageId, {
+              cfg: this.opts.cfg as CoreConfig,
+              accountId: this.opts.accountId,
+              client: this.opts.client,
+              reason: "approval expired",
+            });
+          }),
+        );
       }),
     );
   }

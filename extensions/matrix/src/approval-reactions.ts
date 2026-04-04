@@ -1,24 +1,5 @@
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
 
-const APPROVE_COMMAND_REGEX =
-  /\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i;
-
-function parseExecApprovalCommandText(
-  raw: string,
-): { approvalId: string; decision: ExecApprovalReplyDecision } | null {
-  const trimmed = raw.trim();
-  const match = trimmed.match(APPROVE_COMMAND_REGEX);
-  if (!match) {
-    return null;
-  }
-  const rawDecision = (match[2] ?? "").toLowerCase();
-  return {
-    approvalId: match[1] ?? "",
-    decision:
-      rawDecision === "always" ? "allow-always" : (rawDecision as ExecApprovalReplyDecision),
-  };
-}
-
 const MATRIX_APPROVAL_REACTION_META = {
   "allow-once": {
     emoji: "✅",
@@ -50,6 +31,22 @@ export type MatrixApprovalReactionResolution = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
 };
+
+type MatrixApprovalReactionTarget = {
+  approvalId: string;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+};
+
+const matrixApprovalReactionTargets = new Map<string, MatrixApprovalReactionTarget>();
+
+function buildReactionTargetKey(roomId: string, eventId: string): string | null {
+  const normalizedRoomId = roomId.trim();
+  const normalizedEventId = eventId.trim();
+  if (!normalizedRoomId || !normalizedEventId) {
+    return null;
+  }
+  return `${normalizedRoomId}:${normalizedEventId}`;
+}
 
 export function listMatrixApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
@@ -94,32 +91,68 @@ export function resolveMatrixApprovalReactionDecision(
   return null;
 }
 
-export function resolveMatrixApprovalReactionTarget(
-  messageText: string,
-  reactionKey: string,
-): MatrixApprovalReactionResolution | null {
-  const allowedDecisions = new Set<ExecApprovalReplyDecision>();
-  let approvalId: string | null = null;
-  for (const line of messageText.split(/\r?\n/)) {
-    const parsed = parseExecApprovalCommandText(line);
-    if (!parsed) {
-      continue;
-    }
-    if (approvalId && approvalId !== parsed.approvalId) {
-      return null;
-    }
-    approvalId = parsed.approvalId;
-    allowedDecisions.add(parsed.decision);
+export function registerMatrixApprovalReactionTarget(params: {
+  roomId: string;
+  eventId: string;
+  approvalId: string;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): void {
+  const key = buildReactionTargetKey(params.roomId, params.eventId);
+  const approvalId = params.approvalId.trim();
+  const allowedDecisions = Array.from(
+    new Set(
+      params.allowedDecisions.filter(
+        (decision): decision is ExecApprovalReplyDecision =>
+          decision === "allow-once" || decision === "allow-always" || decision === "deny",
+      ),
+    ),
+  );
+  if (!key || !approvalId || allowedDecisions.length === 0) {
+    return;
   }
-  if (!approvalId || allowedDecisions.size === 0) {
+  matrixApprovalReactionTargets.set(key, {
+    approvalId,
+    allowedDecisions,
+  });
+}
+
+export function unregisterMatrixApprovalReactionTarget(params: {
+  roomId: string;
+  eventId: string;
+}): void {
+  const key = buildReactionTargetKey(params.roomId, params.eventId);
+  if (!key) {
+    return;
+  }
+  matrixApprovalReactionTargets.delete(key);
+}
+
+export function resolveMatrixApprovalReactionTarget(params: {
+  roomId: string;
+  eventId: string;
+  reactionKey: string;
+}): MatrixApprovalReactionResolution | null {
+  const key = buildReactionTargetKey(params.roomId, params.eventId);
+  if (!key) {
     return null;
   }
-  const decision = resolveMatrixApprovalReactionDecision(reactionKey, Array.from(allowedDecisions));
+  const target = matrixApprovalReactionTargets.get(key);
+  if (!target) {
+    return null;
+  }
+  const decision = resolveMatrixApprovalReactionDecision(
+    params.reactionKey,
+    target.allowedDecisions,
+  );
   if (!decision) {
     return null;
   }
   return {
-    approvalId,
+    approvalId: target.approvalId,
     decision,
   };
+}
+
+export function clearMatrixApprovalReactionTargetsForTest(): void {
+  matrixApprovalReactionTargets.clear();
 }
