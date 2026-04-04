@@ -12,6 +12,7 @@ import {
   withResolvedMatrixSendClient,
 } from "./send/client.js";
 import {
+  buildNoticeContent,
   buildReplyRelation,
   buildTextContent,
   buildThreadRelation,
@@ -62,7 +63,9 @@ type MatrixClientResolveOpts = {
   accountId?: string | null;
 };
 
-function isMatrixClient(value: MatrixClient | MatrixClientResolveOpts): value is MatrixClient {
+function isMatrixClient(
+  value: MatrixClient | MatrixClientResolveOpts,
+): value is MatrixClient {
   return typeof (value as { sendEvent?: unknown }).sendEvent === "function";
 }
 
@@ -83,7 +86,9 @@ function normalizeMatrixClientResolveOpts(
   };
 }
 
-function resolvePreviousEditContent(previousEvent: unknown): Record<string, unknown> | undefined {
+function resolvePreviousEditContent(
+  previousEvent: unknown,
+): Record<string, unknown> | undefined {
   if (!previousEvent || typeof previousEvent !== "object") {
     return undefined;
   }
@@ -98,7 +103,9 @@ function resolvePreviousEditContent(previousEvent: unknown): Record<string, unkn
     : content;
 }
 
-function hasMatrixMentionsMetadata(content: Record<string, unknown> | undefined): boolean {
+function hasMatrixMentionsMetadata(
+  content: Record<string, unknown> | undefined,
+): boolean {
   return Boolean(content && Object.hasOwn(content, "m.mentions"));
 }
 
@@ -109,7 +116,8 @@ async function resolvePreviousEditMentions(params: {
   if (hasMatrixMentionsMetadata(params.content)) {
     return extractMatrixMentions(params.content);
   }
-  const body = typeof params.content?.body === "string" ? params.content.body : "";
+  const body =
+    typeof params.content?.body === "string" ? params.content.body : "";
   if (!body) {
     return {};
   }
@@ -136,7 +144,10 @@ export function prepareMatrixSingleText(
       channel: "matrix",
       accountId: opts.accountId,
     });
-  const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
+  const convertedText = getCore().channel.text.convertMarkdownTables(
+    trimmedText,
+    tableMode,
+  );
   const singleEventLimit = Math.min(
     getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
     MATRIX_TEXT_LIMIT,
@@ -159,7 +170,11 @@ export function chunkMatrixText(
 ): MatrixPreparedChunkedText {
   const preparedText = prepareMatrixSingleText(text, opts);
   const cfg = opts.cfg ?? getCore().config.loadConfig();
-  const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+  const chunkMode = getCore().channel.text.resolveChunkMode(
+    cfg,
+    "matrix",
+    opts.accountId,
+  );
   return {
     ...preparedText,
     chunks: getCore().channel.text.chunkMarkdownTextWithMode(
@@ -211,17 +226,25 @@ export async function sendMessageMatrix(
           mediaLocalRoots: opts.mediaLocalRoots,
           mediaReadFile: opts.mediaReadFile,
         });
-        const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
-          contentType: media.contentType,
-          filename: media.fileName,
-        });
+        const uploaded = await uploadMediaMaybeEncrypted(
+          client,
+          roomId,
+          media.buffer,
+          {
+            contentType: media.contentType,
+            filename: media.fileName,
+          },
+        );
         const durationMs = await resolveMediaDurationMs({
           buffer: media.buffer,
           contentType: media.contentType,
           fileName: media.fileName,
           kind: media.kind ?? "unknown",
         });
-        const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
+        const baseMsgType = resolveMatrixMsgType(
+          media.contentType,
+          media.fileName,
+        );
         const { useVoice } = resolveMatrixVoiceDecision({
           wantsVoice: opts.audioAsVoice === true,
           contentType: media.contentType,
@@ -238,7 +261,9 @@ export async function sendMessageMatrix(
           : undefined;
         const [firstChunk, ...rest] = chunks;
         const captionMarkdown = useVoice ? "" : (firstChunk ?? "");
-        const body = useVoice ? "Voice message" : captionMarkdown || media.fileName || "(file)";
+        const body = useVoice
+          ? "Voice message"
+          : captionMarkdown || media.fileName || "(file)";
         const content = buildMediaContent({
           msgtype,
           body,
@@ -268,7 +293,9 @@ export async function sendMessageMatrix(
           if (!text) {
             continue;
           }
-          const followup = buildTextContent(text, followupRelation);
+          const followup = opts?.notice
+            ? buildNoticeContent(text, followupRelation)
+            : buildTextContent(text, followupRelation);
           await enrichMatrixFormattedContent({
             client,
             content: followup,
@@ -283,7 +310,9 @@ export async function sendMessageMatrix(
           if (!text) {
             continue;
           }
-          const content = buildTextContent(text, relation);
+          const content = opts?.notice
+            ? buildNoticeContent(text, relation)
+            : buildTextContent(text, relation);
           await enrichMatrixFormattedContent({
             client,
             content,
@@ -324,7 +353,10 @@ export async function sendPollMatrix(
       const roomId = await resolveMatrixRoomId(client, to);
       const pollContent = buildPollStartContent(poll);
       const fallbackText =
-        pollContent["m.text"] ?? pollContent["org.matrix.msc1767.text"] ?? poll.question ?? "";
+        pollContent["m.text"] ??
+        pollContent["org.matrix.msc1767.text"] ??
+        poll.question ??
+        "";
       const mentions = await resolveMatrixMentionsForBody({
         client,
         body: fallbackText,
@@ -357,7 +389,8 @@ export async function sendTypingMatrix(
     },
     async (resolved) => {
       const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);
-      const resolvedTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 30_000;
+      const resolvedTimeoutMs =
+        typeof timeoutMs === "number" ? timeoutMs : 30_000;
       await resolved.setTyping(resolvedRoom, typing, resolvedTimeoutMs);
     },
   );
@@ -435,13 +468,18 @@ async function getPreviousMatrixEvent(
 ): Promise<Record<string, unknown> | null> {
   const getEvent = (
     client as {
-      getEvent?: (roomId: string, eventId: string) => Promise<Record<string, unknown>>;
+      getEvent?: (
+        roomId: string,
+        eventId: string,
+      ) => Promise<Record<string, unknown>>;
     }
   ).getEvent;
   if (typeof getEvent !== "function") {
     return null;
   }
-  return await Promise.resolve(getEvent.call(client, roomId, eventId)).catch(() => null);
+  return await Promise.resolve(getEvent.call(client, roomId, eventId)).catch(
+    () => null,
+  );
 }
 
 export async function editMessageMatrix(
@@ -471,14 +509,21 @@ export async function editMessageMatrix(
         channel: "matrix",
         accountId: opts.accountId,
       });
-      const convertedText = getCore().channel.text.convertMarkdownTables(newText, tableMode);
+      const convertedText = getCore().channel.text.convertMarkdownTables(
+        newText,
+        tableMode,
+      );
       const newContent = buildTextContent(convertedText);
       await enrichMatrixFormattedContent({
         client,
         content: newContent,
         markdown: convertedText,
       });
-      const previousEvent = await getPreviousMatrixEvent(client, resolvedRoom, originalEventId);
+      const previousEvent = await getPreviousMatrixEvent(
+        client,
+        resolvedRoom,
+        originalEventId,
+      );
       const previousContent = resolvePreviousEditContent(previousEvent);
       const previousMentions = await resolvePreviousEditMentions({
         client,

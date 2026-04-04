@@ -100,6 +100,8 @@ export type MatrixSendOpts = {
   timeoutMs?: number;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** When true, send as m.notice instead of m.text. Used for machine-generated tool output. */
+  notice?: boolean;
 };
 
 export type MatrixMediaMsgType =

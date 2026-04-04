@@ -1,9 +1,15 @@
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
 import { chunkMatrixText, sendMessageMatrix } from "../send.js";
-import type { MarkdownTableMode, OpenClawConfig, ReplyPayload, RuntimeEnv } from "./runtime-api.js";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "./runtime-api.js";
 
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_RE =
+  /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 const THINKING_BLOCK_RE =
   /<\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 
@@ -40,6 +46,8 @@ export async function deliverMatrixReplies(params: {
   accountId?: string;
   mediaLocalRoots?: readonly string[];
   tableMode?: MarkdownTableMode;
+  /** When true, send text as m.notice instead of m.text (machine-generated tool output). */
+  notice?: boolean;
 }): Promise<void> {
   const core = getMatrixRuntime();
   const tableMode =
@@ -56,21 +64,30 @@ export async function deliverMatrixReplies(params: {
   };
   let hasReplied = false;
   for (const reply of params.replies) {
-    if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
+    if (
+      reply.isReasoning === true ||
+      shouldSuppressReasoningReplyText(reply.text)
+    ) {
       logVerbose("matrix reply suppressed as reasoning-only");
       continue;
     }
-    const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+    const hasMedia =
+      Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
-        logVerbose("matrix reply has audioAsVoice without media/text; skipping");
+        logVerbose(
+          "matrix reply has audioAsVoice without media/text; skipping",
+        );
         continue;
       }
       params.runtime.error?.("matrix reply missing text/media");
       continue;
     }
     const replyToIdRaw = reply.replyToId?.trim();
-    const replyToId = params.threadId || params.replyToMode === "off" ? undefined : replyToIdRaw;
+    const replyToId =
+      params.threadId || params.replyToMode === "off"
+        ? undefined
+        : replyToIdRaw;
     const rawText = reply.text ?? "";
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
@@ -80,7 +97,9 @@ export async function deliverMatrixReplies(params: {
 
     const shouldIncludeReply = (id?: string) =>
       Boolean(id) && (params.replyToMode === "all" || !hasReplied);
-    const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
+    const replyToIdForReply = shouldIncludeReply(replyToId)
+      ? replyToId
+      : undefined;
 
     if (mediaList.length === 0) {
       let sentTextChunk = false;
@@ -100,6 +119,7 @@ export async function deliverMatrixReplies(params: {
           replyToId: replyToIdForReply,
           threadId: params.threadId,
           accountId: params.accountId,
+          notice: params.notice,
         });
         sentTextChunk = true;
       }
@@ -121,6 +141,7 @@ export async function deliverMatrixReplies(params: {
         threadId: params.threadId,
         audioAsVoice: reply.audioAsVoice,
         accountId: params.accountId,
+        notice: params.notice,
       });
       first = false;
     }

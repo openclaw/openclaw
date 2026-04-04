@@ -25,7 +25,9 @@ async function resolveMatrixSelfUserId(
   try {
     return (await client.getUserId()) ?? null;
   } catch (err) {
-    logVerboseMessage(`matrix: failed resolving self user id for decrypt warning: ${String(err)}`);
+    logVerboseMessage(
+      `matrix: failed resolving self user id for decrypt warning: ${String(err)}`,
+    );
     return null;
   }
 }
@@ -47,7 +49,10 @@ export function registerMatrixMonitorEvents(params: {
   warnedCryptoMissingRooms: Set<string>;
   logger: RuntimeLogger;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
-  onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
+  onRoomMessage: (
+    roomId: string,
+    event: MatrixRawEvent,
+  ) => void | Promise<void>;
 }): void {
   const {
     cfg,
@@ -65,17 +70,35 @@ export function registerMatrixMonitorEvents(params: {
     formatNativeDependencyHint,
     onRoomMessage,
   } = params;
-  const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
-    client,
-    allowFrom,
-    dmEnabled,
-    dmPolicy,
-    readStoreAllowFrom,
-    logVerboseMessage,
+  const { routeVerificationEvent, routeVerificationSummary } =
+    createMatrixVerificationEventRouter({
+      client,
+      allowFrom,
+      dmEnabled,
+      dmPolicy,
+      readStoreAllowFrom,
+      logVerboseMessage,
+    });
+
+  // Cache the bot's own user ID to filter self-messages synchronously.
+  // This prevents infinite loops when verbose tool output is enabled (issue #007):
+  // without this filter, the bot's own outbound messages arriving via /sync would be
+  // forwarded to onRoomMessage and processed as new inbound user messages.
+  let cachedSelfUserId: string | null = null;
+  void resolveMatrixSelfUserId(client, logVerboseMessage).then((uid) => {
+    cachedSelfUserId = uid;
   });
 
   client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
     if (routeVerificationEvent(roomId, event)) {
+      return;
+    }
+    // Drop self-messages before they reach the handler. After the initial async
+    // resolution (~50-200ms), this check is synchronous with zero race window.
+    // During the startup grace period, handler.ts has its own self-sender check
+    // as a secondary guard.
+    const senderId = typeof event.sender === "string" ? event.sender : null;
+    if (cachedSelfUserId && senderId === cachedSelfUserId) {
       return;
     }
     void onRoomMessage(roomId, event);
@@ -84,21 +107,30 @@ export function registerMatrixMonitorEvents(params: {
   client.on("room.encrypted_event", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
-    logVerboseMessage(`matrix: encrypted event room=${roomId} type=${eventType} id=${eventId}`);
+    logVerboseMessage(
+      `matrix: encrypted event room=${roomId} type=${eventType} id=${eventId}`,
+    );
   });
 
   client.on("room.decrypted_event", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id ?? "unknown";
     const eventType = event?.type ?? "unknown";
-    logVerboseMessage(`matrix: decrypted event room=${roomId} type=${eventType} id=${eventId}`);
+    logVerboseMessage(
+      `matrix: decrypted event room=${roomId} type=${eventType} id=${eventId}`,
+    );
   });
 
   client.on(
     "room.failed_decryption",
     async (roomId: string, event: MatrixRawEvent, error: Error) => {
-      const selfUserId = await resolveMatrixSelfUserId(client, logVerboseMessage);
+      const selfUserId = await resolveMatrixSelfUserId(
+        client,
+        logVerboseMessage,
+      );
       const sender = typeof event.sender === "string" ? event.sender : null;
-      const senderMatchesOwnUser = Boolean(selfUserId && sender && selfUserId === sender);
+      const senderMatchesOwnUser = Boolean(
+        selfUserId && sender && selfUserId === sender,
+      );
       logger.warn("Failed to decrypt message", {
         roomId,
         eventId: event.event_id,
@@ -127,11 +159,20 @@ export function registerMatrixMonitorEvents(params: {
     directTracker?.invalidateRoom(roomId);
     const eventId = event?.event_id ?? "unknown";
     const sender = event?.sender ?? "unknown";
-    const invitee = typeof event?.state_key === "string" ? event.state_key.trim() : "";
+    const invitee =
+      typeof event?.state_key === "string" ? event.state_key.trim() : "";
     const senderIsInvitee =
-      typeof event?.sender === "string" && invitee && event.sender.trim() === invitee;
-    const isDirect = (event?.content as { is_direct?: boolean } | undefined)?.is_direct === true;
-    if (typeof event?.sender === "string" && event.sender.trim() && !senderIsInvitee) {
+      typeof event?.sender === "string" &&
+      invitee &&
+      event.sender.trim() === invitee;
+    const isDirect =
+      (event?.content as { is_direct?: boolean } | undefined)?.is_direct ===
+      true;
+    if (
+      typeof event?.sender === "string" &&
+      event.sender.trim() &&
+      !senderIsInvitee
+    ) {
       directTracker?.rememberInvite?.(roomId, event.sender);
     }
     logVerboseMessage(
@@ -153,15 +194,23 @@ export function registerMatrixMonitorEvents(params: {
       );
       if (auth.encryption !== true && !warnedEncryptedRooms.has(roomId)) {
         warnedEncryptedRooms.add(roomId);
-        const warning = formatMatrixEncryptedEventDisabledWarning(cfg, auth.accountId);
+        const warning = formatMatrixEncryptedEventDisabledWarning(
+          cfg,
+          auth.accountId,
+        );
         logger.warn(warning, { roomId });
       }
-      if (auth.encryption === true && !client.crypto && !warnedCryptoMissingRooms.has(roomId)) {
+      if (
+        auth.encryption === true &&
+        !client.crypto &&
+        !warnedCryptoMissingRooms.has(roomId)
+      ) {
         warnedCryptoMissingRooms.add(roomId);
         const hint = formatNativeDependencyHint({
           packageName: "@matrix-org/matrix-sdk-crypto-nodejs",
           manager: "pnpm",
-          downloadCommand: "node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
+          downloadCommand:
+            "node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
         });
         const warning = `matrix: encryption enabled but crypto is unavailable; ${hint}`;
         logger.warn(warning, { roomId });
@@ -170,7 +219,8 @@ export function registerMatrixMonitorEvents(params: {
     }
     if (eventType === EventType.RoomMember) {
       directTracker?.invalidateRoom(roomId);
-      const membership = (event?.content as { membership?: string } | undefined)?.membership;
+      const membership = (event?.content as { membership?: string } | undefined)
+        ?.membership;
       const stateKey = (event as { state_key?: string }).state_key ?? "";
       logVerboseMessage(
         `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
