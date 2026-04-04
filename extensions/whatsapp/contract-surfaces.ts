@@ -3,6 +3,8 @@ type UnsupportedSecretRefConfigCandidate = {
   value: unknown;
 };
 
+import { hasAnyWhatsAppAuth } from "./src/accounts.js";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -13,6 +15,12 @@ export const unsupportedSecretRefSurfacePatterns = [
 ] as const;
 
 export { resolveLegacyGroupSessionKey } from "./src/group-session-contract.js";
+
+export function hasPersistedAuthState(params: {
+  cfg: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+}): boolean {
+  return hasAnyWhatsAppAuth(params.cfg);
+}
 
 export function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,

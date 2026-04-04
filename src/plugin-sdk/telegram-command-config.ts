@@ -3,4 +3,6 @@ export {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
-} from "../../extensions/telegram/src/command-config.js";
+  type TelegramCustomCommandInput,
+  type TelegramCustomCommandIssue,
+} from "../config/telegram-command-config.js";

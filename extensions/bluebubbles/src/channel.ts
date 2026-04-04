@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { collectBlueBubblesStatusIssues } from "openclaw/plugin-sdk/bluebubbles";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
@@ -9,7 +10,6 @@ import {
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   buildProbeChannelStatusSummary,
-  collectBlueBubblesStatusIssues,
   PAIRING_APPROVED_MESSAGE,
 } from "openclaw/plugin-sdk/channel-status";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";

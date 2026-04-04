@@ -79,7 +79,7 @@ function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
     if (!rawId || !CHAT_CHANNEL_ID_SET.has(rawId)) {
       continue;
     }
-    const id = rawId as ChatChannelId;
+    const id = rawId;
     entries.set(
       id,
       toChatChannelMeta({
@@ -87,11 +87,6 @@ function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
         channel,
       }),
     );
-  }
-
-  const missingIds = CHAT_CHANNEL_ORDER.filter((id) => !entries.has(id));
-  if (missingIds.length > 0) {
-    throw new Error(`Missing bundled chat channel metadata for: ${missingIds.join(", ")}`);
   }
 
   return Object.freeze(Object.fromEntries(entries)) as Record<ChatChannelId, ChatChannelMeta>;

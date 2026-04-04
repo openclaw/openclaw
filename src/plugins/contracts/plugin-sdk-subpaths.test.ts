@@ -607,6 +607,8 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
+    expectSourceOmitsSnippet("command-auth", "../../extensions/");
+    expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
