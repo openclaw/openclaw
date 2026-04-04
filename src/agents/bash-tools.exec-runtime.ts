@@ -220,13 +220,22 @@ export function renderExecTargetLabel(target: ExecTarget) {
 export function isRequestedExecTargetAllowed(params: {
   configuredTarget: ExecTarget;
   requestedTarget: ExecTarget;
+  sandboxAvailable?: boolean;
 }) {
-  // `auto` means "use sandbox/gateway by default, but permit agents to
-  // explicitly select any host".  Without this, an agent requesting
-  // `host=node` while the config says `auto` is rejected because the
-  // strict equality `"node" === "auto"` fails.
+  // When `auto` is configured, only allow targets that are at least as
+  // isolated as what auto-resolution would have picked.  `auto` resolves
+  // to sandbox when a sandbox runtime is available, otherwise gateway.
+  // Permitting unconditional overrides would let an agent escape a
+  // sandbox to node/gateway (P1 sandbox-escape vector).
   if (params.configuredTarget === "auto") {
-    return true;
+    const autoResolved = params.sandboxAvailable ? "sandbox" : "gateway";
+    // Isolation order: sandbox > gateway > node.  Only allow requests
+    // that are equally or more isolated than the auto-resolved default.
+    if (autoResolved === "sandbox") {
+      return params.requestedTarget === "sandbox" || params.requestedTarget === "auto";
+    }
+    // autoResolved === "gateway": allow gateway, sandbox, or auto
+    return params.requestedTarget !== "node";
   }
   return params.requestedTarget === params.configuredTarget;
 }
@@ -252,6 +261,7 @@ export function resolveExecTarget(params: {
     !isRequestedExecTargetAllowed({
       configuredTarget,
       requestedTarget,
+      sandboxAvailable: params.sandboxAvailable,
     })
   ) {
     throw new Error(

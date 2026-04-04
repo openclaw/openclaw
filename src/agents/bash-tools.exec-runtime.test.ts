@@ -86,29 +86,13 @@ describe("resolveExecTarget", () => {
     });
   });
 
-  it("allows agent-requested node when configured host is auto", () => {
-    expect(
-      resolveExecTarget({
-        configuredTarget: "auto",
-        requestedTarget: "node",
-        elevatedRequested: false,
-        sandboxAvailable: false,
-      }),
-    ).toMatchObject({
-      configuredTarget: "auto",
-      requestedTarget: "node",
-      selectedTarget: "node",
-      effectiveHost: "node",
-    });
-  });
-
-  it("allows agent-requested gateway when configured host is auto", () => {
+  it("allows agent-requested gateway when configured host is auto and no sandbox", () => {
     expect(
       resolveExecTarget({
         configuredTarget: "auto",
         requestedTarget: "gateway",
         elevatedRequested: false,
-        sandboxAvailable: true,
+        sandboxAvailable: false,
       }),
     ).toMatchObject({
       configuredTarget: "auto",
@@ -118,7 +102,7 @@ describe("resolveExecTarget", () => {
     });
   });
 
-  it("allows agent-requested sandbox when configured host is auto", () => {
+  it("allows agent-requested sandbox when configured host is auto and sandbox available", () => {
     expect(
       resolveExecTarget({
         configuredTarget: "auto",
@@ -146,6 +130,55 @@ describe("resolveExecTarget", () => {
       configuredTarget: "auto",
       requestedTarget: "auto",
       selectedTarget: "auto",
+      effectiveHost: "sandbox",
+    });
+  });
+
+  it("rejects agent-requested node when auto resolves to sandbox (sandbox escape)", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("rejects agent-requested gateway when auto resolves to sandbox (sandbox escape)", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("rejects agent-requested node when auto resolves to gateway (privilege escalation)", () => {
+    expect(() =>
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "node",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toThrow("exec host not allowed");
+  });
+
+  it("allows agent-requested sandbox when auto resolves to gateway (more isolated)", () => {
+    expect(
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "sandbox",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      configuredTarget: "auto",
+      requestedTarget: "sandbox",
+      selectedTarget: "sandbox",
       effectiveHost: "sandbox",
     });
   });
