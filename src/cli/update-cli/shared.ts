@@ -280,9 +280,22 @@ async function isPreferredGlobalManagerAvailable(
 ): Promise<boolean> {
   if (manager === "bun") {
     const bunInstallRoot = process.env.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
-    return await pathExists(
-      path.join(bunInstallRoot, "install", "global", "node_modules", DEFAULT_PACKAGE_NAME),
+    const installRoot = path.join(
+      bunInstallRoot,
+      "install",
+      "global",
+      "node_modules",
+      DEFAULT_PACKAGE_NAME,
     );
+    if (!(await pathExists(installRoot))) {
+      return false;
+    }
+    try {
+      const res = await runCommand(["bun", "--version"], { timeoutMs });
+      return res.code === 0;
+    } catch {
+      return false;
+    }
   }
   try {
     const res = await runCommand([manager, "root", "-g"], { timeoutMs });

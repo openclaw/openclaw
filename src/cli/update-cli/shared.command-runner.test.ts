@@ -102,7 +102,7 @@ describe("createGlobalCommandRunner", () => {
         timeoutMs: 1200,
         preferredManager: "npm",
       }),
-    ).resolves.toBe("pnpm");
+    ).resolves.toBe("npm");
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["npm", "root", "-g"], {
       timeoutMs: 1200,
@@ -137,6 +137,14 @@ describe("createGlobalCommandRunner", () => {
   it("respects BUN_INSTALL when verifying a preferred bun install", async () => {
     process.env.BUN_INSTALL = "/opt/bun";
     pathExists.mockResolvedValueOnce(true);
+    runCommandWithTimeout.mockResolvedValueOnce({
+      stdout: "1.2.3\n",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
 
     await expect(
       resolveGlobalManager({
@@ -148,7 +156,37 @@ describe("createGlobalCommandRunner", () => {
     ).resolves.toBe("bun");
 
     expect(pathExists).toHaveBeenCalledWith("/opt/bun/install/global/node_modules/openclaw");
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(["bun", "--version"], {
+      timeoutMs: 1200,
+    });
     expect(detectGlobalInstallManagerByPresence).not.toHaveBeenCalled();
+  });
+
+  it("falls back when the preferred bun install exists but bun is not runnable", async () => {
+    process.env.BUN_INSTALL = "/opt/bun";
+    pathExists.mockResolvedValueOnce(true);
+    runCommandWithTimeout.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "bun missing",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      resolveGlobalManager({
+        root: "/opt/openclaw",
+        installKind: "package",
+        timeoutMs: 1200,
+        preferredManager: "bun",
+      }),
+    ).resolves.toBe("npm");
+
+    expect(pathExists).toHaveBeenCalledWith("/opt/bun/install/global/node_modules/openclaw");
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(["bun", "--version"], {
+      timeoutMs: 1200,
+    });
+    expect(detectGlobalInstallManagerByPresence).toHaveBeenCalled();
   });
 });
