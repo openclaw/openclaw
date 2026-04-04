@@ -1,5 +1,6 @@
 import {
   resolveAgentDir,
+  resolveAgentConfig,
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
@@ -163,6 +164,7 @@ export async function buildStatusReply(params: {
       })
     : selectedModelAuth;
   const agentDefaults = cfg.agents?.defaults ?? {};
+  const agentCfg = resolveAgentConfig(cfg, statusAgentId) ?? agentDefaults;
   const effectiveFastMode =
     resolvedFastMode ??
     resolveFastModeState({
@@ -170,11 +172,13 @@ export async function buildStatusReply(params: {
       provider,
       model,
       sessionEntry,
+      agentCfg,
     }).enabled;
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
       ...agentDefaults,
+      ...agentCfg,
       model: {
         ...toAgentModelListLike(agentDefaults.model),
         primary: `${provider}/${model}`,

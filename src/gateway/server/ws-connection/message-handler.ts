@@ -198,62 +198,8 @@ export function attachGatewayWsMessageHandler(params: {
     logWsControl,
   } = params;
 
-  const configSnapshot = loadConfig();
-  const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
-  const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-  const clientIp = resolveClientIp({
-    remoteAddr,
-    forwardedFor,
-    realIp,
-    trustedProxies,
-    allowRealIpFallback,
-  });
-
-  // If proxy headers are present but the remote address isn't trusted, don't treat
-  // the connection as local. This prevents auth bypass when running behind a reverse
-  // proxy without proper configuration - the proxy's loopback connection would otherwise
-  // cause all external requests to be treated as trusted local clients.
-  const hasProxyHeaders = Boolean(forwardedFor || realIp);
-  const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
-  const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
-  const hostIsLocalish = isLocalishHost(requestHost);
-  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
-  const reportedClientIp =
-    isLocalClient || hasUntrustedProxyHeaders
-      ? undefined
-      : clientIp && !isLoopbackAddress(clientIp)
-        ? clientIp
-        : undefined;
-
-  if (hasUntrustedProxyHeaders) {
-    logWsControl.warn(
-      "Proxy headers detected from untrusted address. " +
-        "Connection will not be treated as local. " +
-        "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
-    );
-  }
-  if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
-    logWsControl.warn(
-      "Loopback connection with non-local Host header. " +
-        "Treating it as remote. If you're behind a reverse proxy, " +
-        "set gateway.trustedProxies and forward X-Forwarded-For/X-Real-IP.",
-    );
-  }
-
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
   const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
-  const browserSecurity = resolveHandshakeBrowserSecurityContext({
-    requestOrigin,
-    clientIp,
-    rateLimiter,
-    browserRateLimiter,
-  });
-  const {
-    hasBrowserOriginHeader,
-    enforceOriginCheckForAnyClient,
-    rateLimitClientIp: browserRateLimitClientIp,
-    authRateLimiter,
-  } = browserSecurity;
 
   socket.on("message", async (data) => {
     if (isClosed()) {
@@ -349,6 +295,55 @@ export function attachGatewayWsMessageHandler(params: {
           mode: connectParams.client.mode,
           version: connectParams.client.version,
         };
+        // Attach the message listener before reading config so early `connect`
+        // frames are not dropped when config validation is slow on startup.
+        const configSnapshot = loadConfig();
+        const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+        const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+        const clientIp = resolveClientIp({
+          remoteAddr,
+          forwardedFor,
+          realIp,
+          trustedProxies,
+          allowRealIpFallback,
+        });
+        const hasProxyHeaders = Boolean(forwardedFor || realIp);
+        const remoteIsTrustedProxy = isTrustedProxyAddress(remoteAddr, trustedProxies);
+        const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
+        const hostIsLocalish = isLocalishHost(requestHost);
+        const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
+        const reportedClientIp =
+          isLocalClient || hasUntrustedProxyHeaders
+            ? undefined
+            : clientIp && !isLoopbackAddress(clientIp)
+              ? clientIp
+              : undefined;
+        if (hasUntrustedProxyHeaders) {
+          logWsControl.warn(
+            "Proxy headers detected from untrusted address. " +
+              "Connection will not be treated as local. " +
+              "Configure gateway.trustedProxies to restore local client detection behind your proxy.",
+          );
+        }
+        if (!hostIsLocalish && isLoopbackAddress(remoteAddr) && !hasProxyHeaders) {
+          logWsControl.warn(
+            "Loopback connection with non-local Host header. " +
+              "Treating it as remote. If you're behind a reverse proxy, " +
+              "set gateway.trustedProxies and forward X-Forwarded-For/X-Real-IP.",
+          );
+        }
+        const browserSecurity = resolveHandshakeBrowserSecurityContext({
+          requestOrigin,
+          clientIp,
+          rateLimiter,
+          browserRateLimiter,
+        });
+        const {
+          hasBrowserOriginHeader,
+          enforceOriginCheckForAnyClient,
+          rateLimitClientIp: browserRateLimitClientIp,
+          authRateLimiter,
+        } = browserSecurity;
         const markHandshakeFailure = (cause: string, meta?: Record<string, unknown>) => {
           setHandshakeState("failed");
           setCloseCause(cause, { ...meta, ...clientMeta });
@@ -1053,7 +1048,7 @@ export function attachGatewayWsMessageHandler(params: {
         });
 
         send({ type: "res", id: frame.id, ok: true, payload: helloOk });
-        void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
+        void refreshGatewayHealthSnapshot({ probe: false }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;

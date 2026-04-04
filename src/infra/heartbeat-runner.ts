@@ -32,6 +32,7 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -39,11 +40,14 @@ import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   normalizeAgentId,
+  normalizeAccountId,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { escapeRegExp } from "../utils.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.js";
+import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -164,6 +168,46 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
   );
 }
 
+function resolveRecentHeartbeatDeliveryEntry(params: {
+  store: Record<string, SessionEntry>;
+  preferredEntry?: SessionEntry;
+  preferredSessionKey: string;
+  accountId?: string;
+}): SessionEntry | undefined {
+  const preferredContext = deliveryContextFromSession(params.preferredEntry);
+  if (
+    preferredContext?.channel &&
+    isDeliverableMessageChannel(preferredContext.channel) &&
+    preferredContext.to
+  ) {
+    return params.preferredEntry;
+  }
+
+  const normalizedAccountId = normalizeAccountId(params.accountId);
+  const candidate = Object.entries(params.store)
+    .filter(([key]) => key !== params.preferredSessionKey && key !== "global" && key !== "unknown")
+    .filter(([key]) => !key.endsWith(":heartbeat"))
+    .map(([_, entry]) => ({
+      entry,
+      context: deliveryContextFromSession(entry),
+    }))
+    .filter(({ context }) =>
+      Boolean(
+        context?.channel && isDeliverableMessageChannel(context.channel) && context.to?.trim(),
+      ),
+    )
+    .filter(({ context }) => {
+      if (!normalizedAccountId) {
+        return true;
+      }
+      const contextAccountId = normalizeAccountId(context?.accountId);
+      return !contextAccountId || contextAccountId === normalizedAccountId;
+    })
+    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
+
+  return candidate?.entry ?? params.preferredEntry;
+}
+
 function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -181,9 +225,16 @@ function resolveHeartbeatSession(
   });
   const store = loadSessionStore(storePath);
   const mainEntry = store[mainSessionKey];
+  const heartbeatAccountId = heartbeat?.accountId?.trim();
+  const fallbackEntry = resolveRecentHeartbeatDeliveryEntry({
+    store,
+    preferredEntry: mainEntry,
+    preferredSessionKey: mainSessionKey,
+    accountId: heartbeatAccountId,
+  });
 
   if (scope === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return { sessionKey: mainSessionKey, storePath, store, entry: fallbackEntry };
   }
 
   const forced = forcedSessionKey?.trim();
@@ -213,12 +264,12 @@ function resolveHeartbeatSession(
 
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed) {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return { sessionKey: mainSessionKey, storePath, store, entry: fallbackEntry };
   }
 
   const normalized = trimmed.toLowerCase();
   if (normalized === "main" || normalized === "global") {
-    return { sessionKey: mainSessionKey, storePath, store, entry: mainEntry };
+    return { sessionKey: mainSessionKey, storePath, store, entry: fallbackEntry };
   }
 
   const candidate = toAgentStoreSessionKey({

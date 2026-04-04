@@ -1,6 +1,7 @@
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveUniqueBoundChannelForAgent } from "../../routing/bindings.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -27,6 +28,8 @@ export type AgentDeliveryPlan = {
 
 export function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
+  cfg?: OpenClawConfig;
+  agentId?: string;
   requestedChannel?: string;
   explicitTo?: string;
   explicitThreadId?: string | number;
@@ -86,6 +89,11 @@ export function resolveAgentDeliveryPlan(params: {
     turnSourceThreadId,
   });
 
+  const boundDelivery =
+    params.wantsDelivery && params.cfg
+      ? resolveUniqueBoundChannelForAgent(params.cfg, params.agentId ?? "main")
+      : null;
+
   const resolvedChannel = (() => {
     if (requestedChannel === INTERNAL_MESSAGE_CHANNEL) {
       return INTERNAL_MESSAGE_CHANNEL;
@@ -93,6 +101,9 @@ export function resolveAgentDeliveryPlan(params: {
     if (requestedChannel === "last") {
       if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
         return baseDelivery.channel;
+      }
+      if (boundDelivery && isDeliverableMessageChannel(boundDelivery.channelId)) {
+        return boundDelivery.channelId;
       }
       return INTERNAL_MESSAGE_CHANNEL;
     }
@@ -104,6 +115,9 @@ export function resolveAgentDeliveryPlan(params: {
     if (baseDelivery.channel && baseDelivery.channel !== INTERNAL_MESSAGE_CHANNEL) {
       return baseDelivery.channel;
     }
+    if (boundDelivery && isDeliverableMessageChannel(boundDelivery.channelId)) {
+      return boundDelivery.channelId;
+    }
     return INTERNAL_MESSAGE_CHANNEL;
   })();
 
@@ -113,9 +127,12 @@ export function resolveAgentDeliveryPlan(params: {
       ? "implicit"
       : undefined;
 
+  const boundAccountIds = boundDelivery?.accountIds ?? [];
   const resolvedAccountId =
     normalizeAccountId(params.accountId) ??
-    (deliveryTargetMode === "implicit" ? baseDelivery.accountId : undefined);
+    (deliveryTargetMode === "implicit"
+      ? (baseDelivery.accountId ?? boundAccountIds[0])
+      : undefined);
 
   let resolvedTo = explicitTo;
   if (

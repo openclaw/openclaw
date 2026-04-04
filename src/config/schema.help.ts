@@ -1013,6 +1013,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Plugin entry name inside the source marketplace, used for later updates.",
   "agents.list.*.identity.avatar":
     "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
+  "agents.list[].thinkingDefault":
+    "Per-agent default thinking level used when no session override or /think directive is present.",
+  "agents.list[].verboseDefault":
+    "Per-agent default verbose level used when no session override or /verbose directive is present.",
+  "agents.list[].elevatedDefault":
+    "Per-agent default elevated-actions level used when no session override or /elevated directive is present.",
+  "agents.list[].fastModeDefault":
+    "Per-agent default fast-mode toggle used when no session override or /fast directive is present.",
+  "agents.list[].reasoningDefault":
+    "Per-agent default reasoning visibility used when no session override or /reasoning directive is present.",
+  "agents.list[].blockStreamingDefault":
+    "Per-agent default for block-streaming replies when no session override is present.",
+  "agents.list[].blockStreamingBreak":
+    "Per-agent block-streaming boundary: text block end or whole-message end.",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",

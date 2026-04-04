@@ -33,4 +33,18 @@ describe("resolveCurrentDirectiveLevels", () => {
     expect(result.currentThinkLevel).toBe("minimal");
     expect(resolveDefaultThinkingLevel).not.toHaveBeenCalled();
   });
+
+  it("surfaces agent fast and reasoning defaults when session is unset", async () => {
+    const result = await resolveCurrentDirectiveLevels({
+      sessionEntry: {},
+      agentCfg: {
+        fastModeDefault: true,
+        reasoningDefault: "on",
+      },
+      resolveDefaultThinkingLevel: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.currentFastMode).toBe(true);
+    expect(result.currentReasoningLevel).toBe("on");
+  });
 });

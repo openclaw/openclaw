@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   GatewayIntents,
+  baseDisconnectSpy,
   baseRegisterClientSpy,
   GatewayPlugin,
   globalFetchMock,
@@ -20,6 +21,7 @@ const {
   const undiciFetchMock = vi.fn();
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
+  const baseDisconnectSpy = vi.fn();
   const webSocketSpy = vi.fn();
 
   const GatewayIntents = {
@@ -43,6 +45,9 @@ const {
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
     }
+    disconnect() {
+      baseDisconnectSpy();
+    }
   }
 
   class HttpsProxyAgent {
@@ -59,6 +64,7 @@ const {
   }
 
   return {
+    baseDisconnectSpy,
     baseRegisterClientSpy,
     GatewayIntents,
     GatewayPlugin,
@@ -162,6 +168,7 @@ describe("createDiscordGatewayPlugin", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", globalFetchMock);
     baseRegisterClientSpy.mockClear();
+    baseDisconnectSpy.mockClear();
     globalFetchMock.mockClear();
     restProxyAgentSpy.mockClear();
     undiciFetchMock.mockClear();
@@ -262,5 +269,43 @@ describe("createDiscordGatewayPlugin", () => {
         throw new Error("body stream closed");
       },
     } as unknown as Response);
+  });
+
+  it("swallows disconnect errors when the gateway websocket never opened", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+    baseDisconnectSpy.mockImplementationOnce(() => {
+      throw new Error("WebSocket was closed before the connection was established");
+    });
+
+    expect(() =>
+      (
+        plugin as {
+          disconnect: () => void;
+        }
+      ).disconnect(),
+    ).not.toThrow();
+  });
+
+  it("rethrows unexpected disconnect failures", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+    baseDisconnectSpy.mockImplementationOnce(() => {
+      throw new Error("disconnect boom");
+    });
+
+    expect(() =>
+      (
+        plugin as {
+          disconnect: () => void;
+        }
+      ).disconnect(),
+    ).toThrow("disconnect boom");
   });
 });

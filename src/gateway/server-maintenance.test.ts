@@ -123,4 +123,24 @@ describe("startGatewayMaintenanceTimers", () => {
 
     stopMaintenanceTimers(timers);
   });
+
+  it("keeps the warm health cache on fast snapshots instead of probe refreshes", async () => {
+    vi.useFakeTimers();
+    const refreshGatewayHealthSnapshot = vi.fn(async () => ({ ok: true }) as HealthSummary);
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      refreshGatewayHealthSnapshot,
+    });
+
+    expect(refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+
+    refreshGatewayHealthSnapshot.mockClear();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+
+    stopMaintenanceTimers(timers);
+  });
 });

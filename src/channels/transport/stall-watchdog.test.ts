@@ -23,6 +23,10 @@ describe("createArmableStallWatchdog", () => {
       await vi.advanceTimersByTimeAsync(1_500);
 
       expect(onTimeout).toHaveBeenCalledTimes(1);
+      const [meta] = onTimeout.mock.calls[0] ?? [];
+      expect(meta).toMatchObject({ timeoutMs: 1_000 });
+      expect(meta?.idleMs).toBeGreaterThanOrEqual(1_000);
+      expect(meta?.idleMs).toBeLessThan(1_100);
       expect(watchdog.isArmed()).toBe(false);
       watchdog.stop();
     } finally {

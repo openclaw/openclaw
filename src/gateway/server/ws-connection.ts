@@ -25,6 +25,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const LOG_HEADER_MAX_LEN = 300;
 const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
+const LOCAL_HANDSHAKE_TIMEOUT_MS = 8_000;
 
 function replaceControlChars(value: string): string {
   let cleaned = "";
@@ -264,7 +265,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
-    const handshakeTimeoutMs = getHandshakeTimeoutMs();
+    const handshakeTimeoutMs = isLoopbackAddress(remoteAddr)
+      ? Math.max(getHandshakeTimeoutMs(), LOCAL_HANDSHAKE_TIMEOUT_MS)
+      : getHandshakeTimeoutMs();
     const handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";

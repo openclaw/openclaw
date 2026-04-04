@@ -63,14 +63,13 @@ export async function runDiscordGatewayLifecycle(params: {
     timeoutMs: RECONNECT_STALL_TIMEOUT_MS,
     abortSignal: params.abortSignal,
     runtime: params.runtime,
-    onTimeout: () => {
+    onTimeout: ({ idleMs, timeoutMs }) => {
       if (params.abortSignal?.aborted || lifecycleStopping) {
         return;
       }
       const at = Date.now();
-      const error = new Error(
-        `discord reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms`,
-      );
+      const timeoutSummary = `idle ${idleMs}ms (limit ${timeoutMs}ms)`;
+      const error = new Error(`discord reconnect watchdog timeout: ${timeoutSummary}`);
       pushStatus({
         connected: false,
         lastEventAt: at,
@@ -82,7 +81,7 @@ export async function runDiscordGatewayLifecycle(params: {
       });
       params.runtime.error?.(
         danger(
-          `discord: reconnect watchdog timeout after ${RECONNECT_STALL_TIMEOUT_MS}ms; force-stopping monitor task`,
+          `discord: reconnect watchdog timeout: ${timeoutSummary}; force-stopping monitor task`,
         ),
       );
       triggerForceStop(error);

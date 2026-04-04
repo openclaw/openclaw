@@ -837,6 +837,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.imessage.cliPath": "iMessage CLI Path",
   "agents.list[].skills": "Agent Skill Filter",
   "agents.list[].identity.avatar": "Agent Avatar",
+  "agents.list[].thinkingDefault": "Agent Thinking Default",
+  "agents.list[].verboseDefault": "Agent Verbose Default",
+  "agents.list[].elevatedDefault": "Agent Elevated Default",
+  "agents.list[].fastModeDefault": "Agent Fast Mode Default",
+  "agents.list[].reasoningDefault": "Agent Reasoning Default",
+  "agents.list[].blockStreamingDefault": "Agent Block Streaming Default",
+  "agents.list[].blockStreamingBreak": "Agent Block Streaming Break",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Agent Heartbeat Suppress Tool Error Warnings",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",

@@ -284,12 +284,18 @@ export function createExecApprovalHandlers(
       }
       const p = params as { id: string; decision: string };
       const decision = p.decision as ExecApprovalDecision;
+      const requestedId = typeof p.id === "string" ? p.id.trim() : "";
       if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
       const resolvedId = manager.lookupPendingId(p.id);
       if (resolvedId.kind === "none") {
+        const settled = requestedId ? manager.getSnapshot(requestedId) : null;
+        if (settled?.resolvedAtMs !== undefined && settled.decision === decision) {
+          respond(true, { ok: true, alreadyResolved: true }, undefined);
+          return;
+        }
         respond(
           false,
           undefined,
@@ -315,6 +321,11 @@ export function createExecApprovalHandlers(
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
       if (!ok) {
+        const settled = manager.getSnapshot(approvalId);
+        if (settled?.resolvedAtMs !== undefined && settled.decision === decision) {
+          respond(true, { ok: true, alreadyResolved: true }, undefined);
+          return;
+        }
         respond(
           false,
           undefined,

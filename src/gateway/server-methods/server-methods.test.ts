@@ -824,6 +824,39 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("treats duplicate late resolve for the same exact approval id as success", async () => {
+    const manager = new ExecApprovalManager();
+    const handlers = createExecApprovalHandlers(manager);
+    const context = {
+      broadcast: (_event: string, _payload: unknown) => {},
+      hasExecApprovalClients: () => true,
+    };
+    const respondFirst = vi.fn();
+    const respondSecond = vi.fn();
+
+    void manager.register(manager.create({ command: "echo one" }, 60_000, "approval-dup"), 60_000);
+
+    await resolveExecApproval({
+      handlers,
+      id: "approval-dup",
+      respond: respondFirst,
+      context,
+    });
+    await resolveExecApproval({
+      handlers,
+      id: "approval-dup",
+      respond: respondSecond,
+      context,
+    });
+
+    expect(respondFirst).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respondSecond).toHaveBeenCalledWith(
+      true,
+      { ok: true, alreadyResolved: true },
+      undefined,
+    );
+  });
+
   it("resolves only the targeted approval id when multiple requests are pending", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
