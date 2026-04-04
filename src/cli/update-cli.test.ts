@@ -3,16 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
-
-const TEST_BUNDLED_RUNTIME_SIDECAR_PATHS = [
-  "dist/extensions/discord/runtime-api.js",
-  "dist/extensions/slack/helper-api.js",
-  "dist/extensions/telegram/thread-bindings-runtime.js",
-] as const;
 
 const confirm = vi.fn();
 const select = vi.fn();

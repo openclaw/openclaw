@@ -133,12 +133,7 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   },
   {
     path: bundledPluginFile("signal", "src/setup-surface.ts"),
-    forbiddenPatterns: [
-      /\bdetectBinary\b/,
-      /\binstallSignalCli\b/,
-      /\bformatCliCommand\b/,
-      /\bformatDocsLink\b/,
-    ],
+    forbiddenPatterns: [/\bdetectBinary\b/, /\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
   {
     path: bundledPluginFile("slack", "src/setup-core.ts"),

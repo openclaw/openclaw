@@ -20,12 +20,7 @@ import {
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
-import {
-  isInboundPathAllowed,
-  resolveIMessageAttachmentRoots,
-  resolveIMessageRemoteAttachmentRoots,
-} from "openclaw/plugin-sdk/media-runtime";
-import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
@@ -40,6 +35,10 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
+import {
+  resolveIMessageAttachmentRoots,
+  resolveIMessageRemoteAttachmentRoots,
+} from "../media-contract.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";

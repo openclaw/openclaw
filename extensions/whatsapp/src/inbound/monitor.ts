@@ -4,10 +4,10 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
-import { resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentity } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
+import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
   isRecentInboundMessage,

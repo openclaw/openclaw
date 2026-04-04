@@ -160,14 +160,9 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetDir: "/tmp/state/agents/main/agent",
       hasLegacy: false,
     },
-    whatsappAuth: {
-      legacyDir: "/tmp/oauth",
-      targetDir: "/tmp/oauth/whatsapp/default",
+    channelPlans: {
       hasLegacy: false,
-    },
-    pairingAllowFrom: {
-      hasLegacyTelegram: false,
-      copyPlans: [],
+      plans: [],
     },
     preview: params?.preview ?? [],
   };

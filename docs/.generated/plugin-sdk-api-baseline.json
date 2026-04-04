@@ -73,7 +73,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 154,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -100,7 +100,7 @@
           "exportName": "ChannelCapabilities",
           "kind": "type",
           "source": {
-            "line": 233,
+            "line": 240,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -127,7 +127,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 776,
+            "line": 788,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -136,7 +136,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 781,
+            "line": 793,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -145,7 +145,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 797,
+            "line": 809,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -154,7 +154,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 285,
+            "line": 287,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -172,7 +172,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 580,
+            "line": 592,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -181,7 +181,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 544,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -208,7 +208,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 65,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1856,7 +1856,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 630,
+            "line": 642,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1865,7 +1865,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 636,
+            "line": 648,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1874,7 +1874,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 154,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1892,7 +1892,7 @@
           "exportName": "ChannelApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 714,
+            "line": 726,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1901,7 +1901,7 @@
           "exportName": "ChannelApprovalCapability",
           "kind": "type",
           "source": {
-            "line": 703,
+            "line": 715,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1910,7 +1910,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 785,
+            "line": 797,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1919,8 +1919,17 @@
           "exportName": "ChannelDirectoryAdapter",
           "kind": "type",
           "source": {
-            "line": 472,
+            "line": 475,
             "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelDirectoryEntry = ChannelDirectoryEntry;",
+          "exportName": "ChannelDirectoryEntry",
+          "kind": "type",
+          "source": {
+            "line": 543,
+            "path": "src/channels/plugins/types.core.ts"
           }
         },
         {
@@ -1928,7 +1937,7 @@
           "exportName": "ChannelDoctorAdapter",
           "kind": "type",
           "source": {
-            "line": 560,
+            "line": 565,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1937,7 +1946,7 @@
           "exportName": "ChannelDoctorConfigMutation",
           "kind": "type",
           "source": {
-            "line": 540,
+            "line": 543,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1946,7 +1955,7 @@
           "exportName": "ChannelDoctorEmptyAllowlistAccountContext",
           "kind": "type",
           "source": {
-            "line": 551,
+            "line": 556,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1955,7 +1964,16 @@
           "exportName": "ChannelDoctorSequenceResult",
           "kind": "type",
           "source": {
-            "line": 546,
+            "line": 551,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelGatewayContext = ChannelGatewayContext<ResolvedAccount>;",
+          "exportName": "ChannelGatewayContext",
+          "kind": "type",
+          "source": {
+            "line": 287,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -1964,7 +1982,16 @@
           "exportName": "ChannelGroupContext",
           "kind": "type",
           "source": {
-            "line": 219,
+            "line": 226,
+            "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelLegacyStateMigrationPlan = ChannelLegacyStateMigrationPlan;",
+          "exportName": "ChannelLegacyStateMigrationPlan",
+          "kind": "type",
+          "source": {
+            "line": 123,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1973,7 +2000,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 580,
+            "line": 592,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -1982,7 +2009,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 544,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2023,6 +2050,33 @@
           }
         },
         {
+          "declaration": "export type ChannelOutboundAdapter = ChannelOutboundAdapter;",
+          "exportName": "ChannelOutboundAdapter",
+          "kind": "type",
+          "source": {
+            "line": 178,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelResolveKind = ChannelResolveKind;",
+          "exportName": "ChannelResolveKind",
+          "kind": "type",
+          "source": {
+            "line": 486,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelResolveResult = ChannelResolveResult;",
+          "exportName": "ChannelResolveResult",
+          "kind": "type",
+          "source": {
+            "line": 488,
+            "path": "src/channels/plugins/types.adapters.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelStatusIssue = ChannelStatusIssue;",
           "exportName": "ChannelStatusIssue",
           "kind": "type",
@@ -2036,7 +2090,7 @@
           "exportName": "ChannelStructuredComponents",
           "kind": "type",
           "source": {
-            "line": 291,
+            "line": 298,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2045,7 +2099,7 @@
           "exportName": "ChannelThreadingContext",
           "kind": "type",
           "source": {
-            "line": 368,
+            "line": 375,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2054,7 +2108,16 @@
           "exportName": "ChannelThreadingToolContext",
           "kind": "type",
           "source": {
-            "line": 382,
+            "line": 389,
+            "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelToolSend = ChannelToolSend;",
+          "exportName": "ChannelToolSend",
+          "kind": "type",
+          "source": {
+            "line": 585,
             "path": "src/channels/plugins/types.core.ts"
           }
         }
@@ -2074,7 +2137,7 @@
           "exportName": "createChannelPairingChallengeIssuer",
           "kind": "function",
           "source": {
-            "line": 22,
+            "line": 23,
             "path": "src/plugin-sdk/channel-pairing.ts"
           }
         },
@@ -2083,7 +2146,7 @@
           "exportName": "createChannelPairingController",
           "kind": "function",
           "source": {
-            "line": 40,
+            "line": 41,
             "path": "src/plugin-sdk/channel-pairing.ts"
           }
         },
@@ -2115,6 +2178,15 @@
           }
         },
         {
+          "declaration": "export function readChannelAllowFromStore(channel: ChannelId, env?: ProcessEnv, accountId?: string | undefined): Promise<string[]>;",
+          "exportName": "readChannelAllowFromStore",
+          "kind": "function",
+          "source": {
+            "line": 570,
+            "path": "src/pairing/pairing-store.ts"
+          }
+        },
+        {
           "declaration": "export function readChannelAllowFromStoreSync(channel: ChannelId, env?: ProcessEnv, accountId?: string | undefined): string[];",
           "exportName": "readChannelAllowFromStoreSync",
           "kind": "function",
@@ -2124,11 +2196,20 @@
           }
         },
         {
+          "declaration": "export function resolveChannelAllowFromPath(channel: ChannelId, env?: ProcessEnv, accountId?: string | undefined): string;",
+          "exportName": "resolveChannelAllowFromPath",
+          "kind": "function",
+          "source": {
+            "line": 107,
+            "path": "src/pairing/pairing-store.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelPairingController = ChannelPairingController;",
           "exportName": "ChannelPairingController",
           "kind": "type",
           "source": {
-            "line": 15,
+            "line": 16,
             "path": "src/plugin-sdk/channel-pairing.ts"
           }
         }
@@ -2148,8 +2229,35 @@
           "exportName": "createChannelReplyPipeline",
           "kind": "function",
           "source": {
-            "line": 20,
+            "line": 25,
             "path": "src/plugin-sdk/channel-reply-pipeline.ts"
+          }
+        },
+        {
+          "declaration": "export function createReplyPrefixContext(params: { cfg: OpenClawConfig; agentId: string; channel?: string | undefined; accountId?: string | undefined; }): ReplyPrefixContextBundle;",
+          "exportName": "createReplyPrefixContext",
+          "kind": "function",
+          "source": {
+            "line": 23,
+            "path": "src/channels/reply-prefix.ts"
+          }
+        },
+        {
+          "declaration": "export function createReplyPrefixOptions(params: { cfg: OpenClawConfig; agentId: string; channel?: string | undefined; accountId?: string | undefined; }): ReplyPrefixOptions;",
+          "exportName": "createReplyPrefixOptions",
+          "kind": "function",
+          "source": {
+            "line": 53,
+            "path": "src/channels/reply-prefix.ts"
+          }
+        },
+        {
+          "declaration": "export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks;",
+          "exportName": "createTypingCallbacks",
+          "kind": "function",
+          "source": {
+            "line": 23,
+            "path": "src/channels/typing.ts"
           }
         },
         {
@@ -2157,7 +2265,7 @@
           "exportName": "ChannelReplyPipeline",
           "kind": "type",
           "source": {
-            "line": 16,
+            "line": 20,
             "path": "src/plugin-sdk/channel-reply-pipeline.ts"
           }
         },
@@ -2175,7 +2283,7 @@
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
-            "line": 12,
+            "line": 15,
             "path": "src/plugin-sdk/channel-reply-pipeline.ts"
           }
         },
@@ -2438,7 +2546,7 @@
           "exportName": "BaseProbeResult",
           "kind": "type",
           "source": {
-            "line": 630,
+            "line": 642,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2447,7 +2555,7 @@
           "exportName": "BaseTokenResolution",
           "kind": "type",
           "source": {
-            "line": 636,
+            "line": 648,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2456,7 +2564,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 154,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2474,7 +2582,7 @@
           "exportName": "ChannelActionAvailabilityState",
           "kind": "type",
           "source": {
-            "line": 32,
+            "line": 34,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2483,7 +2591,7 @@
           "exportName": "ChannelAgentPromptAdapter",
           "kind": "type",
           "source": {
-            "line": 511,
+            "line": 523,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2510,7 +2618,7 @@
           "exportName": "ChannelAllowlistAdapter",
           "kind": "type",
           "source": {
-            "line": 720,
+            "line": 732,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2519,7 +2627,7 @@
           "exportName": "ChannelApprovalAdapter",
           "kind": "type",
           "source": {
-            "line": 714,
+            "line": 726,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2528,7 +2636,7 @@
           "exportName": "ChannelApprovalCapability",
           "kind": "type",
           "source": {
-            "line": 703,
+            "line": 715,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2537,7 +2645,7 @@
           "exportName": "ChannelApprovalForwardTarget",
           "kind": "type",
           "source": {
-            "line": 39,
+            "line": 41,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2546,7 +2654,7 @@
           "exportName": "ChannelApprovalInitiatingSurfaceState",
           "kind": "type",
           "source": {
-            "line": 37,
+            "line": 39,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2555,7 +2663,7 @@
           "exportName": "ChannelAuthAdapter",
           "kind": "type",
           "source": {
-            "line": 409,
+            "line": 412,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2564,7 +2672,7 @@
           "exportName": "ChannelCapabilities",
           "kind": "type",
           "source": {
-            "line": 233,
+            "line": 240,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2573,7 +2681,7 @@
           "exportName": "ChannelCapabilitiesDiagnostics",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 56,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2582,7 +2690,7 @@
           "exportName": "ChannelCapabilitiesDisplayLine",
           "kind": "type",
           "source": {
-            "line": 49,
+            "line": 51,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2591,7 +2699,7 @@
           "exportName": "ChannelCapabilitiesDisplayTone",
           "kind": "type",
           "source": {
-            "line": 47,
+            "line": 49,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2600,7 +2708,7 @@
           "exportName": "ChannelCommandAdapter",
           "kind": "type",
           "source": {
-            "line": 510,
+            "line": 513,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2609,7 +2717,7 @@
           "exportName": "ChannelCommandConversationContext",
           "kind": "type",
           "source": {
-            "line": 785,
+            "line": 797,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2618,7 +2726,7 @@
           "exportName": "ChannelConfigAdapter",
           "kind": "type",
           "source": {
-            "line": 98,
+            "line": 100,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2627,7 +2735,7 @@
           "exportName": "ChannelConfiguredBindingConversationRef",
           "kind": "type",
           "source": {
-            "line": 776,
+            "line": 788,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2636,7 +2744,7 @@
           "exportName": "ChannelConfiguredBindingMatch",
           "kind": "type",
           "source": {
-            "line": 781,
+            "line": 793,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2645,7 +2753,7 @@
           "exportName": "ChannelConfiguredBindingProvider",
           "kind": "type",
           "source": {
-            "line": 797,
+            "line": 809,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2654,7 +2762,7 @@
           "exportName": "ChannelConversationBindingSupport",
           "kind": "type",
           "source": {
-            "line": 814,
+            "line": 826,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2663,7 +2771,7 @@
           "exportName": "ChannelDirectoryAdapter",
           "kind": "type",
           "source": {
-            "line": 472,
+            "line": 475,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2672,7 +2780,7 @@
           "exportName": "ChannelDirectoryEntry",
           "kind": "type",
           "source": {
-            "line": 531,
+            "line": 543,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2681,7 +2789,7 @@
           "exportName": "ChannelDirectoryEntryKind",
           "kind": "type",
           "source": {
-            "line": 529,
+            "line": 541,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2690,7 +2798,7 @@
           "exportName": "ChannelElevatedAdapter",
           "kind": "type",
           "source": {
-            "line": 503,
+            "line": 506,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2699,7 +2807,7 @@
           "exportName": "ChannelGatewayAdapter",
           "kind": "type",
           "source": {
-            "line": 393,
+            "line": 395,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2708,7 +2816,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 285,
+            "line": 287,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2717,7 +2825,7 @@
           "exportName": "ChannelGroupAdapter",
           "kind": "type",
           "source": {
-            "line": 130,
+            "line": 132,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2726,7 +2834,7 @@
           "exportName": "ChannelGroupContext",
           "kind": "type",
           "source": {
-            "line": 219,
+            "line": 226,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2735,7 +2843,7 @@
           "exportName": "ChannelHeartbeatAdapter",
           "kind": "type",
           "source": {
-            "line": 435,
+            "line": 438,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2762,7 +2870,7 @@
           "exportName": "ChannelLifecycleAdapter",
           "kind": "type",
           "source": {
-            "line": 593,
+            "line": 599,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2771,7 +2879,7 @@
           "exportName": "ChannelLoginWithQrStartResult",
           "kind": "type",
           "source": {
-            "line": 364,
+            "line": 366,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2780,7 +2888,7 @@
           "exportName": "ChannelLoginWithQrWaitResult",
           "kind": "type",
           "source": {
-            "line": 369,
+            "line": 371,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2789,7 +2897,7 @@
           "exportName": "ChannelLogoutContext",
           "kind": "type",
           "source": {
-            "line": 374,
+            "line": 376,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2798,7 +2906,7 @@
           "exportName": "ChannelLogoutResult",
           "kind": "type",
           "source": {
-            "line": 358,
+            "line": 360,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2807,7 +2915,7 @@
           "exportName": "ChannelLogSink",
           "kind": "type",
           "source": {
-            "line": 212,
+            "line": 219,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2816,7 +2924,7 @@
           "exportName": "ChannelMentionAdapter",
           "kind": "type",
           "source": {
-            "line": 263,
+            "line": 270,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2825,7 +2933,7 @@
           "exportName": "ChannelMessageActionAdapter",
           "kind": "type",
           "source": {
-            "line": 580,
+            "line": 592,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2834,7 +2942,7 @@
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 544,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2888,7 +2996,7 @@
           "exportName": "ChannelMessagingAdapter",
           "kind": "type",
           "source": {
-            "line": 398,
+            "line": 405,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2897,7 +3005,7 @@
           "exportName": "ChannelMeta",
           "kind": "type",
           "source": {
-            "line": 124,
+            "line": 131,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2906,7 +3014,7 @@
           "exportName": "ChannelOutboundAdapter",
           "kind": "type",
           "source": {
-            "line": 176,
+            "line": 178,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2915,7 +3023,7 @@
           "exportName": "ChannelOutboundContext",
           "kind": "type",
           "source": {
-            "line": 136,
+            "line": 138,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2924,7 +3032,7 @@
           "exportName": "ChannelOutboundPayloadHint",
           "kind": "type",
           "source": {
-            "line": 161,
+            "line": 163,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2942,7 +3050,7 @@
           "exportName": "ChannelOutboundTargetRef",
           "kind": "type",
           "source": {
-            "line": 165,
+            "line": 167,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2951,7 +3059,7 @@
           "exportName": "ChannelPairingAdapter",
           "kind": "type",
           "source": {
-            "line": 382,
+            "line": 384,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2969,7 +3077,7 @@
           "exportName": "ChannelPollContext",
           "kind": "type",
           "source": {
-            "line": 618,
+            "line": 630,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2978,7 +3086,7 @@
           "exportName": "ChannelPollResult",
           "kind": "type",
           "source": {
-            "line": 609,
+            "line": 621,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -2987,7 +3095,7 @@
           "exportName": "ChannelResolveKind",
           "kind": "type",
           "source": {
-            "line": 483,
+            "line": 486,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -2996,7 +3104,7 @@
           "exportName": "ChannelResolverAdapter",
           "kind": "type",
           "source": {
-            "line": 493,
+            "line": 496,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3005,7 +3113,7 @@
           "exportName": "ChannelResolveResult",
           "kind": "type",
           "source": {
-            "line": 485,
+            "line": 488,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3014,7 +3122,7 @@
           "exportName": "ChannelSecurityAdapter",
           "kind": "type",
           "source": {
-            "line": 884,
+            "line": 899,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3023,7 +3131,7 @@
           "exportName": "ChannelSecurityContext",
           "kind": "type",
           "source": {
-            "line": 257,
+            "line": 264,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3032,7 +3140,7 @@
           "exportName": "ChannelSecurityDmPolicy",
           "kind": "type",
           "source": {
-            "line": 248,
+            "line": 255,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3041,7 +3149,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 65,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3059,7 +3167,7 @@
           "exportName": "ChannelStatusAdapter",
           "kind": "type",
           "source": {
-            "line": 230,
+            "line": 232,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3077,7 +3185,7 @@
           "exportName": "ChannelStreamingAdapter",
           "kind": "type",
           "source": {
-            "line": 282,
+            "line": 289,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3086,7 +3194,7 @@
           "exportName": "ChannelStructuredComponents",
           "kind": "type",
           "source": {
-            "line": 291,
+            "line": 298,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3095,7 +3203,7 @@
           "exportName": "ChannelThreadingAdapter",
           "kind": "type",
           "source": {
-            "line": 325,
+            "line": 332,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3104,7 +3212,7 @@
           "exportName": "ChannelThreadingContext",
           "kind": "type",
           "source": {
-            "line": 368,
+            "line": 375,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3113,7 +3221,7 @@
           "exportName": "ChannelThreadingToolContext",
           "kind": "type",
           "source": {
-            "line": 382,
+            "line": 389,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3122,7 +3230,7 @@
           "exportName": "ChannelToolSend",
           "kind": "type",
           "source": {
-            "line": 573,
+            "line": 585,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -3295,7 +3403,7 @@
           "exportName": "setSetupChannelEnabled",
           "kind": "function",
           "source": {
-            "line": 882,
+            "line": 874,
             "path": "src/channels/plugins/setup-wizard-helpers.ts"
           }
         },
@@ -3322,7 +3430,7 @@
           "exportName": "ChannelSetupAdapter",
           "kind": "type",
           "source": {
-            "line": 63,
+            "line": 65,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },
@@ -3331,7 +3439,7 @@
           "exportName": "ChannelSetupDmPolicy",
           "kind": "type",
           "source": {
-            "line": 93,
+            "line": 90,
             "path": "src/channels/plugins/setup-wizard-types.ts"
           }
         },
@@ -4010,7 +4118,7 @@
           "exportName": "applyAccountNameToChannelSection",
           "kind": "function",
           "source": {
-            "line": 34,
+            "line": 35,
             "path": "src/channels/plugins/setup-helpers.ts"
           }
         },
@@ -4037,7 +4145,7 @@
           "exportName": "buildChannelOutboundSessionRoute",
           "kind": "function",
           "source": {
-            "line": 193,
+            "line": 226,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4078,11 +4186,20 @@
           }
         },
         {
+          "declaration": "export function createActionGate<T extends Record<string, boolean | undefined>>(actions: T | undefined): ActionGate<T>;",
+          "exportName": "createActionGate",
+          "kind": "function",
+          "source": {
+            "line": 46,
+            "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
           "declaration": "export function createChannelPluginBase<TResolvedAccount>(params: CreateChannelPluginBaseOptions<TResolvedAccount>): CreatedChannelPluginBase<TResolvedAccount>;",
           "exportName": "createChannelPluginBase",
           "kind": "function",
           "source": {
-            "line": 558,
+            "line": 591,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4091,7 +4208,7 @@
           "exportName": "createChatChannelPlugin",
           "kind": "function",
           "source": {
-            "line": 531,
+            "line": 564,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4109,7 +4226,7 @@
           "exportName": "createSubsystemLogger",
           "kind": "function",
           "source": {
-            "line": 308,
+            "line": 302,
             "path": "src/logging/subsystem.ts"
           }
         },
@@ -4118,7 +4235,7 @@
           "exportName": "defineChannelPluginEntry",
           "kind": "function",
           "source": {
-            "line": 291,
+            "line": 324,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4136,7 +4253,7 @@
           "exportName": "defineSetupPluginEntry",
           "kind": "function",
           "source": {
-            "line": 334,
+            "line": 367,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4177,12 +4294,30 @@
           }
         },
         {
+          "declaration": "export function ensureConfiguredAcpBindingReady(params: { cfg: OpenClawConfig; configuredBinding: ResolvedConfiguredAcpBinding | null; }): Promise<{ ok: true; } | { ok: false; error: string; }>;",
+          "exportName": "ensureConfiguredAcpBindingReady",
+          "kind": "function",
+          "source": {
+            "line": 110,
+            "path": "src/acp/persistent-bindings.lifecycle.ts"
+          }
+        },
+        {
           "declaration": "export function formatPairingApproveHint(channelId: string): string;",
           "exportName": "formatPairingApproveHint",
           "kind": "function",
           "source": {
             "line": 17,
             "path": "src/channels/plugins/helpers.ts"
+          }
+        },
+        {
+          "declaration": "export function formatZonedTimestamp(date: Date, options?: FormatZonedTimestampOptions | undefined): string | undefined;",
+          "exportName": "formatZonedTimestamp",
+          "kind": "function",
+          "source": {
+            "line": 57,
+            "path": "src/infra/format-time/format-datetime.ts"
           }
         },
         {
@@ -4222,6 +4357,24 @@
           }
         },
         {
+          "declaration": "export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: string[] | undefined): boolean;",
+          "exportName": "isTrustedProxyAddress",
+          "kind": "function",
+          "source": {
+            "line": 136,
+            "path": "src/gateway/net.ts"
+          }
+        },
+        {
+          "declaration": "export function jsonResult(payload: unknown): AgentToolResult<unknown>;",
+          "exportName": "jsonResult",
+          "kind": "function",
+          "source": {
+            "line": 256,
+            "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
           "declaration": "export function loadSecretFileSync(filePath: string, label: string, options?: SecretFileReadOptions): SecretFileReadResult;",
           "exportName": "loadSecretFileSync",
           "kind": "function",
@@ -4235,7 +4388,7 @@
           "exportName": "migrateBaseNameToDefaultAccount",
           "kind": "function",
           "source": {
-            "line": 93,
+            "line": 94,
             "path": "src/channels/plugins/setup-helpers.ts"
           }
         },
@@ -4285,12 +4438,75 @@
           }
         },
         {
+          "declaration": "export function parseStrictPositiveInteger(value: unknown): number | undefined;",
+          "exportName": "parseStrictPositiveInteger",
+          "kind": "function",
+          "source": {
+            "line": 34,
+            "path": "src/infra/parse-finite-number.ts"
+          }
+        },
+        {
+          "declaration": "export function readNumberParam(params: Record<string, unknown>, key: string, options?: { required?: boolean | undefined; label?: string | undefined; integer?: boolean | undefined; strict?: boolean | undefined; }): number | undefined;",
+          "exportName": "readNumberParam",
+          "kind": "function",
+          "source": {
+            "line": 117,
+            "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
+          "declaration": "export function readReactionParams(params: Record<string, unknown>, options: { emojiKey?: string | undefined; removeKey?: string | undefined; removeErrorMessage: string; }): ReactionParams;",
+          "exportName": "readReactionParams",
+          "kind": "function",
+          "source": {
+            "line": 197,
+            "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
           "declaration": "export function readSecretFileSync(filePath: string, label: string, options?: SecretFileReadOptions): string;",
           "exportName": "readSecretFileSync",
           "kind": "function",
           "source": {
             "line": 118,
             "path": "src/infra/secret-file.ts"
+          }
+        },
+        {
+          "declaration": "export function readStringArrayParam(params: Record<string, unknown>, key: string, options: StringParamOptions & { required: true; }): string[];\nexport function readStringArrayParam(params: Record<string, unknown>, key: string, options?: StringParamOptions | undefined): string[] | undefined;",
+          "exportName": "readStringArrayParam",
+          "kind": "function",
+          "source": {
+            "line": 145,
+            "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
+          "declaration": "export function readStringParam(params: Record<string, unknown>, key: string, options: StringParamOptions & { required: true; }): string;\nexport function readStringParam(params: Record<string, unknown>, key: string, options?: StringParamOptions | undefined): string | undefined;",
+          "exportName": "readStringParam",
+          "kind": "function",
+          "source": {
+            "line": 62,
+            "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveClientIp(params: { remoteAddr?: string | undefined; forwardedFor?: string | undefined; realIp?: string | undefined; trustedProxies?: string[] | undefined; allowRealIpFallback?: boolean | undefined; }): string | undefined;",
+          "exportName": "resolveClientIp",
+          "kind": "function",
+          "source": {
+            "line": 151,
+            "path": "src/gateway/net.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveConfiguredAcpBindingRecord(params: { cfg: OpenClawConfig; channel: string; accountId: string; conversationId: string; parentConversationId?: string | undefined; }): ResolvedConfiguredAcpBinding | null;",
+          "exportName": "resolveConfiguredAcpBindingRecord",
+          "kind": "function",
+          "source": {
+            "line": 15,
+            "path": "src/acp/persistent-bindings.resolve.ts"
           }
         },
         {
@@ -4361,7 +4577,7 @@
           "exportName": "stripChannelTargetPrefix",
           "kind": "function",
           "source": {
-            "line": 173,
+            "line": 206,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4370,7 +4586,7 @@
           "exportName": "stripTargetKindPrefix",
           "kind": "function",
           "source": {
-            "line": 185,
+            "line": 218,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4402,12 +4618,39 @@
           }
         },
         {
+          "declaration": "export type AllowlistMatch = AllowlistMatch<TSource>;",
+          "exportName": "AllowlistMatch",
+          "kind": "type",
+          "source": {
+            "line": 13,
+            "path": "src/channels/allowlist-match.ts"
+          }
+        },
+        {
           "declaration": "export type AnyAgentTool = AnyAgentTool;",
           "exportName": "AnyAgentTool",
           "kind": "type",
           "source": {
             "line": 9,
             "path": "src/agents/tools/common.ts"
+          }
+        },
+        {
+          "declaration": "export type BaseProbeResult = BaseProbeResult<TError>;",
+          "exportName": "BaseProbeResult",
+          "kind": "type",
+          "source": {
+            "line": 642,
+            "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelAccountSnapshot = ChannelAccountSnapshot;",
+          "exportName": "ChannelAccountSnapshot",
+          "kind": "type",
+          "source": {
+            "line": 154,
+            "path": "src/channels/plugins/types.core.ts"
           }
         },
         {
@@ -4420,12 +4663,39 @@
           }
         },
         {
+          "declaration": "export type ChannelDirectoryEntry = ChannelDirectoryEntry;",
+          "exportName": "ChannelDirectoryEntry",
+          "kind": "type",
+          "source": {
+            "line": 543,
+            "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelGroupContext = ChannelGroupContext;",
+          "exportName": "ChannelGroupContext",
+          "kind": "type",
+          "source": {
+            "line": 226,
+            "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
           "declaration": "export type ChannelMessageActionContext = ChannelMessageActionContext;",
           "exportName": "ChannelMessageActionContext",
           "kind": "type",
           "source": {
-            "line": 544,
+            "line": 556,
             "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelMessageActionName = \"send\" | \"broadcast\" | \"poll\" | \"poll-vote\" | \"react\" | \"reactions\" | \"read\" | \"edit\" | \"unsend\" | \"reply\" | \"sendWithEffect\" | \"renameGroup\" | \"setGroupIcon\" | \"addParticipant\" | \"removeParticipant\" | \"leaveGroup\" | \"sendAttachment\" | \"delete\" | \"pin\" | \"unpin\" | \"list-pins\" | \"permissions\" | \"thread-create\" | \"thread-list\" | \"thread-reply\" | \"search\" | \"sticker\" | \"sticker-search\" | \"member-info\" | \"role-info\" | \"emoji-list\" | \"emoji-upload\" | \"sticker-upload\" | \"role-add\" | \"role-remove\" | \"channel-info\" | \"channel-list\" | \"channel-create\" | \"channel-edit\" | \"channel-delete\" | \"channel-move\" | \"category-create\" | \"category-edit\" | \"category-delete\" | \"topic-create\" | \"topic-edit\" | \"voice-status\" | \"event-list\" | \"event-create\" | \"timeout\" | \"kick\" | \"ban\" | \"set-profile\" | \"set-presence\" | \"download-file\" | \"upload-file\";",
+          "exportName": "ChannelMessageActionName",
+          "kind": "type",
+          "source": {
+            "line": 6,
+            "path": "src/channels/plugins/types.ts"
           }
         },
         {
@@ -4433,8 +4703,26 @@
           "exportName": "ChannelMessagingAdapter",
           "kind": "type",
           "source": {
-            "line": 398,
+            "line": 405,
             "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelMeta = ChannelMeta;",
+          "exportName": "ChannelMeta",
+          "kind": "type",
+          "source": {
+            "line": 131,
+            "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelOutboundAdapter = ChannelOutboundAdapter;",
+          "exportName": "ChannelOutboundAdapter",
+          "kind": "type",
+          "source": {
+            "line": 178,
+            "path": "src/channels/plugins/types.adapters.ts"
           }
         },
         {
@@ -4442,7 +4730,7 @@
           "exportName": "ChannelOutboundSessionRoute",
           "kind": "type",
           "source": {
-            "line": 312,
+            "line": 319,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -4451,7 +4739,7 @@
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
-            "line": 168,
+            "line": 201,
             "path": "src/plugin-sdk/core.ts"
           }
         },
@@ -4462,6 +4750,24 @@
           "source": {
             "line": 82,
             "path": "src/channels/plugins/types.plugin.ts"
+          }
+        },
+        {
+          "declaration": "export type ChannelSetupInput = ChannelSetupInput;",
+          "exportName": "ChannelSetupInput",
+          "kind": "type",
+          "source": {
+            "line": 64,
+            "path": "src/channels/plugins/types.core.ts"
+          }
+        },
+        {
+          "declaration": "export type ChatType = ChatType;",
+          "exportName": "ChatType",
+          "kind": "type",
+          "source": {
+            "line": 1,
+            "path": "src/channels/chat-type.ts"
           }
         },
         {
@@ -4483,12 +4789,30 @@
           }
         },
         {
+          "declaration": "export type HistoryEntry = HistoryEntry;",
+          "exportName": "HistoryEntry",
+          "kind": "type",
+          "source": {
+            "line": 30,
+            "path": "src/auto-reply/reply/history.ts"
+          }
+        },
+        {
           "declaration": "export type MediaUnderstandingProviderPlugin = MediaUnderstandingProvider;",
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
             "line": 1527,
             "path": "src/plugins/types.ts"
+          }
+        },
+        {
+          "declaration": "export type NormalizedLocation = NormalizedLocation;",
+          "exportName": "NormalizedLocation",
+          "kind": "type",
+          "source": {
+            "line": 3,
+            "path": "src/channels/location.ts"
           }
         },
         {
@@ -4573,6 +4897,15 @@
           }
         },
         {
+          "declaration": "export type OutboundIdentity = OutboundIdentity;",
+          "exportName": "OutboundIdentity",
+          "kind": "type",
+          "source": {
+            "line": 5,
+            "path": "src/infra/outbound/identity.ts"
+          }
+        },
+        {
           "declaration": "export type PluginCommandContext = PluginCommandContext;",
           "exportName": "PluginCommandContext",
           "kind": "type",
@@ -4597,6 +4930,15 @@
           "source": {
             "line": 54,
             "path": "src/plugins/runtime/types.ts"
+          }
+        },
+        {
+          "declaration": "export type PollInput = PollInput;",
+          "exportName": "PollInput",
+          "kind": "type",
+          "source": {
+            "line": 1,
+            "path": "src/polls.ts"
           }
         },
         {
@@ -4951,6 +5293,15 @@
           }
         },
         {
+          "declaration": "export type ReplyPayload = ReplyPayload;",
+          "exportName": "ReplyPayload",
+          "kind": "type",
+          "source": {
+            "line": 85,
+            "path": "src/auto-reply/types.ts"
+          }
+        },
+        {
           "declaration": "export type RoutePeer = RoutePeer;",
           "exportName": "RoutePeer",
           "kind": "type",
@@ -4966,6 +5317,15 @@
           "source": {
             "line": 19,
             "path": "src/routing/resolve-route.ts"
+          }
+        },
+        {
+          "declaration": "export type RuntimeLogger = RuntimeLogger;",
+          "exportName": "RuntimeLogger",
+          "kind": "type",
+          "source": {
+            "line": 7,
+            "path": "src/plugins/runtime/types-core.ts"
           }
         },
         {
@@ -5029,6 +5389,15 @@
           "source": {
             "line": 1,
             "path": "src/infra/provider-usage.types.ts"
+          }
+        },
+        {
+          "declaration": "export type WizardPrompter = WizardPrompter;",
+          "exportName": "WizardPrompter",
+          "kind": "type",
+          "source": {
+            "line": 37,
+            "path": "src/wizard/prompts.ts"
           }
         },
         {
@@ -6241,30 +6610,12 @@
           }
         },
         {
-          "declaration": "export function createSlackOutboundPayloadHarness(params: { payload: ReplyPayload; sendResults?: { messageId: string; }[] | undefined; }): SlackOutboundPayloadHarness;",
-          "exportName": "createSlackOutboundPayloadHarness",
-          "kind": "function",
-          "source": {
-            "line": 26,
-            "path": "src/channels/plugins/contracts/slack-outbound-harness.ts"
-          }
-        },
-        {
           "declaration": "export function createTempHomeEnv(prefix: string): Promise<TempHomeEnv>;",
           "exportName": "createTempHomeEnv",
           "kind": "function",
           "source": {
             "line": 20,
             "path": "src/test-utils/temp-home.ts"
-          }
-        },
-        {
-          "declaration": "export function createWhatsAppPollFixture(): { cfg: OpenClawConfig; poll: { question: string; options: string[]; maxSelections: number; }; to: string; accountId: string; };",
-          "exportName": "createWhatsAppPollFixture",
-          "kind": "function",
-          "source": {
-            "line": 4,
-            "path": "src/test-helpers/whatsapp-outbound.ts"
           }
         },
         {
@@ -6292,15 +6643,6 @@
           "source": {
             "line": 4,
             "path": "src/test-utils/auth-token-assertions.ts"
-          }
-        },
-        {
-          "declaration": "export function expectWhatsAppPollSent(sendPollWhatsApp: MockInstance<Procedure>, params: { cfg: OpenClawConfig; poll: { question: string; options: string[]; maxSelections: number; }; to?: string | undefined; accountId?: string | undefined; }): void;",
-          "exportName": "expectWhatsAppPollSent",
-          "kind": "function",
-          "source": {
-            "line": 19,
-            "path": "src/test-helpers/whatsapp-outbound.ts"
           }
         },
         {
@@ -6506,7 +6848,7 @@
           "exportName": "setDefaultChannelPluginRegistryForTests",
           "kind": "function",
           "source": {
-            "line": 126,
+            "line": 41,
             "path": "src/commands/channel-test-registry.ts"
           }
         },
@@ -6623,7 +6965,7 @@
           "exportName": "ChannelAccountSnapshot",
           "kind": "type",
           "source": {
-            "line": 147,
+            "line": 154,
             "path": "src/channels/plugins/types.core.ts"
           }
         },
@@ -6632,7 +6974,7 @@
           "exportName": "ChannelGatewayContext",
           "kind": "type",
           "source": {
-            "line": 285,
+            "line": 287,
             "path": "src/channels/plugins/types.adapters.ts"
           }
         },

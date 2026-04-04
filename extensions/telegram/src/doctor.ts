@@ -2,11 +2,9 @@ import {
   type ChannelDoctorAdapter,
   type ChannelDoctorConfigMutation,
   type ChannelDoctorEmptyAllowlistAccountContext,
+  type ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
-import {
-  resolveTelegramPreviewStreamMode,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   getChannelsCommandSecretTargetIds,
   resolveCommandSecretRefsViaGateway,
@@ -15,6 +13,7 @@ import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromUsernameHit = { path: string; entry: string };
 type DoctorAllowFromList = Array<string | number>;
@@ -452,7 +451,44 @@ export function collectTelegramEmptyAllowlistExtraWarnings(
     : [];
 }
 
+function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
+  const entry = asObjectRecord(value);
+  if (!entry) {
+    return false;
+  }
+  return (
+    entry.streamMode !== undefined ||
+    typeof entry.streaming === "boolean" ||
+    (typeof entry.streaming === "string" &&
+      entry.streaming !== resolveTelegramPreviewStreamMode(entry))
+  );
+}
+
+function hasLegacyTelegramAccountStreamingAliases(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyTelegramStreamingAliases(account));
+}
+
+const TELEGRAM_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: ["channels", "telegram"],
+    message:
+      'channels.telegram.streamMode and boolean channels.telegram.streaming are legacy; use channels.telegram.streaming="off|partial|block".',
+    match: hasLegacyTelegramStreamingAliases,
+  },
+  {
+    path: ["channels", "telegram", "accounts"],
+    message:
+      'channels.telegram.accounts.<id>.streamMode and boolean channels.telegram.accounts.<id>.streaming are legacy; use channels.telegram.accounts.<id>.streaming="off|partial|block".',
+    match: hasLegacyTelegramAccountStreamingAliases,
+  },
+];
+
 export const telegramDoctor: ChannelDoctorAdapter = {
+  legacyConfigRules: TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig: ({ cfg }) => normalizeTelegramCompatibilityConfig(cfg),
   collectPreviewWarnings: ({ cfg, doctorFixCommand }) =>
     collectTelegramAllowFromUsernameWarnings({

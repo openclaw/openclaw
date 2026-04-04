@@ -19,6 +19,7 @@ import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -437,18 +438,20 @@ export async function compactEmbeddedPiSessionDirect(
     });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
+    const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
       provider,
       modelId,
-      modelContextWindow: runtimeModel.contextWindow,
+      modelContextTokens: runtimeModelWithContext.contextTokens,
+      modelContextWindow: runtimeModelWithContext.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     const effectiveModel = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
-        ctxInfo.tokens < (runtimeModel.contextWindow ?? Infinity)
-          ? { ...runtimeModel, contextWindow: ctxInfo.tokens }
-          : runtimeModel,
+        ctxInfo.tokens < (runtimeModelWithContext.contextWindow ?? Infinity)
+          ? { ...runtimeModelWithContext, contextWindow: ctxInfo.tokens }
+          : runtimeModelWithContext,
         apiKeyInfo,
       ),
       // Skip header injection when runtime auth exchange produced a
@@ -1027,11 +1030,13 @@ export async function compactEmbeddedPiSession(
           agentDir,
           params.config,
         );
+        const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
         const ceCtxInfo = resolveContextWindowInfo({
           cfg: params.config,
           provider: ceProvider,
           modelId: ceModelId,
-          modelContextWindow: ceModel?.contextWindow,
+          modelContextTokens: ceRuntimeModel?.contextTokens,
+          modelContextWindow: ceRuntimeModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
         // When the context engine owns compaction, its compact() implementation

@@ -12,6 +12,68 @@ OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in*
 access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
 OpenAI explicitly supports subscription OAuth usage in external tools/workflows like OpenClaw.
 
+## Default interaction style
+
+OpenClaw adds a small OpenAI-specific prompt overlay by default for both
+`openai/*` and `openai-codex/*` runs. The overlay keeps the assistant warm,
+collaborative, concise, and direct without replacing the base OpenClaw system
+prompt.
+
+Config key:
+
+`plugins.entries.openai.config.personalityOverlay`
+
+Allowed values:
+
+- `"friendly"`: default; enable the OpenAI-specific overlay.
+- `"off"`: disable the overlay and use the base OpenClaw prompt only.
+
+Scope:
+
+- Applies to `openai/*` models.
+- Applies to `openai-codex/*` models.
+- Does not affect other providers.
+
+This behavior is enabled by default:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openai: {
+        config: {
+          personalityOverlay: "friendly",
+        },
+      },
+    },
+  },
+}
+```
+
+### Disable the OpenAI prompt overlay
+
+If you prefer the unmodified base OpenClaw prompt, turn the overlay off:
+
+```json5
+{
+  plugins: {
+    entries: {
+      openai: {
+        config: {
+          personalityOverlay: "off",
+        },
+      },
+    },
+  },
+}
+```
+
+You can also set it directly with the config CLI:
+
+```bash
+openclaw config set plugins.entries.openai.config.personalityOverlay off
+```
+
 ## Option A: OpenAI API key (OpenAI Platform)
 
 **Best for:** direct API access and usage-based billing.
@@ -80,6 +142,41 @@ OpenClaw also preserves `openai-codex/gpt-5.3-codex-spark` when `pi-ai`
 discovers it. Treat it as entitlement-dependent and experimental: Codex Spark is
 separate from GPT-5.4 `/fast`, and availability depends on the signed-in Codex /
 ChatGPT account.
+
+### Codex context window cap
+
+OpenClaw treats the Codex model metadata and the runtime context cap as separate
+values.
+
+For `openai-codex/gpt-5.4`:
+
+- native `contextWindow`: `1050000`
+- default runtime `contextTokens` cap: `272000`
+
+That keeps model metadata truthful while preserving the smaller default runtime
+window that has better latency and quality characteristics in practice.
+
+If you want a different effective cap, set `models.providers.<provider>.models[].contextTokens`:
+
+```json5
+{
+  models: {
+    providers: {
+      "openai-codex": {
+        models: [
+          {
+            id: "gpt-5.4",
+            contextTokens: 160000,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Use `contextWindow` only when you are declaring or overriding native model
+metadata. Use `contextTokens` when you want to limit the runtime context budget.
 
 ### Transport default
 
@@ -238,6 +335,20 @@ Example:
 
 Session overrides win over config. Clearing the session override in the Sessions UI
 returns the session to the configured default.
+
+### Native OpenAI versus OpenAI-compatible routes
+
+OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints differently
+from generic OpenAI-compatible `/v1` proxies:
+
+- native `openai/*`, `openai-codex/*`, and Azure OpenAI routes keep
+  `reasoning: { effort: "none" }` intact when you explicitly disable reasoning
+- native OpenAI-family routes default tool schemas to strict mode
+- proxy-style OpenAI-compatible routes keep the looser compat behavior and do
+  not force strict tool schemas or native-only request shaping
+
+This preserves current native OpenAI Responses behavior without forcing older
+OpenAI-compatible shims onto third-party `/v1` backends.
 
 ### OpenAI Responses server-side compaction
 

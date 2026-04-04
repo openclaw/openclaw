@@ -3,8 +3,9 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { detectBinary, installSignalCli } from "openclaw/plugin-sdk/setup-tools";
+import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
+import { installSignalCli } from "./install-signal-cli.js";
 import {
   createSignalCliPathTextInput,
   normalizeSignalAccountInput,
@@ -28,7 +29,13 @@ export const signalSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "signal-cli missing",
     configuredScore: 1,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg, accountId }) => resolveSignalAccount({ cfg, accountId }).configured,
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? resolveSignalAccount({ cfg, accountId }).configured
+        : listSignalAccountIds(cfg).some(
+            (resolvedAccountId) =>
+              resolveSignalAccount({ cfg, accountId: resolvedAccountId }).configured,
+          ),
     resolveBinaryPath: ({ cfg, accountId }) =>
       resolveSignalAccount({ cfg, accountId }).config.cliPath ?? "signal-cli",
     detectBinary,

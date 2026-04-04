@@ -20,6 +20,25 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
 
     expect(contextTokens).toBe(123_456);
   });
+
+  it("prefers per-model contextTokens over contextWindow", () => {
+    const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
+            },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      fallbackContextTokens: 999,
+    });
+
+    expect(contextTokens).toBe(272_000);
+  });
 });
 
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {

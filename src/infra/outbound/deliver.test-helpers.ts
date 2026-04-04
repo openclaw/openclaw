@@ -1,11 +1,11 @@
 import { vi } from "vitest";
+import { createIMessageTestPlugin } from "../../../test/helpers/channels/imessage-test-plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { DeliverOutboundPayloadsParams, OutboundDeliveryResult } from "./deliver.js";
 import {
