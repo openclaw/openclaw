@@ -12,6 +12,7 @@ import {
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { log } from "../logger.js";
+import { readPiModelContextTokens } from "../model-context-tokens.js";
 
 type HookContext = {
   agentId?: string;
@@ -107,7 +108,7 @@ export function resolveEffectiveRuntimeModel(params: {
     cfg: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
-    modelContextTokens: params.runtimeModel.contextTokens,
+    modelContextTokens: readPiModelContextTokens(params.runtimeModel),
     modelContextWindow: params.runtimeModel.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });

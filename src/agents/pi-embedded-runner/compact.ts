@@ -103,6 +103,7 @@ import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
+import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
@@ -443,7 +444,7 @@ export async function compactEmbeddedPiSessionDirect(
       cfg: params.config,
       provider,
       modelId,
-      modelContextTokens: runtimeModelWithContext.contextTokens,
+      modelContextTokens: readPiModelContextTokens(runtimeModel),
       modelContextWindow: runtimeModelWithContext.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
@@ -1035,7 +1036,7 @@ export async function compactEmbeddedPiSession(
           cfg: params.config,
           provider: ceProvider,
           modelId: ceModelId,
-          modelContextTokens: ceRuntimeModel?.contextTokens,
+          modelContextTokens: readPiModelContextTokens(ceModel),
           modelContextWindow: ceRuntimeModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
