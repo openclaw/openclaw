@@ -646,6 +646,62 @@ describe("spawnAcpDirect", () => {
     }
   });
 
+  it("surfaces non-missing target workspace access failures instead of silently dropping cwd", async () => {
+    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
+    const accessSpy = vi.spyOn(fs, "access");
+    try {
+      const mainWorkspace = path.join(workspaceRoot, "main");
+      const targetWorkspace = path.join(workspaceRoot, "claude-code");
+      await fs.mkdir(mainWorkspace, { recursive: true });
+      await fs.mkdir(targetWorkspace, { recursive: true });
+
+      replaceSpawnConfig({
+        ...hoisted.state.cfg,
+        acp: {
+          ...hoisted.state.cfg.acp,
+          allowedAgents: ["codex", "claude-code"],
+        },
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              workspace: mainWorkspace,
+            },
+            {
+              id: "claude-code",
+              workspace: targetWorkspace,
+            },
+          ],
+        },
+      });
+
+      accessSpy.mockRejectedValueOnce(
+        Object.assign(new Error("permission denied"), { code: "EACCES" }),
+      );
+
+      const result = await spawnAcpDirect(
+        {
+          task: "Inspect the queue owner state",
+          agentId: "claude-code",
+          mode: "run",
+        },
+        {
+          agentSessionKey: "agent:main:main",
+        },
+      );
+
+      expect(result).toEqual({
+        status: "error",
+        error: "permission denied",
+      });
+      expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+    } finally {
+      accessSpy.mockRestore();
+      await fs.rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("binds LINE ACP sessions to the current conversation when the channel has no native threads", async () => {
     enableLineCurrentConversationBindings();
     hoisted.sessionBindingBindMock.mockImplementationOnce(
