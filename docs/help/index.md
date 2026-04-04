@@ -1,5 +1,5 @@
 ---
-summary: "Help hub for OpenClaw install issues, gateway fixes, FAQ answers, and common self-hosted AI assistant troubleshooting."
+summary: "Help hub for VeriClaw install issues, gateway fixes, FAQ answers, and common self-hosted AI assistant troubleshooting."
 read_when:
   - You’re new and want the “what do I click/run” guide
   - Something broke and you want the fastest path to a fix

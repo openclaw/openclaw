@@ -20,23 +20,26 @@ Current release posture:
 
 ## Release title options
 
-- `OpenClaw + VeriClaw 爪印: self-hosted AI assistant, MCP gateway, and correction workspace`
-- `VeriClaw 爪印 for OpenClaw: evidence-first correction for multi-agent bot runtime`
-- `OpenClaw launch: self-hosted AI assistant with MCP gateway, bot runtime, and VeriClaw correction`
+- `VeriClaw: self-hosted AI assistant, MCP gateway, and correction workspace`
+- `VeriClaw 爪印: evidence-first correction for a multi-agent bot runtime`
+- `VeriClaw launch: self-hosted AI assistant with MCP gateway and runtime truth`
 
 ## Paste-ready GitHub release body
 
 ```md
-# OpenClaw + VeriClaw 爪印
+# VeriClaw
 
-OpenClaw is a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot runtime for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
+VeriClaw is the public-facing product brand for a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot runtime for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
 
-VeriClaw 爪印 is the Apple-native correction companion built for the moment when a bot drifts, hallucinates, fake-completes, overreaches, or fails its professional role contract.
+The current repository, runtime, Gateway, and CLI compatibility layer still use OpenClaw and `openclaw` naming under the hood.
 
-Together, the launch story is:
+VeriClaw 爪印 is built for the moment when a bot drifts, hallucinates, fake-completes, overreaches, or fails its professional role contract.
 
-- OpenClaw for runtime, channel orchestration, and tool-connected execution
-- VeriClaw for evidence-first correction, diagnosis, verification, and casebook learning
+The ship story is:
+
+- VeriClaw for the outward product story
+- OpenClaw for runtime, channel orchestration, and tool-connected execution compatibility
+- VeriClaw correction for evidence-first diagnosis, verification, and casebook learning
 
 Instead of stopping at alerts or dashboards, the correction loop is:
 
@@ -68,7 +71,7 @@ Instead of stopping at alerts or dashboards, the correction loop is:
 - the runtime already spans channels, tools, and device surfaces
 - the correction workflow turns vague bot failures into concrete evidence and next actions
 - the repo is useful as both a production base and a reference implementation for AI gateway design
-- the OpenClaw + VeriClaw split makes it easier to extend runtime and supervision separately
+- the brand-plus-runtime split makes it easier to extend runtime and supervision separately
 
 ## Why this is different
 
@@ -90,7 +93,7 @@ So teams can answer three questions clearly:
 ## Current launch scope
 
 - GitHub repository launch plus App Store companion readiness converging toward the same ship point
-- OpenClaw runtime plus VeriClaw companion story
+- VeriClaw public launch story with OpenClaw runtime compatibility underneath
 - watchOS remains outside the current release gate
 - release copy should stay aligned across GitHub, docs, and Apple-facing materials
 
@@ -114,11 +117,11 @@ See:
 Use this when a shorter GitHub post or pinned discussion is needed:
 
 ```md
-OpenClaw is a self-hosted AI assistant and MCP-compatible gateway for multi-channel bots, browser automation, and multi-agent workflows.
+VeriClaw is the public-facing product brand for a self-hosted AI assistant and MCP-compatible gateway for multi-channel bots, browser automation, and multi-agent workflows.
 
-VeriClaw 爪印 is the Apple-native correction companion for the moment a bot drifts. It pushes the workflow toward evidence, diagnosis, prescription, verification, and casebook learning.
+The current runtime and CLI still use OpenClaw / `openclaw` naming under the hood.
 
-OpenClaw remains the runtime. VeriClaw adds the native supervision layer.
+VeriClaw 爪印 adds the correction layer for the moment a bot drifts. It pushes the workflow toward evidence, diagnosis, prescription, verification, and casebook learning.
 ```
 
 ## Social-share version
@@ -126,9 +129,9 @@ OpenClaw remains the runtime. VeriClaw adds the native supervision layer.
 Use this when a repost or cross-post needs stronger fork intent:
 
 ```md
-If you want a self-hosted AI assistant that can run Discord, Telegram, WhatsApp, Slack, MCP tools, browser automation, and multi-agent workflows from one gateway, that is the OpenClaw side.
+If you want a self-hosted AI assistant that can run Discord, Telegram, WhatsApp, Slack, MCP tools, browser automation, and multi-agent workflows from one gateway, that is the VeriClaw story.
 
-If you also want runtime truth, evidence-first correction, and verification before calling work done, that is the VeriClaw side.
+If you also want runtime truth, evidence-first correction, and verification before calling work done, that is the VeriClaw correction layer.
 ```
 
 ## Maintainer notes

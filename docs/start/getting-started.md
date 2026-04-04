@@ -1,5 +1,5 @@
 ---
-summary: "Install OpenClaw and run your first self-hosted AI assistant or multi-channel bot gateway in minutes."
+summary: "Install VeriClaw and run your first self-hosted AI assistant or multi-channel bot gateway in minutes."
 read_when:
   - First time setup from zero
   - You want the fastest path to a working chat
@@ -10,7 +10,7 @@ title: "Getting Started"
 
 Goal: go from zero to a first working chat with minimal setup.
 
-OpenClaw is a self-hosted AI assistant and MCP-compatible gateway. If you found this page while looking for a Discord AI bot runtime, Telegram or WhatsApp AI gateway, browser automation assistant, or local-first multi-agent runtime, this is the fastest path to a working setup.
+VeriClaw is the public-facing product brand for a self-hosted AI assistant and MCP-compatible gateway. If you found this page while looking for a Discord AI bot runtime, Telegram or WhatsApp AI gateway, browser automation assistant, or local-first multi-agent runtime, this is the fastest path to a working setup. The current package and CLI name remains `openclaw`, so the commands below stay the same.
 
 <Info>
 Fastest chat: open the Control UI (no channel setup needed). Run `openclaw dashboard`

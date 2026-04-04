@@ -1,5 +1,5 @@
 ---
-summary: "Frequently asked questions about OpenClaw setup, self-hosted AI assistant workflows, MCP compatibility, multi-channel bots, browser automation, and usage."
+summary: "Frequently asked questions about VeriClaw setup, self-hosted AI assistant workflows, MCP compatibility, multi-channel bots, browser automation, and usage."
 read_when:
   - Answering common setup, install, onboarding, or runtime support questions
   - Triaging user-reported issues before deeper debugging
@@ -13,12 +13,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 ## Table of contents
 
 - [Product fit and search-intent questions](#product-fit-and-search-intent-questions)
-  - [What is OpenClaw in one sentence?](#what-is-openclaw-in-one-sentence)
-  - [Is OpenClaw a self-hosted AI assistant?](#is-openclaw-a-self-hosted-ai-assistant)
-  - [Is OpenClaw compatible with MCP or the Model Context Protocol?](#is-openclaw-compatible-with-mcp-or-the-model-context-protocol)
-  - [Can one OpenClaw gateway run Discord, Telegram, WhatsApp, and Slack bots at the same time?](#can-one-openclaw-gateway-run-discord-telegram-whatsapp-and-slack-bots-at-the-same-time)
-  - [Is OpenClaw useful for browser automation and multi-agent workflows?](#is-openclaw-useful-for-browser-automation-and-multi-agent-workflows)
-  - [What is VeriClaw, and how does it relate to OpenClaw?](#what-is-vericlaw-and-how-does-it-relate-to-openclaw)
+  - [What is VeriClaw in one sentence?](#what-is-vericlaw-in-one-sentence)
+  - [Is VeriClaw a self-hosted AI assistant?](#is-vericlaw-a-self-hosted-ai-assistant)
+  - [Is VeriClaw compatible with MCP or the Model Context Protocol?](#is-vericlaw-compatible-with-mcp-or-the-model-context-protocol)
+  - [Can one VeriClaw gateway run Discord, Telegram, WhatsApp, and Slack bots at the same time?](#can-one-vericlaw-gateway-run-discord-telegram-whatsapp-and-slack-bots-at-the-same-time)
+  - [Is VeriClaw useful for browser automation and multi-agent workflows?](#is-vericlaw-useful-for-browser-automation-and-multi-agent-workflows)
+  - [What is OpenClaw, and how does it relate to VeriClaw?](#what-is-openclaw-and-how-does-it-relate-to-vericlaw)
 - [Quick start and first-run setup]
   - [Im stuck what's the fastest way to get unstuck?](#im-stuck-whats-the-fastest-way-to-get-unstuck)
   - [What's the recommended way to install and set up OpenClaw?](#whats-the-recommended-way-to-install-and-set-up-openclaw)
@@ -70,12 +70,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [How important is it to run OpenClaw on a dedicated machine?](#how-important-is-it-to-run-openclaw-on-a-dedicated-machine)
   - [What are the minimum VPS requirements and recommended OS?](#what-are-the-minimum-vps-requirements-and-recommended-os)
   - [Can I run OpenClaw in a VM and what are the requirements](#can-i-run-openclaw-in-a-vm-and-what-are-the-requirements)
-- [What is OpenClaw?](#what-is-openclaw)
-  - [What is OpenClaw, in one paragraph?](#what-is-openclaw-in-one-paragraph)
+- [What is VeriClaw?](#what-is-vericlaw)
+  - [What is VeriClaw, in one paragraph?](#what-is-vericlaw-in-one-paragraph)
   - [What's the value proposition?](#whats-the-value-proposition)
   - [I just set it up what should I do first](#i-just-set-it-up-what-should-i-do-first)
-  - [What are the top five everyday use cases for OpenClaw](#what-are-the-top-five-everyday-use-cases-for-openclaw)
-  - [Can OpenClaw help with lead gen outreach ads and blogs for a SaaS](#can-openclaw-help-with-lead-gen-outreach-ads-and-blogs-for-a-saas)
+  - [What are the top five everyday use cases for VeriClaw](#what-are-the-top-five-everyday-use-cases-for-vericlaw)
+  - [Can VeriClaw help with lead gen outreach ads and blogs for a SaaS](#can-vericlaw-help-with-lead-gen-outreach-ads-and-blogs-for-a-saas)
   - [What are the advantages vs Claude Code for web development?](#what-are-the-advantages-vs-claude-code-for-web-development)
 - [Skills and automation](#skills-and-automation)
   - [How do I customize skills without keeping the repo dirty?](#how-do-i-customize-skills-without-keeping-the-repo-dirty)
@@ -209,50 +209,50 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Product fit and search-intent questions
 
-### What is OpenClaw in one sentence?
+### What is VeriClaw in one sentence?
 
-OpenClaw is a self-hosted AI assistant, MCP-compatible gateway, and
+VeriClaw is a self-hosted AI assistant, MCP-compatible gateway, and
 multi-channel bot runtime that lets you run one Gateway for Discord, Telegram,
 WhatsApp, Slack, browser automation, and multi-agent workflows from your own
 machine or server.
 
-### Is OpenClaw a self-hosted AI assistant?
+### Is VeriClaw a self-hosted AI assistant?
 
-Yes. OpenClaw is designed to run on your own Mac, Linux box, Windows machine
+Yes. VeriClaw is designed to run on your own Mac, Linux box, Windows machine
 via WSL2, homelab host, or VPS. You control the Gateway, workspace, channels,
 sessions, and routing. Hosted model APIs are optional and bring-your-own.
 
-### Is OpenClaw compatible with MCP or the Model Context Protocol?
+### Is VeriClaw compatible with MCP or the Model Context Protocol?
 
-Yes. OpenClaw is MCP-compatible and can connect Model Context Protocol tools to
+Yes. VeriClaw is MCP-compatible and can connect Model Context Protocol tools to
 its assistant runtime. In practice, that means you can route chat inputs,
 browser actions, and tool-backed tasks through one Gateway instead of juggling
 separate control planes. If you are looking for a runtime or gateway that can
-work with MCP tools, that is a core OpenClaw use case. See [Tools](/tools) and
+work with MCP tools, that is a core VeriClaw use case. See [Tools](/tools) and
 [Architecture](/concepts/architecture).
 
-### Can one OpenClaw gateway run Discord, Telegram, WhatsApp, and Slack bots at the same time?
+### Can one VeriClaw gateway run Discord, Telegram, WhatsApp, and Slack bots at the same time?
 
-Yes. One OpenClaw Gateway can serve multiple channels simultaneously, each with
+Yes. One VeriClaw Gateway can serve multiple channels simultaneously, each with
 its own session scope, allowlists, mention rules, routing, and agent behavior.
 That is one of the main reasons people deploy it instead of running separate
 bots for every chat surface. See [Channels](/channels) and
 [Channel routing](/channels/channel-routing).
 
-### Is OpenClaw useful for browser automation and multi-agent workflows?
+### Is VeriClaw useful for browser automation and multi-agent workflows?
 
-Yes. OpenClaw is built for tool-connected agents, browser control, and
+Yes. VeriClaw is built for tool-connected agents, browser control, and
 multi-agent routing. It works well when you want one assistant runtime that can
 chat in channels, operate a browser, call tools, and split work across
 different agents or workspaces. See [Browser](/tools/browser) and
 [Multi-agent](/concepts/multi-agent).
 
-### What is VeriClaw, and how does it relate to OpenClaw?
+### What is OpenClaw, and how does it relate to VeriClaw?
 
-VeriClaw is the correction companion for OpenClaw. OpenClaw is the runtime,
-gateway, and multi-channel execution layer. VeriClaw focuses on evidence-first
-correction, diagnosis, verification, and delivery integrity when a bot drifts,
-hallucinates, or fake-completes work.
+VeriClaw is the public-facing product brand. OpenClaw is the current runtime,
+gateway, repository, and CLI compatibility layer underneath. Public-facing copy
+should lead with VeriClaw; technical commands and package names still use
+`openclaw` until the underlying runtime names change.
 
 ## First 60 seconds if something's broken
 
@@ -1005,7 +1005,7 @@ For security guidance, read [Security](/gateway/security).
 
 ### What are the minimum VPS requirements and recommended OS
 
-OpenClaw is lightweight. For a basic Gateway + one chat channel:
+VeriClaw is lightweight. For a basic Gateway + one chat channel:
 
 - **Absolute minimum:** 1 vCPU, 1GB RAM, ~500MB disk.
 - **Recommended:** 1-2 vCPU, 2GB RAM or more for headroom (logs, media, multiple channels). Node tools and browser automation can be resource hungry.
@@ -1029,15 +1029,15 @@ If you are on Windows, **WSL2 is the easiest VM style setup** and has the best t
 compatibility. See [Windows](/platforms/windows), [VPS hosting](/vps).
 If you are running macOS in a VM, see [macOS VM](/install/macos-vm).
 
-## What is OpenClaw?
+## What is VeriClaw?
 
-### What is OpenClaw in one paragraph
+### What is VeriClaw in one paragraph
 
-OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Google Chat, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
+VeriClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (WhatsApp, Telegram, Slack, Mattermost (plugin), Discord, Google Chat, Signal, iMessage, WebChat) and can also do voice + a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product. The current runtime and CLI still use `OpenClaw` / `openclaw` naming for compatibility.
 
 ### What's the value proposition
 
-OpenClaw is not "just a Claude wrapper." It's a **local-first control plane** that lets you run a
+VeriClaw is not "just a Claude wrapper." It's a **local-first control plane** that lets you run a
 capable assistant on **your own hardware**, reachable from the chat apps you already use, with
 stateful sessions, memory, and tools - without handing control of your workflows to a hosted
 SaaS.
@@ -1070,7 +1070,7 @@ Good first projects:
 It can handle large tasks, but it works best when you split them into phases and
 use sub agents for parallel work.
 
-### What are the top five everyday use cases for OpenClaw
+### What are the top five everyday use cases for VeriClaw
 
 Everyday wins usually look like:
 
@@ -1080,7 +1080,7 @@ Everyday wins usually look like:
 - **Browser automation:** filling forms, collecting data, and repeating web tasks.
 - **Cross device coordination:** send a task from your phone, let the Gateway run it on a server, and get the result back in chat.
 
-### Can OpenClaw help with lead gen outreach ads and blogs for a SaaS
+### Can VeriClaw help with lead gen outreach ads and blogs for a SaaS
 
 Yes for **research, qualification, and drafting**. It can scan sites, build shortlists,
 summarize prospects, and write outreach or ad copy drafts.
@@ -1093,8 +1093,8 @@ Docs: [Security](/gateway/security).
 
 ### What are the advantages vs Claude Code for web development
 
-OpenClaw is a **personal assistant** and coordination layer, not an IDE replacement. Use
-Claude Code or Codex for the fastest direct coding loop inside a repo. Use OpenClaw when you
+VeriClaw is a **personal assistant** and coordination layer, not an IDE replacement. Use
+Claude Code or Codex for the fastest direct coding loop inside a repo. Use VeriClaw when you
 want durable memory, cross-device access, and tool orchestration.
 
 Advantages:

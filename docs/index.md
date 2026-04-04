@@ -1,11 +1,11 @@
 ---
-summary: "OpenClaw is a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot runtime for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows."
+summary: "VeriClaw is a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot runtime for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows."
 read_when:
   - Introducing OpenClaw to newcomers
-title: "OpenClaw"
+title: "VeriClaw"
 ---
 
-# OpenClaw 🦞
+# VeriClaw 🦞
 
 <p align="center">
     <img
@@ -41,9 +41,11 @@ title: "OpenClaw"
   </Card>
 </Columns>
 
-## What is OpenClaw?
+## What is VeriClaw?
 
-OpenClaw is a **self-hosted AI assistant** and **MCP-compatible gateway** that connects your favorite chat apps, tools, and browser workflows to one always-available runtime. You run a single Gateway process on your own machine or server, and it becomes the bridge between Discord, Telegram, WhatsApp, Slack, iMessage, browser automation, and multi-agent execution.
+VeriClaw is a **self-hosted AI assistant** and **MCP-compatible gateway** that connects your favorite chat apps, tools, and browser workflows to one always-available runtime. You run a single Gateway process on your own machine or server, and it becomes the bridge between Discord, Telegram, WhatsApp, Slack, iMessage, browser automation, and multi-agent execution.
+
+The public-facing product name is `VeriClaw`. The current repository, runtime, and CLI still use `OpenClaw` / `openclaw` naming for compatibility, so the commands in these docs remain unchanged.
 
 **Who is it for?** Developers, operators, and power users who want a personal or team AI assistant they can message from anywhere without giving up control of their data, routing, or runtime.
 
@@ -57,7 +59,7 @@ OpenClaw is a **self-hosted AI assistant** and **MCP-compatible gateway** that c
 
 **What do you need?** Node 24 (recommended), or Node 22 LTS (`22.16+`) for compatibility, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
 
-## Popular ways teams use OpenClaw
+## Popular ways teams use VeriClaw
 
 - Run a self-hosted AI assistant on a Mac mini, Linux box, homelab machine, or VPS.
 - Turn Discord, Telegram, WhatsApp, Slack, or iMessage into a persistent AI bot inbox.

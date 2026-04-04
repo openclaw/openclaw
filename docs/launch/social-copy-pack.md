@@ -10,8 +10,8 @@ title: "Social Copy Pack"
 # Social copy pack
 
 Use this file when you need short, reusable launch copy that helps people
-understand what OpenClaw is, why VeriClaw matters, and why the repo is worth
-forking.
+understand what VeriClaw is, how OpenClaw still fits technically underneath,
+and why the repo is worth forking.
 
 Keep these ideas visible in most public posts:
 
@@ -26,14 +26,16 @@ Keep these ideas visible in most public posts:
 
 ## One-line options
 
-- `OpenClaw is a self-hosted AI assistant and MCP-compatible gateway for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.`
-- `OpenClaw gives you one self-hosted runtime for channels, tools, browser control, and agent routing.`
-- `VeriClaw adds evidence-first correction, verification, and delivery integrity to the OpenClaw runtime.`
+- `VeriClaw is a self-hosted AI assistant and MCP-compatible gateway for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.`
+- `VeriClaw gives you one self-hosted runtime for channels, tools, browser control, and agent routing.`
+- `VeriClaw adds evidence-first correction, verification, and delivery integrity on top of the current OpenClaw runtime compatibility layer.`
 
 ## Short GitHub release blurb
 
 ```md
-OpenClaw is a self-hosted AI assistant and MCP-compatible gateway for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
+VeriClaw is a self-hosted AI assistant and MCP-compatible gateway for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
+
+The current runtime and CLI still use OpenClaw / `openclaw` naming underneath for compatibility.
 
 VeriClaw adds the correction side: evidence, diagnosis, prescription, verification, and casebook learning when a bot drifts or fake-completes.
 ```
@@ -41,21 +43,23 @@ VeriClaw adds the correction side: evidence, diagnosis, prescription, verificati
 ## Pinned GitHub discussion opener
 
 ```md
-If you want one self-hosted AI runtime for channels, tools, browser automation, and multi-agent workflows, that is the OpenClaw side.
+If you want one self-hosted AI runtime for channels, tools, browser automation, and multi-agent workflows, that is the VeriClaw story.
 
-If you also want runtime truth, evidence-first correction, and verification before calling work done, that is the VeriClaw side.
+If you also want runtime truth, evidence-first correction, and verification before calling work done, that is the VeriClaw correction layer.
 ```
 
 ## X or short-post options
 
-- `OpenClaw is the self-hosted AI assistant + MCP gateway I wanted for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows. VeriClaw adds the correction loop.`
+- `VeriClaw is the self-hosted AI assistant + MCP gateway I wanted for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.`
 - `One gateway. Multiple channels. Browser automation. MCP tools. Multi-agent routing. Then VeriClaw for evidence-first correction and delivery integrity.`
 - `Worth forking if you want a real self-hosted AI runtime, not another dashboard demo.`
 
 ## Discord announcement version
 
 ```md
-OpenClaw is a self-hosted AI assistant and MCP-compatible gateway that can run Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows from one runtime.
+VeriClaw is a self-hosted AI assistant and MCP-compatible gateway that can run Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows from one runtime.
+
+The current runtime and CLI still use OpenClaw / `openclaw` naming for compatibility.
 
 VeriClaw is the correction companion for runtime truth, evidence-first diagnosis, verification, and delivery integrity.
 
@@ -66,7 +70,9 @@ https://github.com/openclaw/openclaw
 ## Longer repost version
 
 ```md
-OpenClaw is the runtime: a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot platform for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
+VeriClaw is the public-facing product brand: a self-hosted AI assistant, MCP-compatible gateway, and multi-channel bot platform for Discord, Telegram, WhatsApp, Slack, browser automation, and multi-agent workflows.
+
+OpenClaw is the current runtime, gateway, repository, and CLI compatibility layer underneath.
 
 VeriClaw is the correction companion: evidence-first diagnosis, prescription, verification, and casebook learning for the moment a bot drifts or claims work it did not really finish.
 
@@ -75,9 +81,9 @@ That combination is the point. Not just agent output. Runtime truth and delivery
 
 ## Title options for reposts or community shares
 
-- `OpenClaw: self-hosted AI assistant and MCP gateway`
-- `OpenClaw + VeriClaw: runtime plus correction workspace`
-- `One self-hosted gateway for Discord, Telegram, WhatsApp, Slack, and browser automation`
+- `VeriClaw: self-hosted AI assistant and MCP gateway`
+- `VeriClaw: runtime plus correction workspace`
+- `One self-hosted VeriClaw gateway for Discord, Telegram, WhatsApp, Slack, and browser automation`
 - `A repo worth forking if you want a real multi-agent runtime`
 
 ## Maintainer notes
