@@ -285,7 +285,7 @@ API key auth, and dynamic model resolution.
 
     - `google` and `google-gemini-cli`: `google-gemini`
     - `openrouter`, `kilocode`, `opencode`, and `opencode-go`: `passthrough-gemini`
-    - `anthropic-vertex`: `anthropic-by-model`
+    - `amazon-bedrock` and `anthropic-vertex`: `anthropic-by-model`
     - `minimax`: `hybrid-anthropic-openai`
     - `moonshot`, `ollama`, `xai`, and `zai`: `openai-compatible`
 
@@ -309,6 +309,38 @@ API key auth, and dynamic model resolution.
     - `openrouter`: `openrouter-thinking`
     - `zai`: `tool-stream-default-on`
 
+    `openclaw/plugin-sdk/provider-model-shared` also exports the replay-family
+    enum plus the shared helpers those families are built from. Common public
+    exports include:
+
+    - `ProviderReplayFamily`
+    - `buildProviderReplayFamilyHooks(...)`
+    - shared replay builders such as `buildOpenAICompatibleReplayPolicy(...)`,
+      `buildAnthropicReplayPolicyForModel(...)`,
+      `buildGoogleGeminiReplayPolicy(...)`, and
+      `buildHybridAnthropicOrOpenAIReplayPolicy(...)`
+    - Gemini replay helpers such as `sanitizeGoogleGeminiReplayHistory(...)`
+      and `resolveTaggedReasoningOutputMode()`
+    - endpoint/model helpers such as `resolveProviderEndpoint(...)`,
+      `normalizeProviderId(...)`, `normalizeGooglePreviewModelId(...)`, and
+      `normalizeNativeXaiModelId(...)`
+
+    `openclaw/plugin-sdk/provider-stream` exposes both the family builder and
+    the public wrapper helpers those families reuse. Common public exports
+    include:
+
+    - `ProviderStreamFamily`
+    - `buildProviderStreamFamilyHooks(...)`
+    - `composeProviderStreamWrappers(...)`
+    - shared OpenAI/Codex wrappers such as
+      `createOpenAIAttributionHeadersWrapper(...)`,
+      `createOpenAIFastModeWrapper(...)`,
+      `createOpenAIServiceTierWrapper(...)`,
+      `createOpenAIResponsesContextManagementWrapper(...)`, and
+      `createCodexNativeWebSearchWrapper(...)`
+    - shared proxy/provider wrappers such as `createOpenRouterWrapper(...)`,
+      `createToolStreamWrapper(...)`, and `createMinimaxFastModeWrapper(...)`
+
     Some stream helpers stay provider-local on purpose. Current bundled
     example: `@openclaw/anthropic-provider` exports
     `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
@@ -325,10 +357,13 @@ API key auth, and dynamic model resolution.
     removal.
 
     `openclaw/plugin-sdk/provider-tools` currently exposes one shared
-    tool-schema family plus xAI-specific compat helpers:
+    tool-schema family plus shared schema/compat helpers:
 
+    - `ProviderToolCompatFamily` documents the shared family inventory today.
     - `buildProviderToolCompatFamilyHooks("gemini")` wires Gemini schema
       cleanup + diagnostics for providers that need Gemini-safe tool schemas.
+    - `normalizeGeminiToolSchemas(...)` and `inspectGeminiToolSchemas(...)`
+      are the underlying public Gemini schema helpers.
     - `resolveXaiModelCompatPatch()` returns the bundled xAI compat patch:
       `toolSchemaProfile: "xai"`, unsupported schema keywords, native
       `web_search` support, and HTML-entity tool-call argument decoding.

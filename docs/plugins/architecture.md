@@ -775,9 +775,9 @@ api.registerProvider({
   scoped to Claude ids instead of every `anthropic-messages` transport.
 - Amazon Bedrock uses `buildReplayPolicy`, `matchesContextOverflowError`,
   `classifyFailoverReason`, and `resolveDefaultThinkingLevel` because it owns
-  Bedrock-specific replay policy plus throttle/not-ready/context-overflow
-  error classification for Anthropic-on-Bedrock traffic; its replay policy
-  shares the same Claude-only `anthropic-by-model` guard.
+  Bedrock-specific throttle/not-ready/context-overflow error classification
+  for Anthropic-on-Bedrock traffic; its replay policy still shares the same
+  Claude-only `anthropic-by-model` guard.
 - OpenRouter, Kilocode, Opencode, and Opencode Go use `buildReplayPolicy`
   through the `passthrough-gemini` replay family because they proxy Gemini
   models through OpenAI-compatible transports and need Gemini

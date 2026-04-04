@@ -128,14 +128,14 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
-    | `plugin-sdk/provider-model-shared` | `normalizeModelCompat`, `buildProviderReplayFamilyHooks`, `sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode` |
+    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
     | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/config helpers |
-    | `plugin-sdk/provider-tools` | `buildProviderToolCompatFamilyHooks`, Gemini schema helpers, xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
+    | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
-    | `plugin-sdk/provider-stream` | `buildProviderStreamFamilyHooks`, stream wrapper types, provider stream wrappers, shared OpenAI/OpenRouter stream-family helpers |
+    | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared OpenAI/OpenRouter/Z.AI/MiniMax wrapper helpers |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
     | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
   </Accordion>

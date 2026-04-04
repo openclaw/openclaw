@@ -100,7 +100,8 @@ Current bundled examples:
   config defaults
 - `amazon-bedrock`: provider-owned context-overflow matching and failover
   reason classification for Bedrock-specific throttle/not-ready errors, plus
-  Claude-only replay-policy guards on Anthropic traffic
+  the shared `anthropic-by-model` replay family for Claude-only replay-policy
+  guards on Anthropic traffic
 - `anthropic-vertex`: Claude-only replay-policy guards on Anthropic-message
   traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
