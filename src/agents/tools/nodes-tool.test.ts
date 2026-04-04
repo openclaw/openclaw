@@ -218,7 +218,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
           pending: [
             {
               requestId: "req-1",
-              commands: ["system.run"],
+              requiredApproveScopes: ["operator.pairing", "operator.admin"],
             },
           ],
         };
@@ -258,7 +258,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
           pending: [
             {
               requestId: "req-1",
-              commands: ["canvas.snapshot"],
+              requiredApproveScopes: ["operator.pairing", "operator.write"],
             },
           ],
         };
@@ -298,6 +298,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
           pending: [
             {
               requestId: "req-1",
+              requiredApproveScopes: ["operator.pairing"],
             },
           ],
         };
@@ -327,6 +328,46 @@ describe("createNodesTool screen_record duration guardrails", () => {
       {},
       { requestId: "req-1" },
       { scopes: ["operator.pairing"] },
+    );
+  });
+
+  it("falls back to command inspection when the gateway does not advertise required scopes", async () => {
+    gatewayMocks.callGatewayTool.mockImplementation(async (method, _opts, params, extra) => {
+      if (method === "node.pair.list") {
+        return {
+          pending: [
+            {
+              requestId: "req-1",
+              commands: ["canvas.snapshot"],
+            },
+          ],
+        };
+      }
+      if (method === "node.pair.approve") {
+        return { ok: true, method, params, extra };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+    const tool = createNodesTool();
+
+    await tool.execute("call-1", {
+      action: "approve",
+      requestId: "req-1",
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "node.pair.list",
+      {},
+      {},
+      { scopes: ["operator.pairing"] },
+    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.pair.approve",
+      {},
+      { requestId: "req-1" },
+      { scopes: ["operator.pairing", "operator.write"] },
     );
   });
 

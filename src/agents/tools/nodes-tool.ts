@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { resolveNodePairApprovalScopes } from "../../infra/node-pairing.js";
+import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -51,10 +51,23 @@ async function resolveNodePairApproveScopes(
   requestId: string,
 ): Promise<OperatorScope[]> {
   const pairing = await callGatewayTool<{
-    pending?: Array<{ requestId?: string; commands?: unknown }>;
+    pending?: Array<{
+      requestId?: string;
+      commands?: unknown;
+      requiredApproveScopes?: unknown;
+    }>;
   }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
   const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
   const match = pending.find((entry) => entry?.requestId === requestId);
+  if (Array.isArray(match?.requiredApproveScopes)) {
+    const scopes = match.requiredApproveScopes.filter(
+      (scope): scope is OperatorScope =>
+        scope === "operator.pairing" || scope === "operator.write" || scope === "operator.admin",
+    );
+    if (scopes.length > 0) {
+      return scopes;
+    }
+  }
   return resolveApproveScopes(match?.commands);
 }
 

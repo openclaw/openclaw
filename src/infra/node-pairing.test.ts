@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import {
   approveNodePairing,
   getPairedNode,
+  listNodePairing,
   requestNodePairing,
   verifyNodeToken,
 } from "./node-pairing.js";
@@ -216,6 +217,29 @@ describe("node pairing tokens", () => {
         nodeId: "node-1",
         commands: undefined,
       }),
+    });
+  });
+
+  test("lists pending requests with precomputed approval scopes", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    await requestNodePairing(
+      {
+        nodeId: "node-1",
+        platform: "darwin",
+        commands: ["canvas.present"],
+      },
+      baseDir,
+    );
+
+    await expect(listNodePairing(baseDir)).resolves.toEqual({
+      pending: [
+        expect.objectContaining({
+          nodeId: "node-1",
+          commands: ["canvas.present"],
+          requiredApproveScopes: ["operator.pairing", "operator.write"],
+        }),
+      ],
+      paired: [],
     });
   });
 });

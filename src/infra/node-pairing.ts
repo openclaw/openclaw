@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
-import { NODE_SYSTEM_RUN_COMMANDS } from "./node-commands.js";
+import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -39,6 +39,10 @@ export type NodePairingPendingRequest = NodePairingRequestInput & {
   ts: number;
 };
 
+export type NodePairingPendingEntry = NodePairingPendingRequest & {
+  requiredApproveScopes: NodeApprovalScope[];
+};
+
 export type NodePairingPairedNode = NodeApprovedSurface & {
   token: string;
   bins?: string[];
@@ -48,7 +52,7 @@ export type NodePairingPairedNode = NodeApprovedSurface & {
 };
 
 export type NodePairingList = {
-  pending: NodePairingPendingRequest[];
+  pending: NodePairingPendingEntry[];
   paired: NodePairingPairedNode[];
 };
 
@@ -59,9 +63,6 @@ type NodePairingStateFile = {
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
-const OPERATOR_PAIRING_SCOPE = "operator.pairing";
-const OPERATOR_WRITE_SCOPE = "operator.write";
-const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
 const withLock = createAsyncLock();
 
@@ -119,24 +120,18 @@ function refreshPendingNodePairingRequest(
   };
 }
 
-export function resolveNodePairApprovalScopes(commands: unknown): string[] {
-  const normalized = Array.isArray(commands)
-    ? commands.filter((command): command is string => typeof command === "string")
-    : [];
-  if (
-    normalized.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))
-  ) {
-    return [OPERATOR_PAIRING_SCOPE, OPERATOR_ADMIN_SCOPE];
-  }
-  if (normalized.length > 0) {
-    return [OPERATOR_PAIRING_SCOPE, OPERATOR_WRITE_SCOPE];
-  }
-  return [OPERATOR_PAIRING_SCOPE];
-}
-
-function resolveNodeApprovalRequiredScopes(pending: NodePairingPendingRequest): string[] {
+function resolveNodeApprovalRequiredScopes(
+  pending: NodePairingPendingRequest,
+): NodeApprovalScope[] {
   const commands = Array.isArray(pending.commands) ? pending.commands : [];
   return resolveNodePairApprovalScopes(commands);
+}
+
+function toPendingNodePairingEntry(pending: NodePairingPendingRequest): NodePairingPendingEntry {
+  return {
+    ...pending,
+    requiredApproveScopes: resolveNodeApprovalRequiredScopes(pending),
+  };
 }
 
 type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
@@ -175,7 +170,9 @@ function newToken() {
 
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
   const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById).toSorted((a, b) => b.ts - a.ts);
+  const pending = Object.values(state.pendingById)
+    .toSorted((a, b) => b.ts - a.ts)
+    .map(toPendingNodePairingEntry);
   const paired = Object.values(state.pairedByNodeId).toSorted(
     (a, b) => b.approvedAtMs - a.approvedAtMs,
   );
@@ -230,11 +227,6 @@ export async function requestNodePairing(
   });
 }
 
-export async function approveNodePairing(
-  requestId: string,
-  options: { callerScopes?: readonly string[] },
-  baseDir?: string,
-): Promise<ApproveNodePairingResult>;
 export async function approveNodePairing(
   requestId: string,
   options: { callerScopes?: readonly string[] },
