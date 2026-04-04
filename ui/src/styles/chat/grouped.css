@@ -32,12 +32,6 @@
   align-items: flex-end;
 }
 
-@media (max-width: 600px) {
-  .chat-group-messages {
-    max-width: 82%;
-  }
-}
-
 .chat-group.user .chat-group-footer {
   justify-content: flex-end;
 }
@@ -483,4 +477,26 @@ img.chat-avatar {
 
 .chat-delete-confirm__yes:hover {
   background: #dc2626;
+}
+
+@media (max-width: 768px) {
+  .chat-group {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .chat-group-messages {
+    max-width: 82%;
+  }
+}
+
+@media (max-width: 400px) {
+  .chat-group-messages {
+    max-width: 100%;
+  }
+
+  .chat-avatar,
+  img.chat-avatar {
+    display: none;
+  }
 }

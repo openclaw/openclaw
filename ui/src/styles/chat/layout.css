@@ -51,16 +51,21 @@
 
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
-  flex: 1 1 0;
+  flex: 1;
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 6px 6px;
+  padding: 0 12px 16px;
   margin: 0 0 0 0;
   min-height: 0;
   /* Allow shrinking for flex scroll behavior */
-  border-radius: var(--radius-md);
+  border-radius: 0;
+  border: none;
   background: transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
 }
 
 .chat-thread-inner > :first-child {
@@ -838,6 +843,14 @@
 
   .chat-compose__field textarea {
     min-height: 64px;
+  }
+
+  .card.chat {
+    padding: 0;
+  }
+
+  .chat-thread {
+    padding: 0 0 16px;
   }
 }
 
