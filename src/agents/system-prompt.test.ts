@@ -119,7 +119,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      'For follow-up at a future time (for example "check back in 10 minutes", reminders, run-later work, or recurring tasks), use cron instead of exec sleep, yieldMs delays, or process polling.',
+    );
+    expect(prompt).toContain(
+      "Use exec/process only for commands that start now and continue running in the background.",
+    );
+    expect(prompt).toContain(
+      "Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.",
     );
     expect(prompt).toContain("You have no independent goals");
     expect(prompt).toContain("Prioritize safety and human oversight");
@@ -287,7 +293,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      'For follow-up at a future time (for example "check back in 10 minutes", reminders, run-later work, or recurring tasks), use cron instead of exec sleep, yieldMs delays, or process polling.',
+    );
+    expect(prompt).toContain(
+      "Use exec/process only for commands that start now and continue running in the background.",
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");

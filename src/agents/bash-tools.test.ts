@@ -410,6 +410,17 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
   expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
 };
 
+describe("tool descriptions", () => {
+  it("documents deferred follow-up guidance for exec and process", () => {
+    expect(execTool.description).toContain(
+      "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
+    );
+    expect(processTool.description).toContain(
+      "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+    );
+  });
+});
+
 beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();

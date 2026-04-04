@@ -150,7 +150,7 @@ export function createProcessTool(
     name: "process",
     label: "process",
     description:
-      "Manage running exec sessions: list, poll, log, write, send-keys, submit, paste, kill.",
+      "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
     parameters: processSchema,
     execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {

@@ -1117,7 +1117,7 @@ function deriveExecShortName(fullPath: string): string {
 
 function buildExecToolDescription(agentId?: string): string {
   const base =
-    "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).";
+    "Execute shell commands with background continuation for work that starts now. Use yieldMs/background to continue later via process tool. Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead. Use pty=true for TTY-required commands (terminal UIs, coding agents).";
   if (process.platform !== "win32") {
     return base;
   }

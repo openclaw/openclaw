@@ -121,6 +121,16 @@ describe("cron tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("documents deferred follow-up guidance in the tool description", () => {
+    const tool = createTestCronTool();
+    expect(tool.description).toContain(
+      'Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks.',
+    );
+    expect(tool.description).toContain(
+      "Do not emulate scheduling with exec sleep or process polling.",
+    );
+  });
+
   it.each([
     [
       "update",
