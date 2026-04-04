@@ -1,3 +1,21 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+
+export type ProviderStreamWrapperFactory =
+  | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
+  | null
+  | undefined
+  | false;
+
+export function composeProviderStreamWrappers(
+  baseStreamFn: StreamFn | undefined,
+  ...wrappers: ProviderStreamWrapperFactory[]
+): StreamFn | undefined {
+  return wrappers.reduce<StreamFn | undefined>(
+    (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
+    baseStreamFn,
+  );
+}
+
 // Public stream-wrapper helpers for provider plugins.
 
 export {

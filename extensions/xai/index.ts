@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
-import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import {
+  composeProviderStreamWrappers,
+  createToolStreamWrapper,
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   jsonResult,
   readProviderEnvValue,
@@ -261,14 +264,16 @@ export default defineSingleProviderPluginEntry({
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) => {
-      let streamFn = createXaiToolPayloadCompatibilityWrapper(ctx.streamFn);
-      if (typeof ctx.extraParams?.fastMode === "boolean") {
-        streamFn = createXaiFastModeWrapper(streamFn, ctx.extraParams.fastMode);
-      }
-      streamFn = createXaiToolCallArgumentDecodingWrapper(streamFn);
-      return createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false);
-    },
+    wrapStreamFn: (ctx) =>
+      composeProviderStreamWrappers(
+        ctx.streamFn,
+        (streamFn) => createXaiToolPayloadCompatibilityWrapper(streamFn),
+        typeof ctx.extraParams?.fastMode === "boolean"
+          ? (streamFn) => createXaiFastModeWrapper(streamFn, ctx.extraParams.fastMode)
+          : undefined,
+        (streamFn) => createXaiToolCallArgumentDecodingWrapper(streamFn),
+        (streamFn) => createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false),
+      ),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
