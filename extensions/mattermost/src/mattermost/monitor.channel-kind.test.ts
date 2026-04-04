@@ -12,9 +12,13 @@ describe("mapMattermostChannelTypeToChatType", () => {
     expect(mapMattermostChannelTypeToChatType(" p ")).toBe("group");
   });
 
-  it("keeps public channels and unknown values as channel", () => {
+  it("keeps public channels and unrecognised type strings as channel", () => {
     expect(mapMattermostChannelTypeToChatType("O")).toBe("channel");
     expect(mapMattermostChannelTypeToChatType("x")).toBe("channel");
-    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("channel");
+  });
+
+  it("returns unknown for null and undefined (channel type not resolvable)", () => {
+    expect(mapMattermostChannelTypeToChatType(undefined)).toBe("unknown");
+    expect(mapMattermostChannelTypeToChatType(null)).toBe("unknown");
   });
 });

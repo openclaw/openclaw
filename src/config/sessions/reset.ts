@@ -53,7 +53,18 @@ export function resolveThreadFlag(params: {
   parentSessionKey?: string | null;
 }): boolean {
   if (params.messageThreadId != null) {
-    return true;
+    // Don't classify as a thread session if the session key explicitly identifies
+    // this as a group/channel session. Some channels (e.g. Mattermost with
+    // replyToMode: "off") set messageThreadId for delivery routing — so replies go
+    // to the correct thread — while intentionally keeping all messages in a single
+    // shared channel session. In that case the session key (e.g. ":channel:") is
+    // the authoritative signal for session type; messageThreadId is a delivery
+    // detail, not evidence that a separate thread session was forked.
+    const normalizedKey = (params.sessionKey ?? "").toLowerCase();
+    const isExplicitGroupSession = GROUP_SESSION_MARKERS.some((m) => normalizedKey.includes(m));
+    if (!isExplicitGroupSession) {
+      return true;
+    }
   }
   if (params.threadLabel?.trim()) {
     return true;
