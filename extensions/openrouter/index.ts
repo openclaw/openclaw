@@ -23,7 +23,6 @@ export default definePluginEntry({
     const {
       buildProviderReplayFamilyHooks,
       buildProviderStreamFamilyHooks,
-      composeProviderStreamWrappers,
       createProviderApiKeyAuthMethod,
       DEFAULT_CONTEXT_TOKENS,
       getOpenRouterModelCapabilities,
