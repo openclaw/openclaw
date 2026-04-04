@@ -325,20 +325,21 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
         cfg: params.cfg,
         logDiagnostics: false,
       });
-      const existing = runtimesBySessionId.get(params.sessionId);
+      // FORK: share a single MCP runtime across all sessions with the same
+      // workspace + config. Stateless servers (TTS, Whisper) don't need
+      // per-session isolation and spawning duplicates wastes VRAM + startup time.
+      const runtimeKey = `${params.workspaceDir}::${nextFingerprint}`;
+      const existing = runtimesBySessionId.get(runtimeKey);
       if (existing) {
-        if (
-          existing.workspaceDir !== params.workspaceDir ||
-          existing.configFingerprint !== nextFingerprint
-        ) {
-          runtimesBySessionId.delete(params.sessionId);
+        if (existing.configFingerprint !== nextFingerprint) {
+          runtimesBySessionId.delete(runtimeKey);
           await existing.dispose();
         } else {
           existing.markUsed();
           return existing;
         }
       }
-      const inFlight = createInFlight.get(params.sessionId);
+      const inFlight = createInFlight.get(runtimeKey);
       if (inFlight) {
         if (
           inFlight.workspaceDir === params.workspaceDir &&
@@ -346,9 +347,9 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
         ) {
           return inFlight.promise;
         }
-        createInFlight.delete(params.sessionId);
+        createInFlight.delete(runtimeKey);
         const staleRuntime = await inFlight.promise.catch(() => undefined);
-        runtimesBySessionId.delete(params.sessionId);
+        runtimesBySessionId.delete(runtimeKey);
         await staleRuntime?.dispose();
       }
       const created = Promise.resolve(
@@ -360,10 +361,10 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
         }),
       ).then((runtime) => {
         runtime.markUsed();
-        runtimesBySessionId.set(params.sessionId, runtime);
+        runtimesBySessionId.set(runtimeKey, runtime);
         return runtime;
       });
-      createInFlight.set(params.sessionId, {
+      createInFlight.set(runtimeKey, {
         promise: created,
         workspaceDir: params.workspaceDir,
         configFingerprint: nextFingerprint,
@@ -371,7 +372,7 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
       try {
         return await created;
       } finally {
-        createInFlight.delete(params.sessionId);
+        createInFlight.delete(runtimeKey);
       }
     },
     bindSessionKey(sessionKey, sessionId) {
@@ -381,27 +382,14 @@ function createSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
       return sessionIdBySessionKey.get(sessionKey);
     },
     async disposeSession(sessionId) {
-      const inFlight = createInFlight.get(sessionId);
-      createInFlight.delete(sessionId);
-      let runtime = runtimesBySessionId.get(sessionId);
-      if (!runtime && inFlight) {
-        runtime = await inFlight.promise.catch(() => undefined);
-      }
-      runtimesBySessionId.delete(sessionId);
-      if (!runtime) {
-        for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
-          if (mappedSessionId === sessionId) {
-            sessionIdBySessionKey.delete(sessionKey);
-          }
-        }
-        return;
-      }
+      // FORK: With shared runtimes, individual session disposal only cleans up
+      // the session key mapping. The shared runtime stays alive for other sessions.
+      // Full cleanup happens via disposeAll() on shutdown.
       for (const [sessionKey, mappedSessionId] of sessionIdBySessionKey.entries()) {
         if (mappedSessionId === sessionId) {
           sessionIdBySessionKey.delete(sessionKey);
         }
       }
-      await runtime.dispose();
     },
     async disposeAll() {
       const inFlightRuntimes = Array.from(createInFlight.values());
