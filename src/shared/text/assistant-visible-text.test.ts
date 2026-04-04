@@ -99,4 +99,44 @@ describe("stripAssistantInternalScaffolding", () => {
     }
     expectVisibleText(input, expected);
   });
+
+  describe("model special token stripping", () => {
+    it("strips Kimi/GLM special tokens in isolation", () => {
+      expectVisibleText(
+        "<|assistant|>Here is the answer<|end|>",
+        "Here is the answer",
+      );
+    });
+
+    it("strips full-width pipe DeepSeek tokens", () => {
+      expectVisibleText(
+        "<｜begin▁of▁sentence｜>Hello world",
+        "Hello world",
+      );
+    });
+
+    it("strips special tokens mixed with normal text", () => {
+      expectVisibleText(
+        "Start <|tool_call_result_begin|>middle<|tool_call_result_end|> end",
+        "Start middle end",
+      );
+    });
+
+    it("preserves special-token-like syntax inside code blocks", () => {
+      // Code blocks are not stripped by stripModelSpecialTokens (it operates
+      // on raw text), but this verifies the overall pipeline handles normal
+      // angle-bracket usage gracefully.
+      expectVisibleText("Use <div>hello</div> in HTML", "Use <div>hello</div> in HTML");
+    });
+
+    it("strips special tokens combined with reasoning tags", () => {
+      const input = [
+        "<thinking>",
+        "internal reasoning",
+        "</thinking>",
+        "<|assistant|>Visible response",
+      ].join("\n");
+      expectVisibleText(input, "Visible response");
+    });
+  });
 });
