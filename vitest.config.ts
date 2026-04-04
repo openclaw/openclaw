@@ -7,6 +7,11 @@ export default defineConfig({
   ...sharedVitestConfig,
   test: {
     ...sharedVitestConfig.test,
-    projects: ["vitest.unit.config.ts", "vitest.boundary.config.ts"],
+    projects: [
+      "vitest.unit.config.ts",
+      "vitest.boundary.config.ts",
+      "vitest.acp.config.ts",
+      "vitest.ui.config.ts",
+    ],
   },
 });

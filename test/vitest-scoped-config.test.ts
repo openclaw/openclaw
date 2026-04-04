@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createAcpVitestConfig } from "../vitest.acp.config.ts";
 import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
 import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
@@ -9,6 +10,7 @@ import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
+import { createUiVitestConfig } from "../vitest.ui.config.ts";
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
@@ -65,11 +67,13 @@ describe("createScopedVitestConfig", () => {
 
 describe("scoped vitest configs", () => {
   const defaultChannelsConfig = createChannelsVitestConfig({});
+  const defaultAcpConfig = createAcpVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultGatewayConfig = createGatewayVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
   const defaultAgentsConfig = createAgentsVitestConfig({});
+  const defaultUiConfig = createUiVitestConfig({});
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
@@ -135,6 +139,11 @@ describe("scoped vitest configs", () => {
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 
+  it("normalizes acp include patterns relative to the scoped dir", () => {
+    expect(defaultAcpConfig.test?.dir).toBe("src/acp");
+    expect(defaultAcpConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
   it("normalizes commands include patterns relative to the scoped dir", () => {
     expect(defaultCommandsConfig.test?.dir).toBe("src/commands");
     expect(defaultCommandsConfig.test?.include).toEqual(["**/*.test.ts"]);
@@ -148,5 +157,10 @@ describe("scoped vitest configs", () => {
   it("normalizes agents include patterns relative to the scoped dir", () => {
     expect(defaultAgentsConfig.test?.dir).toBe("src/agents");
     expect(defaultAgentsConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("normalizes ui include patterns relative to the scoped dir", () => {
+    expect(defaultUiConfig.test?.dir).toBe("ui/src/ui");
+    expect(defaultUiConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 });
