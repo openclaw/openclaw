@@ -222,6 +222,8 @@ export type TelegramAccountConfig = {
   ackReaction?: string;
   /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server). */
   apiRoot?: string;
+  /** Absolute local roots trusted for direct Bot API `file_path` reads in `--local` mode. */
+  trustedLocalFileRoots?: string[];
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
 };

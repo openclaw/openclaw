@@ -316,6 +316,12 @@ export const TelegramAccountSchemaBase = z
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
+    trustedLocalFileRoots: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Absolute local roots trusted for direct Telegram Bot API file_path reads when the Bot API server runs in --local mode.",
+      ),
     autoTopicLabel: AutoTopicLabelSchema,
   })
   .strict();

@@ -387,6 +387,7 @@ export const registerTelegramHandlers = ({
             opts.token,
             telegramTransport,
             telegramCfg.apiRoot,
+            telegramCfg.trustedLocalFileRoots,
           );
         } catch (mediaErr) {
           if (!isRecoverableMediaGroupError(mediaErr)) {
@@ -495,6 +496,7 @@ export const registerTelegramHandlers = ({
         opts.token,
         telegramTransport,
         telegramCfg.apiRoot,
+        telegramCfg.trustedLocalFileRoots,
       );
       if (!media) {
         return [];
@@ -1016,6 +1018,7 @@ export const registerTelegramHandlers = ({
         opts.token,
         telegramTransport,
         telegramCfg.apiRoot,
+        telegramCfg.trustedLocalFileRoots,
       );
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
