@@ -68,6 +68,14 @@ for new setup via onboarding or `models auth` commands.
 For new setup, use an Anthropic API key or migrate to Claude CLI on the gateway
 host.
 
+Other providers can still use the generic token helpers:
+
+- `openclaw models auth setup-token --provider <id>` runs the provider's token
+  auth flow (interactive TTY required).
+- `openclaw models auth paste-token --provider <id>` prompts for a token value
+  and writes it to `auth-profiles.json` (default profile id:
+  `<provider>:manual`).
+
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
 ```bash

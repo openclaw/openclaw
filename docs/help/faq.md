@@ -614,6 +614,9 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     Yes. Reuse a local **Claude CLI** login on the gateway host with `openclaw models auth login --provider anthropic --method cli --set-default`.
 
     Existing legacy Anthropic token profiles still run if they are already configured, but OpenClaw no longer offers Anthropic setup-token as a new setup path. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
+    Other providers can still use the generic token helpers with
+    `openclaw models auth setup-token --provider <id>` or
+    `openclaw models auth paste-token --provider <id>`.
 
     Important: Anthropic changed third-party harness billing on **April 4, 2026
     at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no

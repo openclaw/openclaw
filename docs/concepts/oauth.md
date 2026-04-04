@@ -84,6 +84,10 @@ OpenClaw no longer offers Anthropic setup-token onboarding or auth commands for
 new setup. Existing legacy Anthropic token profiles are still honored at
 runtime if they are already configured.
 
+The generic token helpers still exist for other providers:
+`openclaw models auth setup-token --provider <id>` and
+`openclaw models auth paste-token --provider <id>`.
+
 ## Anthropic Claude CLI migration
 
 If Claude CLI is already installed and signed in on the gateway host, you can
