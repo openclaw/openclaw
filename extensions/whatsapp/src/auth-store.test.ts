@@ -92,13 +92,31 @@ describe("maybeRestoreCredsFromBackup", () => {
     const dir = await makeCaseDir();
     const credsPath = path.join(dir, "creds.json");
     const backupPath = path.join(dir, "creds.json.bak");
+    // Fresh 1-byte file — mtime is now, treated as transient write in progress
     fsSync.writeFileSync(credsPath, "{");
     fsSync.writeFileSync(backupPath, JSON.stringify({ me: { id: "backup@s.whatsapp.net" } }));
 
     maybeRestoreCredsFromBackup(dir);
 
-    // Single-byte file on disk means write in progress — don't clobber
+    // Single-byte file on disk with recent mtime — don't clobber
     expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{");
+  });
+
+  it("restores from backup when creds.json is crash-truncated (1 byte and stale)", async () => {
+    const dir = await makeCaseDir();
+    const credsPath = path.join(dir, "creds.json");
+    const backupPath = path.join(dir, "creds.json.bak");
+    const backupContent = JSON.stringify({ me: { id: "backup@s.whatsapp.net" } });
+    // Simulate crash-truncated file: 1 byte, last modified >5 s ago
+    fsSync.writeFileSync(credsPath, "{");
+    const staleTime = new Date(Date.now() - 10_000);
+    fsSync.utimesSync(credsPath, staleTime, staleTime);
+    fsSync.writeFileSync(backupPath, backupContent);
+
+    maybeRestoreCredsFromBackup(dir);
+
+    // 1-byte + stale → treated as crash-truncated, backup should be restored
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe(backupContent);
   });
 
   it("does nothing when neither file exists", async () => {

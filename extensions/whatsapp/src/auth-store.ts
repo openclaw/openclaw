@@ -60,20 +60,20 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     try {
       const stats = fsSync.statSync(credsPath);
       if (stats.isFile()) {
-        if (stats.size > 0) {
-          // Non-empty but unparseable (size 1 = partial write) — transient,
-          // skip restore so the in-progress write can complete.
+        if (stats.size > 1) {
+          // File has real content (>1 byte) but failed to parse — transient
+          // mid-write state, skip restore so the in-progress write completes.
           return;
         }
-        // size === 0: check whether it's a transient truncation (fresh) or
+        // size <= 1: check whether it's a transient truncation (fresh) or
         // a permanent crash artifact (stale).
         const ageMs = Date.now() - stats.mtimeMs;
         if (ageMs < 5_000) {
           // Recently touched — likely a write in progress, skip restore.
           return;
         }
-        // Empty AND stale — treat as crash-truncated, fall through to
-        // backup-restore path.
+        // Empty/1-byte AND stale — treat as crash-truncated, fall through
+        // to backup-restore path.
       }
     } catch {
       // statSync throws when the file is truly absent — fall through to
