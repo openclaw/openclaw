@@ -145,18 +145,18 @@ barrels are important signals for planning, but they do not override R1-R4.
 
 ### Deferred to Planning
 
-- [Affects R5][Technical] Which minimal set of package-local `tsconfig.json` files and
+- [Affects R5] Technical: Which minimal set of package-local `tsconfig.json` files and
   project references is sufficient to enforce R1-R4 in phase 1?
-- [Affects R7][Technical] Which currently exported plugin-specific `plugin-sdk` subpaths
+- [Affects R7] Technical: Which currently exported plugin-specific `plugin-sdk` subpaths
   should be frozen temporarily, which should be replaced by generic seams, and which
   should be removed outright?
-- [Affects R9][Needs research] What is the cleanest way to combine pnpm workspace
+- [Affects R9] Needs research: What is the cleanest way to combine pnpm workspace
   dependencies, package `exports`, and TypeScript project references here without
   destabilizing the existing build and release flow?
-- [Affects R13][Technical] Which core slices need to become real package boundaries in
+- [Affects R13] Technical: Which core slices need to become real package boundaries in
   phase 1, and which can remain internal behind the root package while bundled plugin
   enforcement is tightened?
-- [Affects R15][Technical] What migration/reporting mechanism should planning use to
+- [Affects R15] Technical: What migration/reporting mechanism should planning use to
   classify broken imports into “delete dependency” versus “design a new interface”?
 
 ## Next Steps

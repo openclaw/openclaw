@@ -1123,7 +1123,6 @@ authoring plugins:
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
-  `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
@@ -1136,9 +1135,9 @@ authoring plugins:
   `openclaw/plugin-sdk/text-runtime`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
-  `telegram-command-config` is the narrow public seam for Telegram custom
-  command normalization/validation and stays available even if the bundled
-  Telegram contract surface is temporarily unavailable.
+  `config-runtime` includes the fallback-stable Telegram custom-command
+  normalization and validation helpers used when the bundled Telegram contract
+  surface is temporarily unavailable.
   `text-runtime` is the shared text/markdown/logging seam, including
   assistant-visible-text stripping, markdown render/chunking helpers, redaction
   helpers, directive-tag helpers, and safe-text utilities.

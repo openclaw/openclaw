@@ -138,7 +138,7 @@ surfaces:
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
   payload field layout is still required
-- `openclaw/plugin-sdk/telegram-command-config` for Telegram custom-command
+- `openclaw/plugin-sdk/config-runtime` for Telegram custom-command
   normalization, duplicate/conflict validation, and a fallback-stable command
   config contract
 

@@ -200,6 +200,10 @@
     "target": "发布策略"
   },
   {
+    "source": "refactor: Enforce bundled plugin package boundaries",
+    "target": "refactor: Enforce bundled plugin package boundaries"
+  },
+  {
     "source": "for full details",
     "target": "了解详情"
   },
