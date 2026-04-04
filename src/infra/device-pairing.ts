@@ -399,21 +399,22 @@ export async function getPendingDevicePairing(
   return state.pendingById[requestId] ?? null;
 }
 
+export type RequestDevicePairingResult =
+  | { status: "pending"; request: DevicePairingPendingRequest; created: boolean }
+  | { status: "already-paired"; device: PairedDevice };
+
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
-): Promise<{
-  status: "pending";
-  request: DevicePairingPendingRequest;
-  created: boolean;
-}> {
+): Promise<RequestDevicePairingResult> {
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const deviceId = normalizeDeviceId(req.deviceId);
     if (!deviceId) {
       throw new Error("deviceId required");
     }
-    const isRepair = Boolean(state.pairedByDeviceId[deviceId]);
+    const existingDevice = state.pairedByDeviceId[deviceId];
+    const isRepair = Boolean(existingDevice);
     const pendingForDevice = Object.values(state.pendingById)
       .filter((pending) => pending.deviceId === deviceId)
       .toSorted((left, right) => right.ts - left.ts);
@@ -458,6 +459,12 @@ export async function requestDevicePairing(
       state.pendingById[superseded.requestId] = superseded;
       await persistState(state, baseDir);
       return { status: "pending" as const, request: superseded, created: true };
+    }
+
+    // If device is already paired and there's no pending request, don't create a new repair request.
+    // Return "already-paired" status so the caller can use the existing pairing.
+    if (isRepair) {
+      return { status: "already-paired" as const, device: existingDevice };
     }
 
     const request = buildPendingDevicePairingRequest({

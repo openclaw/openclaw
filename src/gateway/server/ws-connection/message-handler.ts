@@ -792,6 +792,10 @@ export function attachGatewayWsMessageHandler(params: {
               ...clientPairingMetadata,
               silent: reason === "scope-upgrade" ? false : allowSilentLocalPairing,
             });
+            // If device is already paired, no pending request was created - just proceed
+            if (pairing.status === "already-paired") {
+              return true;
+            }
             const context = buildRequestContext();
             let approved: Awaited<ReturnType<typeof approveDevicePairing>> | undefined;
             let resolvedByConcurrentApproval = false;
