@@ -73,8 +73,7 @@ function mockFailureResponse(statusCode = 500) {
 
 function installFakeTimerHarness() {
   beforeAll(async () => {
-    ({ sendMessage, sendFileUrl, fetchChatUsers, resolveChatUserId } =
-      await import("./client.js"));
+    ({ sendMessage, sendFileUrl, fetchChatUsers, resolveChatUserId } = await import("./client.js"));
   });
 
   beforeEach(() => {
@@ -192,6 +191,8 @@ function mockUserListResponseImpl(
 }
 
 describe("resolveChatUserId", () => {
+  installFakeTimerHarness();
+
   const baseUrl =
     "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22";
   const baseUrl2 =
