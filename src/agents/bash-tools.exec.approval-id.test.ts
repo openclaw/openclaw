@@ -165,6 +165,32 @@ async function expectGatewayExecWithoutApproval(options: {
   expect(calls).not.toContain("exec.approval.waitDecision");
 }
 
+async function expectGatewayAskAlwaysPrompt(options: {
+  turnId: string;
+  command?: string;
+  allowlist?: Array<{ pattern: string; source?: "allow-always" }>;
+}) {
+  await writeExecApprovalsConfig({
+    version: 1,
+    defaults: { security: "full", ask: "always", askFallback: "full" },
+    agents: {
+      main: options.allowlist ? { allowlist: options.allowlist } : {},
+    },
+  });
+  mockPendingApprovalRegistration();
+
+  const tool = createExecTool({
+    host: "gateway",
+    ask: "always",
+    security: "full",
+    approvalRunningNoticeMs: 0,
+  });
+
+  return await tool.execute(options.turnId, {
+    command: options.command ?? `${JSON.stringify(process.execPath)} --version`,
+  });
+}
+
 function mockAcceptedApprovalFlow(options: {
   onAgent?: (params: Record<string, unknown>) => void;
   onNodeInvoke?: (params: unknown) => unknown;
@@ -484,26 +510,9 @@ describe("exec approvals", () => {
   });
 
   it("keeps ask=always prompts even when durable allow-always trust matches", async () => {
-    await writeExecApprovalsConfig({
-      version: 1,
-      defaults: { security: "full", ask: "always", askFallback: "full" },
-      agents: {
-        main: {
-          allowlist: [{ pattern: process.execPath, source: "allow-always" }],
-        },
-      },
-    });
-    mockPendingApprovalRegistration();
-
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-    });
-
-    const result = await tool.execute("call-gateway-durable-still-prompts", {
-      command: `${JSON.stringify(process.execPath)} --version`,
+    const result = await expectGatewayAskAlwaysPrompt({
+      turnId: "call-gateway-durable-still-prompts",
+      allowlist: [{ pattern: process.execPath, source: "allow-always" }],
     });
 
     expect(result.details.status).toBe("approval-pending");
@@ -517,26 +526,9 @@ describe("exec approvals", () => {
   });
 
   it("keeps ask=always prompts for static allowlist entries without allow-always trust", async () => {
-    await writeExecApprovalsConfig({
-      version: 1,
-      defaults: { security: "full", ask: "always", askFallback: "full" },
-      agents: {
-        main: {
-          allowlist: [{ pattern: process.execPath }],
-        },
-      },
-    });
-    mockPendingApprovalRegistration();
-
-    const tool = createExecTool({
-      host: "gateway",
-      ask: "always",
-      security: "full",
-      approvalRunningNoticeMs: 0,
-    });
-
-    const result = await tool.execute("call-static-allowlist-still-prompts", {
-      command: `${JSON.stringify(process.execPath)} --version`,
+    const result = await expectGatewayAskAlwaysPrompt({
+      turnId: "call-static-allowlist-still-prompts",
+      allowlist: [{ pattern: process.execPath }],
     });
 
     expect(result.details.status).toBe("approval-pending");
