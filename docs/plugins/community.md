@@ -21,6 +21,20 @@ OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
 
+### A2A Gateway
+
+OpenClaw plugin implementing the A2A (Agent-to-Agent) v0.3.0 protocol. Enables
+agents to discover and communicate across servers with bio-inspired routing,
+mDNS discovery, four-state circuit breaker, SSE streaming, and a DevTools CLI.
+486 tests, actively maintained.
+
+- **npm:** `openclaw-a2a-gateway`
+- **repo:** [github.com/win4r/openclaw-a2a-gateway](https://github.com/win4r/openclaw-a2a-gateway)
+
+```bash
+openclaw plugins install openclaw-a2a-gateway
+```
+
 ### Codex App Server Bridge
 
 Independent OpenClaw bridge for Codex App Server conversations. Bind a chat to
