@@ -71,6 +71,14 @@ If Gemini CLI OAuth requests fail after login, set
 `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and
 retry.
 
+Gemini CLI JSON usage notes:
+
+- Reply text comes from the CLI JSON `response` field.
+- Usage falls back to `stats` when the CLI leaves `usage` empty.
+- `stats.cached` is normalized into OpenClaw `cacheRead`.
+- If `stats.input` is missing, OpenClaw derives input tokens from
+  `stats.input_tokens - stats.cached`.
+
 ## Capabilities
 
 | Capability             | Supported         |

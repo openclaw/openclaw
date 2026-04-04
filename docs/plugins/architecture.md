@@ -473,6 +473,13 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
+Some bundled-plugin helper subpaths still remain in the generated SDK export
+map for compatibility and bundled-plugin maintenance. Current examples include
+`plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
+`plugin-sdk/zalo-setup`, and several `plugin-sdk/matrix*` seams. Treat those as
+reserved implementation-detail exports, not as the recommended SDK pattern for
+new third-party plugins.
+
 ## Load pipeline
 
 At startup, OpenClaw does roughly this:
@@ -711,23 +718,36 @@ api.registerProvider({
 
 - Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
   `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
-  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, and `isModernModelRef`
-  because it owns Claude 4.6 forward-compat, provider-family hints, auth
-  repair guidance, usage endpoint integration, prompt-cache eligibility,
-  auth-aware config defaults, and Claude default/adaptive thinking policy.
+  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  and `wrapStreamFn` because it owns Claude 4.6 forward-compat,
+  provider-family hints, auth repair guidance, usage endpoint integration,
+  prompt-cache eligibility, auth-aware config defaults, Claude
+  default/adaptive thinking policy, and Anthropic-specific stream shaping for
+  beta headers, `/fast` / `serviceTier`, and `context1m`.
+- Anthropic's Claude-specific stream helpers stay in the bundled plugin's own
+  public `api.ts` / `contract-api.ts` seam for now. That package surface
+  exports `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
+  `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level
+  Anthropic wrapper builders instead of widening the generic SDK around one
+  provider's beta-header rules.
 - OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
   `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `supportsXHighThinking`, and `isModernModelRef`
   because it owns GPT-5.4 forward-compat, the direct OpenAI
   `openai-completions` -> `openai-responses` normalization, Codex-aware auth
   hints, Spark suppression, synthetic OpenAI list rows, and GPT-5 thinking /
-  live-model policy.
+  live-model policy; the `openai-responses-defaults` stream family owns the
+  shared native OpenAI Responses wrappers for attribution headers,
+  `/fast`/`serviceTier`, text verbosity, native Codex web search,
+  reasoning-compat payload shaping, and Responses context management.
 - OpenRouter uses `catalog` plus `resolveDynamicModel` and
   `prepareDynamicModel` because the provider is pass-through and may expose new
   model ids before OpenClaw's static catalog updates; it also uses
   `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible` to keep
   provider-specific request headers, routing metadata, reasoning patches, and
-  prompt-cache policy out of core.
+  prompt-cache policy out of core. Its replay policy comes from the
+  `passthrough-gemini` family, while the `openrouter-thinking` stream family
+  owns proxy reasoning injection and the unsupported-model / `auto` skips.
 - GitHub Copilot uses `catalog`, `auth`, `resolveDynamicModel`, and
   `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
   needs provider-owned device login, model fallback behavior, Claude transcript
@@ -738,7 +758,8 @@ api.registerProvider({
   `prepareExtraParams`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
   still runs on core OpenAI transports but owns its transport/base URL
   normalization, OAuth refresh fallback policy, default transport choice,
-  synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
+  synthetic Codex catalog rows, and ChatGPT usage endpoint integration; it
+  shares the same `openai-responses-defaults` stream family as direct OpenAI.
 - Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel`,
   `buildReplayPolicy`, `sanitizeReplayHistory`,
   `resolveReasoningOutputMode`, `wrapStreamFn`, and `isModernModelRef` because the
@@ -1058,6 +1079,15 @@ authoring plugins:
   `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
   `<plugin-package-root>/index.js` is the bundled plugin entry,
   and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
+- Current bundled provider examples:
+  - Anthropic uses `api.js` / `contract-api.js` for Claude stream helpers such
+    as `wrapAnthropicProviderStream`, beta-header helpers, and `service_tier`
+    parsing.
+  - OpenAI uses `api.js` for provider builders, default-model helpers, and
+    realtime provider builders.
+  - OpenRouter uses `api.js` for its provider builder plus onboarding/config
+    helpers, while `register.runtime.js` can still re-export generic
+    `plugin-sdk/provider-stream` helpers for repo-local use.
 - Facade-loaded public entry points prefer the active runtime config snapshot
   when one exists, then fall back to the resolved config file on disk when
   OpenClaw is not yet serving a runtime snapshot.
@@ -1313,6 +1343,18 @@ Example:
   }
 }
 ```
+
+Useful `openclaw.channel` fields beyond the minimal example:
+
+- `detailLabel`: secondary label for richer catalog/status surfaces
+- `docsLabel`: override link text for the docs link
+- `preferOver`: lower-priority plugin/channel ids this catalog entry should outrank
+- `selectionDocsPrefix`, `selectionDocsOmitLabel`, `selectionExtras`: selection-surface copy controls
+- `markdownCapable`: marks the channel as markdown-capable for outbound formatting decisions
+- `showConfigured`: hide the channel from configured-channel listing surfaces when set to `false`
+- `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
+- `forceAccountBinding`: require explicit account binding even when only one account exists
+- `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets
 
 OpenClaw can also merge **external channel catalogs** (for example, an MPM
 registry export). Drop a JSON file at one of:

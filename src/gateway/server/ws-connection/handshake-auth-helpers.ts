@@ -8,6 +8,7 @@ import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
 
 export const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+export const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 export type PairingLocalityKind = "direct_local" | "cli_container_local" | "remote";
 
 export type HandshakeBrowserSecurityContext = {
@@ -24,6 +25,18 @@ type HandshakeConnectAuth = {
   password?: string;
 };
 
+function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
+  const trimmedOrigin = requestOrigin?.trim();
+  if (!trimmedOrigin) {
+    return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
+  }
+  try {
+    return `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}${new URL(trimmedOrigin).origin.toLowerCase()}`;
+  } catch {
+    return BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP;
+  }
+}
+
 export function resolveHandshakeBrowserSecurityContext(params: {
   requestOrigin?: string;
   clientIp: string | undefined;
@@ -38,7 +51,7 @@ export function resolveHandshakeBrowserSecurityContext(params: {
     enforceOriginCheckForAnyClient: hasBrowserOriginHeader,
     rateLimitClientIp:
       hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
-        ? BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP
+        ? resolveBrowserOriginRateLimitKey(params.requestOrigin)
         : params.clientIp,
     authRateLimiter:
       hasBrowserOriginHeader && params.browserRateLimiter

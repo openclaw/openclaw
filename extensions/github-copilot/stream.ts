@@ -6,6 +6,7 @@ import {
   hasCopilotVisionInput,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 
 type StreamContext = Parameters<StreamFn>[1];
 
@@ -33,4 +34,8 @@ export function wrapCopilotAnthropicStream(baseStreamFn: StreamFn | undefined): 
       applyAnthropicEphemeralCacheControlMarkers,
     );
   };
+}
+
+export function wrapCopilotProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
+  return wrapCopilotAnthropicStream(ctx.streamFn);
 }

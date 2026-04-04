@@ -18,11 +18,18 @@ OpenClaw features that can generate provider usage or paid API calls.
 
 - `/status` shows the current session model, context usage, and last response tokens.
 - If the model uses **API-key auth**, `/status` also shows **estimated cost** for the last reply.
+- If live session metadata is sparse, `/status` can recover token/cache
+  counters and the active runtime model label from the latest transcript usage
+  entry. Existing nonzero live values still take precedence, and prompt-sized
+  transcript totals can win when stored totals are missing or smaller.
 
 **Per-message cost footer**
 
 - `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
 - `/usage tokens` shows tokens only; subscription-style OAuth, legacy token, and CLI flows hide dollar cost.
+- Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
+  `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
+  from `stats.input_tokens - stats.cached` when needed.
 
 Anthropic note: starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
 Anthropic says OpenClaw no longer uses included Claude subscription limits.
@@ -35,9 +42,16 @@ per-message dollar estimate that OpenClaw can show in `/usage full`.
 - `openclaw status --usage` and `openclaw channels list` show provider **usage windows**
   (quota snapshots, not per-message costs).
 - Human output is normalized to `X% left` across providers.
+- Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI,
+  OpenAI Codex, MiniMax, Xiaomi, and z.ai.
 - MiniMax note: its raw `usage_percent` / `usagePercent` fields mean remaining
   quota, so OpenClaw inverts them before display. Count-based fields still win
-  when present.
+  when present. If the provider returns `model_remains`, OpenClaw prefers the
+  chat-model entry, derives the window label from timestamps when needed, and
+  includes the model name in the plan label.
+- Usage auth for those quota windows comes from provider-specific hooks when
+  available; otherwise OpenClaw falls back to matching OAuth/API-key
+  credentials from auth profiles, env, or config.
 
 See [Token use & costs](/reference/token-use) for details and examples.
 

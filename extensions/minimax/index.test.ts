@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -149,5 +149,31 @@ describe("minimax provider hooks", () => {
       label: "MiniMax Search",
       envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
     });
+  });
+
+  it("prefers minimax-portal oauth when resolving MiniMax usage auth", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const apiProvider = requireRegisteredProvider(providers, "minimax");
+    const resolveOAuthToken = vi.fn(async (params?: { provider?: string }) =>
+      params?.provider === "minimax-portal" ? { token: "portal-oauth-token" } : null,
+    );
+    const resolveApiKeyFromConfigAndStore = vi.fn(() => undefined);
+
+    await expect(
+      apiProvider.resolveUsageAuth?.({
+        provider: "minimax",
+        config: {},
+        env: {},
+        resolveOAuthToken,
+        resolveApiKeyFromConfigAndStore,
+      } as never),
+    ).resolves.toEqual({ token: "portal-oauth-token" });
+
+    expect(resolveOAuthToken).toHaveBeenCalledWith({ provider: "minimax-portal" });
+    expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
   });
 });

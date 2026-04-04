@@ -104,7 +104,8 @@ Current bundled examples:
 - `anthropic-vertex`: Claude-only replay-policy guards on Anthropic-message
   traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
-  hints, Gemini thought-signature sanitation on proxy Gemini traffic, and
+  hints, Gemini thought-signature sanitation on proxy Gemini traffic, proxy
+  reasoning injection through the `openrouter-thinking` stream family, and
   cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
   Claude-thinking transcript hints, runtime token exchange, and usage endpoint
@@ -112,8 +113,9 @@ Current bundled examples:
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
   normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
   OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
-  normalization (`input` / `output` and `prompt` / `completion` families), and
-  provider-family metadata
+  normalization (`input` / `output` and `prompt` / `completion` families), the
+  shared `openai-responses-defaults` stream family for native OpenAI/Codex
+  wrappers, and provider-family metadata
 - `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
   native Gemini replay validation, bootstrap replay sanitation, tagged
   reasoning-output mode, and modern-model matching; Gemini CLI OAuth also owns
@@ -283,6 +285,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
   - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
+  - Gemini CLI JSON replies are parsed from `response`; usage falls back to
+    `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
 
 ### Z.AI (GLM)
 
@@ -328,8 +332,9 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/kilo/auto`
-- MiniMax: `minimax` (`MINIMAX_API_KEY`)
-- Example model: `minimax/MiniMax-M2.7`
+- MiniMax: `minimax` (API key) and `minimax-portal` (OAuth)
+- Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY` for `minimax-portal`
+- Example model: `minimax/MiniMax-M2.7` or `minimax-portal/MiniMax-M2.7`
 - MiniMax onboarding/API-key setup writes explicit M2.7 model definitions with
   `input: ["text", "image"]`; the bundled provider catalog keeps the chat refs
   text-only until that provider config is materialized
@@ -553,7 +558,8 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 - MiniMax OAuth (CN): `--auth-choice minimax-cn-oauth`
 - MiniMax API key (Global): `--auth-choice minimax-global-api`
 - MiniMax API key (CN): `--auth-choice minimax-cn-api`
-- Auth: `MINIMAX_API_KEY`
+- Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or
+  `MINIMAX_API_KEY` for `minimax-portal`
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 

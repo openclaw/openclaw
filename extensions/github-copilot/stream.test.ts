@@ -1,6 +1,6 @@
 import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream";
 import { describe, expect, it, vi } from "vitest";
-import { wrapCopilotAnthropicStream } from "./stream.js";
+import { wrapCopilotAnthropicStream, wrapCopilotProviderStream } from "./stream.js";
 
 describe("wrapCopilotAnthropicStream", () => {
   it("adds Copilot headers and Anthropic cache markers for Claude payloads", async () => {
@@ -87,5 +87,25 @@ describe("wrapCopilotAnthropicStream", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledWith(expect.anything(), expect.anything(), options);
+  });
+
+  it("adapts provider stream context without changing wrapper behavior", () => {
+    const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
+
+    const wrapped = wrapCopilotProviderStream({
+      streamFn: baseStreamFn,
+    } as never);
+
+    wrapped(
+      {
+        provider: "github-copilot",
+        api: "openai-responses",
+        id: "gpt-4.1",
+      } as never,
+      { messages: [{ role: "user", content: "hi" }] } as never,
+      {},
+    );
+
+    expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 });

@@ -17,17 +17,19 @@ object CanvasActionTrust {
     val normalizedCandidate = normalizeTrustedRemoteA2uiUri(candidateUri) ?: return false
 
     return trustedA2uiUrls.any { trusted ->
-      isTrustedA2uiPage(normalizedCandidate, trusted)
+      matchesTrustedRemoteA2uiUrlExact(normalizedCandidate, trusted)
     }
   }
 
-  private fun isTrustedA2uiPage(candidateUri: URI, trustedUrl: String): Boolean {
+  private fun matchesTrustedRemoteA2uiUrlExact(candidateUri: URI, trustedUrl: String): Boolean {
     val trustedUri = parseUri(trustedUrl) ?: return false
     val normalizedTrusted = normalizeTrustedRemoteA2uiUri(trustedUri) ?: return false
     return candidateUri == normalizedTrusted
   }
 
   private fun normalizeTrustedRemoteA2uiUri(uri: URI): URI? {
+    // Keep Android trust normalization aligned with iOS ScreenController:
+    // exact remote URL match, scheme/host normalized, fragment ignored.
     val scheme = uri.scheme?.lowercase() ?: return null
     if (scheme != "http" && scheme != "https") return null
 

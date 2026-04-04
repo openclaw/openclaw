@@ -120,7 +120,7 @@ describe("tools product copy", () => {
                 label: "Cron",
                 description: "Schedule and manage cron jobs.",
                 rawDescription:
-                  "Manage Gateway cron jobs and send wake events.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }",
+                  'Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
                 source: "core",
               },
             ],
@@ -130,7 +130,9 @@ describe("tools product copy", () => {
       { verbose: true },
     );
 
-    expect(text).toContain("Cron - Manage Gateway cron jobs and send wake events.");
+    expect(text).toContain(
+      'Cron - Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.',
+    );
     expect(text).not.toContain("ACTIONS:");
     expect(text).not.toContain("JOB SCHEMA:");
   });

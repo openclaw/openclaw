@@ -27,6 +27,10 @@ openclaw models scan
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview.
 When provider usage snapshots are available, the OAuth/API-key status section includes
 provider usage windows and quota snapshots.
+Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI
+Codex, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
+when available; otherwise OpenClaw falls back to matching OAuth/API-key
+credentials from auth profiles, env, or config.
 Add `--probe` to run live auth probes against each configured provider profile.
 Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent’s model/auth state. When omitted,

@@ -109,11 +109,17 @@ Look for:
 Common signatures:
 
 - `device identity required` → non-secure context or missing device auth.
+- `origin not allowed` → browser `Origin` is not in `gateway.controlUi.allowedOrigins`
+  (or you are connecting from a non-loopback browser origin without an explicit
+  allowlist).
 - `device nonce required` / `device nonce mismatch` → client is not completing the
   challenge-based device auth flow (`connect.challenge` + `device.nonce`).
 - `device signature invalid` / `device signature expired` → client signed the wrong
   payload (or stale timestamp) for the current handshake.
 - `AUTH_TOKEN_MISMATCH` with `canRetryWithDeviceToken=true` → client can do one trusted retry with cached device token.
+- `too many failed authentication attempts (retry later)` from a browser-origin
+  loopback client → repeated failures from that same normalized `Origin` are
+  locked out temporarily; another localhost origin uses a separate bucket.
 - repeated `unauthorized` after that retry → shared token/device token drift; refresh token config and re-approve/rotate device token if needed.
 - `gateway connect failed:` → wrong host/port/url target.
 

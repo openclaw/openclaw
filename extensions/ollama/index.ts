@@ -157,9 +157,7 @@ export default definePluginEntry({
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
-      wrapStreamFn: (ctx) => {
-        return createConfiguredOllamaCompatStreamWrapper(ctx);
-      },
+      wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
       createEmbeddingProvider: async ({ config, model, remote }) => {
         const { provider, client } = await createOllamaEmbeddingProvider({
           config,

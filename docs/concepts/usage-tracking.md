@@ -14,6 +14,11 @@ title: "Usage Tracking"
 - No estimated costs; only the provider-reported windows.
 - Human-readable status output is normalized to `X% left`, even when an
   upstream API reports consumed quota, remaining quota, or only raw counts.
+- Session-level `/status` and `session_status` can fall back to the latest
+  transcript usage entry when the live session snapshot is sparse. That
+  fallback fills missing token/cache counters, can recover the active runtime
+  model label, and prefers the larger prompt-oriented total when session
+  metadata is missing or smaller. Existing nonzero live values still win.
 
 ## Where it shows up
 
@@ -29,8 +34,26 @@ title: "Usage Tracking"
 - **Anthropic (Claude)**: OAuth tokens in auth profiles.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
 - **Gemini CLI**: OAuth tokens in auth profiles.
+  - JSON usage falls back to `stats`; `stats.cached` is normalized into
+    `cacheRead`.
 - **OpenAI Codex**: OAuth tokens in auth profiles (accountId used when present).
-- **MiniMax**: API key (coding plan key; `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`); uses the 5‑hour coding plan window. MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining** quota, so OpenClaw inverts them before display; count-based fields win when present.
+- **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
+  `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
+  surface, prefers stored MiniMax OAuth when present, and otherwise falls back
+  to `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`.
+  MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining**
+  quota, so OpenClaw inverts them before display; count-based fields win when
+  present.
+  - Coding-plan window labels come from provider hours/minutes fields when
+    present, then fall back to the `start_time` / `end_time` span.
+  - If the coding-plan endpoint returns `model_remains`, OpenClaw prefers the
+    chat-model entry, derives the window label from timestamps when explicit
+    `window_hours` / `window_minutes` fields are absent, and includes the model
+    name in the plan label.
+- **Xiaomi MiMo**: API key via env/config/auth store (`XIAOMI_API_KEY`).
 - **z.ai**: API key via env/config/auth store.
 
-Usage is hidden if no matching OAuth/API credentials exist.
+Usage is hidden when no usable provider usage auth can be resolved. Providers
+can supply plugin-specific usage auth logic; otherwise OpenClaw falls back to
+matching OAuth/API-key credentials from auth profiles, environment variables,
+or config.
