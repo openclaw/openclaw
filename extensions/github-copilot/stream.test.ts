@@ -49,6 +49,8 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
     expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
       headers: {
+        "Editor-Version": "vscode/1.96.2",
+        "User-Agent": "GitHubCopilotChat/0.26.7",
         "X-Initiator": "user",
         "Openai-Intent": "conversation-edits",
         "Copilot-Vision-Request": "true",
