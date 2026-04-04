@@ -113,4 +113,72 @@ describe("prompt cache observability", () => {
       }),
     ).toBeNull();
   });
+
+  it("ignores missing usage and preserves the previous cache-read baseline", () => {
+    beginPromptCacheObservation({
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      cacheRetention: "long",
+      streamStrategy: "boundary-aware:openai-responses",
+      transport: "sse",
+      systemPrompt: "stable system",
+      toolNames: ["read"],
+    });
+    completePromptCacheObservation({
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      usage: { cacheRead: 8_000 },
+    });
+
+    beginPromptCacheObservation({
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      cacheRetention: "short",
+      streamStrategy: "boundary-aware:openai-responses",
+      transport: "websocket",
+      systemPrompt: "stable system with hook change",
+      toolNames: ["read"],
+    });
+
+    expect(
+      completePromptCacheObservation({
+        sessionId: "session-1",
+        sessionKey: "agent:main",
+      }),
+    ).toBeNull();
+
+    const resumed = beginPromptCacheObservation({
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      cacheRetention: "short",
+      streamStrategy: "boundary-aware:openai-responses",
+      transport: "websocket",
+      systemPrompt: "stable system with hook change",
+      toolNames: ["read"],
+    });
+
+    expect(resumed.previousCacheRead).toBe(8_000);
+    expect(resumed.changes).toBeNull();
+
+    expect(
+      completePromptCacheObservation({
+        sessionId: "session-1",
+        sessionKey: "agent:main",
+        usage: { cacheRead: 2_000 },
+      }),
+    ).toEqual({
+      previousCacheRead: 8_000,
+      cacheRead: 2_000,
+      changes: null,
+    });
+  });
 });

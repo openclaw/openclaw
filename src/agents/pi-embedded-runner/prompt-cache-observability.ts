@@ -166,7 +166,11 @@ export function completePromptCacheObservation(params: {
     return null;
   }
 
-  const cacheRead = params.usage?.cacheRead ?? 0;
+  const cacheRead = params.usage?.cacheRead;
+  if (typeof cacheRead !== "number" || !Number.isFinite(cacheRead)) {
+    tracker.pendingChanges = null;
+    return null;
+  }
   const previousCacheRead = tracker.lastCacheRead;
   tracker.lastCacheRead = cacheRead;
 
