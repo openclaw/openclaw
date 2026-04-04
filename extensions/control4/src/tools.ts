@@ -8,12 +8,25 @@ function isControllable(item: C4Item): boolean {
   return !STRUCTURAL_TYPES.has(item.typeName);
 }
 
+const QUERY_STOP_WORDS = new Set([
+  "a", "an", "the", "my", "all", "and", "or", "is", "in", "on", "at",
+  "to", "for", "of", "off", "turn", "set", "get", "show", "tell", "with",
+]);
+
 function itemMatchesQuery(item: C4Item, query: string): boolean {
-  const q = query.toLowerCase();
+  // Split the query into meaningful tokens; each token is OR-ed across fields.
+  const terms = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 1 && !QUERY_STOP_WORDS.has(t));
+
+  if (terms.length === 0) return true;
+
   const name = item.name.toLowerCase();
   const room = (item.roomName ?? "").toLowerCase();
   const type = item.typeName.toLowerCase();
-  return name.includes(q) || room.includes(q) || type.includes(q);
+  const haystack = `${name} ${room} ${type}`;
+  return terms.some((term) => haystack.includes(term));
 }
 
 /** Tool 1: Find devices by name, room, or type. */
