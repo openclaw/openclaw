@@ -889,6 +889,7 @@ Options:
 - `--json`
 - `--timeout <ms>`
 - `--verbose`
+- `--debug` (alias for `--verbose`)
 
 ### `sessions`
 
@@ -906,6 +907,10 @@ Options:
 Subcommands:
 
 - `sessions cleanup` — remove expired or orphaned sessions
+
+Notes:
+
+- `sessions cleanup` also supports `--fix-missing` to prune entries whose transcript files are gone.
 
 ## Reset / Uninstall
 
