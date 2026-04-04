@@ -1,8 +1,5 @@
+import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
 import { listDescendantRunsForRequester } from "../../agents/subagent-registry-read.js";
-import {
-  readLatestAssistantReply,
-  waitForAgentRunsUntilQuiescent,
-} from "../../agents/tools/agent-step.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 export { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
@@ -100,11 +97,11 @@ export async function waitForDescendantSubagentSummary(params: {
     return initialReply;
   }
 
-  // --- Push-based wait for all active descendants ---
-  // We iterate in case first-level descendants spawn their own subagents while
-  // we wait, so new active runs can appear between rounds.
-  await waitForAgentRunsUntilQuiescent({
+  // Wait until no descendant runs remain active. Descendants can finish and
+  // spawn more descendants, so the helper refreshes the run set until it drains.
+  await waitForAgentRunsToDrain({
     deadlineAtMs: deadline,
+    initialPendingRunIds: initialActiveRuns.map((entry) => entry.runId),
     getPendingRunIds: () => getActiveRuns().map((entry) => entry.runId),
   });
 

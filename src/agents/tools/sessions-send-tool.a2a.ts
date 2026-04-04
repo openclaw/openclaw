@@ -4,7 +4,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
-import { readLatestAssistantReply, runAgentStep, waitForAgentRun } from "./agent-step.js";
+import { readLatestAssistantReply, waitForAgentRun } from "../run-wait.js";
+import { runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   buildAgentToAgentAnnounceContext,

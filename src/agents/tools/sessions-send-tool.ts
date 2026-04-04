@@ -12,7 +12,7 @@ import { AGENT_LANE_NESTED } from "../lanes.js";
 import {
   readLatestAssistantReplySnapshot,
   waitForAgentRunAndReadUpdatedAssistantReply,
-} from "./agent-step.js";
+} from "../run-wait.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {

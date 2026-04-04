@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
+vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
@@ -10,9 +10,9 @@ import {
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
-  waitForAgentRunsUntilQuiescent,
+  waitForAgentRunsToDrain,
   waitForAgentRunAndReadUpdatedAssistantReply,
-} from "./agent-step.js";
+} from "./run-wait.js";
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
@@ -181,7 +181,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
   });
 });
 
-describe("waitForAgentRunsUntilQuiescent", () => {
+describe("waitForAgentRunsToDrain", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
     __testing.setDepsForTest({
@@ -204,7 +204,7 @@ describe("waitForAgentRunsUntilQuiescent", () => {
       return { status: "ok" };
     });
 
-    const result = await waitForAgentRunsUntilQuiescent({
+    const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
       getPendingRunIds: () => activeRunIds,
     });
@@ -236,13 +236,45 @@ describe("waitForAgentRunsUntilQuiescent", () => {
 
   it("deduplicates and trims pending run ids", async () => {
     callGatewayMock.mockResolvedValue({ status: "ok" });
+    let activeRunIds = [" run-1 ", "run-1", "", "run-2"];
 
-    const result = await waitForAgentRunsUntilQuiescent({
+    const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
-      getPendingRunIds: () => [" run-1 ", "run-1", "", "run-2"],
+      getPendingRunIds: () => {
+        const current = activeRunIds;
+        activeRunIds = [];
+        return current;
+      },
     });
 
     expect(result.timedOut).toBe(false);
     expect(callGatewayMock.mock.calls).toHaveLength(2);
+  });
+
+  it("keeps the initial pending run ids before refreshing", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+    let activeRunIds = ["run-2"];
+
+    const result = await waitForAgentRunsToDrain({
+      timeoutMs: 1_000,
+      initialPendingRunIds: ["run-1"],
+      getPendingRunIds: () => {
+        const current = activeRunIds;
+        activeRunIds = [];
+        return current;
+      },
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(callGatewayMock.mock.calls.map((call) => call[0])).toEqual([
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({ runId: "run-1" }),
+      }),
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({ runId: "run-2" }),
+      }),
+    ]);
   });
 });

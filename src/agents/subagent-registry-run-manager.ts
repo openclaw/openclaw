@@ -3,6 +3,7 @@ import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -21,7 +22,6 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { waitForAgentRun } from "./tools/agent-step.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 

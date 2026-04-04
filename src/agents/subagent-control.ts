@@ -26,6 +26,10 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { abortEmbeddedPiRun } from "./pi-embedded.js";
+import {
+  readLatestAssistantReplySnapshot,
+  waitForAgentRunAndReadUpdatedAssistantReply,
+} from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
 import {
   clearSubagentRunSteerRestart,
@@ -39,10 +43,6 @@ import {
   replaceSubagentRunAfterSteer,
   type SubagentRunRecord,
 } from "./subagent-registry.js";
-import {
-  readLatestAssistantReplySnapshot,
-  waitForAgentRunAndReadUpdatedAssistantReply,
-} from "./tools/agent-step.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 export const DEFAULT_RECENT_MINUTES = 30;
