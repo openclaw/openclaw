@@ -53,7 +53,10 @@ type GoogleGenerateImageResponse = {
 };
 
 function resolveGoogleBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
-  return normalizeGoogleApiBaseUrl(cfg?.models?.providers?.google?.baseUrl);
+  // Strip the /openai suffix if present: native Gemini image API does not use
+  // the OpenAI-compatible endpoint and returns HTTP 404 when it is included.
+  const raw = normalizeGoogleApiBaseUrl(cfg?.models?.providers?.google?.baseUrl);
+  return raw.replace(/\/openai$/, "");
 }
 
 function normalizeGoogleImageModel(model: string | undefined): string {
