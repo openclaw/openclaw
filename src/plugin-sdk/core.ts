@@ -16,7 +16,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelMeta } from "../channels/plugins/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
@@ -25,7 +25,7 @@ import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
 
 export type {
   AnyAgentTool,
@@ -356,13 +356,35 @@ export function buildChannelOutboundSessionRoute(params: {
   };
 }
 
+const emptyChannelConfigSchema: ChannelConfigSchema = {
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {},
+  },
+  runtime: {
+    safeParse(value: unknown) {
+      if (value === undefined) {
+        return { success: true, data: undefined };
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return { success: false, issues: [{ path: [], message: "expected config object" }] };
+      }
+      if (Object.keys(value as Record<string, unknown>).length > 0) {
+        return { success: false, issues: [{ path: [], message: "config must be empty" }] };
+      }
+      return { success: true, data: value };
+    },
+  },
+};
+
 /** Options for a channel plugin entry that should register a channel capability. */
 type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   id: string;
   name: string;
   description: string;
   plugin: TPlugin;
-  configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
+  configSchema?: ChannelConfigSchema | (() => ChannelConfigSchema);
   setRuntime?: (runtime: PluginRuntime) => void;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
@@ -372,7 +394,7 @@ type DefinedChannelPluginEntry<TPlugin> = {
   id: string;
   name: string;
   description: string;
-  configSchema: OpenClawPluginConfigSchema;
+  configSchema: ChannelConfigSchema;
   register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
@@ -430,15 +452,16 @@ export function defineChannelPluginEntry<TPlugin>({
   name,
   description,
   plugin,
-  configSchema = emptyPluginConfigSchema,
+  configSchema = emptyChannelConfigSchema,
   setRuntime,
   registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  let resolvedConfigSchema: ChannelPlugin<TResolvedAccount>["configSchema"] | undefined;
-  const getConfigSchema = (): ChannelPlugin<TResolvedAccount>["configSchema"] => {
+  let resolvedConfigSchema: ChannelConfigSchema | undefined;
+  const getConfigSchema = (): ChannelConfigSchema => {
     resolvedConfigSchema ??=
-      typeof configSchema === "function" ? configSchema() : configSchema;
+      (typeof configSchema === "function" ? configSchema() : configSchema) ??
+      emptyChannelConfigSchema;
     return resolvedConfigSchema;
   };
   const entry = {
