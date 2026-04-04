@@ -219,8 +219,10 @@ final class WebChatSwiftUIWindowController {
     private let sessionKey: String
     private let hosting: NSHostingController<OpenClawChatView>
     private let contentController: NSViewController
+    private let viewModel: OpenClawChatViewModel
     private var window: NSWindow?
     private var dismissMonitor: Any?
+    private var talkSyncTask: Task<Void, Never>?
     var onClosed: (() -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -231,23 +233,35 @@ final class WebChatSwiftUIWindowController {
     init(sessionKey: String, presentation: WebChatPresentation, transport: any OpenClawChatTransport) {
         self.sessionKey = sessionKey
         self.presentation = presentation
+        let appState = AppStateStore.shared
         let vm = OpenClawChatViewModel(
             sessionKey: sessionKey,
             transport: transport,
             initialThinkingLevel: Self.persistedThinkingLevel(),
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
+            },
+            talkAvailable: voiceWakeSupported,
+            talkEnabled: appState.talkEnabled,
+            onTalkToggle: { enabled in
+                Task { await appState.setTalkEnabled(enabled) }
             })
-        let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
+        self.viewModel = vm
+        let accent = Self.color(fromHex: appState.seamColorHex)
         self.hosting = NSHostingController(rootView: OpenClawChatView(
             viewModel: vm,
             showsSessionSwitcher: true,
             userAccent: accent))
         self.contentController = Self.makeContentController(for: presentation, hosting: self.hosting)
         self.window = Self.makeWindow(for: presentation, contentViewController: self.contentController)
+        self.talkSyncTask = Task { [weak self] in
+            await self?.observeTalkState()
+        }
     }
 
-    deinit {}
+    deinit {
+        self.talkSyncTask?.cancel()
+    }
 
     var isVisible: Bool {
         self.window?.isVisible ?? false
@@ -334,6 +348,22 @@ final class WebChatSwiftUIWindowController {
 
     private func removeDismissMonitor() {
         OverlayPanelFactory.clearGlobalEventMonitor(&self.dismissMonitor)
+    }
+
+    private func observeTalkState() async {
+        let appState = AppStateStore.shared
+        while !Task.isCancelled {
+            let enabled = await withCheckedContinuation { continuation in
+                withObservationTracking {
+                    _ = appState.talkEnabled
+                } onChange: {
+                    Task { @MainActor in
+                        continuation.resume(returning: appState.talkEnabled)
+                    }
+                }
+            }
+            self.viewModel.updateTalkState(enabled: enabled, available: voiceWakeSupported)
+        }
     }
 
     private static func persistedThinkingLevel() -> String? {

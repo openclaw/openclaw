@@ -29,6 +29,8 @@ public final class OpenClawChatViewModel {
     public var attachments: [OpenClawPendingAttachment] = []
     public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
+    public private(set) var talkEnabled: Bool = false
+    public private(set) var talkAvailable: Bool = false
 
     public private(set) var sessionKey: String
     public private(set) var sessionId: String?
@@ -39,6 +41,7 @@ public final class OpenClawChatViewModel {
     private var sessionDefaults: OpenClawChatSessionsDefaults?
     private let prefersExplicitThinkingLevel: Bool
     private let onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)?
+    private let onTalkToggle: (@MainActor @Sendable (Bool) -> Void)?
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
@@ -77,7 +80,10 @@ public final class OpenClawChatViewModel {
         sessionKey: String,
         transport: any OpenClawChatTransport,
         initialThinkingLevel: String? = nil,
-        onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil)
+        onThinkingLevelChanged: (@MainActor @Sendable (String) -> Void)? = nil,
+        talkAvailable: Bool = false,
+        talkEnabled: Bool = false,
+        onTalkToggle: (@MainActor @Sendable (Bool) -> Void)? = nil)
     {
         self.sessionKey = sessionKey
         self.transport = transport
@@ -85,6 +91,9 @@ public final class OpenClawChatViewModel {
         self.thinkingLevel = normalizedThinkingLevel ?? "off"
         self.prefersExplicitThinkingLevel = normalizedThinkingLevel != nil
         self.onThinkingLevelChanged = onThinkingLevelChanged
+        self.talkAvailable = talkAvailable
+        self.talkEnabled = talkEnabled
+        self.onTalkToggle = onTalkToggle
 
         self.eventTask = Task { [weak self] in
             guard let self else { return }
@@ -207,6 +216,20 @@ public final class OpenClawChatViewModel {
 
     public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
         self.attachments.removeAll { $0.id == id }
+    }
+
+    public var showsTalkToggle: Bool {
+        self.talkAvailable && self.onTalkToggle != nil
+    }
+
+    public func toggleTalk() {
+        let next = !self.talkEnabled
+        self.onTalkToggle?(next)
+    }
+
+    public func updateTalkState(enabled: Bool, available: Bool) {
+        self.talkEnabled = enabled
+        self.talkAvailable = available
     }
 
     public var canSend: Bool {

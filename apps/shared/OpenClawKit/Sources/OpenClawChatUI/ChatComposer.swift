@@ -34,6 +34,7 @@ struct OpenClawChatComposer: View {
                     }
                     self.thinkingPicker
                     Spacer()
+                    self.talkToggle
                     self.refreshButton
                     self.attachmentPicker
                 }
@@ -334,6 +335,21 @@ struct OpenClawChatComposer: View {
                 .background(Circle().fill(Color.accentColor))
                 .disabled(!self.viewModel.canSend)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var talkToggle: some View {
+        if self.viewModel.showsTalkToggle {
+            Button {
+                self.viewModel.toggleTalk()
+            } label: {
+                Image(systemName: self.viewModel.talkEnabled ? "waveform.circle.fill" : "waveform.circle")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .tint(self.viewModel.talkEnabled ? .accentColor : nil)
+            .help(self.viewModel.talkEnabled ? "Stop Talk Mode" : "Talk Mode")
         }
     }
 
