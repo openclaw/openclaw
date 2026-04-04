@@ -29,7 +29,6 @@ import {
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
-import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -49,7 +48,6 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleCommandsListCommand,
     handleToolsCommand,
     handleStatusCommand,
-    handleTasksCommand,
     handleAllowlistCommand,
     handleApproveCommand,
     handleContextCommand,

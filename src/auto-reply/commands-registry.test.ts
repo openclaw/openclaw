@@ -30,7 +30,6 @@ afterEach(() => {
 describe("commands registry", () => {
   it("builds command text with args", () => {
     expect(buildCommandText("status")).toBe("/status");
-    expect(buildCommandText("tasks")).toBe("/tasks");
     expect(buildCommandText("model", "gpt-5")).toBe("/model gpt-5");
     expect(buildCommandText("models")).toBe("/models");
   });
@@ -40,7 +39,6 @@ describe("commands registry", () => {
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "skill")).toBeTruthy();
-    expect(specs.find((spec) => spec.name === "tasks")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeTruthy();
   });
