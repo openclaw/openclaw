@@ -1,12 +1,12 @@
-import { listBundledChannelPlugins } from "../bundled.js";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { listBundledChannelPlugins, setBundledChannelRuntime } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
-import {
-  channelPluginSurfaceKeys,
-  type ChannelPluginSurface,
-} from "./manifest.js";
+import { channelPluginSurfaceKeys, type ChannelPluginSurface } from "./manifest.js";
+
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
 
 type SurfaceContractEntry = {
   id: string;
@@ -22,7 +22,7 @@ type SurfaceContractEntry = {
     | "directory"
     | "gateway"
   >;
-  expectedSurfaces: ChannelPluginSurface[];
+  surfaces: readonly ChannelPluginSurface[];
 };
 
 type ThreadingContractEntry = {
@@ -33,7 +33,9 @@ type ThreadingContractEntry = {
 type DirectoryContractEntry = {
   id: string;
   plugin: Pick<ChannelPlugin, "id" | "directory">;
-  coverage?: "lookups" | "presence";
+  coverage: "lookups" | "presence";
+  cfg?: OpenClawConfig;
+  accountId?: string;
 };
 
 const sendMessageMatrixMock = vi.hoisted(() =>
@@ -69,41 +71,34 @@ let surfaceContractRegistryCache: SurfaceContractEntry[] | undefined;
 let threadingContractRegistryCache: ThreadingContractEntry[] | undefined;
 let directoryContractRegistryCache: DirectoryContractEntry[] | undefined;
 
-const directoryPresenceOnlyIds = new Set<string>(["whatsapp", "zalouser"]);
-
-function resolveSurfacesFromPlugin(plugin: ChannelPlugin): ChannelPluginSurface[] {
-  const surfaces: ChannelPluginSurface[] = [];
-  for (const surface of channelPluginSurfaceKeys) {
-    if (plugin[surface] !== undefined) {
-      surfaces.push(surface);
-    }
-  }
-  return surfaces;
-}
-
 export function getSurfaceContractRegistry(): SurfaceContractEntry[] {
   surfaceContractRegistryCache ??= listBundledChannelPlugins().map((plugin) => ({
     id: plugin.id,
     plugin,
-    expectedSurfaces: resolveSurfacesFromPlugin(plugin),
+    surfaces: channelPluginSurfaceKeys.filter((surface) => Boolean(plugin[surface])),
   }));
   return surfaceContractRegistryCache;
 }
 
 export function getThreadingContractRegistry(): ThreadingContractEntry[] {
-  threadingContractRegistryCache ??= listBundledChannelPlugins()
-    .filter((plugin) => Boolean(plugin.threading))
-    .map((plugin) => ({ id: plugin.id, plugin }));
+  threadingContractRegistryCache ??= getSurfaceContractRegistry()
+    .filter((entry) => entry.surfaces.includes("threading"))
+    .map((entry) => ({
+      id: entry.id,
+      plugin: entry.plugin,
+    }));
   return threadingContractRegistryCache;
 }
 
+const directoryPresenceOnlyIds = new Set(["whatsapp", "zalouser"]);
+
 export function getDirectoryContractRegistry(): DirectoryContractEntry[] {
-  directoryContractRegistryCache ??= listBundledChannelPlugins()
-    .filter((plugin) => Boolean(plugin.directory))
-    .map((plugin) => ({
-      id: plugin.id,
-      plugin,
-      coverage: directoryPresenceOnlyIds.has(plugin.id) ? "presence" : "lookups",
+  directoryContractRegistryCache ??= getSurfaceContractRegistry()
+    .filter((entry) => entry.surfaces.includes("directory"))
+    .map((entry) => ({
+      id: entry.id,
+      plugin: entry.plugin,
+      coverage: directoryPresenceOnlyIds.has(entry.id) ? "presence" : "lookups",
     }));
   return directoryContractRegistryCache;
 }
