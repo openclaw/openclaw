@@ -8,36 +8,16 @@ import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-runtime.js";
-import {
-  createAnthropicBetaHeadersWrapper,
-  createBedrockNoCacheWrapper,
-  createAnthropicFastModeWrapper,
-  createAnthropicToolPayloadCompatibilityWrapper,
-  isAnthropicBedrockModel,
-  resolveAnthropicFastMode,
-  resolveAnthropicBetas,
-  resolveCacheRetention,
-} from "./anthropic-stream-wrappers.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
+import { resolveCacheRetention } from "./anthropic-cache-retention.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
-import { createMinimaxFastModeWrapper } from "./minimax-stream-wrappers.js";
 import {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
   createSiliconFlowThinkingWrapper,
-  shouldApplyMoonshotPayloadCompat,
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
-import {
-  createOpenAIAttributionHeadersWrapper,
-  createOpenAIDefaultTransportWrapper,
-  createOpenAIFastModeWrapper,
-  createOpenAIResponsesContextManagementWrapper,
-  createOpenAIServiceTierWrapper,
-  resolveOpenAIFastMode,
-  resolveOpenAIServiceTier,
-} from "./openai-stream-wrappers.js";
-import { createXaiFastModeWrapper } from "./xai-stream-wrappers.js";
+import { createOpenAIResponsesContextManagementWrapper } from "./openai-stream-wrappers.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
@@ -76,6 +56,7 @@ export function resolveExtraParams(params: {
   modelId: string;
   agentId?: string;
 }): Record<string, unknown> | undefined {
+  const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
   const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
@@ -84,19 +65,29 @@ export function resolveExtraParams(params: {
       ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
       : undefined;
 
-  if (!globalParams && !agentParams) {
+  if (!defaultParams && !globalParams && !agentParams) {
     return undefined;
   }
 
-  const merged = Object.assign({}, globalParams, agentParams);
+  const merged = Object.assign({}, defaultParams, globalParams, agentParams);
   const resolvedParallelToolCalls = resolveAliasedParamValue(
-    [globalParams, agentParams],
+    [defaultParams, globalParams, agentParams],
     "parallel_tool_calls",
     "parallelToolCalls",
   );
   if (resolvedParallelToolCalls !== undefined) {
     merged.parallel_tool_calls = resolvedParallelToolCalls;
     delete merged.parallelToolCalls;
+  }
+
+  const resolvedTextVerbosity = resolveAliasedParamValue(
+    [globalParams, agentParams],
+    "text_verbosity",
+    "textVerbosity",
+  );
+  if (resolvedTextVerbosity !== undefined) {
+    merged.text_verbosity = resolvedTextVerbosity;
+    delete merged.textVerbosity;
   }
 
   return merged;
@@ -189,6 +180,7 @@ function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  model?: ProviderRuntimeModel,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined;
@@ -214,21 +206,33 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.openaiWsWarmup === "boolean") {
     streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
-  const cacheRetention = resolveCacheRetention(extraParams, provider);
-  if (cacheRetention) {
-    streamParams.cacheRetention = cacheRetention;
+  const initialCacheRetention = resolveCacheRetention(
+    extraParams,
+    provider,
+    typeof model?.api === "string" ? model.api : undefined,
+    typeof model?.id === "string" ? model.id : undefined,
+  );
+  if (Object.keys(streamParams).length > 0 || initialCacheRetention) {
+    const debugParams = initialCacheRetention
+      ? { ...streamParams, cacheRetention: initialCacheRetention }
+      : streamParams;
+    log.debug(`creating streamFn wrapper with params: ${JSON.stringify(debugParams)}`);
   }
-
-  if (Object.keys(streamParams).length === 0) {
-    return undefined;
-  }
-
-  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
 
   const underlying = baseStreamFn ?? streamSimple;
-  const wrappedStreamFn: StreamFn = (model, context, options) => {
-    return underlying(model, context, {
+  const wrappedStreamFn: StreamFn = (callModel, context, options) => {
+    const cacheRetention = resolveCacheRetention(
+      extraParams,
+      provider,
+      typeof callModel.api === "string" ? callModel.api : undefined,
+      typeof callModel.id === "string" ? callModel.id : undefined,
+    );
+    if (Object.keys(streamParams).length === 0 && !cacheRetention) {
+      return underlying(callModel, context, options);
+    }
+    return underlying(callModel, context, {
       ...streamParams,
+      ...(cacheRetention ? { cacheRetention } : {}),
       ...options,
     });
   };
@@ -264,23 +268,99 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (model.api !== "openai-completions" && model.api !== "openai-responses") {
+    if (
+      model.api !== "openai-completions" &&
+      model.api !== "openai-responses" &&
+      model.api !== "azure-openai-responses"
+    ) {
       return underlying(model, context, options);
     }
     log.debug(
       `applying parallel_tool_calls=${enabled} for ${model.provider ?? "unknown"}/${model.id ?? "unknown"} api=${model.api}`,
     );
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          (payload as Record<string, unknown>).parallel_tool_calls = enabled;
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      payloadObj.parallel_tool_calls = enabled;
     });
   };
+}
+
+type ApplyExtraParamsContext = {
+  agent: { streamFn?: StreamFn };
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelId: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  thinkingLevel?: ThinkLevel;
+  model?: ProviderRuntimeModel;
+  effectiveExtraParams: Record<string, unknown>;
+  resolvedExtraParams?: Record<string, unknown>;
+  override?: Record<string, unknown>;
+};
+
+function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    ctx.agent.streamFn,
+    ctx.effectiveExtraParams,
+    ctx.provider,
+    ctx.model,
+  );
+
+  if (wrappedStreamFn) {
+    log.debug(`applying extraParams to agent streamFn for ${ctx.provider}/${ctx.modelId}`);
+    ctx.agent.streamFn = wrappedStreamFn;
+  }
+
+  if (
+    shouldApplySiliconFlowThinkingOffCompat({
+      provider: ctx.provider,
+      modelId: ctx.modelId,
+      thinkingLevel: ctx.thinkingLevel,
+    })
+  ) {
+    log.debug(
+      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${ctx.provider}/${ctx.modelId})`,
+    );
+    ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
+  }
+}
+
+function applyPostPluginStreamWrappers(
+  ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
+): void {
+  if (!ctx.providerWrapperHandled) {
+    // Guard Google-family payloads against invalid negative thinking budgets
+    // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
+    ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
+
+    // Work around upstream pi-ai hardcoding `store: false` for Responses API.
+    // Force `store=true` for direct OpenAI Responses models and auto-enable
+    // server-side compaction for compatible Responses payloads.
+    ctx.agent.streamFn = createOpenAIResponsesContextManagementWrapper(
+      ctx.agent.streamFn,
+      ctx.effectiveExtraParams,
+    );
+  }
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [ctx.resolvedExtraParams, ctx.override],
+    "parallel_tool_calls",
+    "parallelToolCalls",
+  );
+  if (rawParallelToolCalls === undefined) {
+    return;
+  }
+  if (typeof rawParallelToolCalls === "boolean") {
+    ctx.agent.streamFn = createParallelToolCallsWrapper(ctx.agent.streamFn, rawParallelToolCalls);
+    return;
+  }
+  if (rawParallelToolCalls === null) {
+    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
+    return;
+  }
+  const summary =
+    typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
+  log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
 }
 
 /**
@@ -298,6 +378,8 @@ export function applyExtraParamsToAgent(
   thinkingLevel?: ThinkLevel,
   agentId?: string,
   workspaceDir?: string,
+  model?: ProviderRuntimeModel,
+  agentDir?: string,
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -320,45 +402,20 @@ export function applyExtraParamsToAgent(
     agentId,
     resolvedExtraParams,
   });
-
-  if (provider === "openai" || provider === "openai-codex") {
-    if (provider === "openai") {
-      // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
-      agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
-    }
-    agent.streamFn = createOpenAIAttributionHeadersWrapper(agent.streamFn);
-  }
-
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    agent.streamFn,
-    effectiveExtraParams,
+  const wrapperContext: ApplyExtraParamsContext = {
+    agent,
+    cfg,
     provider,
-  );
-
-  if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
-    agent.streamFn = wrappedStreamFn;
-  }
-
-  const anthropicBetas = resolveAnthropicBetas(effectiveExtraParams, provider, modelId);
-  if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
-  }
-
-  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
-    );
-    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
-  }
-
-  agent.streamFn = createAnthropicToolPayloadCompatibilityWrapper(agent.streamFn, {
-    config: cfg,
+    modelId,
+    agentDir,
     workspaceDir,
-  });
+    thinkingLevel,
+    model,
+    effectiveExtraParams,
+    resolvedExtraParams,
+    override,
+  };
+
   const providerStreamBase = agent.streamFn;
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
@@ -369,86 +426,20 @@ export function applyExtraParamsToAgent(
       modelId,
       extraParams: effectiveExtraParams,
       thinkingLevel,
+      model,
       streamFn: providerStreamBase,
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
+  // Apply caller/config extra params outside provider defaults so explicit values
+  // like `openaiWsWarmup=false` can override provider-added defaults.
+  applyPrePluginStreamWrappers(wrapperContext);
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
-
-  if (!providerWrapperHandled && shouldApplyMoonshotPayloadCompat({ provider, modelId })) {
-    // Preserve the legacy Moonshot compatibility path when no plugin wrapper
-    // actually handled the stream function. This covers tests/disabled plugins
-    // and Ollama Cloud Kimi models until they gain a dedicated runtime hook.
-    const thinkingType = resolveMoonshotThinkingType({
-      configuredThinking: effectiveExtraParams?.thinking,
-      thinkingLevel,
-    });
-    agent.streamFn = createMoonshotThinkingWrapper(agent.streamFn, thinkingType);
-  }
-
-  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
-    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
-    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
-  }
-
-  // Guard Google payloads against invalid negative thinking budgets emitted by
-  // upstream model-ID heuristics for Gemini 3.1 variants.
-  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
-
-  const anthropicFastMode = resolveAnthropicFastMode(effectiveExtraParams);
-  if (anthropicFastMode !== undefined) {
-    log.debug(`applying Anthropic fast mode=${anthropicFastMode} for ${provider}/${modelId}`);
-    agent.streamFn = createAnthropicFastModeWrapper(agent.streamFn, anthropicFastMode);
-  }
-
-  if (typeof effectiveExtraParams?.fastMode === "boolean") {
-    log.debug(
-      `applying MiniMax fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`,
-    );
-    agent.streamFn = createMinimaxFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
-    log.debug(`applying xAI fast mode=${effectiveExtraParams.fastMode} for ${provider}/${modelId}`);
-    agent.streamFn = createXaiFastModeWrapper(agent.streamFn, effectiveExtraParams.fastMode);
-  }
-
-  const openAIFastMode = resolveOpenAIFastMode(effectiveExtraParams);
-  if (openAIFastMode) {
-    log.debug(`applying OpenAI fast mode for ${provider}/${modelId}`);
-    agent.streamFn = createOpenAIFastModeWrapper(agent.streamFn);
-  }
-
-  const openAIServiceTier = resolveOpenAIServiceTier(effectiveExtraParams);
-  if (openAIServiceTier) {
-    log.debug(`applying OpenAI service_tier=${openAIServiceTier} for ${provider}/${modelId}`);
-    agent.streamFn = createOpenAIServiceTierWrapper(agent.streamFn, openAIServiceTier);
-  }
-
-  // Work around upstream pi-ai hardcoding `store: false` for Responses API.
-  // Force `store=true` for direct OpenAI Responses models and auto-enable
-  // server-side compaction for compatible OpenAI Responses payloads.
-  agent.streamFn = createOpenAIResponsesContextManagementWrapper(
-    agent.streamFn,
-    effectiveExtraParams,
-  );
-
-  const rawParallelToolCalls = resolveAliasedParamValue(
-    [resolvedExtraParams, override],
-    "parallel_tool_calls",
-    "parallelToolCalls",
-  );
-  if (rawParallelToolCalls !== undefined) {
-    if (typeof rawParallelToolCalls === "boolean") {
-      agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
-    } else if (rawParallelToolCalls === null) {
-      log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-    } else {
-      const summary =
-        typeof rawParallelToolCalls === "string"
-          ? rawParallelToolCalls
-          : typeof rawParallelToolCalls;
-      log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
-    }
-  }
+  applyPostPluginStreamWrappers({
+    ...wrapperContext,
+    providerWrapperHandled,
+  });
 
   return { effectiveExtraParams };
 }

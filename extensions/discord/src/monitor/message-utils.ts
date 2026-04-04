@@ -1,10 +1,11 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import { fetchRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { mergeAbortSignals } from "./timeouts.js";
 
 const DISCORD_CDN_HOSTNAMES = [
   "cdn.discordapp.com",
@@ -57,6 +58,14 @@ export type DiscordMediaInfo = {
   path: string;
   contentType?: string;
   placeholder: string;
+};
+
+type DiscordMediaResolveOptions = {
+  fetchImpl?: FetchLike;
+  ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 };
 
 export type DiscordChannelInfo = {
@@ -209,26 +218,31 @@ export function hasDiscordMessageStickers(message: Message): boolean {
 export async function resolveMediaList(
   message: Message,
   maxBytes: number,
-  fetchImpl?: FetchLike,
-  ssrfPolicy?: SsrFPolicy,
+  options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(ssrfPolicy);
+  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
   await appendResolvedMediaFromAttachments({
     attachments: message.attachments ?? [],
     maxBytes,
     out,
     errorPrefix: "discord: failed to download attachment",
-    fetchImpl,
+    fetchImpl: options?.fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
   });
   await appendResolvedMediaFromStickers({
     stickers: resolveDiscordMessageStickers(message),
     maxBytes,
     out,
     errorPrefix: "discord: failed to download sticker",
-    fetchImpl,
+    fetchImpl: options?.fetchImpl,
     ssrfPolicy: resolvedSsrFPolicy,
+    readIdleTimeoutMs: options?.readIdleTimeoutMs,
+    totalTimeoutMs: options?.totalTimeoutMs,
+    abortSignal: options?.abortSignal,
   });
   return out;
 }
@@ -236,34 +250,94 @@ export async function resolveMediaList(
 export async function resolveForwardedMediaList(
   message: Message,
   maxBytes: number,
-  fetchImpl?: FetchLike,
-  ssrfPolicy?: SsrFPolicy,
+  options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
   const snapshots = resolveDiscordMessageSnapshots(message);
   if (snapshots.length === 0) {
     return [];
   }
   const out: DiscordMediaInfo[] = [];
-  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(ssrfPolicy);
+  const resolvedSsrFPolicy = resolveDiscordMediaSsrFPolicy(options?.ssrfPolicy);
   for (const snapshot of snapshots) {
     await appendResolvedMediaFromAttachments({
       attachments: snapshot.message?.attachments,
       maxBytes,
       out,
       errorPrefix: "discord: failed to download forwarded attachment",
-      fetchImpl,
+      fetchImpl: options?.fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      readIdleTimeoutMs: options?.readIdleTimeoutMs,
+      totalTimeoutMs: options?.totalTimeoutMs,
+      abortSignal: options?.abortSignal,
     });
     await appendResolvedMediaFromStickers({
       stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
       maxBytes,
       out,
       errorPrefix: "discord: failed to download forwarded sticker",
-      fetchImpl,
+      fetchImpl: options?.fetchImpl,
       ssrfPolicy: resolvedSsrFPolicy,
+      readIdleTimeoutMs: options?.readIdleTimeoutMs,
+      totalTimeoutMs: options?.totalTimeoutMs,
+      abortSignal: options?.abortSignal,
     });
   }
   return out;
+}
+
+async function fetchDiscordMedia(params: {
+  url: string;
+  filePathHint: string;
+  maxBytes: number;
+  fetchImpl?: FetchLike;
+  ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
+}) {
+  // `totalTimeoutMs` is enforced per individual attachment or sticker fetch.
+  // The inbound worker's abort signal remains the outer bound for the message.
+  const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
+  const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const fetchPromise = fetchRemoteMedia({
+    url: params.url,
+    filePathHint: params.filePathHint,
+    maxBytes: params.maxBytes,
+    fetchImpl: params.fetchImpl,
+    ssrfPolicy: params.ssrfPolicy,
+    readIdleTimeoutMs: params.readIdleTimeoutMs,
+    ...(signal ? { requestInit: { signal } } : {}),
+  }).catch((error) => {
+    if (timedOut) {
+      // After the timeout wins the race we abort the underlying fetch and keep
+      // this branch pending so the later AbortError does not surface as an
+      // unhandled rejection after Promise.race has already settled.
+      return new Promise<never>(() => {});
+    }
+    throw error;
+  });
+
+  try {
+    if (!params.totalTimeoutMs) {
+      return await fetchPromise;
+    }
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        timeoutAbortController?.abort();
+        reject(new Error(`discord media download timed out after ${params.totalTimeoutMs}ms`));
+      }, params.totalTimeoutMs);
+      timeoutHandle.unref?.();
+    });
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
 
 async function appendResolvedMediaFromAttachments(params: {
@@ -273,6 +347,9 @@ async function appendResolvedMediaFromAttachments(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }) {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
@@ -280,12 +357,15 @@ async function appendResolvedMediaFromAttachments(params: {
   }
   for (const attachment of attachments) {
     try {
-      const fetched = await fetchRemoteMedia({
+      const fetched = await fetchDiscordMedia({
         url: attachment.url,
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
         ssrfPolicy: params.ssrfPolicy,
+        readIdleTimeoutMs: params.readIdleTimeoutMs,
+        totalTimeoutMs: params.totalTimeoutMs,
+        abortSignal: params.abortSignal,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -383,6 +463,9 @@ async function appendResolvedMediaFromStickers(params: {
   errorPrefix: string;
   fetchImpl?: FetchLike;
   ssrfPolicy?: SsrFPolicy;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }) {
   const stickers = params.stickers;
   if (!stickers || stickers.length === 0) {
@@ -393,12 +476,15 @@ async function appendResolvedMediaFromStickers(params: {
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
-        const fetched = await fetchRemoteMedia({
+        const fetched = await fetchDiscordMedia({
           url: candidate.url,
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
           ssrfPolicy: params.ssrfPolicy,
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs,
+          abortSignal: params.abortSignal,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,
@@ -549,26 +635,30 @@ function resolveDiscordMentions(text: string, message: Message): string {
 }
 
 function resolveDiscordForwardedMessagesText(message: Message): string {
-  const snapshots = resolveDiscordMessageSnapshots(message);
-  if (snapshots.length === 0) {
-    return "";
+  return resolveDiscordForwardedMessagesTextFromSnapshots(resolveDiscordMessageSnapshots(message));
+}
+
+function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
+  const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
+  return normalizeDiscordMessageSnapshots(
+    rawData?.message_snapshots ??
+      (message as { message_snapshots?: unknown }).message_snapshots ??
+      (message as { messageSnapshots?: unknown }).messageSnapshots,
+  );
+}
+
+function normalizeDiscordMessageSnapshots(snapshots: unknown): DiscordMessageSnapshot[] {
+  if (!Array.isArray(snapshots)) {
+    return [];
   }
-  const forwardedBlocks = snapshots
-    .map((snapshot) => {
-      const snapshotMessage = snapshot.message;
-      if (!snapshotMessage) {
-        return null;
-      }
-      const text = resolveDiscordSnapshotMessageText(snapshotMessage);
-      if (!text) {
-        return null;
-      }
-      const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
-      const heading = authorLabel
-        ? `[Forwarded message from ${authorLabel}]`
-        : "[Forwarded message]";
-      return `${heading}\n${text}`;
-    })
+  return snapshots.filter(
+    (entry): entry is DiscordMessageSnapshot => Boolean(entry) && typeof entry === "object",
+  );
+}
+
+export function resolveDiscordForwardedMessagesTextFromSnapshots(snapshots: unknown): string {
+  const forwardedBlocks = normalizeDiscordMessageSnapshots(snapshots)
+    .map((snapshot) => buildDiscordForwardedMessageBlock(snapshot.message))
     .filter((entry): entry is string => Boolean(entry));
   if (forwardedBlocks.length === 0) {
     return "";
@@ -576,18 +666,19 @@ function resolveDiscordForwardedMessagesText(message: Message): string {
   return forwardedBlocks.join("\n\n");
 }
 
-function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapshot[] {
-  const rawData = (message as { rawData?: { message_snapshots?: unknown } }).rawData;
-  const snapshots =
-    rawData?.message_snapshots ??
-    (message as { message_snapshots?: unknown }).message_snapshots ??
-    (message as { messageSnapshots?: unknown }).messageSnapshots;
-  if (!Array.isArray(snapshots)) {
-    return [];
+function buildDiscordForwardedMessageBlock(
+  snapshotMessage: DiscordSnapshotMessage | null | undefined,
+): string | null {
+  if (!snapshotMessage) {
+    return null;
   }
-  return snapshots.filter(
-    (entry): entry is DiscordMessageSnapshot => Boolean(entry) && typeof entry === "object",
-  );
+  const text = resolveDiscordSnapshotMessageText(snapshotMessage);
+  if (!text) {
+    return null;
+  }
+  const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
+  const heading = authorLabel ? `[Forwarded message from ${authorLabel}]` : "[Forwarded message]";
+  return `${heading}\n${text}`;
 }
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {

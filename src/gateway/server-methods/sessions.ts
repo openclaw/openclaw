@@ -28,6 +28,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
@@ -46,12 +47,6 @@ import {
   validateSessionsResolveParams,
   validateSessionsSendParams,
 } from "../protocol/index.js";
-import {
-  archiveSessionTranscriptsForSession,
-  cleanupSessionBeforeMutation,
-  emitSessionUnboundLifecycleEvent,
-  performGatewaySessionReset,
-} from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -149,21 +144,41 @@ function emitSessionsChanged(
             sessionId: sessionRow.sessionId,
             kind: sessionRow.kind,
             channel: sessionRow.channel,
+            subject: sessionRow.subject,
+            groupChannel: sessionRow.groupChannel,
+            space: sessionRow.space,
+            chatType: sessionRow.chatType,
+            origin: sessionRow.origin,
+            spawnedBy: sessionRow.spawnedBy,
+            spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            forkedFromParent: sessionRow.forkedFromParent,
+            spawnDepth: sessionRow.spawnDepth,
+            subagentRole: sessionRow.subagentRole,
+            subagentControlScope: sessionRow.subagentControlScope,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
             deliveryContext: sessionRow.deliveryContext,
             parentSessionKey: sessionRow.parentSessionKey,
             childSessions: sessionRow.childSessions,
             thinkingLevel: sessionRow.thinkingLevel,
+            fastMode: sessionRow.fastMode,
+            verboseLevel: sessionRow.verboseLevel,
+            reasoningLevel: sessionRow.reasoningLevel,
+            elevatedLevel: sessionRow.elevatedLevel,
+            sendPolicy: sessionRow.sendPolicy,
             systemSent: sessionRow.systemSent,
             abortedLastRun: sessionRow.abortedLastRun,
+            inputTokens: sessionRow.inputTokens,
+            outputTokens: sessionRow.outputTokens,
             lastChannel: sessionRow.lastChannel,
             lastTo: sessionRow.lastTo,
             lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
+            responseUsage: sessionRow.responseUsage,
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
@@ -466,7 +481,7 @@ async function handleSessionSend(params: {
   });
   if (sendAcked) {
     if (shouldAttachPendingMessageSeq({ payload: sendPayload, cached: sendCached })) {
-      reactivateCompletedSubagentSession({
+      await reactivateCompletedSubagentSession({
         sessionKey: canonicalKey,
         runId: startedRunId,
       });
@@ -675,7 +690,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
-    const key = requestedKey ?? buildDashboardSessionKey(agentId);
+    const loweredRequestedKey = requestedKey?.toLowerCase();
+    const key = requestedKey
+      ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
+        ? loweredRequestedKey
+        : toAgentStoreSessionKey({
+            agentId,
+            requestKey: requestedKey,
+            mainKey: cfg.session?.mainKey,
+          })
+      : buildDashboardSessionKey(agentId);
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
     const created = await updateSessionStore(target.storePath, async (store) => {
@@ -725,12 +749,31 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const createdEntry =
+      created.entry.sessionFile === ensured.transcriptPath
+        ? created.entry
+        : {
+            ...created.entry,
+            sessionFile: ensured.transcriptPath,
+          };
+    if (createdEntry !== created.entry) {
+      await updateSessionStore(target.storePath, (store) => {
+        const existing = store[target.canonicalKey];
+        if (existing) {
+          store[target.canonicalKey] = {
+            ...existing,
+            sessionFile: ensured.transcriptPath,
+          };
+        }
+      });
+    }
+
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? readSessionMessages(created.entry.sessionId, target.storePath, created.entry.sessionFile)
+      ? readSessionMessages(createdEntry.sessionId, target.storePath, createdEntry.sessionFile)
           .length + 1
       : undefined;
 
@@ -768,8 +811,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         key: target.canonicalKey,
-        sessionId: created.entry.sessionId,
-        entry: created.entry,
+        sessionId: createdEntry.sessionId,
+        entry: createdEntry,
         runStarted,
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),
@@ -947,6 +990,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const reason = p.reason === "new" ? "new" : "reset";
+    const { performGatewaySessionReset } = await import("./sessions.runtime.js");
     const result = await performGatewaySessionReset({
       key,
       reason,
@@ -987,6 +1031,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
+    const {
+      archiveSessionTranscriptsForSessionDetailed,
+      cleanupSessionBeforeMutation,
+      emitGatewaySessionEndPluginHook,
+      emitSessionUnboundLifecycleEvent,
+    } = await import("./sessions.runtime.js");
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const mutationCleanupError = await cleanupSessionBeforeMutation({
@@ -1012,9 +1062,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return hadEntry;
     });
 
-    const archived =
+    const archivedTranscripts =
       deleted && deleteTranscript
-        ? archiveSessionTranscriptsForSession({
+        ? archiveSessionTranscriptsForSessionDetailed({
             sessionId,
             storePath,
             sessionFile: entry?.sessionFile,
@@ -1022,7 +1072,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             reason: "deleted",
           })
         : [];
+    const archived = archivedTranscripts.map((entry) => entry.archivedPath);
     if (deleted) {
+      emitGatewaySessionEndPluginHook({
+        cfg,
+        sessionKey: target.canonicalKey ?? key,
+        sessionId,
+        storePath,
+        sessionFile: entry?.sessionFile,
+        agentId: target.agentId,
+        reason: "deleted",
+        archivedTranscripts,
+      });
       const emitLifecycleHooks = p.emitLifecycleHooks !== false;
       await emitSessionUnboundLifecycleEvent({
         targetSessionKey: target.canonicalKey ?? key,

@@ -1,5 +1,6 @@
-import { normalizeProviderIdForAuth } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { normalizeProviderIdForAuth } from "../agents/model-selection.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
 export type ProviderAuthChoiceMetadata = {
@@ -9,6 +10,9 @@ export type ProviderAuthChoiceMetadata = {
   choiceId: string;
   choiceLabel: string;
   choiceHint?: string;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
+  deprecatedChoiceIds?: string[];
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -31,30 +35,50 @@ export function resolveManifestProviderAuthChoices(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderAuthChoiceMetadata[] {
   const registry = loadPluginManifestRegistry({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
     env: params?.env,
   });
+  const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
 
   return registry.plugins.flatMap((plugin) =>
-    (plugin.providerAuthChoices ?? []).map((choice) => ({
-      pluginId: plugin.id,
-      providerId: choice.provider,
-      methodId: choice.method,
-      choiceId: choice.choiceId,
-      choiceLabel: choice.choiceLabel ?? choice.choiceId,
-      ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-      ...(choice.groupId ? { groupId: choice.groupId } : {}),
-      ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
-      ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-      ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
-      ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
-      ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
-      ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
-      ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
-    })),
+    plugin.origin === "workspace" &&
+    params?.includeUntrustedWorkspacePlugins === false &&
+    !resolveEffectiveEnableState({
+      id: plugin.id,
+      origin: plugin.origin,
+      config: normalizedConfig,
+      rootConfig: params?.config,
+    }).enabled
+      ? []
+      : (plugin.providerAuthChoices ?? []).map((choice) => ({
+          pluginId: plugin.id,
+          providerId: choice.provider,
+          methodId: choice.method,
+          choiceId: choice.choiceId,
+          choiceLabel: choice.choiceLabel ?? choice.choiceId,
+          ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+          ...(choice.assistantPriority !== undefined
+            ? { assistantPriority: choice.assistantPriority }
+            : {}),
+          ...(choice.assistantVisibility
+            ? { assistantVisibility: choice.assistantVisibility }
+            : {}),
+          ...(choice.deprecatedChoiceIds
+            ? { deprecatedChoiceIds: choice.deprecatedChoiceIds }
+            : {}),
+          ...(choice.groupId ? { groupId: choice.groupId } : {}),
+          ...(choice.groupLabel ? { groupLabel: choice.groupLabel } : {}),
+          ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+          ...(choice.optionKey ? { optionKey: choice.optionKey } : {}),
+          ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
+          ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
+          ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+          ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
+        })),
   );
 }
 
@@ -64,6 +88,7 @@ export function resolveManifestProviderAuthChoice(
     config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    includeUntrustedWorkspacePlugins?: boolean;
   },
 ): ProviderAuthChoiceMetadata | undefined {
   const normalized = choiceId.trim();
@@ -80,6 +105,7 @@ export function resolveManifestProviderApiKeyChoice(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderAuthChoiceMetadata | undefined {
   const normalizedProviderId = normalizeProviderIdForAuth(params.providerId);
   if (!normalizedProviderId) {
@@ -94,10 +120,29 @@ export function resolveManifestProviderApiKeyChoice(params: {
   });
 }
 
+export function resolveManifestDeprecatedProviderAuthChoice(
+  choiceId: string,
+  params?: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    includeUntrustedWorkspacePlugins?: boolean;
+  },
+): ProviderAuthChoiceMetadata | undefined {
+  const normalized = choiceId.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return resolveManifestProviderAuthChoices(params).find((choice) =>
+    choice.deprecatedChoiceIds?.includes(normalized),
+  );
+}
+
 export function resolveManifestProviderOnboardAuthFlags(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderOnboardAuthFlag[] {
   const flags: ProviderOnboardAuthFlag[] = [];
   const seen = new Set<string>();

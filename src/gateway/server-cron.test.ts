@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const {
   enqueueSystemEventMock,
@@ -31,9 +32,16 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow,
-}));
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  return await mergeMockedModule(
+    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+      "../infra/heartbeat-wake.js",
+    ),
+    () => ({
+      requestHeartbeatNow,
+    }),
+  );
+});
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");

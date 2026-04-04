@@ -1,15 +1,36 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+const { recordInboundSessionMock } = vi.hoisted(() => ({
+  recordInboundSessionMock: vi.fn().mockResolvedValue(undefined),
+}));
 
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
-let clearRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").clearRuntimeConfigSnapshot;
-let setRuntimeConfigSnapshot: typeof import("../../../src/config/config.js").setRuntimeConfigSnapshot;
-
-beforeAll(async () => {
-  vi.resetModules();
-  ({ buildTelegramMessageContextForTest } = await import("./bot-message-context.test-harness.js"));
-  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
-    await import("../../../src/config/config.js"));
+vi.mock("./bot-message-context.session.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./bot-message-context.session.runtime.js")>(
+    "./bot-message-context.session.runtime.js",
+  );
+  return {
+    ...actual,
+    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+  };
 });
+
+vi.mock("./bot-message-context.body.js", () => ({
+  resolveTelegramInboundBody: async () => ({
+    bodyText: "hello",
+    rawBody: "hello",
+    historyKey: undefined,
+    commandAuthorized: false,
+    effectiveWasMentioned: true,
+    canDetectMention: false,
+    shouldBypassMention: false,
+    stickerCacheHit: false,
+    locationData: undefined,
+  }),
+}));
+
+const { buildTelegramMessageContextForTest } =
+  await import("./bot-message-context.test-harness.js");
+const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+  await import("openclaw/plugin-sdk/config-runtime");
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot();
@@ -17,6 +38,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  recordInboundSessionMock.mockClear();
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {

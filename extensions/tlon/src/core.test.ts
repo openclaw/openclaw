@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
+  createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
 import { TlonAuthorizationSchema, TlonConfigSchema } from "./config-schema.js";
@@ -12,6 +13,7 @@ import { resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
 const tlonConfigure = createPluginSetupWizardConfigure(tlonPlugin);
+const tlonStatus = createPluginSetupWizardStatus(tlonPlugin);
 
 describe("tlon core", () => {
   it("formats dm allowlist entries through the shared hybrid adapter", () => {
@@ -220,5 +222,26 @@ describe("tlon core", () => {
 
     expect(resolved.ship).toBe("~zod");
     expect(resolved.code).toBe("base-code");
+  });
+
+  it("setup status labels the selected account", async () => {
+    const status = await tlonStatus({
+      cfg: {
+        channels: {
+          tlon: {
+            ship: "~zod",
+            url: "https://urbit.example.com",
+            code: "base-code",
+            accounts: {
+              work: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: { tlon: "work" },
+    });
+
+    expect(status.configured).toBe(true);
+    expect(status.statusLines).toEqual(["Tlon (work): configured"]);
   });
 });

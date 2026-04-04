@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const createChannelReplyPipelineMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
 const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
 const streamInstances = vi.hoisted(
@@ -86,6 +87,9 @@ describe("createMSTeamsReplyDispatcher", () => {
     }));
 
     getMSTeamsRuntimeMock.mockReturnValue({
+      system: {
+        enqueueSystemEvent: enqueueSystemEventMock,
+      },
       channel: {
         text: {
           resolveChunkMode: vi.fn(() => "length"),
@@ -99,10 +103,15 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
   });
 
-  function createDispatcher(conversationType: string = "personal") {
+  function createDispatcher(
+    conversationType: string = "personal",
+    msteamsConfig: Record<string, unknown> = {},
+    extraParams: { onSentMessageIds?: (ids: string[]) => void } = {},
+  ) {
     return createMSTeamsReplyDispatcher({
-      cfg: { channels: { msteams: {} } } as never,
+      cfg: { channels: { msteams: msteamsConfig } } as never,
       agentId: "agent",
+      sessionKey: "agent:main:main",
       runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
       adapter: {
@@ -124,6 +133,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       } as never,
       replyStyle: "thread",
       textLimit: 4000,
+      ...extraParams,
     });
   }
 
@@ -135,7 +145,26 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     expect(streamInstances).toHaveLength(1);
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(1);
+    expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("sends native typing indicator for channel conversations by default", async () => {
+    createDispatcher("channel");
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.onReplyStart?.();
+
+    expect(streamInstances).toHaveLength(0);
     expect(typingCallbacks.onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips native typing indicator when typingIndicator=false", async () => {
+    createDispatcher("channel", { typingIndicator: false });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.onReplyStart?.();
+
+    expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
   });
 
   it("only sends the informative status update once", async () => {
@@ -160,6 +189,96 @@ describe("createMSTeamsReplyDispatcher", () => {
     createDispatcher("channel");
 
     expect(streamInstances).toHaveLength(0);
+  });
+
+  it("sets disableBlockStreaming=false when blockStreaming=true", () => {
+    const dispatcher = createDispatcher("personal", { blockStreaming: true });
+
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
+  });
+
+  it("sets disableBlockStreaming=true when blockStreaming=false", () => {
+    const dispatcher = createDispatcher("personal", { blockStreaming: false });
+
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(true);
+  });
+
+  it("leaves disableBlockStreaming undefined when blockStreaming is not set", () => {
+    const dispatcher = createDispatcher("personal", {});
+
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBeUndefined();
+  });
+
+  it("flushes messages immediately on deliver when blockStreaming is enabled", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+
+    createDispatcher("personal", { blockStreaming: true });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Call deliver — with blockStreaming enabled it should flush immediately
+    await options.deliver({ text: "block content" });
+
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not flush messages on deliver when blockStreaming is disabled", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+
+    createDispatcher("personal", { blockStreaming: false });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.deliver({ text: "block content" });
+
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("queues a system event when some queued Teams messages fail to send", async () => {
+    const onSentMessageIds = vi.fn();
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { content: "one" },
+      { content: "two" },
+    ] as never);
+    sendMSTeamsMessagesMock
+      .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }))
+      .mockResolvedValueOnce(["id-1"] as never)
+      .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }));
+
+    const dispatcher = createDispatcher(
+      "personal",
+      { blockStreaming: false },
+      { onSentMessageIds },
+    );
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.deliver({ text: "block content" });
+    await dispatcher.markDispatchIdle();
+
+    expect(onSentMessageIds).toHaveBeenCalledWith(["id-1"]);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("Microsoft Teams delivery failed"),
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        contextKey: "msteams:delivery-failure:conv",
+      }),
+    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("The user may not have received the full reply"),
+      expect.any(Object),
+    );
+  });
+
+  it("does not queue a delivery-failure system event when Teams send succeeds", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+
+    const dispatcher = createDispatcher("personal", { blockStreaming: false });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.deliver({ text: "block content" });
+    await dispatcher.markDispatchIdle();
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 });
 

@@ -24,10 +24,24 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 
 - use `Authorization: Bearer <token>` with the normal Gateway auth config
 - treat the endpoint as full operator access for the gateway instance
+- for shared-secret auth modes (`token` and `password`), ignore narrower bearer-declared `x-openclaw-scopes` values and restore the normal full operator defaults
+- for trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`), honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set
 - select agents with `model: "openclaw"`, `model: "openclaw/default"`, `model: "openclaw/<agentId>"`, or `x-openclaw-agent-id`
 - use `x-openclaw-model` when you want to override the selected agent's backend model
 - use `x-openclaw-session-key` for explicit session routing
 - use `x-openclaw-message-channel` when you want a non-default synthetic ingress channel context
+
+Auth matrix:
+
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set
+  - treats chat turns on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - honor `x-openclaw-scopes` when the header is present
+  - fall back to the normal operator default scope set when the header is absent
+  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 

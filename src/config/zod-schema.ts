@@ -102,6 +102,7 @@ const MemoryQmdSchema = z
     command: z.string().optional(),
     mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
+    searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
     sessions: MemoryQmdSessionSchema.optional(),
@@ -180,11 +181,6 @@ const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
-    voiceId: z.string().optional(),
-    voiceAliases: z.record(z.string(), z.string()).optional(),
-    modelId: z.string().optional(),
-    outputFormat: z.string().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
   })
@@ -218,6 +214,12 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+    headers: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
   })
   .catchall(z.unknown());
 
@@ -368,7 +370,6 @@ export const OpenClawSchema = z
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
           .object({
-            allowPrivateNetwork: z.boolean().optional(),
             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
             allowedHostnames: z.array(z.string()).optional(),
             hostnameAllowlist: z.array(z.string()).optional(),
@@ -442,7 +443,12 @@ export const OpenClawSchema = z
             billingBackoffHours: z.number().positive().optional(),
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
+            authPermanentBackoffMinutes: z.number().positive().optional(),
+            authPermanentMaxMinutes: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
+            overloadedProfileRotations: z.number().int().nonnegative().optional(),
+            overloadedBackoffMs: z.number().int().nonnegative().optional(),
+            rateLimitedProfileRotations: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),
@@ -716,6 +722,12 @@ export const OpenClawSchema = z
           .object({
             deny: z.array(z.string()).optional(),
             allow: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        webchat: z
+          .object({
+            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
           })
           .strict()
           .optional(),

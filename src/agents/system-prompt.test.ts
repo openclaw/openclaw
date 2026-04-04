@@ -149,6 +149,62 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("tells the agent not to execute /approve through exec", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain(
+      "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
+    );
+  });
+
+  it("keeps manual /approve instructions for non-native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "signal" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+    expect(prompt).not.toContain("allow-once|allow-always|deny");
+  });
+
+  it("tells native approval channels not to duplicate plain chat /approve instructions", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).not.toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+  });
+
+  it("treats webchat as a native approval surface", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "webchat" },
+    });
+
+    expect(prompt).toContain(
+      "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear",
+    );
+    expect(prompt).toContain(
+      "Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.",
+    );
+    expect(prompt).not.toContain(
+      "When exec returns approval-pending, include the concrete /approve command from tool output",
+    );
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -272,7 +328,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
@@ -414,10 +470,7 @@ describe("buildAgentSystemPrompt", () => {
 
   // The system prompt intentionally does NOT include the current date/time.
   // Only the timezone is included, to keep the prompt stable for caching.
-  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
   // Agents should use session_status or message timestamps to determine the date/time.
-  // Related: https://github.com/moltbot/moltbot/issues/1897
-  //          https://github.com/moltbot/moltbot/issues/3658
   it("does NOT include a date or time in the system prompt (cache stability)", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
@@ -427,10 +480,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     // The prompt should contain the timezone but NOT the formatted date/time string.
-    // This is intentional for prompt cache stability — the date/time was removed in
-    // commit 66eec295b. If you're here because you want to add it back, please see
-    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
-    // gateway-level timestamp injection into messages, not the system prompt.
+    // This is intentional for prompt cache stability. If you want to add date/time
+    // awareness, do it through gateway-level timestamp injection into messages, not
+    // the system prompt.
     expect(prompt).toContain("Time zone: America/Chicago");
     expect(prompt).not.toContain("Monday, January 5th, 2026");
     expect(prompt).not.toContain("3:26 PM");
@@ -441,14 +493,14 @@ describe("buildAgentSystemPrompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
-        "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Opus: anthropic/claude-opus-4-6",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 
     expect(prompt).toContain("## Model Aliases");
     expect(prompt).toContain("Prefer aliases when specifying model overrides");
-    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-6");
   });
 
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
@@ -630,7 +682,7 @@ describe("buildAgentSystemPrompt", () => {
         arch: "arm64",
         node: "v20",
         model: "anthropic/claude",
-        defaultModel: "anthropic/claude-opus-4-5",
+        defaultModel: "anthropic/claude-opus-4-6",
       },
       "telegram",
       ["inlineButtons"],
@@ -643,10 +695,56 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("os=macOS (arm64)");
     expect(line).toContain("node=v20");
     expect(line).toContain("model=anthropic/claude");
-    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(line).toContain("default_model=anthropic/claude-opus-4-6");
     expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlineButtons");
+    expect(line).toContain("capabilities=inlinebuttons");
     expect(line).toContain("thinking=low");
+  });
+
+  it("normalizes runtime capability ordering and casing for cache stability", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+      },
+      "telegram",
+      [" React ", "inlineButtons", "react"],
+      "low",
+    );
+
+    expect(line).toContain("capabilities=inlinebuttons,react");
+  });
+
+  it("keeps semantically equivalent structured prompt inputs byte-stable", () => {
+    const clean = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlinebuttons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+      heartbeatPrompt: "ping",
+      extraSystemPrompt: "Group chat context\nSecond line",
+      workspaceNotes: ["Reminder: keep commits scoped."],
+      modelAliasLines: ["- Sonnet: anthropic/claude-sonnet-4-5"],
+    });
+    const noisy = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: [" react ", "inlineButtons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\r\n  <skill>  \r\n    <name>demo</name>\t\r\n  </skill>\r\n</available_skills>\r\n",
+      heartbeatPrompt: " ping  \r\n",
+      extraSystemPrompt: "  Group chat context  \r\nSecond line \t\r\n",
+      workspaceNotes: ["  Reminder: keep commits scoped. \t\r\n"],
+      modelAliasLines: ["  - Sonnet: anthropic/claude-sonnet-4-5 \t\r\n"],
+    });
+
+    expect(noisy).toBe(clean);
+    expect(noisy).not.toContain("\r");
+    expect(noisy).not.toMatch(/[ \t]+$/m);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {

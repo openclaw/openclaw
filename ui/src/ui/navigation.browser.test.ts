@@ -14,6 +14,26 @@ function nextFrame() {
   });
 }
 
+function findConfirmButton(app: ReturnType<typeof mountApp>) {
+  return Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
+    (button) => button.textContent?.trim() === "Confirm",
+  );
+}
+
+async function confirmPendingGatewayChange(app: ReturnType<typeof mountApp>) {
+  const confirmButton = findConfirmButton(app);
+  expect(confirmButton).not.toBeUndefined();
+  confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+  await app.updateComplete;
+}
+
+function expectConfirmedGatewayChange(app: ReturnType<typeof mountApp>) {
+  expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+  expect(app.settings.token).toBe("abc123");
+  expect(window.location.search).toBe("");
+  expect(window.location.hash).toBe("");
+}
+
 describe("control UI routing", () => {
   it("hydrates the tab from the location", async () => {
     const app = mountApp("/sessions");
@@ -62,6 +82,14 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(app.tab).toBe("channels");
     expect(window.location.pathname).toBe("/channels");
+  });
+
+  it("keeps dreams navigation visible even when dreaming is disabled", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const dreamsLink = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/dreams"]');
+    expect(dreamsLink).not.toBeNull();
   });
 
   it("renders the refreshed top navigation shell", async () => {
@@ -392,17 +420,9 @@ describe("control UI routing", () => {
     expect(app.settings.gatewayUrl).not.toBe("wss://other-gateway.example/openclaw");
     expect(app.settings.token).toBe("");
 
-    const confirmButton = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Confirm",
-    );
-    expect(confirmButton).not.toBeUndefined();
-    confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    await app.updateComplete;
+    await confirmPendingGatewayChange(app);
 
-    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(app.settings.token).toBe("abc123");
-    expect(window.location.search).toBe("");
-    expect(window.location.hash).toBe("");
+    expectConfirmedGatewayChange(app);
   });
 
   it("keeps a query token pending until the gateway URL change is confirmed", async () => {
@@ -414,17 +434,9 @@ describe("control UI routing", () => {
     expect(app.settings.gatewayUrl).not.toBe("wss://other-gateway.example/openclaw");
     expect(app.settings.token).toBe("");
 
-    const confirmButton = Array.from(app.querySelectorAll<HTMLButtonElement>("button")).find(
-      (button) => button.textContent?.trim() === "Confirm",
-    );
-    expect(confirmButton).not.toBeUndefined();
-    confirmButton?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    await app.updateComplete;
+    await confirmPendingGatewayChange(app);
 
-    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(app.settings.token).toBe("abc123");
-    expect(window.location.search).toBe("");
-    expect(window.location.hash).toBe("");
+    expectConfirmedGatewayChange(app);
   });
 
   it("restores the token after a same-tab refresh", async () => {

@@ -1,38 +1,26 @@
 import { ChannelType } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
+import * as discordClientModule from "../client.js";
+import * as discordSendModule from "../send.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
-const hoisted = vi.hoisted(() => {
-  const restGet = vi.fn();
-  const sendMessageDiscord = vi.fn();
-  const sendWebhookMessageDiscord = vi.fn();
-  const createDiscordRestClient = vi.fn(() => ({
-    rest: {
-      get: restGet,
-    },
-  }));
-  return {
-    restGet,
-    sendMessageDiscord,
-    sendWebhookMessageDiscord,
-    createDiscordRestClient,
-  };
-});
+const DEFAULT_SEND_RESULT = {
+  messageId: "msg-1",
+  channelId: "thread-1",
+};
 
-vi.mock("../client.js", () => ({
-  createDiscordRestClient: hoisted.createDiscordRestClient,
-}));
-
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
-  return {
-    ...actual,
-    addRoleDiscord: vi.fn(),
-    sendMessageDiscord: (...args: unknown[]) => hoisted.sendMessageDiscord(...args),
-    sendWebhookMessageDiscord: (...args: unknown[]) => hoisted.sendWebhookMessageDiscord(...args),
-  };
-});
+const restGet = vi.fn<(...args: unknown[]) => Promise<unknown>>();
+const sendMessageDiscord = vi.fn<typeof discordSendModule.sendMessageDiscord>();
+const sendWebhookMessageDiscord = vi.fn<typeof discordSendModule.sendWebhookMessageDiscord>();
+const createDiscordRestClient = vi.fn<typeof discordClientModule.createDiscordRestClient>(
+  () =>
+    ({
+      rest: {
+        get: restGet,
+      },
+    }) as unknown as ReturnType<typeof discordClientModule.createDiscordRestClient>,
+);
 
 let maybeSendBindingMessage: typeof import("./thread-bindings.discord-api.js").maybeSendBindingMessage;
 let resolveChannelIdForBinding: typeof import("./thread-bindings.discord-api.js").resolveChannelIdForBinding;
@@ -44,10 +32,30 @@ beforeAll(async () => {
 
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {
-    hoisted.restGet.mockClear();
-    hoisted.createDiscordRestClient.mockClear();
-    hoisted.sendMessageDiscord.mockClear().mockResolvedValue({});
-    hoisted.sendWebhookMessageDiscord.mockClear().mockResolvedValue({});
+    vi.restoreAllMocks();
+    restGet.mockReset();
+    sendMessageDiscord.mockReset().mockResolvedValue(DEFAULT_SEND_RESULT);
+    sendWebhookMessageDiscord.mockReset().mockResolvedValue(DEFAULT_SEND_RESULT);
+    createDiscordRestClient.mockReset().mockImplementation(
+      () =>
+        ({
+          rest: {
+            get: restGet,
+          },
+        }) as unknown as ReturnType<typeof discordClientModule.createDiscordRestClient>,
+    );
+    vi.spyOn(discordClientModule, "createDiscordRestClient").mockImplementation(
+      (...args) =>
+        createDiscordRestClient(...args) as unknown as ReturnType<
+          typeof discordClientModule.createDiscordRestClient
+        >,
+    );
+    vi.spyOn(discordSendModule, "sendMessageDiscord").mockImplementation((...args) =>
+      sendMessageDiscord(...args),
+    );
+    vi.spyOn(discordSendModule, "sendWebhookMessageDiscord").mockImplementation((...args) =>
+      sendWebhookMessageDiscord(...args),
+    );
   });
 
   it("returns explicit channelId without resolving route", async () => {
@@ -58,12 +66,12 @@ describe("resolveChannelIdForBinding", () => {
     });
 
     expect(resolved).toBe("channel-explicit");
-    expect(hoisted.createDiscordRestClient).not.toHaveBeenCalled();
-    expect(hoisted.restGet).not.toHaveBeenCalled();
+    expect(createDiscordRestClient).not.toHaveBeenCalled();
+    expect(restGet).not.toHaveBeenCalled();
   });
 
   it("returns parent channel for thread channels", async () => {
-    hoisted.restGet.mockResolvedValueOnce({
+    restGet.mockResolvedValueOnce({
       id: "thread-1",
       type: ChannelType.PublicThread,
       parent_id: "channel-parent",
@@ -81,7 +89,7 @@ describe("resolveChannelIdForBinding", () => {
     const cfg = {
       channels: { discord: { token: "tok" } },
     } as OpenClawConfig;
-    hoisted.restGet.mockResolvedValueOnce({
+    restGet.mockResolvedValueOnce({
       id: "thread-1",
       type: ChannelType.PublicThread,
       parent_id: "channel-parent",
@@ -93,12 +101,12 @@ describe("resolveChannelIdForBinding", () => {
       threadId: "thread-1",
     });
 
-    const createDiscordRestClientCalls = hoisted.createDiscordRestClient.mock.calls as unknown[][];
+    const createDiscordRestClientCalls = createDiscordRestClient.mock.calls as unknown[][];
     expect(createDiscordRestClientCalls[0]?.[1]).toBe(cfg);
   });
 
   it("keeps non-thread channel id even when parent_id exists", async () => {
-    hoisted.restGet.mockResolvedValueOnce({
+    restGet.mockResolvedValueOnce({
       id: "channel-text",
       type: ChannelType.GuildText,
       parent_id: "category-1",
@@ -113,7 +121,7 @@ describe("resolveChannelIdForBinding", () => {
   });
 
   it("keeps forum channel id instead of parent category", async () => {
-    hoisted.restGet.mockResolvedValueOnce({
+    restGet.mockResolvedValueOnce({
       id: "forum-1",
       type: ChannelType.GuildForum,
       parent_id: "category-1",
@@ -130,8 +138,15 @@ describe("resolveChannelIdForBinding", () => {
 
 describe("maybeSendBindingMessage", () => {
   beforeEach(() => {
-    hoisted.sendMessageDiscord.mockClear().mockResolvedValue({});
-    hoisted.sendWebhookMessageDiscord.mockClear().mockResolvedValue({});
+    vi.restoreAllMocks();
+    sendMessageDiscord.mockReset().mockResolvedValue(DEFAULT_SEND_RESULT);
+    sendWebhookMessageDiscord.mockReset().mockResolvedValue(DEFAULT_SEND_RESULT);
+    vi.spyOn(discordSendModule, "sendMessageDiscord").mockImplementation((...args) =>
+      sendMessageDiscord(...args),
+    );
+    vi.spyOn(discordSendModule, "sendWebhookMessageDiscord").mockImplementation((...args) =>
+      sendWebhookMessageDiscord(...args),
+    );
   });
 
   it("forwards cfg to webhook send path", async () => {
@@ -158,14 +173,14 @@ describe("maybeSendBindingMessage", () => {
       text: "hello webhook",
     });
 
-    expect(hoisted.sendWebhookMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(hoisted.sendWebhookMessageDiscord.mock.calls[0]?.[1]).toMatchObject({
+    expect(sendWebhookMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(sendWebhookMessageDiscord.mock.calls[0]?.[1]).toMatchObject({
       cfg,
       webhookId: "wh_1",
       webhookToken: "tok_1",
       accountId: "default",
       threadId: "thread-1",
     });
-    expect(hoisted.sendMessageDiscord).not.toHaveBeenCalled();
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
   });
 });

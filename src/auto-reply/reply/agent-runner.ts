@@ -516,6 +516,9 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
+    const cliSessionBinding = isCliProvider(providerUsed, cfg)
+      ? runResult.meta?.agentMeta?.cliSessionBinding
+      : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
       lookupContextTokens(modelUsed) ??
@@ -534,6 +537,8 @@ export async function runReplyAgent(params: {
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
+      cliSessionBinding,
+      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
@@ -547,6 +552,7 @@ export async function runReplyAgent(params: {
       payloads: payloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
+      silentExpected: followupRun.run.silentExpected,
       blockStreamingEnabled,
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -725,6 +731,7 @@ export async function runReplyAgent(params: {
     if (autoCompactionCount > 0) {
       const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       const count = await incrementRunCompactionCount({
+        cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,

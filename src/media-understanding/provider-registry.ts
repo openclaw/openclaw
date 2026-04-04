@@ -1,17 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  deepgramMediaUnderstandingProvider,
-  groqMediaUnderstandingProvider,
-} from "../plugin-sdk/media-understanding.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
-
-const PROVIDERS: MediaUnderstandingProvider[] = [
-  groqMediaUnderstandingProvider,
-  deepgramMediaUnderstandingProvider,
-];
 
 function mergeProviderIntoRegistry(
   registry: Map<string, MediaUnderstandingProvider>,
@@ -24,6 +15,9 @@ function mergeProviderIntoRegistry(
         ...existing,
         ...provider,
         capabilities: provider.capabilities ?? existing.capabilities,
+        defaultModels: provider.defaultModels ?? existing.defaultModels,
+        autoPriority: provider.autoPriority ?? existing.autoPriority,
+        nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
       }
     : provider;
   registry.set(normalizedKey, merged);
@@ -36,16 +30,37 @@ export function buildMediaUnderstandingRegistry(
   cfg?: OpenClawConfig,
 ): Map<string, MediaUnderstandingProvider> {
   const registry = new Map<string, MediaUnderstandingProvider>();
-  for (const provider of PROVIDERS) {
+  for (const provider of resolvePluginCapabilityProviders({
+    key: "mediaUnderstandingProviders",
+    cfg,
+  })) {
     mergeProviderIntoRegistry(registry, provider);
   }
-  const active = getActivePluginRegistry();
-  const pluginRegistry =
-    (active?.mediaUnderstandingProviders?.length ?? 0) > 0
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  for (const entry of pluginRegistry?.mediaUnderstandingProviders ?? []) {
-    mergeProviderIntoRegistry(registry, entry.provider);
+  // Auto-register media-understanding for config providers with image-capable models (#51392)
+  const configProviders = cfg?.models?.providers;
+  if (configProviders && typeof configProviders === "object") {
+    for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
+      if (!providerKey?.trim()) {
+        continue;
+      }
+      const normalizedKey = normalizeMediaProviderId(providerKey);
+      if (registry.has(normalizedKey)) {
+        continue;
+      }
+      const models = (providerCfg as { models?: Array<{ input?: string[] }> })?.models ?? [];
+      const hasImageModel = models.some(
+        (m) => Array.isArray(m?.input) && m.input.includes("image"),
+      );
+      if (hasImageModel) {
+        const autoProvider: MediaUnderstandingProvider = {
+          id: normalizedKey,
+          capabilities: ["image"],
+          describeImage: describeImageWithModel,
+          describeImages: describeImagesWithModel,
+        };
+        mergeProviderIntoRegistry(registry, autoProvider);
+      }
+    }
   }
   if (overrides) {
     for (const [key, provider] of Object.entries(overrides)) {
@@ -56,6 +71,9 @@ export function buildMediaUnderstandingRegistry(
             ...existing,
             ...provider,
             capabilities: provider.capabilities ?? existing.capabilities,
+            defaultModels: provider.defaultModels ?? existing.defaultModels,
+            autoPriority: provider.autoPriority ?? existing.autoPriority,
+            nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
           }
         : provider;
       registry.set(normalizedKey, merged);

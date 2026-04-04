@@ -209,7 +209,7 @@ These tests assert:
 For a specific plugin:
 
 ```bash
-pnpm test -- extensions/my-channel/
+pnpm test -- <bundled-plugin-root>/my-channel/
 ```
 
 For contract tests only:
@@ -240,10 +240,10 @@ OpenClaw uses Vitest with V8 coverage thresholds. For plugin tests:
 pnpm test
 
 # Run specific plugin tests
-pnpm test -- extensions/my-channel/src/channel.test.ts
+pnpm test -- <bundled-plugin-root>/my-channel/src/channel.test.ts
 
 # Run with a specific test name filter
-pnpm test -- extensions/my-channel/ -t "resolves account"
+pnpm test -- <bundled-plugin-root>/my-channel/ -t "resolves account"
 
 # Run with coverage
 pnpm test:coverage
@@ -252,7 +252,7 @@ pnpm test:coverage
 If local runs cause memory pressure:
 
 ```bash
-OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test
+OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test
 ```
 
 ## Related

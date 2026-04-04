@@ -2,10 +2,15 @@ import fs from "node:fs/promises";
 import type { Server } from "node:http";
 import express, { type Express } from "express";
 import { danger } from "../globals.js";
-import { SafeOpenError, readFileWithinRoot } from "../infra/fs-safe.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { detectMime } from "./mime.js";
-import { cleanOldMedia, getMediaDir, MEDIA_MAX_BYTES } from "./store.js";
+import {
+  cleanOldMedia,
+  getMediaDir,
+  isSafeOpenError,
+  MEDIA_MAX_BYTES,
+  readFileWithinRoot,
+} from "./server.runtime.js";
 
 const DEFAULT_TTL_MS = 2 * 60 * 1000;
 const MAX_MEDIA_ID_CHARS = 200;
@@ -72,7 +77,7 @@ export function attachMediaRoutes(
         setTimeout(cleanup, 50);
       });
     } catch (err) {
-      if (err instanceof SafeOpenError) {
+      if (isSafeOpenError(err)) {
         if (err.code === "outside-workspace") {
           res.status(400).send("file is outside workspace root");
           return;

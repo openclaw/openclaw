@@ -1,20 +1,18 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as commandRegistryModule from "../../../../src/auto-reply/commands-registry.js";
-import type {
-  ChatCommandDefinition,
-  CommandArgsParsing,
-} from "../../../../src/auto-reply/commands-registry.types.js";
-import type { ModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
-import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import * as globalsModule from "../../../../src/globals.js";
-import * as timeoutModule from "../../../../src/utils/with-timeout.js";
+import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
+import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
+import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import { replyWithDiscordModelPickerProviders } from "./native-command-ui.js";
 import {
+  __testing as nativeCommandTesting,
   createDiscordModelPickerFallbackButton,
   createDiscordModelPickerFallbackSelect,
 } from "./native-command.js";
@@ -238,9 +236,27 @@ function createBoundThreadBindingManager(params: {
   };
 }
 
+function createDispatchSpy() {
+  const dispatchSpy = vi
+    .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
+    .mockResolvedValue({} as never);
+  nativeCommandTesting.setDispatchReplyWithDispatcher(
+    dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+  );
+  return dispatchSpy;
+}
+
 describe("Discord model picker interactions", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+    nativeCommandTesting.setDispatchReplyWithDispatcher(
+      dispatcherModule.dispatchReplyWithDispatcher as typeof import("openclaw/plugin-sdk/reply-runtime").dispatchReplyWithDispatcher,
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {
@@ -286,9 +302,7 @@ describe("Discord model picker interactions", () => {
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
     mockModelCommandPipeline(modelCommand);
 
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const dispatchSpy = createDispatchSpy();
 
     const selectInteraction = await runModelSelect({ context });
 
@@ -320,11 +334,9 @@ describe("Discord model picker interactions", () => {
     const recordRecentSpy = vi
       .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
       .mockResolvedValue();
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const dispatchSpy = createDispatchSpy();
     const withTimeoutSpy = vi
-      .spyOn(timeoutModule, "withTimeout")
+      .spyOn(commandTextModule, "withTimeout")
       .mockRejectedValue(new Error("timeout"));
 
     await runModelSelect({ context });
@@ -395,9 +407,7 @@ describe("Discord model picker interactions", () => {
     ]);
     mockModelCommandPipeline(modelCommand);
 
-    const dispatchSpy = vi
-      .spyOn(dispatcherModule, "dispatchReplyWithDispatcher")
-      .mockResolvedValue({} as never);
+    const dispatchSpy = createDispatchSpy();
 
     // rs=2 -> first deduped recent (default is anthropic/claude-sonnet-4-5, so openai/gpt-4o remains)
     const submitInteraction = await runSubmitButton({
@@ -430,7 +440,7 @@ describe("Discord model picker interactions", () => {
 
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
     mockModelCommandPipeline(modelCommand);
-    vi.spyOn(dispatcherModule, "dispatchReplyWithDispatcher").mockResolvedValue({} as never);
+    createDispatchSpy();
     const verboseSpy = vi.spyOn(globalsModule, "logVerbose").mockImplementation(() => {});
 
     const select = createDiscordModelPickerFallbackSelect(context);

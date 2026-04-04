@@ -3,6 +3,8 @@ import {
   type ProviderAuthContext,
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
+  type ProviderReplayPolicy,
+  type ProviderReplayPolicyContext,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -16,50 +18,57 @@ import {
   upsertAuthProfile,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { DEFAULT_CONTEXT_TOKENS, normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
+import {
+  buildOpenAICompatibleReplayPolicy,
+  normalizeModelCompat,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { createZaiToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildZaiModelDefinition } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from "./onboard.js";
 
 const PROVIDER_ID = "zai";
-const GLM5_MODEL_ID = "glm-5";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+
+function buildZaiReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy | undefined {
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
+}
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  const lower = trimmedModelId.toLowerCase();
-  if (lower !== GLM5_MODEL_ID && !lower.startsWith(`${GLM5_MODEL_ID}-`)) {
+  if (!trimmedModelId.toLowerCase().startsWith("glm-5")) {
     return undefined;
   }
 
+  const existing = ctx.modelRegistry.find(
+    PROVIDER_ID,
+    trimmedModelId,
+  ) as ProviderRuntimeModel | null;
+  if (existing) {
+    return existing;
+  }
+
+  const def = buildZaiModelDefinition({ id: trimmedModelId });
   const template = ctx.modelRegistry.find(
     PROVIDER_ID,
     GLM5_TEMPLATE_MODEL_ID,
   ) as ProviderRuntimeModel | null;
-  if (template) {
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-      reasoning: true,
-    } as ProviderRuntimeModel);
-  }
-
   return normalizeModelCompat({
-    id: trimmedModelId,
-    name: trimmedModelId,
+    ...template,
+    id: def.id,
+    name: def.name,
     api: "openai-completions",
     provider: PROVIDER_ID,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
-    maxTokens: DEFAULT_CONTEXT_TOKENS,
+    reasoning: def.reasoning,
+    input: def.input,
+    cost: def.cost,
+    contextWindow: def.contextWindow,
+    maxTokens: def.maxTokens,
   } as ProviderRuntimeModel);
 }
 
@@ -272,6 +281,7 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+      buildReplayPolicy: (ctx) => buildZaiReplayPolicy(ctx),
       prepareExtraParams: (ctx) => {
         if (ctx.extraParams?.tool_stream !== undefined) {
           return ctx.extraParams;

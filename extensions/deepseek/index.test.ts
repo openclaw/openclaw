@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveProviderPluginChoice } from "../../src/plugins/provider-wizard.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
+import { resolveProviderPluginChoice } from "../../src/plugins/provider-auth-choice.runtime.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import deepseekPlugin from "./index.js";
 
 describe("deepseek provider plugin", () => {
-  it("registers DeepSeek with api-key auth wizard metadata", () => {
-    const provider = registerSingleProviderPlugin(deepseekPlugin);
+  it("registers DeepSeek with api-key auth wizard metadata", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
     const resolved = resolveProviderPluginChoice({
       providers: [provider],
       choice: "deepseek-api-key",
@@ -21,7 +21,7 @@ describe("deepseek provider plugin", () => {
   });
 
   it("builds the static DeepSeek model catalog", async () => {
-    const provider = registerSingleProviderPlugin(deepseekPlugin);
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
     expect(provider.catalog).toBeDefined();
 
     const catalog = await provider.catalog!.run({

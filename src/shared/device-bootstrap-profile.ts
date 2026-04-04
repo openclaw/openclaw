@@ -11,8 +11,8 @@ export type DeviceBootstrapProfileInput = {
 };
 
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
-  roles: ["node"],
-  scopes: [],
+  roles: ["node", "operator"],
+  scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
 };
 
 function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {
@@ -36,16 +36,4 @@ export function normalizeDeviceBootstrapProfile(
     roles: normalizeBootstrapRoles(input?.roles),
     scopes: normalizeDeviceAuthScopes(input?.scopes ? [...input.scopes] : []),
   };
-}
-
-export function sameDeviceBootstrapProfile(
-  left: DeviceBootstrapProfile,
-  right: DeviceBootstrapProfile,
-): boolean {
-  return (
-    left.roles.length === right.roles.length &&
-    left.scopes.length === right.scopes.length &&
-    left.roles.every((value, index) => value === right.roles[index]) &&
-    left.scopes.every((value, index) => value === right.scopes[index])
-  );
 }

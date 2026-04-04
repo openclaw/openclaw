@@ -5,6 +5,10 @@ import {
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import {
+  mergeProviderRequestOverrides,
+  sanitizeConfiguredProviderRequest,
+} from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -15,17 +19,18 @@ import type {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
-  DEFAULT_AUDIO_MODELS,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
+  resolveDefaultMediaModel,
 } from "./defaults.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
-import { describeImageWithModel } from "./image.js";
+import { describeImageWithModel } from "./image-runtime.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
@@ -210,6 +215,38 @@ async function resolveCliOutput(params: {
   return params.stdout.trim();
 }
 
+async function resolveCliMediaPath(params: {
+  capability: MediaUnderstandingCapability;
+  command: string;
+  mediaPath: string;
+  outputDir: string;
+}): Promise<string> {
+  const commandId = commandBase(params.command);
+  if (params.capability !== "audio" || commandId !== "whisper-cli") {
+    return params.mediaPath;
+  }
+
+  const ext = path.extname(params.mediaPath).toLowerCase();
+  if (ext === ".wav") {
+    return params.mediaPath;
+  }
+
+  const wavPath = path.join(params.outputDir, `${path.parse(params.mediaPath).name}.wav`);
+  await runFfmpeg([
+    "-y",
+    "-i",
+    params.mediaPath,
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-c:a",
+    "pcm_s16le",
+    wavPath,
+  ]);
+  return wavPath;
+}
+
 type ProviderQuery = Record<string, string | number | boolean>;
 
 function normalizeProviderQuery(
@@ -377,7 +414,11 @@ async function resolveProviderExecutionContext(params: {
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
-  return { apiKeys, baseUrl, headers };
+  const request = mergeProviderRequestOverrides(
+    sanitizeConfiguredProviderRequest(params.config?.request),
+    sanitizeConfiguredProviderRequest(params.entry.request),
+  );
+  return { apiKeys, baseUrl, headers, request };
 }
 
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
@@ -495,7 +536,7 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+    const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
       providerId,
       cfg,
       entry,
@@ -507,7 +548,14 @@ export async function runProviderEntry(params: {
       config: params.config,
       entry,
     });
-    const model = entry.model?.trim() || DEFAULT_AUDIO_MODELS[providerId] || entry.model;
+    const model =
+      entry.model?.trim() ||
+      resolveDefaultMediaModel({
+        cfg,
+        providerId,
+        capability: "audio",
+      }) ||
+      entry.model;
     const result = await executeWithApiKeyRotation({
       provider: providerId,
       apiKeys,
@@ -519,6 +567,7 @@ export async function runProviderEntry(params: {
           apiKey,
           baseUrl,
           headers,
+          request,
           model,
           language: entry.language ?? params.config?.language ?? cfg.tools?.media?.audio?.language,
           prompt,
@@ -553,7 +602,7 @@ export async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
+  const { apiKeys, baseUrl, headers, request } = await resolveProviderExecutionContext({
     providerId,
     cfg,
     entry,
@@ -571,6 +620,7 @@ export async function runProviderEntry(params: {
         apiKey,
         baseUrl,
         headers,
+        request,
         model: entry.model,
         prompt,
         timeoutMs,
@@ -619,7 +669,12 @@ export async function runCliEntry(params: {
   const outputDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-cli-"),
   );
-  const mediaPath = pathResult.path;
+  const mediaPath = await resolveCliMediaPath({
+    capability,
+    command,
+    mediaPath: pathResult.path,
+    outputDir,
+  });
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 
   const templCtx: MsgContext = {

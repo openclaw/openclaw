@@ -1,5 +1,6 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
@@ -117,17 +118,6 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   return derived.length > 0 ? derived : [];
 }
 
-function resolveFallbackProviderMentionStripRegexes(providerId?: string | null): RegExp[] {
-  switch (providerId?.trim().toLowerCase()) {
-    case "discord":
-      return [/<@!?\d+>/gi];
-    case "slack":
-      return [/<@[^>\s]+>/gi];
-    default:
-      return [];
-  }
-}
-
 export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
   const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
   return compileMentionPatternsCached({
@@ -208,7 +198,10 @@ export function stripMentions(
   agentId?: string,
 ): string {
   let result = text;
-  const providerId = ctx.Provider ? normalizeChannelId(ctx.Provider) : null;
+  const providerId =
+    (ctx.Provider ? normalizeChannelId(ctx.Provider) : null) ??
+    (ctx.Provider?.trim().toLowerCase() as ChannelId | undefined) ??
+    null;
   const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
   const configRegexes = compileMentionPatternsCached({
     patterns: normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId)),
@@ -226,9 +219,7 @@ export function stripMentions(
       cache: mentionStripRegexCompileCache,
       warnRejected: false,
     });
-  const fallbackProviderRegexes =
-    providerRegexes.length > 0 ? [] : resolveFallbackProviderMentionStripRegexes(providerId);
-  for (const re of [...configRegexes, ...providerRegexes, ...fallbackProviderRegexes]) {
+  for (const re of [...configRegexes, ...providerRegexes]) {
     result = result.replace(re, " ");
   }
   if (providerMentions?.stripMentions) {

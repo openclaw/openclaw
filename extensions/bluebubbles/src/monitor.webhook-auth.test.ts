@@ -1,10 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBlueBubblesMonitorTestRuntime,
-  EMPTY_DISPATCH_RESULT,
-  resetBlueBubblesMonitorTestState,
-  type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
@@ -27,6 +21,17 @@ import {
   type WebhookRequestParams,
 } from "./monitor.webhook.test-helpers.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import {
+  createBlueBubblesMonitorTestRuntime,
+  EMPTY_DISPATCH_RESULT,
+  resetBlueBubblesMonitorTestState,
+  type DispatchReplyParams,
+} from "./test-support/monitor-test-support.js";
+
+const { TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS } = vi.hoisted(() => ({
+  TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: 3,
+}));
+const TEST_WEBHOOK_BODY_TIMEOUT_MS = 1;
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -46,31 +51,51 @@ vi.mock("./attachments.js", () => ({
   }),
 }));
 
-vi.mock("./reactions.js", async () => {
-  const actual = await vi.importActual<typeof import("./reactions.js")>("./reactions.js");
-  return {
-    ...actual,
-    sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
-  };
-});
+vi.mock("./reactions.js", () => ({
+  normalizeBlueBubblesReactionInput: vi.fn((emoji: string, remove?: boolean) =>
+    remove ? `-${emoji}` : emoji,
+  ),
+  sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
+
+vi.mock("./webhook-ingress.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./webhook-ingress.js")>("./webhook-ingress.js");
+  return {
+    ...actual,
+    WEBHOOK_RATE_LIMIT_DEFAULTS: {
+      ...actual.WEBHOOK_RATE_LIMIT_DEFAULTS,
+      maxRequests: TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
+    },
+    readWebhookBodyOrReject: (params: Parameters<typeof actual.readWebhookBodyOrReject>[0]) =>
+      actual.readWebhookBodyOrReject({
+        ...params,
+        timeoutMs: TEST_WEBHOOK_BODY_TIMEOUT_MS,
+      }),
+  };
+});
 
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
 const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
-const mockResolveAgentRoute = vi.fn(() => ({
+const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
+  PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
+> = {
   agentId: "main",
   channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
+  lastRoutePolicy: "main",
   matchedBy: "default",
-}));
+};
+const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -84,7 +109,10 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open" as const);
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
   async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
@@ -107,6 +135,7 @@ const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
+const mockFetch = vi.fn();
 const TEST_WEBHOOK_PASSWORD = "secret-token";
 
 function createMockRuntime(): PluginRuntime {
@@ -142,6 +171,12 @@ describe("BlueBubbles webhook monitor", () => {
   let unregister: () => void;
 
   beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
     resetBlueBubblesMonitorTestState({
       createRuntime: createMockRuntime,
       fetchHistoryMock: mockFetchBlueBubblesHistory,
@@ -156,6 +191,7 @@ describe("BlueBubbles webhook monitor", () => {
 
   afterEach(() => {
     unregister?.();
+    vi.unstubAllGlobals();
   });
 
   function setupWebhookTarget(params?: {
@@ -345,25 +381,17 @@ describe("BlueBubbles webhook monitor", () => {
     });
 
     it("returns 408 when request body times out (Slow-Loris protection)", async () => {
-      vi.useFakeTimers();
-      try {
-        setupWebhookTarget();
+      setupWebhookTarget();
 
-        // Create a request that never sends data or ends (simulates slow-loris)
-        const { req, destroyMock } = createHangingWebhookRequestForTest();
+      // Create a request that never sends data or ends (simulates slow-loris).
+      const { req, destroyMock } = createHangingWebhookRequestForTest();
 
-        const { res, handledPromise } = createWebhookDispatchForTest(req);
+      const { res, handledPromise } = createWebhookDispatchForTest(req);
 
-        // Advance past the 30s timeout
-        await vi.advanceTimersByTimeAsync(31_000);
-
-        const handled = await handledPromise;
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(408);
-        expect(destroyMock).toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
+      const handled = await handledPromise;
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(408);
+      expect(destroyMock).toHaveBeenCalled();
     });
 
     it("rejects unauthorized requests before reading the body", async () => {
@@ -394,6 +422,162 @@ describe("BlueBubbles webhook monitor", () => {
     it("rejects unauthorized requests with wrong password", async () => {
       await expectProtectedWebhookRequestStatus(
         createProtectedPasswordQueryRequestParams("wrong-token"),
+        401,
+      );
+    });
+
+    it("rate limits repeated invalid password guesses from the same client", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "99999999",
+        }),
+      });
+
+      let saw429 = false;
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
+        const candidate = String(i).padStart(8, "0");
+        const { res } = await dispatchWebhookPayloadForTest(
+          createPasswordQueryRequestParamsForTest({
+            password: candidate,
+            body: createTimestampedNewMessagePayloadForTest({
+              guid: `msg-${i}`,
+              text: `hello ${i}`,
+            }),
+            remoteAddress: "192.168.1.100",
+          }),
+        );
+
+        if (res.statusCode === 429) {
+          saw429 = true;
+          break;
+        }
+
+        expect(res.statusCode).toBe(401);
+      }
+
+      expect(saw429).toBe(true);
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("keeps forwarded clients behind configured trusted proxies in separate auth buckets", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "99999999",
+        }),
+        config: {
+          gateway: {
+            trustedProxies: ["10.0.0.0/8"],
+          },
+        } as OpenClawConfig,
+      });
+
+      let saw429 = false;
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
+        const candidate = String(i).padStart(8, "0");
+        const { res } = await dispatchWebhookPayloadForTest(
+          createPasswordQueryRequestParamsForTest({
+            password: candidate,
+            body: createTimestampedNewMessagePayloadForTest({
+              guid: `proxy-msg-${i}`,
+              text: `hello proxy ${i}`,
+            }),
+            remoteAddress: "10.0.0.5",
+            overrides: {
+              headers: {
+                host: "localhost",
+                "x-forwarded-for": "203.0.113.10",
+              },
+            },
+          }),
+        );
+
+        if (res.statusCode === 429) {
+          saw429 = true;
+          break;
+        }
+
+        expect(res.statusCode).toBe(401);
+      }
+
+      expect(saw429).toBe(true);
+
+      await expectWebhookRequestStatusForTest(
+        createPasswordQueryRequestParamsForTest({
+          password: "wrong-pass",
+          body: createTimestampedNewMessagePayloadForTest({
+            guid: "proxy-msg-other-client",
+            text: "hello other proxy client",
+          }),
+          remoteAddress: "10.0.0.5",
+          overrides: {
+            headers: {
+              host: "localhost",
+              "x-forwarded-for": "203.0.113.11",
+            },
+          },
+        }),
+        401,
+      );
+    });
+
+    it("keeps real-ip fallback clients behind trusted proxies in separate auth buckets", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "99999999",
+        }),
+        config: {
+          gateway: {
+            trustedProxies: ["10.0.0.0/8"],
+            allowRealIpFallback: true,
+          },
+        } as OpenClawConfig,
+      });
+
+      let saw429 = false;
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
+        const candidate = String(i).padStart(8, "0");
+        const { res } = await dispatchWebhookPayloadForTest(
+          createPasswordQueryRequestParamsForTest({
+            password: candidate,
+            body: createTimestampedNewMessagePayloadForTest({
+              guid: `real-ip-msg-${i}`,
+              text: `hello real ip ${i}`,
+            }),
+            remoteAddress: "10.0.0.5",
+            overrides: {
+              headers: {
+                host: "localhost",
+                "x-real-ip": "203.0.113.10",
+              },
+            },
+          }),
+        );
+
+        if (res.statusCode === 429) {
+          saw429 = true;
+          break;
+        }
+
+        expect(res.statusCode).toBe(401);
+      }
+
+      expect(saw429).toBe(true);
+
+      await expectWebhookRequestStatusForTest(
+        createPasswordQueryRequestParamsForTest({
+          password: "wrong-pass",
+          body: createTimestampedNewMessagePayloadForTest({
+            guid: "real-ip-msg-other-client",
+            text: "hello other real ip client",
+          }),
+          remoteAddress: "10.0.0.5",
+          overrides: {
+            headers: {
+              host: "localhost",
+              "x-real-ip": "203.0.113.11",
+            },
+          },
+        }),
         401,
       );
     });

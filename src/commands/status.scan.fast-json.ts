@@ -6,7 +6,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getAgentLocalStatuses } from "./status.agent-local.js";
+import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import type { StatusScanResult } from "./status.scan.js";
 import { scanStatusJsonCore } from "./status.scan.json-core.js";
 import {
@@ -69,7 +69,7 @@ function resolveDefaultMemoryStorePath(agentId: string): string {
 
 async function resolveMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
-  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatuses>>;
+  agentStatus: Awaited<ReturnType<typeof getAgentLocalStatusesFn>>;
   memoryPlugin: MemoryPluginStatus;
 }): Promise<MemoryStatusSnapshot | null> {
   const { resolveMemorySearchConfig } = await loadMemorySearchModule();
@@ -127,7 +127,9 @@ export async function scanStatusJsonFast(
     cfg,
     sourceConfig: loadedRaw,
     secretDiagnostics,
-    hasConfiguredChannels: hasPotentialConfiguredChannels(cfg),
+    hasConfiguredChannels: hasPotentialConfiguredChannels(cfg, process.env, {
+      includePersistedAuthState: false,
+    }),
     opts,
     resolveOsSummary,
     resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>

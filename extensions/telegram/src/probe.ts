@@ -1,6 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-runtime";
-import type { TelegramNetworkConfig } from "../runtime-api.js";
 import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 

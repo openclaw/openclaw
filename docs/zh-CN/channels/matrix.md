@@ -5,7 +5,7 @@ summary: Matrix 支持状态、功能和配置
 title: Matrix
 x-i18n:
   generated_at: "2026-02-03T07:44:02Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b276b5263593c766e7be6549abbb27927177e7b51cfd297b4825965372513ee4
   source_path: channels/matrix.md

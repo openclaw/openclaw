@@ -25,6 +25,8 @@ let requesterDepthResolver: (sessionKey?: string) => number = () => 0;
 let subagentSessionRunActive = true;
 let shouldIgnorePostCompletion = false;
 let pendingDescendantRuns = 0;
+const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
+const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
 let fallbackRequesterResolution: {
   requesterSessionKey: string;
   requesterOrigin?: { channel?: string; to?: string; accountId?: string };
@@ -43,16 +45,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-async function createConfigModuleMock(
-  importOriginal: () => Promise<typeof import("../config/config.js")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    loadConfig: () => configOverride,
-  };
-}
-
 function createSessionsModuleMock() {
   return {
     loadSessionStore: vi.fn(() => sessionStore),
@@ -65,33 +57,6 @@ function createSessionsModuleMock() {
 function createSubagentDepthModuleMock() {
   return {
     getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
-  };
-}
-
-async function createPiEmbeddedModuleMock(
-  importOriginal: () => Promise<typeof import("./pi-embedded.js")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    isEmbeddedPiRunActive: () => false,
-    queueEmbeddedPiMessage: () => false,
-    waitForEmbeddedPiRunEnd: async () => true,
-  };
-}
-
-async function createSubagentRegistryModuleMock(
-  importOriginal: () => Promise<typeof import("./subagent-registry.js")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    countActiveDescendantRuns: () => 0,
-    countPendingDescendantRuns: () => pendingDescendantRuns,
-    listSubagentRunsForRequester: () => [],
-    isSubagentSessionRunActive: () => subagentSessionRunActive,
-    shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
-    resolveRequesterForChildSession: () => fallbackRequesterResolution,
   };
 }
 
@@ -114,27 +79,60 @@ function createTimeoutHistoryWithNoReply() {
 }
 
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
-vi.mock("../config/config.js", createConfigModuleMock);
-vi.mock("../config/sessions.js", createSessionsModuleMock);
 vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./pi-embedded.js", createPiEmbeddedModuleMock);
-vi.mock("./subagent-registry.js", createSubagentRegistryModuleMock);
-
-let runSubagentAnnounceFlow: typeof import("./subagent-announce.js").runSubagentAnnounceFlow;
+vi.mock("./subagent-announce-delivery.runtime.js", () => ({
+  createBoundDeliveryRouter: () => ({
+    resolveDestination: () => ({ mode: "none" }),
+  }),
+  resolveConversationIdFromTargets: () => "",
+  resolveExternalBestEffortDeliveryTarget: (params: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  }) => ({
+    deliver: Boolean(params.channel && params.to),
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+  }),
+  resolveQueueSettings: (params: {
+    cfg?: {
+      messages?: {
+        queue?: {
+          byChannel?: Record<string, string>;
+        };
+      };
+    };
+    channel?: string;
+  }) => ({
+    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
+  }),
+}));
+vi.mock("./subagent-announce.runtime.js", () => ({
+  callGateway: createGatewayCallModuleMock().callGateway,
+  loadConfig: () => configOverride,
+  ...createSessionsModuleMock(),
+  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
+  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
+}));
+vi.mock("./subagent-announce.registry.runtime.js", () => ({
+  countActiveDescendantRuns: () => 0,
+  countPendingDescendantRuns: () => pendingDescendantRuns,
+  countPendingDescendantRunsExcludingRun: () => 0,
+  listSubagentRunsForRequester: () => [],
+  isSubagentSessionRunActive: () => subagentSessionRunActive,
+  shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
+  replaceSubagentRunAfterSteer: () => true,
+  resolveRequesterForChildSession: () => fallbackRequesterResolution,
+}));
+import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 type AnnounceFlowParams = Parameters<
   typeof import("./subagent-announce.js").runSubagentAnnounceFlow
 >[0];
-
-async function loadFreshSubagentAnnounceFlowForTest() {
-  vi.resetModules();
-  vi.doMock("../gateway/call.js", createGatewayCallModuleMock);
-  vi.doMock("../config/config.js", createConfigModuleMock);
-  vi.doMock("../config/sessions.js", createSessionsModuleMock);
-  vi.doMock("./subagent-depth.js", createSubagentDepthModuleMock);
-  vi.doMock("./pi-embedded.js", createPiEmbeddedModuleMock);
-  vi.doMock("./subagent-registry.js", createSubagentRegistryModuleMock);
-  ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
-}
 
 const defaultSessionConfig = {
   mainKey: "main",
@@ -214,11 +212,9 @@ describe("subagent announce timeout config", () => {
     subagentSessionRunActive = true;
     shouldIgnorePostCompletion = false;
     pendingDescendantRuns = 0;
+    isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
+    waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
     fallbackRequesterResolution = null;
-  });
-
-  beforeEach(async () => {
-    await loadFreshSubagentAnnounceFlowForTest();
   });
 
   it("uses 90s timeout by default for direct announce agent call", async () => {
@@ -257,8 +253,8 @@ describe("subagent announce timeout config", () => {
   });
 
   it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
-    vi.useFakeTimers();
     try {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
       callGatewayImpl = async (request) => {
         if (request.method === "chat.history") {
           return { messages: [] };
@@ -273,7 +269,6 @@ describe("subagent announce timeout config", () => {
         },
         expectsCompletionMessage: true,
       });
-      await vi.runAllTimersAsync();
       await expect(announcePromise).resolves.toBe(false);
 
       const directAgentCalls = gatewayCalls.filter(
@@ -281,7 +276,7 @@ describe("subagent announce timeout config", () => {
       );
       expect(directAgentCalls).toHaveLength(4);
     } finally {
-      vi.useRealTimers();
+      vi.unstubAllEnvs();
     }
   });
 

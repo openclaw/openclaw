@@ -4,9 +4,10 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
+import { nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
   TEST_SETUP_RELAY_URLS,
@@ -202,6 +203,44 @@ describe("nostr setup wizard", () => {
     expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
     expect(result.cfg.channels?.nostr?.relays).toEqual(TEST_SETUP_RELAY_URLS);
   });
+
+  it("preserves the selected named account label during setup", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Nostr private key (nsec... or hex)") {
+          return TEST_HEX_PRIVATE_KEY;
+        }
+        if (message === "Relay URLs (comma-separated, optional)") {
+          return "";
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: nostrConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+      accountOverrides: {
+        nostr: "work",
+      },
+    });
+
+    expect(result.accountId).toBe("work");
+    expect(result.cfg.channels?.nostr?.defaultAccount).toBe("work");
+    expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
+  });
+
+  it("uses configured defaultAccount when setup accountId is omitted", () => {
+    expect(
+      nostrPlugin.setup?.resolveAccountId?.({
+        cfg: createConfiguredNostrCfg({ defaultAccount: "work" }) as OpenClawConfig,
+        accountId: undefined,
+        input: {},
+      } as never),
+    ).toBe("work");
+  });
 });
 
 describe("nostr account helpers", () => {
@@ -224,6 +263,21 @@ describe("nostr account helpers", () => {
     it("returns configured defaultAccount when privateKey is configured", () => {
       const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
       expect(listNostrAccountIds(cfg)).toEqual(["work"]);
+    });
+
+    it("does not treat unresolved SecretRef privateKey as configured", () => {
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: {
+              source: "env",
+              provider: "default",
+              id: "NOSTR_PRIVATE_KEY",
+            },
+          },
+        },
+      };
+      expect(listNostrAccountIds(cfg)).toEqual([]);
     });
   });
 
@@ -313,6 +367,27 @@ describe("nostr account helpers", () => {
       expect(account.publicKey).toBe("");
     });
 
+    it("does not treat unresolved SecretRef privateKey as configured", () => {
+      const secretRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "NOSTR_PRIVATE_KEY",
+      };
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: secretRef,
+          },
+        },
+      };
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.configured).toBe(false);
+      expect(account.privateKey).toBe("");
+      expect(account.publicKey).toBe("");
+      expect(account.config.privateKey).toEqual(secretRef);
+    });
+
     it("preserves all config options", () => {
       const cfg = createConfiguredNostrCfg({
         name: "Bot",
@@ -330,6 +405,34 @@ describe("nostr account helpers", () => {
         relays: ["wss://relay1", "wss://relay2"],
         dmPolicy: "allowlist",
         allowFrom: ["pubkey1", "pubkey2"],
+      });
+    });
+  });
+
+  describe("setup wizard", () => {
+    it("keeps unresolved SecretRef privateKey visible without marking the account configured", () => {
+      const secretRef = {
+        source: "env" as const,
+        provider: "default",
+        id: "NOSTR_PRIVATE_KEY",
+      };
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: secretRef,
+          },
+        },
+      };
+      const credential = nostrSetupWizard.credentials?.[0];
+      if (!credential?.inspect) {
+        throw new Error("nostr setup credential inspect missing");
+      }
+
+      expect(credential.inspect({ cfg, accountId: "default" })).toEqual({
+        accountConfigured: false,
+        hasConfiguredValue: true,
+        resolvedValue: undefined,
+        envValue: undefined,
       });
     });
   });

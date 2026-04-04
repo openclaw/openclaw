@@ -1,7 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
-  "description": "Self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI coding agents. Run a single Gateway process on your own machine and message your AI assistant from anywhere.",
+  "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "theme": "mint",
   "icons": {
     "library": "lucide"
@@ -52,6 +52,10 @@
     ]
   },
   "redirects": [
+    {
+      "source": "/providers/modelstudio",
+      "destination": "/providers/qwen_modelstudio"
+    },
     {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
@@ -330,7 +334,7 @@
     },
     {
       "source": "/auth-monitoring",
-      "destination": "/automation/auth-monitoring"
+      "destination": "/gateway/authentication"
     },
     {
       "source": "/camera",
@@ -378,7 +382,7 @@
     },
     {
       "source": "/cron-vs-heartbeat",
-      "destination": "/automation/cron-vs-heartbeat"
+      "destination": "/automation"
     },
     {
       "source": "/dashboard",
@@ -434,7 +438,7 @@
     },
     {
       "source": "/gmail-pubsub",
-      "destination": "/automation/gmail-pubsub"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/grammy",
@@ -614,7 +618,7 @@
     },
     {
       "source": "/poll",
-      "destination": "/automation/poll"
+      "destination": "/cli/message"
     },
     {
       "source": "/presence",
@@ -774,7 +778,7 @@
     },
     {
       "source": "/webhook",
-      "destination": "/automation/webhook"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/whatsapp",
@@ -875,6 +879,34 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/automation/clawflow",
+      "destination": "/automation/taskflow"
+    },
+    {
+      "source": "/automation/poll",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/automation/auth-monitoring",
+      "destination": "/gateway/authentication"
+    },
+    {
+      "source": "/automation/troubleshooting",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/automation/cron-vs-heartbeat",
+      "destination": "/automation"
+    },
+    {
+      "source": "/automation/webhook",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/automation/gmail-pubsub",
+      "destination": "/automation/cron-jobs"
     }
   ],
   "navigation": {
@@ -920,6 +952,7 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
+                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -979,13 +1012,13 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/qqbot",
                   "channels/signal",
                   "channels/slack",
                   "channels/synology-chat",
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
-                  "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1018,6 +1051,7 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
+                  "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping"
                 ]
@@ -1028,7 +1062,17 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
+                  {
+                    "group": "Memory",
+                    "pages": [
+                      "concepts/memory",
+                      "concepts/memory-builtin",
+                      "concepts/memory-qmd",
+                      "concepts/memory-honcho",
+                      "concepts/memory-search",
+                      "concepts/memory-dreaming"
+                    ]
+                  },
                   "concepts/compaction"
                 ]
               },
@@ -1064,6 +1108,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/voice-call",
                   {
                     "group": "Building Plugins",
                     "pages": [
@@ -1099,17 +1144,14 @@
                 ]
               },
               {
-                "group": "Automation",
+                "group": "Automation & Tasks",
                 "pages": [
-                  "automation/hooks",
-                  "automation/standing-orders",
+                  "automation/index",
                   "automation/cron-jobs",
-                  "automation/cron-vs-heartbeat",
-                  "automation/troubleshooting",
-                  "automation/webhook",
-                  "automation/gmail-pubsub",
-                  "automation/poll",
-                  "automation/auth-monitoring"
+                  "automation/tasks",
+                  "automation/taskflow",
+                  "automation/standing-orders",
+                  "automation/hooks"
                 ]
               },
               {
@@ -1137,15 +1179,19 @@
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
+                      "tools/ollama-search",
                       "tools/perplexity-search",
+                      "tools/searxng-search",
                       "tools/tavily"
                     ]
                   },
                   "tools/btw",
+                  "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/image-generation",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
@@ -1181,6 +1227,7 @@
                 "pages": [
                   "providers/anthropic",
                   "providers/bedrock",
+                  "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
@@ -1194,7 +1241,6 @@
                   "providers/litellm",
                   "providers/minimax",
                   "providers/mistral",
-                  "providers/modelstudio",
                   "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",
@@ -1204,8 +1250,10 @@
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",
+                  "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
+                  "providers/stepfun",
                   "providers/synthetic",
                   "providers/together",
                   "providers/venice",
@@ -1332,18 +1380,24 @@
                 ]
               },
               {
-                "group": "Nodes and devices",
+                "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
                   "nodes/troubleshooting",
-                  "nodes/media-understanding",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command",
-                  "tools/tts"
+                  {
+                    "group": "Media capabilities",
+                    "pages": [
+                      "nodes/media-understanding",
+                      "nodes/images",
+                      "nodes/audio",
+                      "nodes/camera",
+                      "tools/tts"
+                    ]
+                  },
+                  {
+                    "group": "Node features",
+                    "pages": ["nodes/talk", "nodes/voicewake", "nodes/location-command"]
+                  }
                 ]
               },
               {
@@ -1408,6 +1462,7 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
+                      "cli/flows",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox"
@@ -1427,7 +1482,14 @@
                   },
                   {
                     "group": "Utility",
-                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                    "pages": [
+                      "cli/acp",
+                      "cli/clawbot",
+                      "cli/completion",
+                      "cli/dns",
+                      "cli/docs",
+                      "cli/mcp"
+                    ]
                   }
                 ]
               },
@@ -1754,17 +1816,8 @@
                 ]
               },
               {
-                "group": "自动化",
-                "pages": [
-                  "zh-CN/automation/hooks",
-                  "zh-CN/automation/cron-jobs",
-                  "zh-CN/automation/cron-vs-heartbeat",
-                  "zh-CN/automation/troubleshooting",
-                  "zh-CN/automation/webhook",
-                  "zh-CN/automation/gmail-pubsub",
-                  "zh-CN/automation/poll",
-                  "zh-CN/automation/auth-monitoring"
-                ]
+                "group": "自动化与任务",
+                "pages": ["zh-CN/automation/hooks", "zh-CN/automation/cron-jobs"]
               },
               {
                 "group": "媒体与设备",

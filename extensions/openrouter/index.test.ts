@@ -1,38 +1,22 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
-import plugin, { injectAutoRouterPlugin } from "./index.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import openrouterPlugin, { injectAutoRouterPlugin } from "./index.js";
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const LIVE_MODEL_ID =
-  process.env.OPENCLAW_LIVE_OPENROUTER_PLUGIN_MODEL?.trim() || "openai/gpt-5.4-nano";
-const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
-const describeLive = liveEnabled ? describe : describe.skip;
+describe("openrouter provider hooks", () => {
+  it("owns native reasoning output mode", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
-const registerOpenRouterPlugin = () =>
-  registerProviderPlugin({
-    plugin,
-    id: "openrouter",
-    name: "OpenRouter Provider",
-  });
-
-describe("openrouter plugin", () => {
-  it("registers the expected provider surfaces", () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } =
-      registerOpenRouterPlugin();
-
-    expect(providers).toHaveLength(1);
-    expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
-    expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders).toHaveLength(0);
-    expect(imageProviders).toHaveLength(0);
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId: "openai/gpt-5.4",
+      } as never),
+    ).toBe("native");
   });
 });
+
 
 describe("injectAutoRouterPlugin", () => {
   function makeBaseStreamFn(payloads: Record<string, unknown>[]): StreamFn {
@@ -74,39 +58,4 @@ describe("injectAutoRouterPlugin", () => {
       { id: "auto-router", allowed_models: ["anthropic/*"] },
     ]);
   });
-});
-
-describeLive("openrouter plugin live", () => {
-  it("registers an OpenRouter provider that can complete a live request", async () => {
-    const { providers } = registerOpenRouterPlugin();
-    const provider = requireRegisteredProvider(providers, "openrouter");
-
-    const resolved = provider.resolveDynamicModel?.({
-      provider: "openrouter",
-      modelId: LIVE_MODEL_ID,
-      modelRegistry: new ModelRegistry(AuthStorage.inMemory()),
-    });
-    if (!resolved) {
-      throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);
-    }
-
-    expect(resolved).toMatchObject({
-      provider: "openrouter",
-      id: LIVE_MODEL_ID,
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
-
-    const client = new OpenAI({
-      apiKey: OPENROUTER_API_KEY,
-      baseURL: resolved.baseUrl,
-    });
-    const response = await client.chat.completions.create({
-      model: resolved.id,
-      messages: [{ role: "user", content: "Reply with exactly OK." }],
-      max_tokens: 16,
-    });
-
-    expect(response.choices[0]?.message?.content?.trim()).toMatch(/^OK[.!]?$/);
-  }, 30_000);
 });

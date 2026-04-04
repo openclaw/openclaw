@@ -1,16 +1,13 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
-  normalizeBaseUrl,
   postJsonRequest,
-} from "openclaw/plugin-sdk/media-understanding";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/provider-http";
 import {
-  DEFAULT_GOOGLE_API_BASE_URL,
-  normalizeGoogleApiBaseUrl,
   normalizeGoogleModelId,
-  parseGeminiAuth,
-} from "openclaw/plugin-sdk/provider-google";
+  resolveGoogleGenerativeAiHttpRequestConfig,
+} from "./api.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
 const DEFAULT_OUTPUT_MIME = "image/png";
@@ -51,10 +48,6 @@ type GoogleGenerateImageResponse = {
     };
   }>;
 };
-
-function resolveGoogleBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
-  return normalizeGoogleApiBaseUrl(cfg?.models?.providers?.google?.baseUrl);
-}
 
 function normalizeGoogleImageModel(model: string | undefined): string {
   const trimmed = model?.trim();
@@ -134,10 +127,13 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const model = normalizeGoogleImageModel(req.model);
-      const baseUrl = normalizeBaseUrl(resolveGoogleBaseUrl(req.cfg), DEFAULT_GOOGLE_API_BASE_URL);
-      const allowPrivate = Boolean(req.cfg?.models?.providers?.google?.baseUrl?.trim());
-      const authHeaders = parseGeminiAuth(auth.apiKey);
-      const headers = new Headers(authHeaders.headers);
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        resolveGoogleGenerativeAiHttpRequestConfig({
+          apiKey: auth.apiKey,
+          baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
+          capability: "image",
+          transport: "http",
+        });
       const imageConfig = mapSizeToImageConfig(req.size);
       const inputParts = (req.inputImages ?? []).map((image) => ({
         inlineData: {
@@ -170,7 +166,8 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         },
         timeoutMs: 60_000,
         fetchFn: fetch,
-        allowPrivateNetwork: allowPrivate,
+        allowPrivateNetwork,
+        dispatcherPolicy,
       });
 
       try {

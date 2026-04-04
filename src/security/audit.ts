@@ -1,9 +1,6 @@
 import { isIP } from "node:net";
 import path from "node:path";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
-import { redactCdpUrl } from "../browser/cdp.helpers.js";
-import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
-import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
 import type { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -20,6 +17,9 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { isBlockedHostnameOrIp, isPrivateNetworkAllowedByPolicy } from "../infra/net/ssrf.js";
+import { redactCdpUrl } from "../plugin-sdk/browser-cdp.js";
+import { resolveBrowserConfig, resolveProfile } from "../plugin-sdk/browser-config.js";
+import { resolveBrowserControlAuth } from "../plugin-sdk/browser-control-auth.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
@@ -120,6 +120,9 @@ let auditDeepModulePromise: Promise<typeof import("./audit.deep.runtime.js")> | 
 let auditChannelModulePromise:
   | Promise<typeof import("./audit-channel.collect.runtime.js")>
   | undefined;
+let pluginRegistryLoaderModulePromise:
+  | Promise<typeof import("../plugins/runtime/runtime-registry-loader.js")>
+  | undefined;
 let gatewayProbeDepsPromise:
   | Promise<{
       buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
@@ -146,6 +149,11 @@ async function loadAuditDeepModule() {
 async function loadAuditChannelModule() {
   auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
   return await auditChannelModulePromise;
+}
+
+async function loadPluginRegistryLoaderModule() {
+  pluginRegistryLoaderModulePromise ??= import("../plugins/runtime/runtime-registry-loader.js");
+  return await pluginRegistryLoaderModulePromise;
 }
 
 async function loadGatewayProbeDeps() {
@@ -193,46 +201,6 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function isFeishuDocToolEnabled(cfg: OpenClawConfig): boolean {
-  const channels = asRecord(cfg.channels);
-  const feishu = asRecord(channels?.feishu);
-  if (!feishu || feishu.enabled === false) {
-    return false;
-  }
-
-  const baseTools = asRecord(feishu.tools);
-  const baseDocEnabled = baseTools?.doc !== false;
-  const baseAppId = hasNonEmptyString(feishu.appId);
-  const baseAppSecret = hasConfiguredSecretInput(feishu.appSecret, cfg.secrets?.defaults);
-  const baseConfigured = baseAppId && baseAppSecret;
-
-  const accounts = asRecord(feishu.accounts);
-  if (!accounts || Object.keys(accounts).length === 0) {
-    return baseDocEnabled && baseConfigured;
-  }
-
-  for (const accountValue of Object.values(accounts)) {
-    const account = asRecord(accountValue) ?? {};
-    if (account.enabled === false) {
-      continue;
-    }
-    const accountTools = asRecord(account.tools);
-    const effectiveTools = accountTools ?? baseTools;
-    const docEnabled = effectiveTools?.doc !== false;
-    if (!docEnabled) {
-      continue;
-    }
-    const accountConfigured =
-      (hasNonEmptyString(account.appId) || baseAppId) &&
-      (hasConfiguredSecretInput(account.appSecret, cfg.secrets?.defaults) || baseAppSecret);
-    if (accountConfigured) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 async function collectFilesystemFindings(params: {
@@ -604,18 +572,6 @@ function collectGatewayConfigFindings(
     });
   }
 
-  if (isFeishuDocToolEnabled(cfg)) {
-    findings.push({
-      checkId: "channels.feishu.doc_owner_open_id",
-      severity: "warn",
-      title: "Feishu doc create can grant requester permissions",
-      detail:
-        'channels.feishu tools include "doc"; feishu_doc action "create" can grant document access to the trusted requesting Feishu user.',
-      remediation:
-        "Disable channels.feishu.tools.doc when not needed, and restrict tool access for untrusted prompts.",
-    });
-  }
-
   const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(cfg);
   if (enabledDangerousFlags.length > 0) {
     findings.push({
@@ -904,7 +860,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       title: "Exec host is sandbox but sandbox mode is off",
       detail:
         "tools.exec.host is explicitly set to sandbox while agents.defaults.sandbox.mode=off. " +
-        "In this mode, exec runs directly on the gateway host.",
+        "In this mode, exec fails closed because no sandbox runtime is available.",
       remediation:
         'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway" with approvals.',
     });
@@ -930,7 +886,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
       title: "Agent exec host uses sandbox while sandbox mode is off",
       detail:
         `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
-        "With sandbox mode off, exec runs directly on the gateway host.",
+        "With sandbox mode off, exec fails closed for those agents.",
       remediation:
         'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
     });
@@ -942,7 +898,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         {
           id: DEFAULT_AGENT_ID,
           security: cfg.tools?.exec?.security ?? "deny",
-          host: cfg.tools?.exec?.host ?? "sandbox",
+          host: cfg.tools?.exec?.host ?? "auto",
         },
         ...agents
           .filter(
@@ -952,7 +908,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
           .map((entry) => ({
             id: entry.id,
             security: entry.tools?.exec?.security ?? cfg.tools?.exec?.security ?? "deny",
-            host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "sandbox",
+            host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
           })),
       ].map((entry) => [entry.id, entry] as const),
     ).values(),
@@ -1455,6 +1411,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     context.includeChannelSecurity &&
     (context.plugins !== undefined || hasPotentialConfiguredChannels(cfg, env));
   if (shouldAuditChannelSecurity) {
+    if (context.plugins === undefined) {
+      (await loadPluginRegistryLoaderModule()).ensurePluginRegistryLoaded({
+        scope: "configured-channels",
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        env,
+      });
+    }
     const channelPlugins = context.plugins ?? (await loadChannelPlugins()).listChannelPlugins();
     const { collectChannelSecurityFindings } = await loadAuditChannelModule();
     findings.push(

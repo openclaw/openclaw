@@ -1,22 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
+  resolvePersistedModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import {
-  getLatestSubagentRunByChildSessionKey,
+  getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry.js";
+} from "../agents/subagent-registry-read.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
@@ -263,7 +271,7 @@ function resolveChildSessionKeys(
     if (!childSessionKey) {
       continue;
     }
-    const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+    const latest = getSessionDisplaySubagentRunByChildSessionKey(childSessionKey);
     const latestControllerSessionKey =
       latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
     if (latestControllerSessionKey !== controllerSessionKey) {
@@ -280,7 +288,7 @@ function resolveChildSessionKeys(
     if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
       continue;
     }
-    const latest = getLatestSubagentRunByChildSessionKey(key);
+    const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
     if (latest) {
       const latestControllerSessionKey =
         latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
@@ -306,6 +314,8 @@ function resolveTranscriptUsageFallback(params: {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   contextTokens?: number;
+  modelProvider?: string;
+  model?: string;
 } | null {
   const entry = params.entry;
   if (!entry?.sessionId) {
@@ -346,6 +356,8 @@ function resolveTranscriptUsageFallback(params: {
     },
   });
   return {
+    modelProvider,
+    model,
     totalTokens: resolvePositiveNumber(snapshot.totalTokens),
     totalTokensFresh: snapshot.totalTokensFresh === true,
     contextTokens: resolvePositiveNumber(contextTokens),
@@ -399,29 +411,33 @@ export function resolveFreshestSessionEntryFromStoreKeys(
   return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
 }
 
-/**
- * Find a session entry by exact or case-insensitive key match.
- * Returns both the entry and the actual store key it was found under,
- * so callers can clean up legacy mixed-case keys when they differ from canonicalKey.
- */
-function findStoreMatch(
+function findFreshestStoreMatch(
   store: Record<string, SessionEntry>,
   ...candidates: string[]
 ): { entry: SessionEntry; key: string } | undefined {
-  // Exact match first.
+  const matches = new Map<string, { entry: SessionEntry; key: string }>();
   for (const candidate of candidates) {
-    if (candidate && store[candidate]) {
-      return { entry: store[candidate], key: candidate };
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const exact = store[trimmed];
+    if (exact) {
+      matches.set(trimmed, { entry: exact, key: trimmed });
+    }
+    for (const key of findStoreKeysIgnoreCase(store, trimmed)) {
+      const entry = store[key];
+      if (entry) {
+        matches.set(key, { entry, key });
+      }
     }
   }
-  // Case-insensitive scan for ALL candidates.
-  const loweredSet = new Set(candidates.filter(Boolean).map((c) => c.toLowerCase()));
-  for (const key of Object.keys(store)) {
-    if (loweredSet.has(key.toLowerCase())) {
-      return { entry: store[key], key };
-    }
+  if (matches.size === 0) {
+    return undefined;
   }
-  return undefined;
+  return [...matches.values()].toSorted(
+    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
+  )[0];
 }
 
 /**
@@ -482,10 +498,14 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
   });
   const primaryKey = target.canonicalKey;
-  if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
+    params.store,
+    target.storeKeys,
+  );
+  if (freshestMatch) {
+    const currentPrimary = params.store[primaryKey];
+    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
+      params.store[primaryKey] = freshestMatch.entry;
     }
   }
   pruneLegacyStoreKeys({
@@ -568,6 +588,41 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
     : sorted;
 }
 
+function normalizeFallbackList(values: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function resolveGatewayAgentModel(
+  cfg: OpenClawConfig,
+  agentId: string,
+): GatewayAgentRow["model"] | undefined {
+  const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+  const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
+  const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  const fallbacks = normalizeFallbackList(fallbackOverride ?? defaultFallbacks);
+  if (!primary && fallbacks.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(primary ? { primary } : {}),
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+  };
+}
+
 export function listAgentsForGateway(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;
@@ -617,10 +672,13 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   }
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
+    const model = resolveGatewayAgentModel(cfg, id);
     return {
       id,
       name: meta?.name,
       identity: meta?.identity,
+      workspace: resolveAgentWorkspaceDir(cfg, id),
+      ...(model ? { model } : {}),
     };
   });
   return { defaultId, mainKey, scope, agents };
@@ -778,7 +836,7 @@ function resolveGatewaySessionStoreLookup(params: {
   };
   let selectedStorePath = fallback.storePath;
   let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath);
-  let selectedMatch = findStoreMatch(selectedStore, ...scanTargets);
+  let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
   for (let index = 1; index < candidates.length; index += 1) {
@@ -787,7 +845,7 @@ function resolveGatewaySessionStoreLookup(params: {
       continue;
     }
     const store = loadSessionStore(candidate.storePath);
-    const match = findStoreMatch(store, ...scanTargets);
+    const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
     }
@@ -975,47 +1033,38 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  // Prefer the last runtime model recorded on the session entry.
-  // This is the actual model used by the latest run and must win over defaults.
-  let provider = resolved.provider;
-  let model = resolved.model;
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      // Provider is explicitly recorded — use it directly. Re-parsing the
-      // model string through parseModelRef would incorrectly split OpenRouter
-      // vendor-prefixed model names (e.g. model="anthropic/claude-haiku-4.5"
-      // with provider="openrouter") into { provider: "anthropic" }, discarding
-      // the stored OpenRouter provider and causing direct API calls to a
-      // provider the user has no credentials for.
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    const parsedRuntime = parseModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
-    if (parsedRuntime) {
-      provider = parsedRuntime.provider;
-      model = parsedRuntime.model;
-    } else {
-      model = runtimeModel;
-    }
-    return { provider, model };
+  const persisted = resolvePersistedModelRef({
+    defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+    runtimeProvider: entry?.modelProvider,
+    runtimeModel: entry?.model,
+    overrideProvider: entry?.providerOverride,
+    overrideModel: entry?.modelOverride,
+  });
+  if (persisted) {
+    return persisted;
+  }
+  return resolved;
+}
+
+export async function resolveGatewayModelSupportsImages(params: {
+  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  provider?: string;
+  model?: string;
+}): Promise<boolean> {
+  if (!params.model) {
+    return true;
   }
 
-  // Fall back to explicit per-session override (set at spawn/model-patch time),
-  // then finally to configured defaults.
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
-    if (parsedOverride) {
-      provider = parsedOverride.provider;
-      model = parsedOverride.model;
-    } else {
-      provider = overrideProvider;
-      model = storedModelOverride;
-    }
+  try {
+    const catalog = await params.loadGatewayModelCatalog();
+    const modelEntry = catalog.find(
+      (entry) =>
+        entry.id === params.model && (!params.provider || entry.provider === params.provider),
+    );
+    return modelEntry ? (modelEntry.input?.includes("image") ?? false) : false;
+  } catch {
+    return false;
   }
-  return { provider, model };
 }
 
 export function resolveSessionModelIdentityRef(
@@ -1105,7 +1154,7 @@ export function buildGatewaySessionRow(params: {
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getLatestSubagentRunByChildSessionKey(key);
+  const subagentRun = getSessionDisplaySubagentRunByChildSessionKey(key);
   const subagentOwner =
     subagentRun?.controllerSessionKey?.trim() || subagentRun?.requesterSessionKey?.trim();
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
@@ -1118,26 +1167,46 @@ export function buildGatewaySessionRow(params: {
     sessionAgentId,
     subagentRun?.model,
   );
-  const modelProvider = resolvedModel.provider;
-  const model = resolvedModel.model ?? DEFAULT_MODEL;
-  const transcriptUsage =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined ||
-    resolvePositiveNumber(entry?.contextTokens) === undefined ||
+  const runtimeModelPresent =
+    Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
+  const needsTranscriptTotalTokens =
+    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
+  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
+  const needsTranscriptEstimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
-      provider: modelProvider,
-      model,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
-    }) === undefined
+    }) === undefined;
+  const transcriptUsage =
+    needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
           entry,
           storePath,
-          fallbackProvider: modelProvider,
-          fallbackModel: model,
+          fallbackProvider: resolvedModel.provider,
+          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
         })
       : null;
+  const preferLiveSubagentModelIdentity =
+    Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
+  const shouldUseTranscriptModelIdentity =
+    runtimeModelPresent &&
+    !preferLiveSubagentModelIdentity &&
+    (needsTranscriptTotalTokens || needsTranscriptContextTokens);
+  const resolvedModelIdentity = {
+    provider: resolvedModel.provider,
+    model: resolvedModel.model ?? DEFAULT_MODEL,
+  };
+  const modelIdentity = shouldUseTranscriptModelIdentity
+    ? {
+        provider: transcriptUsage?.modelProvider ?? resolvedModelIdentity.provider,
+        model: transcriptUsage?.model ?? resolvedModelIdentity.model,
+      }
+    : resolvedModelIdentity;
+  const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
@@ -1186,6 +1255,11 @@ export function buildGatewaySessionRow(params: {
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
+    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    forkedFromParent: entry?.forkedFromParent,
+    spawnDepth: entry?.spawnDepth,
+    subagentRole: entry?.subagentRole,
+    subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     displayName,
@@ -1202,6 +1276,7 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
+    fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
@@ -1225,6 +1300,7 @@ export function buildGatewaySessionRow(params: {
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+    lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
   };
 }
 
@@ -1300,13 +1376,13 @@ export function listSessionsFromStore(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      const latest = getLatestSubagentRunByChildSessionKey(key);
+      const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
       if (latest) {
         const latestControllerSessionKey =
           latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
         return latestControllerSessionKey === spawnedBy;
       }
-      return entry?.spawnedBy === spawnedBy;
+      return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;
     })
     .filter(([, entry]) => {
       if (!label) {

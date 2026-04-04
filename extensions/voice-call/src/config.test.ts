@@ -13,10 +13,11 @@ function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): Voi
 
 function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
   const tts = config.tts;
-  if (!tts?.elevenlabs) {
+  const elevenlabs = tts?.providers?.elevenlabs;
+  if (!elevenlabs || typeof elevenlabs !== "object") {
     throw new Error("voice-call config did not preserve nested elevenlabs TTS config");
   }
-  return { tts, elevenlabs: tts.elevenlabs };
+  return { tts, elevenlabs };
 }
 
 describe("validateProviderConfig", () => {
@@ -178,6 +179,35 @@ describe("validateProviderConfig", () => {
       expect(result.errors).toEqual([]);
     });
   });
+
+  describe("realtime config", () => {
+    it("rejects disabled inbound policy for realtime mode", () => {
+      const config = createBaseConfig("twilio");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "disabled";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
+      );
+    });
+
+    it("rejects enabling realtime and streaming together", () => {
+      const config = createBaseConfig("twilio");
+      config.realtime.enabled = true;
+      config.streaming.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
+      );
+    });
+  });
 });
 
 describe("normalizeVoiceCallConfig", () => {
@@ -193,23 +223,39 @@ describe("normalizeVoiceCallConfig", () => {
 
     expect(normalized.serve.path).toBe("/voice/webhook");
     expect(normalized.streaming.streamPath).toBe("/custom-stream");
-    expect(normalized.streaming.sttModel).toBe("gpt-4o-transcribe");
+    expect(normalized.streaming.provider).toBeUndefined();
+    expect(normalized.streaming.providers).toEqual({});
+    expect(normalized.realtime.streamPath).toBe("/voice/stream/realtime");
     expect(normalized.tunnel.provider).toBe("none");
     expect(normalized.webhookSecurity.allowedHosts).toEqual([]);
+  });
+
+  it("derives the realtime stream path from a custom webhook path", () => {
+    const normalized = normalizeVoiceCallConfig({
+      enabled: true,
+      provider: "twilio",
+      serve: {
+        path: "/custom/webhook",
+      },
+    });
+
+    expect(normalized.realtime.streamPath).toBe("/custom/stream/realtime");
   });
 
   it("accepts partial nested TTS overrides and preserves nested objects", () => {
     const normalized = normalizeVoiceCallConfig({
       tts: {
         provider: "elevenlabs",
-        elevenlabs: {
-          apiKey: {
-            source: "env",
-            provider: "elevenlabs",
-            id: "ELEVENLABS_API_KEY",
-          },
-          voiceSettings: {
-            speed: 1.1,
+        providers: {
+          elevenlabs: {
+            apiKey: {
+              source: "env",
+              provider: "elevenlabs",
+              id: "ELEVENLABS_API_KEY",
+            },
+            voiceSettings: {
+              speed: 1.1,
+            },
           },
         },
       },
@@ -223,5 +269,30 @@ describe("normalizeVoiceCallConfig", () => {
       id: "ELEVENLABS_API_KEY",
     });
     expect(elevenlabs.voiceSettings).toEqual({ speed: 1.1 });
+  });
+});
+
+describe("resolveVoiceCallConfig", () => {
+  it("preserves configured realtime instructions without env indirection", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "twilio",
+      realtime: {
+        enabled: true,
+        instructions: "Stay concise.",
+      },
+    });
+
+    expect(resolved.realtime.instructions).toBe("Stay concise.");
+    expect(resolved.realtime.provider).toBeUndefined();
+  });
+
+  it("leaves responseModel unset so voice responses can inherit runtime defaults", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+    });
+
+    expect(resolved.responseModel).toBeUndefined();
   });
 });

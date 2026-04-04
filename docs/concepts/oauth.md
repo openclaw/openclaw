@@ -3,16 +3,23 @@ summary: "OAuth in OpenClaw: token exchange, storage, and multi-account patterns
 read_when:
   - You want to understand OpenClaw OAuth end-to-end
   - You hit token invalidation / logout issues
-  - You want setup-token or OAuth auth flows
+  - You want Claude CLI or OAuth auth flows
   - You want multiple accounts or profile routing
 title: "OAuth"
 ---
 
 # OAuth
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, use the **setup-token** flow. Anthropic subscription use outside Claude Code has been restricted for some users in the past, so treat it as a user-choice risk and verify current Anthropic policy yourself. OpenAI Codex OAuth is explicitly supported for use in external tools like OpenClaw. This page explains:
+OpenClaw supports “subscription auth” via OAuth for providers that offer it
+(notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, new
+setup should use the local **Claude CLI** login path on the gateway host, but
+Anthropic changed third-party harness billing on
+**April 4, 2026 at 12:00 PM PT / 8:00 PM BST**: Anthropic says Claude
+subscription limits no longer cover OpenClaw and Anthropic now requires **Extra
+Usage** for that traffic. OpenAI Codex OAuth is explicitly supported for use in
+external tools like OpenClaw. This page explains:
 
-For Anthropic in production, API key auth is the safer recommended path over subscription setup-token auth.
+For Anthropic in production, API key auth is the safer recommended path.
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
@@ -37,6 +44,9 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
+- when credentials are reused from an external CLI like Codex CLI, OpenClaw
+  mirrors them with provenance and re-reads that external source instead of
+  rotating the refresh token itself
 
 ## Storage (where tokens live)
 
@@ -54,25 +64,54 @@ All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full r
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
-## Anthropic setup-token (subscription auth)
+## Anthropic legacy token compatibility
 
 <Warning>
-Anthropic setup-token support is technical compatibility, not a policy guarantee.
-Anthropic has blocked some subscription usage outside Claude Code in the past.
-Decide for yourself whether to use subscription auth, and verify Anthropic's current terms.
+Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+OpenClaw or other third-party harnesses. Existing Anthropic token profiles
+remain technically usable in OpenClaw, but Anthropic now requires **Extra
+Usage** (pay-as-you-go billed separately from the subscription) for that
+traffic.
+
+If you want other subscription-style options in OpenClaw, see [OpenAI
+Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
+Plan](/providers/qwen_modelstudio), [MiniMax Coding Plan](/providers/minimax),
+and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
-Run `claude setup-token` on any machine, then paste it into OpenClaw:
+OpenClaw no longer offers Anthropic setup-token onboarding or auth commands for
+new setup. Existing legacy Anthropic token profiles are still honored at
+runtime if they are already configured.
+
+## Anthropic Claude CLI migration
+
+If Claude CLI is already installed and signed in on the gateway host, you can
+switch Anthropic model selection over to the local CLI backend. This is a
+supported OpenClaw path when you want to reuse a local Claude CLI login on the
+same host.
+
+Prerequisites:
+
+- the `claude` binary is installed on the gateway host
+- Claude CLI is already authenticated there via `claude auth login`
+
+Migration command:
 
 ```bash
-openclaw models auth setup-token --provider anthropic
+openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
-If you generated the token elsewhere, paste it manually:
+Onboarding shortcut:
 
 ```bash
-openclaw models auth paste-token --provider anthropic
+openclaw onboard --auth-choice anthropic-cli
 ```
+
+This keeps existing Anthropic auth profiles for rollback, but rewrites the main
+default-model path from `anthropic/...` to `claude-cli/...`, rewrites matching
+Anthropic Claude fallbacks, and adds matching `claude-cli/...` allowlist
+entries under `agents.defaults.models`.
 
 Verify:
 
@@ -84,15 +123,20 @@ openclaw models status
 
 OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
-### Anthropic setup-token
+### Anthropic Claude CLI
 
 Flow shape:
 
-1. run `claude setup-token`
-2. paste the token into OpenClaw
-3. store as a token auth profile (no refresh)
+Claude CLI path:
 
-The wizard path is `openclaw onboard` → auth choice `setup-token` (Anthropic).
+1. sign in with `claude auth login` on the gateway host
+2. run `openclaw models auth login --provider anthropic --method cli --set-default`
+3. store no new auth profile; switch model selection to `claude-cli/...`
+4. keep existing Anthropic auth profiles for rollback
+
+Interactive assistant path:
+
+- `openclaw onboard` / `openclaw configure` → auth choice `anthropic-cli`
 
 ### OpenAI Codex (ChatGPT OAuth)
 
@@ -117,6 +161,8 @@ At runtime:
 
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
+- exception: reused external CLI credentials stay externally managed; OpenClaw
+  re-reads the CLI auth store and never spends the copied refresh token itself
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 
@@ -156,3 +202,9 @@ Related docs:
 
 - [/concepts/model-failover](/concepts/model-failover) (rotation + cooldown rules)
 - [/tools/slash-commands](/tools/slash-commands) (command surface)
+
+## Related
+
+- [Authentication](/gateway/authentication) — model provider auth overview
+- [Secrets](/gateway/secrets) — credential storage and SecretRef
+- [Configuration Reference](/gateway/configuration-reference#auth-storage) — auth config keys

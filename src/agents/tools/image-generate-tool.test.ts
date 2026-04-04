@@ -180,6 +180,44 @@ describe("createImageGenerateTool", () => {
     expect(createImageGenerateTool({ config: {} })).toBeNull();
   });
 
+  it("matches image-generation providers across canonical provider aliases", () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "z.ai",
+        aliases: ["z-ai"],
+        defaultModel: "glm-4.5-image",
+        models: ["glm-4.5-image"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+          },
+          edit: {
+            enabled: false,
+            maxInputImages: 0,
+          },
+          geometry: {},
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+
+    expect(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "z-ai/glm-4.5-image",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toBeNull();
+  });
+
   it("infers an OpenAI image-generation model from env-backed auth", () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
@@ -371,6 +409,89 @@ describe("createImageGenerateTool", () => {
           expect.objectContaining({
             buffer: Buffer.from("input-image"),
             mimeType: "image/png",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("does not treat inferred edit resolution as an OpenAI override", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "openai",
+        defaultModel: "gpt-image-1",
+        models: ["gpt-image-1"],
+        capabilities: {
+          generate: {
+            maxCount: 4,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          edit: {
+            enabled: true,
+            maxCount: 4,
+            maxInputImages: 5,
+            supportsSize: true,
+            supportsAspectRatio: false,
+            supportsResolution: false,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1024x1536", "1536x1024"],
+          },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "edited.png",
+        },
+      ],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("input-image"),
+      contentType: "image/jpeg",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 3200,
+      height: 1800,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/edited.png",
+      id: "edited.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+      workspaceDir: process.cwd(),
+    });
+
+    await expect(
+      tool.execute("call-openai-edit", {
+        prompt: "Remove the subject but keep the rest unchanged.",
+        image: "./fixtures/reference.png",
+      }),
+    ).resolves.toBeDefined();
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelOverride: undefined,
+        resolution: undefined,
+        inputImages: [
+          expect.objectContaining({
+            buffer: Buffer.from("input-image"),
+            mimeType: "image/jpeg",
           }),
         ],
       }),

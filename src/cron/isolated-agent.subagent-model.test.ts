@@ -45,7 +45,7 @@ function makeCfg(
   const base: OpenClawConfig = {
     agents: {
       defaults: {
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
         workspace: path.join(home, "openclaw"),
       },
     },
@@ -95,12 +95,16 @@ async function runSubagentModelCase(params: {
   home: string;
   cfgOverrides?: Partial<OpenClawConfig>;
   jobModelOverride?: string;
+  agentId?: string;
 }) {
   const storePath = await writeSessionStore(params.home);
   mockEmbeddedAgent();
   const job = makeJob();
   if (params.jobModelOverride) {
     job.payload = { kind: "agentTurn", message: "do work", model: params.jobModelOverride };
+  }
+  if (params.agentId) {
+    job.agentId = params.agentId;
   }
 
   await runCronIsolatedAgentTurn({
@@ -127,7 +131,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       cfgOverrides: {
         agents: {
           defaults: {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
             subagents: { model: "ollama/llama3.2:3b" },
           },
         },
@@ -139,14 +143,14 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       name: "falls back to main model when subagents.model is unset",
       cfgOverrides: undefined,
       expectedProvider: "anthropic",
-      expectedModel: "claude-sonnet-4-5",
+      expectedModel: "claude-sonnet-4-6",
     },
     {
       name: "supports subagents.model with {primary} object format",
       cfgOverrides: {
         agents: {
           defaults: {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
             subagents: { model: { primary: "google/gemini-2.5-flash" } },
           },
         },
@@ -180,7 +184,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: "anthropic/claude-sonnet-4-5",
+              model: "anthropic/claude-sonnet-4-6",
               workspace: path.join(home, "openclaw"),
               subagents: { model: "ollama/llama3.2:3b" },
             },
@@ -190,6 +194,27 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       });
       expect(call?.provider).toBe("openai");
       expect(call?.model).toBe("gpt-4o");
+    });
+  });
+
+  it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    await withTempHome(async (home) => {
+      const call = await runSubagentModelCase({
+        home,
+        agentId: "research",
+        cfgOverrides: {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-sonnet-4-6",
+              workspace: path.join(home, "openclaw"),
+              subagents: { model: "ollama/llama3.2:3b" },
+            },
+            list: [{ id: "research", model: { primary: "anthropic/claude-opus-4-6" } }],
+          },
+        },
+      });
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toBe("claude-opus-4-6");
     });
   });
 });

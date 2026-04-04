@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -8,13 +9,19 @@ export function composeSystemPromptWithHookContext(params: {
   prependSystemContext?: string;
   appendSystemContext?: string;
 }): string | undefined {
-  const prependSystem = params.prependSystemContext?.trim();
-  const appendSystem = params.appendSystemContext?.trim();
+  const prependSystem =
+    typeof params.prependSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.prependSystemContext)
+      : "";
+  const appendSystem =
+    typeof params.appendSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.appendSystemContext)
+      : "";
   if (!prependSystem && !appendSystem) {
     return undefined;
   }
   return joinPresentTextSegments(
-    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
+    [prependSystem, params.baseSystemPrompt, appendSystem],
     { trim: true },
   );
 }
@@ -31,20 +38,31 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
     : undefined;
 }
 
+export function shouldUseOpenAIWebSocketTransport(params: {
+  provider: string;
+  modelApi?: string | null;
+}): boolean {
+  // openai-codex normalizes to the ChatGPT backend HTTP path, not the public
+  // OpenAI Responses websocket endpoint. Keep it on HTTP until a provider-
+  // specific websocket target exists and is verified end-to-end.
+  return params.modelApi === "openai-responses" && params.provider === "openai";
+}
+
 export function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string) => boolean;
+  modelApi?: string;
+  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
 }): boolean {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
   return (
     params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-    params.isCacheTtlEligibleProvider(params.provider, params.modelId)
+    params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.modelApi)
   );
 }
 
@@ -57,7 +75,8 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string) => boolean;
+  modelApi?: string;
+  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
   now?: number;
 }): boolean {
   if (!shouldAppendAttemptCacheTtl(params)) {

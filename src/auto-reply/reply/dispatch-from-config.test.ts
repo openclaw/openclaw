@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type {
@@ -78,6 +78,9 @@ const sessionStoreMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
 }));
+const agentEventMocks = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -128,13 +131,23 @@ vi.mock("./route-reply.runtime.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
-vi.mock("./route-reply.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./route-reply.js")>();
-  return {
-    ...actual,
-    routeReply: mocks.routeReply,
-  };
-});
+vi.mock("./route-reply.js", () => ({
+  isRoutableChannel: (channel: string | undefined) =>
+    Boolean(
+      channel &&
+      [
+        "telegram",
+        "slack",
+        "discord",
+        "signal",
+        "imessage",
+        "whatsapp",
+        "feishu",
+        "mattermost",
+      ].includes(channel),
+    ),
+  routeReply: mocks.routeReply,
+}));
 
 vi.mock("./abort.runtime.js", () => ({
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
@@ -152,29 +165,17 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
 }));
-vi.mock("../../config/sessions/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/store.js")>();
-  return {
-    ...actual,
-    loadSessionStore: sessionStoreMocks.loadSessionStore,
-    resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  };
-});
-vi.mock("../../config/sessions/paths.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/paths.js")>();
-  return {
-    ...actual,
-    resolveStorePath: sessionStoreMocks.resolveStorePath,
-  };
-});
+vi.mock("./dispatch-from-config.runtime.js", () => ({
+  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  loadSessionStore: sessionStoreMocks.loadSessionStore,
+  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  resolveStorePath: sessionStoreMocks.resolveStorePath,
+  triggerInternalHook: internalHookMocks.triggerInternalHook,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookMocks.runner,
   getGlobalPluginRegistry: () => hookMocks.registry,
-}));
-vi.mock("../../hooks/internal-hooks.js", () => ({
-  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  triggerInternalHook: internalHookMocks.triggerInternalHook,
 }));
 vi.mock("../../acp/runtime/session-meta.js", () => ({
   listAcpSessionEntries: acpMocks.listAcpSessionEntries,
@@ -184,29 +185,27 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
 vi.mock("../../acp/runtime/registry.js", () => ({
   requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
 }));
-vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
-  return {
-    ...actual,
-    getSessionBindingService: () => ({
-      bind: vi.fn(async () => {
-        throw new Error("bind not mocked");
-      }),
-      getCapabilities: vi.fn(() => ({
-        adapterAvailable: true,
-        bindSupported: true,
-        unbindSupported: true,
-        placements: ["current", "child"] as const,
-      })),
-      listBySession: (targetSessionKey: string) =>
-        sessionBindingMocks.listBySession(targetSessionKey),
-      resolveByConversation: sessionBindingMocks.resolveByConversation,
-      touch: sessionBindingMocks.touch,
-      unbind: vi.fn(async () => []),
+vi.mock("../../infra/outbound/session-binding-service.js", () => ({
+  getSessionBindingService: () => ({
+    bind: vi.fn(async () => {
+      throw new Error("bind not mocked");
     }),
-  };
-});
+    getCapabilities: vi.fn(() => ({
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current", "child"] as const,
+    })),
+    listBySession: (targetSessionKey: string) =>
+      sessionBindingMocks.listBySession(targetSessionKey),
+    resolveByConversation: sessionBindingMocks.resolveByConversation,
+    touch: sessionBindingMocks.touch,
+    unbind: vi.fn(async () => []),
+  }),
+}));
+vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+}));
 vi.mock("../../tts/tts.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
   normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
@@ -238,6 +237,7 @@ function createDispatcher(): ReplyDispatcher {
     sendFinalReply: vi.fn(() => true),
     waitForIdle: vi.fn(async () => {}),
     getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
     markComplete: vi.fn(),
   };
 }
@@ -284,13 +284,15 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 }
 
 describe("dispatchReplyFromConfig", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     ({ __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js"));
     ({ __testing: pluginBindingTesting } = await import("../../plugins/conversation-binding.js"));
     ({ AcpRuntimeError: AcpRuntimeErrorClass } = await import("../../acp/runtime/errors.js"));
+  });
+
+  beforeEach(() => {
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -299,8 +301,9 @@ describe("dispatchReplyFromConfig", () => {
           nativeCommands: true,
         },
       }),
-      execApprovals: {
-        shouldSuppressLocalPrompt: ({ payload }: { payload: ReplyPayload }) =>
+      outbound: {
+        deliveryMode: "direct",
+        shouldSuppressLocalPayloadPrompt: ({ payload }: { payload: ReplyPayload }) =>
           Boolean(
             payload.channelData &&
             typeof payload.channelData === "object" &&
@@ -348,6 +351,7 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.upsertAcpSessionMeta.mockReset();
     acpMocks.upsertAcpSessionMeta.mockResolvedValue(null);
     acpMocks.requireAcpRuntimeBackend.mockReset();
+    agentEventMocks.emitAgentEvent.mockReset();
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
     pluginBindingTesting.reset();
@@ -1034,7 +1038,9 @@ describe("dispatchReplyFromConfig", () => {
     const streamedText = blockCalls.map((call) => (call[0] as ReplyPayload).text ?? "").join("");
     expect(streamedText).toContain("hello");
     expect(streamedText).toContain("world");
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello world" }),
+    );
   });
 
   it("aborts ACP dispatch promptly when the caller abort signal fires", async () => {
@@ -1123,6 +1129,127 @@ describe("dispatchReplyFromConfig", () => {
     expect(outcome).toBe("settled");
   });
 
+  it("emits lifecycle end for ACP turns using the current run id", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyOptions: {
+        runId: "run-acp-lifecycle-end",
+      },
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp-lifecycle-end",
+        sessionKey: "agent:codex-acp:session-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "end",
+        }),
+      }),
+    );
+  });
+
+  it("emits lifecycle error for ACP turn failures using the current run id", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([]);
+    runtime.runTurn.mockImplementation(async function* () {
+      yield { type: "status", tag: "usage_update", text: "warming up" };
+      throw new Error("ACP exploded");
+    });
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyOptions: {
+        runId: "run-acp-lifecycle-error",
+      },
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp-lifecycle-error",
+        sessionKey: "agent:codex-acp:session-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "error",
+          error: expect.stringContaining("ACP exploded"),
+        }),
+      }),
+    );
+  });
+
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
     setNoAbort();
     const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
@@ -1183,12 +1310,12 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(1);
-    const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.text).toContain("Session ids resolved");
-    expect(finalPayload?.text).toContain("agent session id: inner-123");
-    expect(finalPayload?.text).toContain("acpx session id: acpx-123");
-    expect(finalPayload?.text).toContain("codex resume inner-123");
+    expect(finalCalls.length).toBe(2);
+    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
+    expect(noticePayload?.text).toContain("Session ids resolved");
+    expect(noticePayload?.text).toContain("agent session id: inner-123");
+    expect(noticePayload?.text).toContain("acpx session id: acpx-123");
+    expect(noticePayload?.text).toContain("codex resume inner-123");
   });
 
   it("posts resolved-session-id notice when ACP session is bound even without MessageThreadId", async () => {
@@ -1266,11 +1393,76 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver: vi.fn() });
 
     const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
-    expect(finalCalls.length).toBe(1);
-    const finalPayload = finalCalls[0]?.[0] as ReplyPayload | undefined;
-    expect(finalPayload?.text).toContain("Session ids resolved");
-    expect(finalPayload?.text).toContain("agent session id: inner-123");
-    expect(finalPayload?.text).toContain("acpx session id: acpx-123");
+    expect(finalCalls.length).toBe(2);
+    const noticePayload = finalCalls[1]?.[0] as ReplyPayload | undefined;
+    expect(noticePayload?.text).toContain("Session ids resolved");
+    expect(noticePayload?.text).toContain("agent session id: inner-123");
+    expect(noticePayload?.text).toContain("acpx session id: acpx-123");
+  });
+
+  it("honors the configured default account when resolving plugin-owned binding fallbacks", async () => {
+    setNoAbort();
+    sessionBindingMocks.resolveByConversation.mockImplementation(
+      (ref: {
+        channel: string;
+        accountId: string;
+        conversationId: string;
+        parentConversationId?: string;
+      }) =>
+        ref.channel === "discord" && ref.accountId === "work" && ref.conversationId === "thread-1"
+          ? ({
+              bindingId: "plugin:work:thread-1",
+              targetSessionKey: "plugin-binding:missing-plugin",
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: "thread-1",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: {
+                pluginBindingOwner: "plugin",
+                pluginId: "missing-plugin",
+                pluginRoot: "/plugins/missing-plugin",
+                pluginName: "Missing Plugin",
+              },
+            } satisfies SessionBindingRecord)
+          : null,
+    );
+
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => undefined);
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      To: "discord:thread-1",
+      SessionKey: "main",
+      BodyForAgent: "fallback",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "work",
+        conversationId: "thread-1",
+      }),
+    );
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("not currently loaded"),
+      }),
+    );
+    expect(replyResolver).toHaveBeenCalled();
   });
 
   it("honors send-policy deny before ACP runtime dispatch", async () => {
@@ -1665,7 +1857,9 @@ describe("dispatchReplyFromConfig", () => {
       .map((call) => ((call[0] as ReplyPayload).text ?? "").trim())
       .filter(Boolean);
     expect(blockTexts).toEqual(["What do you want to work on?"]);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "What do you want to work on?" }),
+    );
   });
 
   it("generates final-mode TTS audio after ACP block streaming completes", async () => {
@@ -2757,6 +2951,70 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("Reasoning:\n_thinking..._");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("signals block boundaries before async block delivery is queued", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const callOrder: string[] = [];
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      await opts?.onBlockReply?.({ text: "The answer is 42" });
+      return undefined;
+    };
+
+    (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => {
+        callOrder.push(`dispatch:${payload.text}`);
+        return true;
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        onBlockReplyQueued: (payload) => {
+          callOrder.push(`queued:${payload.text}`);
+        },
+      },
+    });
+
+    expect(callOrder).toEqual(["queued:The answer is 42", "dispatch:The answer is 42"]);
+  });
+
+  it("forwards payload metadata into onBlockReplyQueued context", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "whatsapp" });
+    const onBlockReplyQueued = vi.fn();
+    const { setReplyPayloadMetadata } = await import("../types.js");
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload | undefined> => {
+      const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
+      await opts?.onBlockReply?.(payload);
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onBlockReplyQueued },
+    });
+
+    expect(onBlockReplyQueued).toHaveBeenCalledWith(
+      { text: "Alpha" },
+      expect.objectContaining({ assistantMessageIndex: 7 }),
+    );
   });
 });
 

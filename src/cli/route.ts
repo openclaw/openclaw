@@ -1,9 +1,7 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { loggingState } from "../logging/state.js";
 import { defaultRuntime } from "../runtime.js";
-import { VERSION } from "../version.js";
 import { getCommandPathWithRootOptions, hasFlag, hasHelpOrVersion } from "./argv.js";
-import { emitCliBanner } from "./banner.js";
 import { findRoutedCommand } from "./program/routes.js";
 
 async function prepareRoutedCommand(params: {
@@ -12,13 +10,24 @@ async function prepareRoutedCommand(params: {
   loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
   const suppressDoctorStdout = hasFlag(params.argv, "--json");
-  emitCliBanner(VERSION, { argv: params.argv });
-  const { ensureConfigReady } = await import("./program/config-guard.js");
-  await ensureConfigReady({
-    runtime: defaultRuntime,
-    commandPath: params.commandPath,
-    ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
-  });
+  const skipConfigGuard =
+    (params.commandPath[0] === "status" && suppressDoctorStdout) ||
+    (params.commandPath[0] === "gateway" && params.commandPath[1] === "status");
+  if (!suppressDoctorStdout && process.stdout.isTTY) {
+    const [{ emitCliBanner }, { VERSION }] = await Promise.all([
+      import("./banner.js"),
+      import("../version.js"),
+    ]);
+    emitCliBanner(VERSION, { argv: params.argv });
+  }
+  if (!skipConfigGuard) {
+    const { ensureConfigReady } = await import("./program/config-guard.js");
+    await ensureConfigReady({
+      runtime: defaultRuntime,
+      commandPath: params.commandPath,
+      ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+    });
+  }
   const shouldLoadPlugins =
     typeof params.loadPlugins === "function" ? params.loadPlugins(params.argv) : params.loadPlugins;
   if (shouldLoadPlugins) {

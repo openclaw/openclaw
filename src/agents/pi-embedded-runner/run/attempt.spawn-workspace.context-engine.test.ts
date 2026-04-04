@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   type AttemptContextEngine,
   assembleAttemptContextEngine,
@@ -7,9 +7,12 @@ import {
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
+  cleanupTempPaths,
   createContextEngineBootstrapAndAssemble,
+  createContextEngineAttemptRunner,
   expectCalledWithSessionKey,
   getHoisted,
+  resetEmbeddedAttemptHarness,
 } from "./attempt.spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
@@ -96,9 +99,15 @@ async function finalizeTurn(
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+  const tempPaths: string[] = [];
 
   beforeEach(() => {
+    resetEmbeddedAttemptHarness();
     hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await cleanupTempPaths(tempPaths);
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -167,6 +176,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ).toBe(true);
   });
 
+  it("forwards silentExpected to the embedded subscription", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: {
+        bootstrap,
+        assemble,
+      },
+      attemptOverrides: {
+        silentExpected: true,
+      },
+      sessionKey,
+      tempPaths,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(hoisted.subscribeEmbeddedPiSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silentExpected: true,
+      }),
+    );
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {
@@ -217,5 +249,33 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.runContextEngineMaintenanceMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ reason: "turn" }),
     );
+  });
+
+  it("releases the session lock even when teardown cleanup throws", async () => {
+    const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
+    const releaseMock = vi.fn(async () => {});
+    hoisted.acquireSessionWriteLockMock.mockResolvedValue({
+      release: releaseMock,
+    });
+    let flushCallCount = 0;
+    hoisted.flushPendingToolResultsAfterIdleMock.mockImplementation(async () => {
+      flushCallCount += 1;
+      if (flushCallCount >= 2) {
+        throw new Error("flush failed");
+      }
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: {
+        bootstrap,
+        assemble,
+      },
+      sessionKey,
+      tempPaths,
+    });
+
+    expect(result.promptError).toBeNull();
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session");
   });
 });

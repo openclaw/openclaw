@@ -123,8 +123,10 @@ openclaw doctor --generate-gateway-token
 openclaw config set gateway.tailscale.mode serve
 openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 
-systemctl --user restart openclaw-gateway
+systemctl --user restart openclaw-gateway.service
 ```
+
+`gateway.trustedProxies=["127.0.0.1"]` is for the local Tailscale Serve proxy. Diff viewer routes keep fail-closed behavior in this setup: raw `127.0.0.1` viewer requests without forwarded proxy headers can return `Diff not found`. Use `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set `plugins.entries.diffs.config.viewerBaseUrl` (or pass a proxy `baseUrl`) if you need shareable viewer links.
 
 ## 7) Verify
 
@@ -133,7 +135,7 @@ systemctl --user restart openclaw-gateway
 openclaw --version
 
 # Check daemon status
-systemctl --user status openclaw-gateway
+systemctl --user status openclaw-gateway.service
 
 # Check Tailscale Serve
 tailscale serve status
@@ -251,7 +253,7 @@ sudo tailscale up --ssh --hostname=openclaw --reset
 ```bash
 openclaw gateway status
 openclaw doctor --non-interactive
-journalctl --user -u openclaw-gateway -n 50
+journalctl --user -u openclaw-gateway.service -n 50
 ```
 
 ### Cannot reach Control UI
@@ -264,7 +266,7 @@ tailscale serve status
 curl http://localhost:18789
 
 # Restart if needed
-systemctl --user restart openclaw-gateway
+systemctl --user restart openclaw-gateway.service
 ```
 
 ### ARM binary issues

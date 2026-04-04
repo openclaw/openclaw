@@ -6,7 +6,7 @@ summary: Doctor 命令：健康检查、配置迁移和修复步骤
 title: Doctor
 x-i18n:
   generated_at: "2026-02-03T07:49:03Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: df7b25f60fd08d508f4c6abfc8e7e06f29bd4bbb34c3320397f47eb72c8de83f
   source_path: gateway/doctor.md

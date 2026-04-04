@@ -28,6 +28,8 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 - [Amazon Bedrock](/providers/bedrock)
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
+- [BytePlus (International)](/concepts/model-providers#byteplus-international)
+- [Chutes](/providers/chutes)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepSeek](/providers/deepseek)
 - [GitHub Copilot](/providers/github-copilot)
@@ -39,7 +41,6 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
-- [Model Studio (Alibaba Cloud)](/providers/modelstudio)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [NVIDIA](/providers/nvidia)
 - [Ollama (cloud + local models)](/providers/ollama)
@@ -49,8 +50,10 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [OpenRouter](/providers/openrouter)
 - [Perplexity (web search)](/providers/perplexity-provider)
 - [Qianfan](/providers/qianfan)
-- [Qwen (OAuth)](/providers/qwen)
+- [Qwen](/providers/qwen)
+- [Qwen / Model Studio (Alibaba Cloud)](/providers/qwen_modelstudio)
 - [SGLang (local models)](/providers/sglang)
+- [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
 - [Together AI](/providers/together)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
@@ -60,6 +63,10 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [xAI](/providers/xai)
 - [Xiaomi](/providers/xiaomi)
 - [Z.AI](/providers/zai)
+
+## Shared overview pages
+
+- [Additional bundled variants](/providers/models#additional-bundled-provider-variants) - Anthropic Vertex, Copilot Proxy, and Gemini CLI OAuth
 
 ## Transcription providers
 

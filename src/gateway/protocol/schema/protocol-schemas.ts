@@ -31,7 +31,11 @@ import {
   ModelsListResultSchema,
   SkillsBinsParamsSchema,
   SkillsBinsResultSchema,
+  SkillsDetailParamsSchema,
+  SkillsDetailResultSchema,
   SkillsInstallParamsSchema,
+  SkillsSearchParamsSchema,
+  SkillsSearchResultSchema,
   SkillsStatusParamsSchema,
   SkillsUpdateParamsSchema,
   ToolCatalogEntrySchema,
@@ -136,6 +140,10 @@ import {
   NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import {
+  PluginApprovalRequestParamsSchema,
+  PluginApprovalResolveParamsSchema,
+} from "./plugin-approvals.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SecretsReloadParamsSchema,
@@ -282,6 +290,10 @@ export const ProtocolSchemas = {
   ToolsEffectiveResult: ToolsEffectiveResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
+  SkillsSearchParams: SkillsSearchParamsSchema,
+  SkillsSearchResult: SkillsSearchResultSchema,
+  SkillsDetailParams: SkillsDetailParamsSchema,
+  SkillsDetailResult: SkillsDetailResultSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
   CronJob: CronJobSchema,
@@ -302,6 +314,8 @@ export const ProtocolSchemas = {
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
+  PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,

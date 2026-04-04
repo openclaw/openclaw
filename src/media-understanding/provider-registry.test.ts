@@ -11,15 +11,10 @@ describe("media-understanding provider registry", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("keeps core-owned fallback providers registered by default", () => {
+  it("returns no providers by default when no active registry is present", () => {
     const registry = buildMediaUnderstandingRegistry();
-    const groqProvider = getMediaUnderstandingProvider("groq", registry);
-    const deepgramProvider = getMediaUnderstandingProvider("deepgram", registry);
-
-    expect(groqProvider?.id).toBe("groq");
-    expect(groqProvider?.capabilities).toEqual(["audio"]);
-    expect(deepgramProvider?.id).toBe("deepgram");
-    expect(deepgramProvider?.capabilities).toEqual(["audio"]);
+    expect(getMediaUnderstandingProvider("groq", registry)).toBeUndefined();
+    expect(getMediaUnderstandingProvider("deepgram", registry)).toBeUndefined();
   });
 
   it("merges plugin-registered media providers into the active registry", async () => {
@@ -62,5 +57,29 @@ describe("media-understanding provider registry", () => {
     const provider = getMediaUnderstandingProvider("gemini", registry);
 
     expect(provider?.id).toBe("google");
+  });
+
+  it("auto-registers media-understanding for config providers with image-capable models (#51392)", () => {
+    const cfg = {
+      models: {
+        providers: {
+          glm: {
+            models: [{ id: "glm-4.6v", input: ["text", "image"] }],
+          },
+          textOnly: {
+            models: [{ id: "text-model", input: ["text"] }],
+          },
+        },
+      },
+    } as never;
+    const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+    const glmProvider = getMediaUnderstandingProvider("glm", registry);
+    const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
+
+    expect(glmProvider?.id).toBe("glm");
+    expect(glmProvider?.capabilities).toEqual(["image"]);
+    expect(glmProvider?.describeImage).toBeDefined();
+    expect(glmProvider?.describeImages).toBeDefined();
+    expect(textOnlyProvider).toBeUndefined();
   });
 });

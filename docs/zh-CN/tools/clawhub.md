@@ -1,13 +1,13 @@
 ---
 read_when:
   - 向新用户介绍 ClawHub
-  - 安装、搜索或发布 Skills
+  - 安装、搜索或发布 Skills 或插件
   - 说明 ClawHub CLI 标志和同步行为
-summary: ClawHub 指南：公共 Skills 注册中心 + CLI 工作流
+summary: ClawHub 指南：公共 Skills / 插件注册中心与 CLI 工作流
 title: ClawHub
 x-i18n:
   generated_at: "2026-02-01T21:42:32Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8b7f8fab80a34e409f37fa130a49ff5b487966755a7b0d214dfebf5207c7124c
   source_path: tools/clawhub.md
@@ -16,9 +16,9 @@ x-i18n:
 
 # ClawHub
 
-ClawHub 是 **OpenClaw 的公共 Skills 注册中心**。它是一项免费服务：所有 Skills 都是公开的、开放的，所有人都可以查看、共享和复用。Skills 就是一个包含 `SKILL.md` 文件（以及辅助文本文件）的文件夹。你可以在网页应用中浏览 Skills，也可以使用 CLI 来搜索、安装、更新和发布 Skills。
+ClawHub 是 **OpenClaw 的公共 Skills 与插件注册中心**。你可以在网页应用中浏览资源，也可以使用 CLI 来搜索、安装、更新和发布 Skills / 插件。
 
-网站：[clawhub.com](https://clawhub.com)
+网站：[clawhub.ai](https://clawhub.ai)
 
 ## 适用人群（新手友好）
 
@@ -112,14 +112,21 @@ pnpm add -g clawhub
 
 - `clawhub list`（读取 `.clawhub/lock.json`）
 
-发布：
+发布 Skills：
 
-- `clawhub publish <path>`
+- `clawhub skill publish <path>`
 - `--slug <slug>`：Skills 标识符。
 - `--name <name>`：显示名称。
 - `--version <version>`：语义化版本号。
 - `--changelog <text>`：变更日志文本（可以为空）。
 - `--tags <tags>`：逗号分隔的标签（默认：`latest`）。
+
+发布插件：
+
+- `clawhub package publish <source>`
+- `<source>` 可以是本地文件夹、`owner/repo`、`owner/repo@ref` 或 GitHub URL。
+- `--dry-run`：只生成发布计划，不实际上传。
+- `--json`：为 CI 输出结构化 JSON。
 
 删除/恢复（仅所有者/管理员）：
 
@@ -162,13 +169,22 @@ clawhub update --all
 对于单个 Skills 文件夹：
 
 ```bash
-clawhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
+clawhub skill publish ./my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
 ```
 
 一次扫描并备份多个 Skills：
 
 ```bash
 clawhub sync --all
+```
+
+### 从 GitHub 发布插件
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+clawhub package publish your-org/your-plugin@v1.0.0
+clawhub package publish https://github.com/your-org/your-plugin
 ```
 
 ## 高级详情（技术性）

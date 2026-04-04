@@ -3,6 +3,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -76,7 +77,10 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const cfg = loadConfig();
+  const cfg = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  }).config;
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -378,22 +382,27 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, channel } = resolvedChannel;
-    if (typeof request.durationSeconds === "number" && channel !== "telegram") {
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    const outbound = plugin?.outbound;
+    if (
+      typeof request.durationSeconds === "number" &&
+      outbound?.supportsPollDurationSeconds !== true
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "durationSeconds is only supported for Telegram polls",
+          `durationSeconds is not supported for ${channel} polls`,
         ),
       );
       return;
     }
-    if (typeof request.isAnonymous === "boolean" && channel !== "telegram") {
+    if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+        errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
       );
       return;
     }
@@ -413,8 +422,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
         respond(
           false,

@@ -4,6 +4,7 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
+  createSetupInputPresenceValidator,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
   type ChannelSetupWizard,
@@ -34,9 +35,13 @@ function isConfigured(account: TlonResolvedAccount): boolean {
 }
 
 type TlonSetupWizardBaseParams = {
-  resolveConfigured: (params: { cfg: OpenClawConfig }) => boolean | Promise<boolean>;
+  resolveConfigured: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+  }) => boolean | Promise<boolean>;
   resolveStatusLines?: (params: {
     cfg: OpenClawConfig;
+    accountId?: string;
     configured: boolean;
   }) => string[] | Promise<string[]>;
   finalize: NonNullable<ChannelSetupWizard["finalize"]>;
@@ -52,9 +57,9 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
       unconfiguredHint: "urbit messenger",
       configuredScore: 1,
       unconfiguredScore: 4,
-      resolveConfigured: ({ cfg }) => params.resolveConfigured({ cfg }),
-      resolveStatusLines: ({ cfg, configured }) =>
-        params.resolveStatusLines?.({ cfg, configured }) ?? [],
+      resolveConfigured: ({ cfg, accountId }) => params.resolveConfigured({ cfg, accountId }),
+      resolveStatusLines: ({ cfg, accountId, configured }) =>
+        params.resolveStatusLines?.({ cfg, accountId, configured }) ?? [],
     },
     introNote: {
       title: "Tlon setup",
@@ -121,16 +126,28 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
   };
 }
 
-export async function resolveTlonSetupConfigured(cfg: OpenClawConfig): Promise<boolean> {
+export async function resolveTlonSetupConfigured(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<boolean> {
+  if (accountId) {
+    return isConfigured(resolveTlonAccount(cfg, accountId));
+  }
   const accountIds = listTlonAccountIds(cfg);
   return accountIds.length > 0
-    ? accountIds.some((accountId) => isConfigured(resolveTlonAccount(cfg, accountId)))
+    ? accountIds.some((resolvedAccountId) =>
+        isConfigured(resolveTlonAccount(cfg, resolvedAccountId)),
+      )
     : isConfigured(resolveTlonAccount(cfg, DEFAULT_ACCOUNT_ID));
 }
 
-export async function resolveTlonSetupStatusLines(cfg: OpenClawConfig): Promise<string[]> {
-  const configured = await resolveTlonSetupConfigured(cfg);
-  return [`Tlon: ${configured ? "configured" : "needs setup"}`];
+export async function resolveTlonSetupStatusLines(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<string[]> {
+  const configured = await resolveTlonSetupConfigured(cfg, accountId);
+  const label = accountId && accountId !== DEFAULT_ACCOUNT_ID ? `Tlon (${accountId})` : "Tlon";
+  return [`${label}: ${configured ? "configured" : "needs setup"}`];
 }
 
 export function applyTlonSetupConfig(params: {
@@ -186,23 +203,24 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
       accountId,
       name,
     }),
-  validateInput: ({ cfg, accountId, input }) => {
-    const setupInput = input as TlonSetupInput;
-    const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-    const ship = setupInput.ship?.trim() || resolved.ship;
-    const url = setupInput.url?.trim() || resolved.url;
-    const code = setupInput.code?.trim() || resolved.code;
-    if (!ship) {
-      return "Tlon requires --ship.";
-    }
-    if (!url) {
-      return "Tlon requires --url.";
-    }
-    if (!code) {
-      return "Tlon requires --code.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    validate: ({ cfg, accountId, input }) => {
+      const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
+      const ship = input.ship?.trim() || resolved.ship;
+      const url = input.url?.trim() || resolved.url;
+      const code = input.code?.trim() || resolved.code;
+      if (!ship) {
+        return "Tlon requires --ship.";
+      }
+      if (!url) {
+        return "Tlon requires --url.";
+      }
+      if (!code) {
+        return "Tlon requires --code.";
+      }
+      return null;
+    },
+  }),
   applyAccountConfig: ({ cfg, accountId, input }) =>
     applyTlonSetupConfig({
       cfg,

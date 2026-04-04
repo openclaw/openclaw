@@ -11,7 +11,6 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { resolveLegacyPiAgentAccessToken } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -28,18 +27,6 @@ type UsageAuthState = {
   env: NodeJS.ProcessEnv;
   agentDir?: string;
 };
-
-function parseGoogleUsageToken(apiKey: string): string {
-  try {
-    const parsed = JSON.parse(apiKey) as { token?: unknown };
-    if (typeof parsed?.token === "string") {
-      return parsed.token;
-    }
-  } catch {
-    // ignore
-  }
-  return apiKey;
-}
 
 function resolveProviderApiKeyFromConfigAndStore(params: {
   state: UsageAuthState;
@@ -110,9 +97,9 @@ async function resolveOAuthToken(params: {
     }
     try {
       const resolved = await resolveApiKeyForProfile({
-        // Usage snapshots should work even if config profile metadata is stale.
-        // (e.g. config says api_key but the store has a token profile.)
-        cfg: undefined,
+        // Reuse the already-resolved config snapshot for token/ref resolution so
+        // usage snapshots don't trigger a second ambient loadConfig() call.
+        cfg: params.state.cfg,
         store: params.state.store,
         profileId,
         agentDir: params.state.agentDir,
@@ -183,46 +170,8 @@ async function resolveProviderUsageAuthFallback(params: {
   state: UsageAuthState;
   provider: UsageProviderId;
 }): Promise<ProviderAuth | null> {
-  switch (params.provider) {
-    case "anthropic":
-    case "github-copilot":
-    case "openai-codex":
-      return await resolveOAuthToken(params);
-    case "google-gemini-cli": {
-      const auth = await resolveOAuthToken(params);
-      return auth ? { ...auth, token: parseGoogleUsageToken(auth.token) } : null;
-    }
-    case "zai": {
-      const apiKey = resolveProviderApiKeyFromConfigAndStore({
-        state: params.state,
-        providerIds: ["zai", "z-ai"],
-        envDirect: [params.state.env.ZAI_API_KEY, params.state.env.Z_AI_API_KEY],
-      });
-      if (apiKey) {
-        return { provider: "zai", token: apiKey };
-      }
-      const legacyToken = resolveLegacyPiAgentAccessToken(params.state.env, ["z-ai", "zai"]);
-      return legacyToken ? { provider: "zai", token: legacyToken } : null;
-    }
-    case "minimax": {
-      const apiKey = resolveProviderApiKeyFromConfigAndStore({
-        state: params.state,
-        providerIds: ["minimax"],
-        envDirect: [params.state.env.MINIMAX_CODE_PLAN_KEY, params.state.env.MINIMAX_API_KEY],
-      });
-      return apiKey ? { provider: "minimax", token: apiKey } : null;
-    }
-    case "xiaomi": {
-      const apiKey = resolveProviderApiKeyFromConfigAndStore({
-        state: params.state,
-        providerIds: ["xiaomi"],
-        envDirect: [params.state.env.XIAOMI_API_KEY],
-      });
-      return apiKey ? { provider: "xiaomi", token: apiKey } : null;
-    }
-    default:
-      return null;
-  }
+  void params;
+  return null;
 }
 
 export async function resolveProviderAuths(params: {

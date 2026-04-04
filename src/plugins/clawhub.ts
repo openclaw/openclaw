@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   ClawHubRequestError,
   downloadClawHubPackageArchive,
@@ -14,7 +12,8 @@ import {
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
 } from "../infra/clawhub.js";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
 export const CLAWHUB_INSTALL_ERROR_CODE = {
@@ -225,15 +224,17 @@ function logClawHubPackageSummary(params: {
   }
 }
 
-export async function installPluginFromClawHub(params: {
-  spec: string;
-  baseUrl?: string;
-  token?: string;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-}): Promise<
+export async function installPluginFromClawHub(
+  params: InstallSafetyOverrides & {
+    spec: string;
+    baseUrl?: string;
+    token?: string;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+  },
+): Promise<
   | ({
       ok: true;
     } & Extract<InstallPluginResult, { ok: true }> & {
@@ -274,7 +275,7 @@ export async function installPluginFromClawHub(params: {
   if (!versionState.ok) {
     return versionState;
   }
-  const runtimeVersion = resolveRuntimeServiceVersion();
+  const runtimeVersion = resolveCompatibilityHostVersion();
   const validationFailure = validateClawHubPluginPackage({
     detail,
     compatibility: versionState.compatibility,
@@ -307,6 +308,7 @@ export async function installPluginFromClawHub(params: {
     );
     const installResult = await installPluginFromArchive({
       archivePath: archive.archivePath,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
       mode: params.mode,
       dryRun: params.dryRun,
@@ -343,9 +345,6 @@ export async function installPluginFromClawHub(params: {
       },
     };
   } finally {
-    await fs.rm(archive.archivePath, { force: true }).catch(() => undefined);
-    await fs
-      .rm(path.dirname(archive.archivePath), { recursive: true, force: true })
-      .catch(() => undefined);
+    await archive.cleanup().catch(() => undefined);
   }
 }

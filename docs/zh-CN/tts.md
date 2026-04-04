@@ -7,7 +7,7 @@ summary: 出站回复的文本转语音（TTS）
 title: 文本转语音
 x-i18n:
   generated_at: "2026-02-03T10:13:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 070ff0cc8592f64c6c9e4ddaddc7e8fba82f0692ceded6fe833ec9ba5b61e6fb
   source_path: tts.md

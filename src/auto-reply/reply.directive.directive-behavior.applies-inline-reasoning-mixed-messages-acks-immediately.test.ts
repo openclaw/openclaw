@@ -6,6 +6,7 @@ import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config
 import {
   DEFAULT_TEST_MODEL_CATALOG,
   installDirectiveBehaviorE2EHooks,
+  installFreshDirectiveBehaviorReplyMocks,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
   replyText,
@@ -21,29 +22,6 @@ import {
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 let actualRunPreparedReply: typeof import("./reply/get-reply-run.js").runPreparedReply;
 const runPreparedReplyMock = vi.hoisted(() => vi.fn());
-
-function installFreshDirectiveBehaviorReplyMocks() {
-  vi.doMock("../agents/pi-embedded.js", () => ({
-    abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-    runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-    resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-    isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-    isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  }));
-  vi.doMock("../agents/model-catalog.js", () => ({
-    loadModelCatalog: loadModelCatalogMock,
-  }));
-  vi.doMock("./reply/get-reply-run.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("./reply/get-reply-run.js")>();
-    actualRunPreparedReply = actual.runPreparedReply;
-    return {
-      ...actual,
-      runPreparedReply: (...args: Parameters<typeof actual.runPreparedReply>) =>
-        runPreparedReplyMock(...args),
-    };
-  });
-}
 
 async function writeSkill(params: { workspaceDir: string; name: string; description: string }) {
   const { workspaceDir, name, description } = params;
@@ -75,7 +53,7 @@ async function runThinkDirectiveAndGetText(home: string): Promise<string | undef
     { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
     {},
     makeWhatsAppDirectiveConfig(home, {
-      model: "anthropic/claude-opus-4-5",
+      model: "anthropic/claude-opus-4-6",
       thinkingDefault: "high",
     }),
   );
@@ -104,7 +82,7 @@ async function runInlineReasoningMessage(params: {
     },
     makeWhatsAppDirectiveConfig(
       params.home,
-      { model: "anthropic/claude-opus-4-5" },
+      { model: "anthropic/claude-opus-4-6" },
       {
         session: { store: params.storePath },
       },
@@ -115,7 +93,7 @@ async function runInlineReasoningMessage(params: {
 function makeRunConfig(home: string, storePath: string) {
   return makeWhatsAppDirectiveConfig(
     home,
-    { model: "anthropic/claude-opus-4-5" },
+    { model: "anthropic/claude-opus-4-6" },
     { session: { store: storePath } },
   );
 }
@@ -175,7 +153,12 @@ describe("directive behavior", () => {
     vi.resetModules();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
-    installFreshDirectiveBehaviorReplyMocks();
+    installFreshDirectiveBehaviorReplyMocks({
+      onActualRunPreparedReply: (runPreparedReply) => {
+        actualRunPreparedReply = runPreparedReply;
+      },
+      runPreparedReply: (...args) => runPreparedReplyMock(...args),
+    });
     ({ getReplyFromConfig } = await import("./reply.js"));
     runPreparedReplyMock.mockReset();
     runPreparedReplyMock.mockImplementation((...args: Parameters<typeof actualRunPreparedReply>) =>
@@ -216,7 +199,7 @@ describe("directive behavior", () => {
       const enabledRes = await getReplyFromConfig(
         { Body: "/verbose on", From: "+1222", To: "+1222", CommandAuthorized: true },
         {},
-        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
+        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-6" }),
       );
       expect(replyText(enabledRes)).toMatch(/^⚙️ Verbose logging enabled\./);
 
@@ -225,7 +208,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: "anthropic/claude-opus-4-5" },
+          { model: "anthropic/claude-opus-4-6" },
           {
             session: { store: storePath },
           },
@@ -271,8 +254,8 @@ describe("directive behavior", () => {
       expect(text).toContain("Options: off, minimal, low, medium, high, adaptive.");
 
       for (const model of [
-        "openai-codex/gpt-5.2-codex",
-        "openai/gpt-5.2",
+        "openai-codex/gpt-5.4",
+        "openai/gpt-5.4",
         "openai/gpt-5.4-mini",
         "openai/gpt-5.4-nano",
       ]) {
@@ -299,9 +282,9 @@ describe("directive behavior", () => {
         makeWhatsAppDirectiveConfig(
           home,
           {
-            model: "anthropic/claude-opus-4-5",
+            model: "anthropic/claude-opus-4-6",
             models: {
-              "anthropic/claude-opus-4-5": { alias: " help " },
+              "anthropic/claude-opus-4-6": { alias: " help " },
             },
           },
           { session: { store: sessionStorePath(home) } },
@@ -333,10 +316,10 @@ describe("directive behavior", () => {
         makeWhatsAppDirectiveConfig(
           home,
           {
-            model: "anthropic/claude-opus-4-5",
+            model: "anthropic/claude-opus-4-6",
             workspace,
             models: {
-              "anthropic/claude-opus-4-5": { alias: "demo_skill" },
+              "anthropic/claude-opus-4-6": { alias: "demo_skill" },
             },
           },
           { session: { store: sessionStorePath(home) } },
@@ -360,7 +343,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: "anthropic/claude-opus-4-5" },
+          { model: "anthropic/claude-opus-4-6" },
           {
             session: { store: sessionStorePath(home) },
           },
@@ -383,7 +366,7 @@ describe("directive behavior", () => {
         {},
         makeWhatsAppDirectiveConfig(
           home,
-          { model: "anthropic/claude-opus-4-5" },
+          { model: "anthropic/claude-opus-4-6" },
           {
             messages: {
               queue: {

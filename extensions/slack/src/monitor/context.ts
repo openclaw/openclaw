@@ -4,9 +4,9 @@ import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
 } from "openclaw/plugin-sdk/config-runtime";
-import { resolveSessionKey, type SessionScope } from "openclaw/plugin-sdk/config-runtime";
+import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/core";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -17,6 +17,7 @@ import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from 
 import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType } from "./channel-type.js";
+import { resolveSessionKey } from "./config.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
 export { inferSlackChannelType, normalizeSlackChannelType } from "./channel-type.js";

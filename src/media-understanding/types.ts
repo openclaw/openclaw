@@ -1,3 +1,5 @@
+import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
+
 export type MediaUnderstandingKind =
   | "audio.transcription"
   | "video.description"
@@ -55,6 +57,7 @@ export type AudioTranscriptionRequest = {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   language?: string;
   prompt?: string;
@@ -75,6 +78,7 @@ export type VideoDescriptionRequest = {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
+  request?: ProviderRequestTransportOverrides;
   model?: string;
   prompt?: string;
   timeoutMs: number;
@@ -133,6 +137,9 @@ export type ImagesDescriptionResult = {
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
+  defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
+  autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
+  nativeDocumentInputs?: Array<"pdf">;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;

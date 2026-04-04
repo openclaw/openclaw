@@ -14,6 +14,44 @@ import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 
+internal enum class SmsSearchAvailabilityReason {
+  Available,
+  PermissionRequired,
+  Unavailable,
+}
+
+internal fun classifySmsSearchAvailability(
+  readSmsAvailable: Boolean,
+  smsFeatureEnabled: Boolean,
+  smsTelephonyAvailable: Boolean,
+): SmsSearchAvailabilityReason {
+  if (readSmsAvailable) return SmsSearchAvailabilityReason.Available
+  if (!smsFeatureEnabled || !smsTelephonyAvailable) return SmsSearchAvailabilityReason.Unavailable
+  return SmsSearchAvailabilityReason.PermissionRequired
+}
+
+internal fun smsSearchAvailabilityError(
+  readSmsAvailable: Boolean,
+  smsFeatureEnabled: Boolean,
+  smsTelephonyAvailable: Boolean,
+): GatewaySession.InvokeResult? {
+  return when (
+    classifySmsSearchAvailability(
+      readSmsAvailable = readSmsAvailable,
+      smsFeatureEnabled = smsFeatureEnabled,
+      smsTelephonyAvailable = smsTelephonyAvailable,
+    )
+  ) {
+    SmsSearchAvailabilityReason.Available,
+    SmsSearchAvailabilityReason.PermissionRequired -> null
+    SmsSearchAvailabilityReason.Unavailable ->
+      GatewaySession.InvokeResult.error(
+        code = "SMS_UNAVAILABLE",
+        message = "SMS_UNAVAILABLE: SMS not available on this device",
+      )
+  }
+}
+
 class InvokeDispatcher(
   private val canvas: CanvasController,
   private val cameraHandler: CameraHandler,
@@ -34,6 +72,8 @@ class InvokeDispatcher(
   private val locationEnabled: () -> Boolean,
   private val sendSmsAvailable: () -> Boolean,
   private val readSmsAvailable: () -> Boolean,
+  private val smsFeatureEnabled: () -> Boolean,
+  private val smsTelephonyAvailable: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val refreshNodeCanvasCapability: suspend () -> Boolean,
@@ -268,15 +308,13 @@ class InvokeDispatcher(
             message = "SMS_UNAVAILABLE: SMS not available on this device",
           )
         }
-      InvokeCommandAvailability.ReadSmsAvailable ->
-        if (readSmsAvailable()) {
-          null
-        } else {
-          GatewaySession.InvokeResult.error(
-            code = "SMS_UNAVAILABLE",
-            message = "SMS_UNAVAILABLE: SMS not available on this device",
-          )
-        }
+      InvokeCommandAvailability.ReadSmsAvailable,
+      InvokeCommandAvailability.RequestableSmsSearchAvailable ->
+        smsSearchAvailabilityError(
+          readSmsAvailable = readSmsAvailable(),
+          smsFeatureEnabled = smsFeatureEnabled(),
+          smsTelephonyAvailable = smsTelephonyAvailable(),
+        )
       InvokeCommandAvailability.CallLogAvailable ->
         if (callLogAvailable()) {
           null

@@ -1,3 +1,6 @@
-import { buildChannelConfigSchema, MSTeamsConfigSchema } from "../runtime-api.js";
+import { buildChannelConfigSchema, MSTeamsConfigSchema } from "openclaw/plugin-sdk/msteams";
+import { msTeamsChannelConfigUiHints } from "./config-ui-hints.js";
 
-export const MSTeamsChannelConfigSchema = buildChannelConfigSchema(MSTeamsConfigSchema);
+export const MSTeamsChannelConfigSchema = buildChannelConfigSchema(MSTeamsConfigSchema, {
+  uiHints: msTeamsChannelConfigUiHints,
+});

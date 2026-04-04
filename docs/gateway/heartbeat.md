@@ -8,16 +8,19 @@ title: "Heartbeat"
 
 # Heartbeat (Gateway)
 
-> **Heartbeat vs Cron?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for guidance on when to use each.
+> **Heartbeat vs Cron?** See [Automation & Tasks](/automation) for guidance on when to use each.
 
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
 
-Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
+Heartbeat is a scheduled main-session turn — it does **not** create [background task](/automation/tasks) records.
+Task records are for detached work (ACP runs, subagents, isolated cron jobs).
+
+Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
 
-1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/setup-token) or set your own cadence.
+1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic Claude CLI or legacy token auth) or set your own cadence.
 2. Create a tiny `HEARTBEAT.md` checklist in the agent workspace (optional but recommended).
 3. Decide where heartbeat messages should go (`target: "none"` is the default; set `target: "last"` to route to the last contact).
 4. Optional: enable heartbeat reasoning delivery for transparency.
@@ -47,7 +50,7 @@ Example config:
 
 ## Defaults
 
-- Interval: `30m` (or `1h` when Anthropic OAuth/setup-token is the detected auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
+- Interval: `30m` (or `1h` when Anthropic Claude CLI or legacy token auth is the detected auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
   `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system
@@ -64,6 +67,8 @@ The default prompt is intentionally broad:
 - **Human check-in**: “Checkup sometimes on your human during day time” nudges an
   occasional lightweight “anything you need?” message, but avoids night-time spam
   by using your configured local timezone (see [/concepts/timezone](/concepts/timezone)).
+
+Heartbeat can react to completed [background tasks](/automation/tasks), but a heartbeat run itself does not create a task record.
 
 If you want a heartbeat to do something very specific (e.g. “check Gmail PubSub
 stats” or “verify gateway health”), set `agents.defaults.heartbeat.prompt` (or
@@ -222,7 +227,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   - Session key formats: see [Sessions](/concepts/session) and [Groups](/channels/groups).
 - `target`:
   - `last`: deliver to the last used external channel.
-  - explicit channel: `whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`.
+  - explicit channel: any configured channel or plugin id, for example `discord`, `matrix`, `telegram`, or `whatsapp`.
   - `none` (default): run the heartbeat but **do not deliver** externally.
 - `directPolicy`: controls direct/DM delivery behavior:
   - `allow` (default): allow direct/DM heartbeat delivery.
@@ -253,6 +258,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   outbound message is sent.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
+- Detached [background tasks](/automation/tasks) can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake does not make the heartbeat run a background task.
 
 ## Visibility controls
 
@@ -391,3 +397,10 @@ Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce c
 - Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).
 - Keep `HEARTBEAT.md` small.
 - Use `target: "none"` if you only want internal state updates.
+
+## Related
+
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Background Tasks](/automation/tasks) — how detached work is tracked
+- [Timezone](/concepts/timezone) — how timezone affects heartbeat scheduling
+- [Troubleshooting](/automation/cron-jobs#troubleshooting) — debugging automation issues

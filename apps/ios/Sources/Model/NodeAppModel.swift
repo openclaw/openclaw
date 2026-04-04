@@ -851,7 +851,8 @@ final class NodeAppModel {
             if url.isEmpty {
                 self.screen.showDefaultCanvas()
             } else {
-                self.screen.navigate(to: url)
+                let trustedA2UIURL = await self.resolveA2UIHostURL()
+                self.screen.navigate(to: url, trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(url))
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
@@ -859,7 +860,9 @@ final class NodeAppModel {
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            self.screen.navigate(to: params.url)
+            let trimmedURL = params.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trustedA2UIURL = await self.resolveA2UIHostURL()
+            self.screen.navigate(to: trimmedURL, trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(trimmedURL))
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
@@ -1697,14 +1700,24 @@ extension NodeAppModel {
             password: password,
             nodeOptions: connectOptions)
         self.prepareForGatewayConnect(url: url, stableID: effectiveStableID)
-        self.startOperatorGatewayLoop(
-            url: url,
-            stableID: effectiveStableID,
+        if self.shouldStartOperatorGatewayLoop(
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            nodeOptions: connectOptions,
-            sessionBox: sessionBox)
+            stableID: effectiveStableID)
+        {
+            self.startOperatorGatewayLoop(
+                url: url,
+                stableID: effectiveStableID,
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password,
+                nodeOptions: connectOptions,
+                sessionBox: sessionBox)
+        } else {
+            self.operatorGatewayTask = nil
+            Task { await self.operatorGateway.disconnect() }
+        }
         self.startNodeGatewayLoop(
             url: url,
             stableID: effectiveStableID,
@@ -1785,6 +1798,116 @@ private extension NodeAppModel {
         self.apnsLastRegisteredTokenHex = nil
     }
 
+    func shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        stableID _: String) -> Bool
+    {
+        Self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            hasStoredOperatorToken: self.hasStoredGatewayRoleToken("operator"))
+    }
+
+    func hasStoredGatewayRoleToken(_ role: String) -> Bool {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        return DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role) != nil
+    }
+
+    nonisolated static func shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        hasStoredOperatorToken: Bool) -> Bool
+    {
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedToken.isEmpty {
+            return true
+        }
+        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPassword.isEmpty {
+            return true
+        }
+        let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedBootstrapToken.isEmpty {
+            return false
+        }
+        return hasStoredOperatorToken
+    }
+
+    nonisolated static func clearingBootstrapToken(in config: GatewayConnectConfig?) -> GatewayConnectConfig? {
+        guard let config else { return nil }
+        let trimmedBootstrapToken = config.bootstrapToken?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedBootstrapToken.isEmpty else { return config }
+        return GatewayConnectConfig(
+            url: config.url,
+            stableID: config.stableID,
+            tls: config.tls,
+            token: config.token,
+            bootstrapToken: nil,
+            password: config.password,
+            nodeOptions: config.nodeOptions)
+    }
+
+    func currentGatewayReconnectAuth(
+        fallbackToken: String?,
+        fallbackBootstrapToken: String?,
+        fallbackPassword: String?) -> (token: String?, bootstrapToken: String?, password: String?)
+    {
+        if let cfg = self.activeGatewayConnectConfig {
+            return (cfg.token, cfg.bootstrapToken, cfg.password)
+        }
+        return (fallbackToken, fallbackBootstrapToken, fallbackPassword)
+    }
+
+    func clearPersistedGatewayBootstrapTokenIfNeeded() {
+        // Always drop the in-memory bootstrap token after the first successful
+        // bootstrap connect so reconnect loops cannot reuse a spent token.
+        self.activeGatewayConnectConfig = Self.clearingBootstrapToken(in: self.activeGatewayConnectConfig)
+
+        let trimmedInstanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedInstanceId.isEmpty else { return }
+        guard
+            GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: trimmedInstanceId) != nil
+        else { return }
+
+        GatewaySettingsStore.clearGatewayBootstrapToken(instanceId: trimmedInstanceId)
+    }
+
+    private func handleSuccessfulBootstrapGatewayOnboarding(
+        url: URL,
+        stableID: String,
+        token: String?,
+        password: String?,
+        nodeOptions: GatewayConnectOptions,
+        sessionBox: WebSocketSessionBox?) async
+    {
+        self.clearPersistedGatewayBootstrapTokenIfNeeded()
+        if self.operatorGatewayTask == nil && self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: nil,
+            password: password,
+            stableID: stableID)
+        {
+            self.startOperatorGatewayLoop(
+                url: url,
+                stableID: stableID,
+                token: token,
+                bootstrapToken: nil,
+                password: password,
+                nodeOptions: nodeOptions,
+                sessionBox: sessionBox)
+        }
+
+        // QR bootstrap onboarding should surface the system notification permission
+        // prompt immediately so visible APNs alerts work without a second manual step.
+        _ = await self.requestNotificationAuthorizationIfNeeded()
+    }
+
     func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
         guard self.isBackgrounded else { return }
         guard !self.backgroundReconnectSuppressed else { return }
@@ -1834,18 +1957,25 @@ private extension NodeAppModel {
                     continue
                 }
 
+                let reconnectAuth = self.currentGatewayReconnectAuth(
+                    fallbackToken: token,
+                    fallbackBootstrapToken: bootstrapToken,
+                    fallbackPassword: password)
                 let effectiveClientId =
                     GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) ?? nodeOptions.clientId
                 let operatorOptions = self.makeOperatorConnectOptions(
                     clientId: effectiveClientId,
-                    displayName: nodeOptions.clientDisplayName)
+                    displayName: nodeOptions.clientDisplayName,
+                    includeApprovalScope: self.shouldRequestOperatorApprovalScope(
+                        token: reconnectAuth.token,
+                        password: reconnectAuth.password))
 
                 do {
                     try await self.operatorGateway.connect(
                         url: url,
-                        token: token,
-                        bootstrapToken: bootstrapToken,
-                        password: password,
+                        token: reconnectAuth.token,
+                        bootstrapToken: reconnectAuth.bootstrapToken,
+                        password: reconnectAuth.password,
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
@@ -1948,13 +2078,18 @@ private extension NodeAppModel {
 
                 do {
                     let epochMs = Int(Date().timeIntervalSince1970 * 1000)
+                    let reconnectAuth = self.currentGatewayReconnectAuth(
+                        fallbackToken: token,
+                        fallbackBootstrapToken: bootstrapToken,
+                        fallbackPassword: password)
+                    let connectedOptions = currentOptions
                     GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(url.absoluteString)")
                     try await self.nodeGateway.connect(
                         url: url,
-                        token: token,
-                        bootstrapToken: bootstrapToken,
-                        password: password,
-                        connectOptions: currentOptions,
+                        token: reconnectAuth.token,
+                        bootstrapToken: reconnectAuth.bootstrapToken,
+                        password: reconnectAuth.password,
+                        connectOptions: connectedOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
                             guard let self else { return }
@@ -1964,6 +2099,19 @@ private extension NodeAppModel {
                                 self.gatewayConnected = true
                                 self.screen.errorText = nil
                                 UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+                            }
+                            let usedBootstrapToken =
+                                reconnectAuth.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
+                                reconnectAuth.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    .isEmpty == false
+                            if usedBootstrapToken {
+                                await self.handleSuccessfulBootstrapGatewayOnboarding(
+                                    url: url,
+                                    stableID: stableID,
+                                    token: reconnectAuth.token,
+                                    password: reconnectAuth.password,
+                                    nodeOptions: connectedOptions,
+                                    sessionBox: sessionBox)
                             }
                             let relayData = await MainActor.run {
                                 (
@@ -1975,8 +2123,8 @@ private extension NodeAppModel {
                             ShareGatewayRelaySettings.saveConfig(
                                 ShareGatewayRelayConfig(
                                     gatewayURLString: url.absoluteString,
-                                    token: token,
-                                    password: password,
+                                    token: reconnectAuth.token,
+                                    password: reconnectAuth.password,
                                     sessionKey: relayData.sessionKey,
                                     deliveryChannel: relayData.deliveryChannel,
                                     deliveryTo: relayData.deliveryTo))
@@ -2121,10 +2269,47 @@ private extension NodeAppModel {
         }
     }
 
-    func makeOperatorConnectOptions(clientId: String, displayName: String?) -> GatewayConnectOptions {
-        GatewayConnectOptions(
+    func shouldRequestOperatorApprovalScope(token: String?, password: String?) -> Bool {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let storedOperatorScopes = DeviceAuthStore
+            .loadToken(deviceId: identity.deviceId, role: "operator")?
+            .scopes ?? []
+        return Self.shouldRequestOperatorApprovalScope(
+            token: token,
+            password: password,
+            storedOperatorScopes: storedOperatorScopes)
+    }
+
+    nonisolated static func shouldRequestOperatorApprovalScope(
+        token: String?,
+        password: String?,
+        storedOperatorScopes: [String]
+    ) -> Bool {
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedToken.isEmpty {
+            return true
+        }
+        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPassword.isEmpty {
+            return true
+        }
+        return storedOperatorScopes.contains("operator.approvals")
+    }
+
+    func makeOperatorConnectOptions(
+        clientId: String,
+        displayName: String?,
+        includeApprovalScope: Bool
+    ) -> GatewayConnectOptions {
+        var scopes = ["operator.read", "operator.write", "operator.talk.secrets"]
+        // Preserve reconnect compatibility for older paired operator tokens that were
+        // approved before iOS requested operator.approvals by default.
+        if includeApprovalScope {
+            scopes.append("operator.approvals")
+        }
+        return GatewayConnectOptions(
             role: "operator",
-            scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
+            scopes: scopes,
             caps: [],
             commands: [],
             permissions: [:],
@@ -3012,9 +3197,69 @@ extension NodeAppModel {
         await self.applyPendingForegroundNodeActions(mapped, trigger: "test")
     }
 
+    func _test_makeOperatorConnectOptions(
+        clientId: String,
+        displayName: String?,
+        includeApprovalScope: Bool
+    ) -> GatewayConnectOptions {
+        self.makeOperatorConnectOptions(
+            clientId: clientId,
+            displayName: displayName,
+            includeApprovalScope: includeApprovalScope)
+    }
+
     static func _test_currentDeepLinkKey() -> String {
         self.expectedDeepLinkKey()
     }
+
+    nonisolated static func _test_shouldStartOperatorGatewayLoop(
+        token: String?,
+        bootstrapToken: String?,
+        password: String?,
+        hasStoredOperatorToken: Bool) -> Bool
+    {
+        self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: bootstrapToken,
+            password: password,
+            hasStoredOperatorToken: hasStoredOperatorToken)
+    }
+
+    nonisolated static func _test_shouldRequestOperatorApprovalScope(
+        token: String?,
+        password: String?,
+        storedOperatorScopes: [String]
+    ) -> Bool {
+        self.shouldRequestOperatorApprovalScope(
+            token: token,
+            password: password,
+            storedOperatorScopes: storedOperatorScopes)
+    }
+
+    nonisolated static func _test_clearingBootstrapToken(
+        in config: GatewayConnectConfig?
+    ) -> GatewayConnectConfig? {
+        self.clearingBootstrapToken(in: config)
+    }
+
+    func _test_handleSuccessfulBootstrapGatewayOnboarding() async {
+        await self.handleSuccessfulBootstrapGatewayOnboarding(
+            url: URL(string: "wss://gateway.example")!,
+            stableID: "test-gateway",
+            token: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil),
+            sessionBox: nil)
+    }
+
 }
 #endif
 // swiftlint:enable type_body_length file_length

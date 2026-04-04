@@ -7,10 +7,11 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   readConfigFileSnapshot,
+  replaceConfigFile,
   resolveGatewayPort,
-  writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
@@ -32,8 +33,8 @@ import {
   cleanupGlobalRenameDirs,
   globalInstallArgs,
   resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
-  resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
@@ -349,8 +350,13 @@ async function runPackageInstallUpdate(params: {
   });
   const installEnv = await createGlobalInstallEnv();
   const runCommand = createGlobalCommandRunner();
-
-  const pkgRoot = await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs);
+  const installTarget = await resolveGlobalInstallTarget({
+    manager,
+    runCommand,
+    timeoutMs: params.timeoutMs,
+    pkgRoot: params.root,
+  });
+  const pkgRoot = installTarget.packageRoot;
   const packageName =
     (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
     DEFAULT_PACKAGE_NAME;
@@ -370,7 +376,7 @@ async function runPackageInstallUpdate(params: {
 
   const updateStep = await runUpdateStep({
     name: "global update",
-    argv: globalInstallArgs(manager, installSpec),
+    argv: globalInstallArgs(installTarget, installSpec),
     env: installEnv,
     timeoutMs: params.timeoutMs,
     progress: params.progress,
@@ -380,7 +386,13 @@ async function runPackageInstallUpdate(params: {
   let afterVersion = beforeVersion;
 
   const verifiedPackageRoot =
-    (await resolveGlobalPackageRoot(manager, runCommand, params.timeoutMs)) ?? pkgRoot;
+    (
+      await resolveGlobalInstallTarget({
+        manager: installTarget,
+        runCommand,
+        timeoutMs: params.timeoutMs,
+      })
+    ).packageRoot ?? pkgRoot;
   if (verifiedPackageRoot) {
     afterVersion = await readPackageVersion(verifiedPackageRoot);
     const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, installSpec);
@@ -481,9 +493,16 @@ async function runGitUpdate(params: {
       installKind: params.installKind,
       timeoutMs: effectiveTimeout,
     });
+    const runCommand = createGlobalCommandRunner();
+    const installTarget = await resolveGlobalInstallTarget({
+      manager,
+      runCommand,
+      timeoutMs: effectiveTimeout,
+      pkgRoot: params.root,
+    });
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(manager, updateRoot),
+      argv: globalInstallArgs(installTarget, updateRoot),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
@@ -549,7 +568,10 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginConfig = npmResult.config;
 
   if (syncResult.changed || npmResult.changed) {
-    await writeConfigFile(pluginConfig);
+    await replaceConfigFile({
+      nextConfig: pluginConfig,
+      baseHash: params.configSnapshot.hash,
+    });
   }
 
   if (params.opts.json) {
@@ -634,12 +656,14 @@ async function maybeRestartService(params: {
             invocationCwd: params.invocationCwd,
           });
         } catch (err) {
-          if (!params.opts.json) {
-            defaultRuntime.log(
-              theme.warn(
-                `Failed to refresh gateway service environment from updated install: ${String(err)}`,
-              ),
-            );
+          // Always log the refresh failure so callers can detect it (issue #56772).
+          // Previously this was silently suppressed in --json mode, hiding the root
+          // cause and preventing auto-update callers from detecting the failure.
+          const message = `Failed to refresh gateway service environment from updated install: ${String(err)}`;
+          if (params.opts.json) {
+            defaultRuntime.error(message);
+          } else {
+            defaultRuntime.log(theme.warn(message));
           }
         }
       }
@@ -1019,12 +1043,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         channel: requestedChannel,
       },
     };
-    await writeConfigFile(next);
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: configSnapshot.hash,
+    });
     postUpdateConfigSnapshot = {
       ...configSnapshot,
+      hash: undefined,
       parsed: next,
-      resolved: next,
-      config: next,
+      sourceConfig: asResolvedSourceConfig(next),
+      resolved: asResolvedSourceConfig(next),
+      runtimeConfig: asRuntimeConfig(next),
+      config: asRuntimeConfig(next),
     };
     if (!opts.json) {
       defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));

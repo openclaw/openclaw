@@ -2,16 +2,17 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
+  createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveGoogleChatAccount, type ResolvedGoogleChatAccount } from "./accounts.js";
 import { googlechatPlugin } from "./channel.js";
@@ -30,6 +31,7 @@ vi.mock("./monitor.js", async () => {
 });
 
 const googlechatConfigure = createPluginSetupWizardConfigure(googlechatPlugin);
+const googlechatStatus = createPluginSetupWizardStatus(googlechatPlugin);
 
 function buildAccount(): ResolvedGoogleChatAccount {
   return {
@@ -49,6 +51,7 @@ function buildAccount(): ResolvedGoogleChatAccount {
 describe("googlechat setup", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("rejects env auth for non-default accounts", () => {
@@ -160,6 +163,174 @@ describe("googlechat setup", () => {
     expect(result.cfg.channels?.googlechat?.audience).toBe("https://example.com/googlechat");
   });
 
+  it("reads the named-account DM policy instead of the channel root", () => {
+    expect(
+      googlechatPlugin.setupWizard?.dmPolicy?.getCurrent(
+        {
+          channels: {
+            googlechat: {
+              dm: {
+                policy: "disabled",
+              },
+              accounts: {
+                alerts: {
+                  serviceAccount: { client_email: "bot@example.com" },
+                  dm: {
+                    policy: "allowlist",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        "alerts",
+      ),
+    ).toBe("allowlist");
+  });
+
+  it("reports configured state for the selected account instead of any account", async () => {
+    const status = await googlechatStatus({
+      cfg: {
+        channels: {
+          googlechat: {
+            accounts: {
+              default: {
+                serviceAccount: { client_email: "default@example.com" },
+              },
+              alerts: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {
+        googlechat: "alerts",
+      },
+      options: {},
+    });
+
+    expect(status.configured).toBe(false);
+  });
+
+  it("reports configured state for the configured defaultAccount instead of any account", async () => {
+    const status = await googlechatStatus({
+      cfg: {
+        channels: {
+          googlechat: {
+            defaultAccount: "alerts",
+            accounts: {
+              default: {
+                serviceAccount: { client_email: "default@example.com" },
+              },
+              alerts: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountOverrides: {},
+      options: {},
+    });
+
+    expect(status.configured).toBe(false);
+  });
+
+  it("reports account-scoped config keys for named accounts", () => {
+    expect(googlechatPlugin.setupWizard?.dmPolicy?.resolveConfigKeys?.({}, "alerts")).toEqual({
+      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
+      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
+    });
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          defaultAccount: "alerts",
+          dm: {
+            policy: "disabled",
+          },
+          accounts: {
+            alerts: {
+              serviceAccount: { client_email: "bot@example.com" },
+              dm: {
+                policy: "allowlist",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(googlechatPlugin.setupWizard?.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(googlechatPlugin.setupWizard?.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.googlechat.accounts.alerts.dm.policy",
+      allowFromKey: "channels.googlechat.accounts.alerts.dm.allowFrom",
+    });
+
+    const next = googlechatPlugin.setupWizard?.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.googlechat?.dm?.policy).toBe("disabled");
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
+  });
+
+  it("uses configured defaultAccount for omitted allowFrom prompt context", async () => {
+    const prompter = {
+      note: vi.fn(async () => {}),
+      text: vi.fn(async () => "users/123456789"),
+    };
+
+    const next = await googlechatPlugin.setupWizard?.dmPolicy?.promptAllowFrom?.({
+      cfg: {
+        channels: {
+          googlechat: {
+            defaultAccount: "alerts",
+            dm: {
+              allowFrom: ["users/root"],
+            },
+            accounts: {
+              alerts: {
+                serviceAccount: { client_email: "bot@example.com" },
+                dm: {
+                  allowFrom: ["users/alerts"],
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+    });
+
+    expect(next?.channels?.googlechat?.dm?.allowFrom).toEqual(["users/root"]);
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual([
+      "users/123456789",
+    ]);
+  });
+
+  it('writes open DM policy to the named account and preserves inherited allowFrom with "*"', () => {
+    const next = googlechatPlugin.setupWizard?.dmPolicy?.setPolicy(
+      {
+        channels: {
+          googlechat: {
+            dm: {
+              allowFrom: ["users/123"],
+            },
+            accounts: {
+              alerts: {
+                serviceAccount: { client_email: "bot@example.com" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "open",
+      "alerts",
+    );
+
+    expect(next?.channels?.googlechat?.dm?.policy).toBeUndefined();
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.policy).toBe("open");
+    expect(next?.channels?.googlechat?.accounts?.alerts?.dm?.allowFrom).toEqual(["users/123", "*"]);
+  });
+
   it("keeps startAccount pending until abort, then unregisters", async () => {
     const unregister = vi.fn();
     hoisted.startGoogleChatMonitor.mockResolvedValue(unregister);
@@ -186,6 +357,32 @@ describe("googlechat setup", () => {
 });
 
 describe("resolveGoogleChatAccount", () => {
+  it("parses default-account env JSON credentials only when they decode to an object", () => {
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '{"client_email":"bot@example.com"}');
+
+    const resolved = resolveGoogleChatAccount({
+      cfg: { channels: { googlechat: {} } },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("env");
+    expect(resolved.credentials).toEqual({ client_email: "bot@example.com" });
+  });
+
+  it("ignores env JSON credentials when they decode to a non-object value", () => {
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT", '["not","an","object"]');
+    vi.stubEnv("GOOGLE_CHAT_SERVICE_ACCOUNT_FILE", "/tmp/googlechat.json");
+
+    const resolved = resolveGoogleChatAccount({
+      cfg: { channels: { googlechat: {} } },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("env");
+    expect(resolved.credentials).toBeUndefined();
+    expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
+  });
+
   it("inherits shared defaults from accounts.default for named accounts", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -310,5 +507,25 @@ describe("resolveGoogleChatAccount", () => {
     const resolved = resolveGoogleChatAccount({ cfg, accountId: "andy" });
     expect(resolved.config.dangerouslyAllowNameMatching).toBeUndefined();
     expect(resolved.config.audienceType).toBe("app-url");
+  });
+
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        googlechat: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: {
+              serviceAccountFile: "/tmp/alerts-sa.json",
+            },
+          },
+        },
+      },
+    };
+
+    const resolved = resolveGoogleChatAccount({ cfg });
+    expect(resolved.accountId).toBe("alerts");
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/alerts-sa.json");
   });
 });

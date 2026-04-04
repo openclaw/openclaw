@@ -1,54 +1,6 @@
-import {
-  resolveAgentConfig,
-  resolveAgentDir,
-  resolveAgentModelFallbacksOverride,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
-import { lookupContextTokens } from "../../agents/context.js";
-import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { resolveNestedAgentLane } from "../../agents/lanes.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
-import { isCliProvider, resolveThinkingDefault } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import {
-  countActiveDescendantRuns,
-  listDescendantRunsForRequester,
-} from "../../agents/subagent-registry.js";
-import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { deriveSessionTotalTokens, hasNonzeroUsage } from "../../agents/usage.js";
-import { ensureAgentWorkspace } from "../../agents/workspace.js";
-import {
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-  supportsXHighThinking,
-} from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveSessionTranscriptPath,
-  setSessionRuntimeModel,
-  updateSessionStore,
-} from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
-import { logWarn } from "../../logger.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import {
-  buildSafeExternalPrompt,
-  detectSuspiciousPatterns,
-  mapHookExternalContentSource,
-  isExternalHookSession,
-  resolveHookExternalContentSource,
-} from "../../security/external-content.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
   dispatchCronDelivery,
@@ -63,10 +15,58 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  LiveSessionModelSwitchError,
+  buildSafeExternalPrompt,
+  countActiveDescendantRuns,
+  deriveSessionTotalTokens,
+  detectSuspiciousPatterns,
+  ensureAgentWorkspace,
+  hasNonzeroUsage,
+  isCliProvider,
+  isExternalHookSession,
+  listDescendantRunsForRequester,
+  loadModelCatalog,
+  logWarn,
+  lookupContextTokens,
+  mapHookExternalContentSource,
+  normalizeAgentId,
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+  registerAgentRunContext,
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentTimeoutMs,
+  resolveAgentWorkspaceDir,
+  resolveBootstrapWarningSignaturesSeen,
+  resolveCronStyleNow,
+  resolveDefaultAgentId,
+  resolveFastModeState,
+  resolveHookExternalContentSource,
+  resolveNestedAgentLane,
+  resolveSessionAuthProfileOverride,
+  resolveSessionTranscriptPath,
+  resolveThinkingDefault,
+  runEmbeddedPiAgent,
+  runWithModelFallback,
+  setSessionRuntimeModel,
+  supportsXHighThinking,
+} from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
-import { isLikelyInterimCronMessage } from "./subagent-followup.js";
+import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+async function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return await sessionStoreRuntimePromise;
+}
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -143,6 +143,7 @@ async function resolveCronDeliveryContext(params: {
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
+    threadId: deliveryPlan.threadId,
     accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
   });
@@ -166,6 +167,18 @@ function appendCronDeliveryInstruction(params: {
     return params.commandBody;
   }
   return `${params.commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+}
+
+function resolvePositiveContextTokens(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+async function loadCliRunnerRuntime() {
+  return await import("../../agents/cli-runner.runtime.js");
+}
+
+async function loadUsageFormatRuntime() {
+  return await import("../../utils/usage-format.js");
 }
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -222,7 +235,12 @@ export async function runCronIsolatedAgentTurn(params: {
   };
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
-  const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
+  const agentSessionKey = resolveCronAgentSessionKey({
+    sessionKey: baseSessionKey,
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    cfg: params.cfg,
+  });
   const payloadHookExternalContentSource =
     params.job.payload.kind === "agentTurn" ? params.job.payload.externalContentSource : undefined;
   const hookExternalContentSource =
@@ -259,6 +277,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (runSessionKey !== agentSessionKey) {
       cronSession.store[runSessionKey] = cronSession.sessionEntry;
     }
+    const { updateSessionStore } = await loadSessionStoreRuntime();
     await updateSessionStore(cronSession.storePath, (store) => {
       store[agentSessionKey] = cronSession.sessionEntry;
       if (runSessionKey !== agentSessionKey) {
@@ -421,11 +440,36 @@ export async function runCronIsolatedAgentTurn(params: {
     storePath: cronSession.storePath,
     isNewSession: cronSession.isNewSession,
   });
-  const authProfileIdSource = cronSession.sessionEntry.authProfileOverrideSource;
+  let liveSelection = {
+    provider,
+    model,
+    authProfileId,
+    authProfileIdSource: authProfileId
+      ? cronSession.sessionEntry.authProfileOverrideSource
+      : undefined,
+  };
+  const syncSessionEntryLiveSelection = () => {
+    cronSession.sessionEntry.modelProvider = liveSelection.provider;
+    cronSession.sessionEntry.model = liveSelection.model;
+    if (liveSelection.authProfileId) {
+      cronSession.sessionEntry.authProfileOverride = liveSelection.authProfileId;
+      cronSession.sessionEntry.authProfileOverrideSource = liveSelection.authProfileIdSource;
+      if (liveSelection.authProfileIdSource === "auto") {
+        cronSession.sessionEntry.authProfileOverrideCompactionCount =
+          cronSession.sessionEntry.compactionCount ?? 0;
+      } else {
+        delete cronSession.sessionEntry.authProfileOverrideCompactionCount;
+      }
+      return;
+    }
+    delete cronSession.sessionEntry.authProfileOverride;
+    delete cronSession.sessionEntry.authProfileOverrideSource;
+    delete cronSession.sessionEntry.authProfileOverrideCompactionCount;
+  };
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>> | undefined;
-  let fallbackProvider = provider;
-  let fallbackModel = model;
+  let fallbackProvider = liveSelection.provider;
+  let fallbackModel = liveSelection.model;
   const runStartedAt = Date.now();
   let runEndedAt = runStartedAt;
   try {
@@ -451,8 +495,8 @@ export async function runCronIsolatedAgentTurn(params: {
     const runPrompt = async (promptText: string) => {
       const fallbackResult = await runWithModelFallback({
         cfg: cfgWithAgentDefaults,
-        provider,
-        model,
+        provider: liveSelection.provider,
+        model: liveSelection.model,
         runId: cronSession.sessionEntry.sessionId,
         agentDir,
         fallbacksOverride:
@@ -464,6 +508,7 @@ export async function runCronIsolatedAgentTurn(params: {
           const bootstrapPromptWarningSignature =
             bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
           if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
+            const { getCliSessionId, runCliAgent } = await loadCliRunnerRuntime();
             // Fresh isolated cron sessions must not reuse a stored CLI session ID.
             // Passing an existing ID activates the resume watchdog profile
             // (noOutputTimeoutRatio 0.3, maxMs 180 s) instead of the fresh profile
@@ -516,8 +561,10 @@ export async function runCronIsolatedAgentTurn(params: {
             lane: resolveNestedAgentLane(params.lane),
             provider: providerOverride,
             model: modelOverride,
-            authProfileId,
-            authProfileIdSource,
+            authProfileId: liveSelection.authProfileId,
+            authProfileIdSource: liveSelection.authProfileId
+              ? liveSelection.authProfileIdSource
+              : undefined,
             thinkLevel,
             fastMode: resolveFastModeState({
               cfg: cfgWithAgentDefaults,
@@ -530,6 +577,7 @@ export async function runCronIsolatedAgentTurn(params: {
             timeoutMs,
             bootstrapContextMode: agentPayload?.lightContext ? "lightweight" : undefined,
             bootstrapContextRunKind: "cron",
+            toolsAllow: agentPayload?.toolsAllow,
             runId: cronSession.sessionEntry.sessionId,
             requireExplicitMessageTarget: toolPolicy.requireExplicitMessageTarget,
             disableMessageTool: toolPolicy.disableMessageTool,
@@ -547,12 +595,58 @@ export async function runCronIsolatedAgentTurn(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
-      provider = fallbackResult.provider;
-      model = fallbackResult.model;
+      liveSelection.provider = fallbackResult.provider;
+      liveSelection.model = fallbackResult.model;
       runEndedAt = Date.now();
     };
 
-    await runPrompt(commandBody);
+    // Retry loop: if the isolated session starts with the wrong model (e.g. the
+    // gateway default) and the runner detects a LiveSessionModelSwitchError, we
+    // restart with the model requested by the error — mirroring the retry logic
+    // in the main agent runner (agent-runner-execution.ts). Without this, cron
+    // jobs that specify a model different from the agent primary always fail.
+    // See: https://github.com/openclaw/openclaw/issues/57206
+    //
+    // Circuit breaker: cap retries to prevent infinite loops when the live
+    // session model switch guard fires repeatedly during failover (#58466).
+    const MAX_MODEL_SWITCH_RETRIES = 2;
+    let modelSwitchRetries = 0;
+    while (true) {
+      try {
+        await runPrompt(commandBody);
+        break;
+      } catch (err) {
+        if (err instanceof LiveSessionModelSwitchError) {
+          modelSwitchRetries += 1;
+          if (modelSwitchRetries > MAX_MODEL_SWITCH_RETRIES) {
+            logWarn(
+              `[cron:${params.job.id}] LiveSessionModelSwitchError retry limit reached (${MAX_MODEL_SWITCH_RETRIES}); aborting`,
+            );
+            throw err;
+          }
+          liveSelection = {
+            provider: err.provider,
+            model: err.model,
+            authProfileId: err.authProfileId,
+            authProfileIdSource: err.authProfileId ? err.authProfileIdSource : undefined,
+          };
+          fallbackProvider = err.provider;
+          fallbackModel = err.model;
+          syncSessionEntryLiveSelection();
+          // Persist the corrected model before retrying so sessions_list
+          // reflects the real model even if the retry also fails.
+          try {
+            await persistSessionEntry();
+          } catch (persistErr) {
+            logWarn(
+              `[cron:${params.job.id}] Failed to persist model switch session entry: ${String(persistErr)}`,
+            );
+          }
+          continue;
+        }
+        throw err;
+      }
+    }
     if (!runResult) {
       throw new Error("cron isolated run returned no result");
     }
@@ -619,11 +713,13 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     const usage = finalRunResult.meta?.agentMeta?.usage;
     const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
-    const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? model;
-    const providerUsed = finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? provider;
+    const modelUsed = finalRunResult.meta?.agentMeta?.model ?? fallbackModel ?? liveSelection.model;
+    const providerUsed =
+      finalRunResult.meta?.agentMeta?.provider ?? fallbackProvider ?? liveSelection.provider;
     const contextTokens =
-      agentCfg?.contextTokens ??
+      resolvePositiveContextTokens(agentCfg?.contextTokens) ??
       lookupContextTokens(modelUsed, { allowAsyncLoad: false }) ??
+      resolvePositiveContextTokens(cronSession.sessionEntry.contextTokens) ??
       DEFAULT_CONTEXT_TOKENS;
 
     setSessionRuntimeModel(cronSession.sessionEntry, {
@@ -634,10 +730,12 @@ export async function runCronIsolatedAgentTurn(params: {
     if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
       const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
+        const { setCliSessionId } = await loadCliRunnerRuntime();
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
       }
     }
     if (hasNonzeroUsage(usage)) {
+      const { estimateUsageCost, resolveModelCostConfig } = await loadUsageFormatRuntime();
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const totalTokens = deriveSessionTotalTokens({

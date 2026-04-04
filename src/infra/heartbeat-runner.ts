@@ -19,7 +19,6 @@ import {
   resolveHeartbeatPrompt as resolveHeartbeatPromptText,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
@@ -28,14 +27,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
-  resolveSessionFilePath,
-  resolveStorePath,
-  saveSessionStore,
-  updateSessionStore,
-} from "../config/sessions.js";
+} from "../config/sessions/main-session.js";
+import { resolveSessionFilePath, resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -44,6 +40,7 @@ import { CommandLane } from "../process/lanes.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -84,12 +81,20 @@ import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./sys
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
+    getReplyFromConfig?: typeof import("./heartbeat-runner.runtime.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     nowMs?: () => number;
   };
 
 const log = createSubsystemLogger("gateway/heartbeat");
+let heartbeatRunnerRuntimePromise: Promise<typeof import("./heartbeat-runner.runtime.js")> | null =
+  null;
+
+function loadHeartbeatRunnerRuntime() {
+  heartbeatRunnerRuntimePromise ??= import("./heartbeat-runner.runtime.js");
+  return heartbeatRunnerRuntimePromise;
+}
 
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
 export {
@@ -659,6 +664,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
+    ForceSenderIsOwnerFalse: hasExecCompletion,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -729,6 +735,8 @@ export async function runHeartbeatOnce(opts: {
           bootstrapContextMode,
         }
       : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+    const getReplyFromConfig =
+      opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -1090,81 +1098,87 @@ export function startHeartbeatRunner(opts: {
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
+    // Track requests-in-flight so we can skip re-arm in finally — the wake
+    // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
+    let requestsInFlight = false;
 
-    if (requestedSessionKey || requestedAgentId) {
-      const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
-      const targetAgent = state.agents.get(targetAgentId);
-      if (!targetAgent) {
-        scheduleNext();
-        return { status: "skipped", reason: "disabled" };
-      }
-      try {
-        const res = await runOnce({
-          cfg: state.cfg,
-          agentId: targetAgent.agentId,
-          heartbeat: targetAgent.heartbeat,
-          reason,
-          sessionKey: requestedSessionKey,
-          deps: { runtime: state.runtime },
-        });
-        if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(targetAgent, now);
+    try {
+      if (requestedSessionKey || requestedAgentId) {
+        const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
+        const targetAgent = state.agents.get(targetAgentId);
+        if (!targetAgent) {
+          return { status: "skipped", reason: "disabled" };
         }
+        try {
+          const res = await runOnce({
+            cfg: state.cfg,
+            agentId: targetAgent.agentId,
+            heartbeat: targetAgent.heartbeat,
+            reason,
+            sessionKey: requestedSessionKey,
+            deps: { runtime: state.runtime },
+          });
+          if (res.status !== "skipped" || res.reason !== "disabled") {
+            advanceAgentSchedule(targetAgent, now);
+          }
+          return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
+        } catch (err) {
+          const errMsg = formatErrorMessage(err);
+          log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
+            error: errMsg,
+          });
+          advanceAgentSchedule(targetAgent, now);
+          return { status: "failed", reason: errMsg };
+        }
+      }
+
+      for (const agent of state.agents.values()) {
+        if (isInterval && now < agent.nextDueMs) {
+          continue;
+        }
+
+        let res: HeartbeatRunResult;
+        try {
+          res = await runOnce({
+            cfg: state.cfg,
+            agentId: agent.agentId,
+            heartbeat: agent.heartbeat,
+            reason,
+            deps: { runtime: state.runtime },
+          });
+        } catch (err) {
+          const errMsg = formatErrorMessage(err);
+          log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+          advanceAgentSchedule(agent, now);
+          continue;
+        }
+        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+          // Do not advance the schedule — the main lane is busy and the wake
+          // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
+          // scheduleNext() here would register a 0 ms timer that races with
+          // the wake layer's 1 s retry and wins, bypassing the cooldown.
+          requestsInFlight = true;
+          return res;
+        }
+        if (res.status !== "skipped" || res.reason !== "disabled") {
+          advanceAgentSchedule(agent, now);
+        }
+        if (res.status === "ran") {
+          ran = true;
+        }
+      }
+
+      if (ran) {
+        return { status: "ran", durationMs: Date.now() - startedAt };
+      }
+      return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
+    } finally {
+      // Always re-arm the timer — except for requests-in-flight, where the
+      // wake layer (heartbeat-wake.ts) handles retry via schedule(DEFAULT_RETRY_MS).
+      if (!requestsInFlight) {
         scheduleNext();
-        return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
-      } catch (err) {
-        const errMsg = formatErrorMessage(err);
-        log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
-          error: errMsg,
-        });
-        advanceAgentSchedule(targetAgent, now);
-        scheduleNext();
-        return { status: "failed", reason: errMsg };
       }
     }
-
-    for (const agent of state.agents.values()) {
-      if (isInterval && now < agent.nextDueMs) {
-        continue;
-      }
-
-      let res: HeartbeatRunResult;
-      try {
-        res = await runOnce({
-          cfg: state.cfg,
-          agentId: agent.agentId,
-          heartbeat: agent.heartbeat,
-          reason,
-          deps: { runtime: state.runtime },
-        });
-      } catch (err) {
-        // If runOnce throws (e.g. during session compaction), we must still
-        // advance the timer and call scheduleNext so heartbeats keep firing.
-        const errMsg = formatErrorMessage(err);
-        log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-        advanceAgentSchedule(agent, now);
-        continue;
-      }
-      if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        // Do not advance the schedule — the main lane is busy and the wake
-        // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
-        // scheduleNext() here would register a 0 ms timer that races with
-        // the wake layer's 1 s retry and wins, bypassing the cooldown.
-        return res;
-      }
-      if (res.status !== "skipped" || res.reason !== "disabled") {
-        advanceAgentSchedule(agent, now);
-      }
-      if (res.status === "ran") {
-        ran = true;
-      }
-    }
-
-    scheduleNext();
-    if (ran) {
-      return { status: "ran", durationMs: Date.now() - startedAt };
-    }
-    return { status: "skipped", reason: isInterval ? "not-due" : "disabled" };
   };
 
   const wakeHandler: HeartbeatWakeHandler = async (params) =>

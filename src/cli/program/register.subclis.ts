@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
-import { removeCommand, removeCommandByName } from "./command-tree.js";
+import { removeCommandByName } from "./command-tree.js";
+import { registerLazyCommand as registerLazyCommandPlaceholder } from "./register-lazy-command.js";
 import {
   getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
@@ -201,7 +201,7 @@ const entries: SubCliEntry[] = [
   },
   {
     name: "qr",
-    description: "Generate iOS pairing QR/setup code",
+    description: "Generate mobile pairing QR/setup code",
     hasSubcommands: false,
     register: async (program) => {
       const mod = await import("../qr-cli.js");
@@ -228,7 +228,7 @@ const entries: SubCliEntry[] = [
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
       const config = await loadValidatedConfigForPluginRegistration();
       if (config) {
-        registerPluginCliCommands(program, config);
+        await registerPluginCliCommands(program, config);
       }
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
@@ -244,7 +244,7 @@ const entries: SubCliEntry[] = [
       const { registerPluginCliCommands } = await import("../../plugins/cli.js");
       const config = await loadValidatedConfigForPluginRegistration();
       if (config) {
-        registerPluginCliCommands(program, config);
+        await registerPluginCliCommands(program, config);
       }
     },
   },
@@ -328,13 +328,13 @@ export async function registerSubCliByName(program: Command, name: string): Prom
 }
 
 function registerLazyCommand(program: Command, entry: SubCliEntry) {
-  const placeholder = program.command(entry.name).description(entry.description);
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
-  placeholder.action(async (...actionArgs) => {
-    removeCommand(program, placeholder);
-    await entry.register(program);
-    await reparseProgramFromActionArgs(program, actionArgs);
+  registerLazyCommandPlaceholder({
+    program,
+    name: entry.name,
+    description: entry.description,
+    register: async () => {
+      await entry.register(program);
+    },
   });
 }
 

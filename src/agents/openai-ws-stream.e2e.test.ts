@@ -9,7 +9,7 @@
  *  - Connection lifecycle cleanup via releaseWsSession
  *
  * Run manually with a valid OPENAI_API_KEY:
- *   OPENAI_API_KEY=sk-... npx vitest run src/agents/openai-ws-stream.e2e.test.ts
+ *   OPENCLAW_LIVE_TEST=1 pnpm exec vitest run --config vitest.e2e.config.ts src/agents/openai-ws-stream.e2e.test.ts
  *
  * Skipped in CI — no API key available and we avoid billable external calls.
  */
@@ -21,21 +21,25 @@ import type {
   Context,
 } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isLiveTestEnabled } from "./live-test-helpers.js";
+import type { OutputItem, ResponseObject } from "./openai-ws-connection.js";
 
 const API_KEY = process.env.OPENAI_API_KEY;
-const LIVE = !!API_KEY;
+const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && !!API_KEY;
 const testFn = LIVE ? it : it.skip;
 
 type OpenAIWsStreamModule = typeof import("./openai-ws-stream.js");
+type OpenAIWsConnectionModule = typeof import("./openai-ws-connection.js");
 type StreamFactory = OpenAIWsStreamModule["createOpenAIWebSocketStreamFn"];
 type StreamReturn = ReturnType<ReturnType<StreamFactory>>;
 let openAIWsStreamModule: OpenAIWsStreamModule;
+let openAIWsConnectionModule: OpenAIWsConnectionModule;
 
 const model = {
   api: "openai-responses" as const,
   provider: "openai",
-  id: "gpt-5.2",
-  name: "gpt-5.2",
+  id: "gpt-5.4",
+  name: "gpt-5.4",
   contextWindow: 128_000,
   maxTokens: 4_096,
   reasoning: true,
@@ -106,6 +110,66 @@ function assistantText(message: AssistantMessage): string {
     .join("");
 }
 
+function extractThinkingBlocks(message: AssistantMessage) {
+  return message.content.filter((block) => block.type === "thinking") as Array<{
+    type: "thinking";
+    thinking: string;
+    thinkingSignature?: string;
+  }>;
+}
+
+function extractToolCall(message: AssistantMessage) {
+  return message.content.find((block) => block.type === "toolCall") as
+    | { type: "toolCall"; id: string; name: string }
+    | undefined;
+}
+
+function parseReasoningSignature(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+  try {
+    return JSON.parse(value) as { id?: unknown; type?: unknown };
+  } catch {
+    return null;
+  }
+}
+
+function extractReasoningText(item: { summary?: unknown; content?: unknown }): string {
+  const summary = item.summary;
+  if (typeof summary === "string") {
+    return summary.trim();
+  }
+  if (Array.isArray(summary)) {
+    const summaryText = summary
+      .map((part) => {
+        if (typeof part === "string") {
+          return part.trim();
+        }
+        if (!part || typeof part !== "object") {
+          return "";
+        }
+        return typeof (part as { text?: unknown }).text === "string"
+          ? ((part as { text: string }).text ?? "").trim()
+          : "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+    if (summaryText) {
+      return summaryText;
+    }
+  }
+  return typeof item.content === "string" ? item.content.trim() : "";
+}
+
+function toExpectedReasoningSignature(item: { id?: string; type: string }) {
+  return {
+    type: item.type,
+    ...(typeof item.id === "string" && item.id.startsWith("rs_") ? { id: item.id } : {}),
+  };
+}
+
 /** Each test gets a unique session ID to avoid cross-test interference. */
 const sessions: string[] = [];
 function freshSession(name: string): string {
@@ -117,13 +181,15 @@ function freshSession(name: string): string {
 describe("OpenAI WebSocket e2e", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+    vi.doMock("@mariozechner/pi-ai", async () => {
+      const actual =
+        await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
       return {
         ...actual,
         createAssistantMessageEventStream: actual.createAssistantMessageEventStream,
       };
     });
+    openAIWsConnectionModule = await import("./openai-ws-connection.js");
     openAIWsStreamModule = await import("./openai-ws-stream.js");
   });
 
@@ -131,6 +197,7 @@ describe("OpenAI WebSocket e2e", () => {
     for (const id of sessions) {
       openAIWsStreamModule.releaseWsSession(id);
     }
+    openAIWsStreamModule.__testing.setDepsForTest();
     sessions.length = 0;
   });
 
@@ -188,6 +255,90 @@ describe("OpenAI WebSocket e2e", () => {
         | undefined;
       expect(toolCall?.name).toBe("noop");
       expect(toolCall?.id).toBeTruthy();
+
+      const secondContext = {
+        ...firstContext,
+        messages: [
+          ...firstContext.messages,
+          firstDone,
+          makeToolResultMessage(toolCall!.id, "TOOL_OK"),
+        ],
+      } as unknown as StreamFnParams[1];
+      const secondDone = expectDone(
+        await collectEvents(
+          streamFn(model, secondContext, {
+            transport: "websocket",
+            maxTokens: 128,
+          }),
+        ),
+      );
+
+      expect(assistantText(secondDone)).toMatch(/TOOL_OK/);
+    },
+    60_000,
+  );
+
+  testFn(
+    "surfaces replay-safe reasoning metadata on websocket tool turns",
+    async () => {
+      const sid = freshSession("tool-reasoning");
+      const completedResponses: ResponseObject[] = [];
+      openAIWsStreamModule.__testing.setDepsForTest({
+        createManager: (options) => {
+          const manager = new openAIWsConnectionModule.OpenAIWebSocketManager(options);
+          manager.onMessage((event) => {
+            if (event.type === "response.completed") {
+              completedResponses.push(event.response);
+            }
+          });
+          return manager;
+        },
+      });
+      const streamFn = openAIWsStreamModule.createOpenAIWebSocketStreamFn(API_KEY!, sid);
+      const firstContext = makeToolContext(
+        "Think carefully, call the tool `noop` with {} first, then after the tool result reply with exactly TOOL_OK.",
+      );
+      const firstDone = expectDone(
+        await collectEvents(
+          streamFn(model, firstContext, {
+            transport: "websocket",
+            toolChoice: "required",
+            reasoningEffort: "high",
+            reasoningSummary: "detailed",
+            maxTokens: 256,
+          } as unknown as StreamFnParams[2]),
+        ),
+      );
+
+      const firstResponse = completedResponses[0];
+      expect(firstResponse).toBeDefined();
+
+      const rawReasoningItems = (firstResponse?.output ?? []).filter(
+        (item): item is Extract<OutputItem, { type: "reasoning" | `reasoning.${string}` }> =>
+          item.type === "reasoning" || item.type.startsWith("reasoning."),
+      );
+      const replayableReasoningItems = rawReasoningItems.filter(
+        (item) => extractReasoningText(item).length > 0,
+      );
+      const thinkingBlocks = extractThinkingBlocks(firstDone);
+      expect(thinkingBlocks).toHaveLength(replayableReasoningItems.length);
+      expect(thinkingBlocks.map((block) => block.thinking)).toEqual(
+        replayableReasoningItems.map((item) => extractReasoningText(item)),
+      );
+      expect(
+        thinkingBlocks.map((block) => parseReasoningSignature(block.thinkingSignature)),
+      ).toEqual(replayableReasoningItems.map((item) => toExpectedReasoningSignature(item)));
+
+      const rawToolCall = firstResponse?.output.find(
+        (item): item is Extract<OutputItem, { type: "function_call" }> =>
+          item.type === "function_call",
+      );
+      expect(rawToolCall).toBeDefined();
+      const toolCall = extractToolCall(firstDone);
+      expect(toolCall?.name).toBe(rawToolCall?.name);
+      expect(toolCall?.id).toBe(
+        rawToolCall ? `${rawToolCall.call_id}|${rawToolCall.id}` : undefined,
+      );
 
       const secondContext = {
         ...firstContext,

@@ -23,16 +23,18 @@ const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
 }));
 
-vi.mock("./pi-embedded-runner/run/attempt.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./pi-embedded-runner/run/attempt.js")>();
+vi.mock("./pi-embedded-runner/run/attempt.js", async () => {
+  const actual = await vi.importActual<typeof import("./pi-embedded-runner/run/attempt.js")>(
+    "./pi-embedded-runner/run/attempt.js",
+  );
   return {
     ...actual,
     runEmbeddedAttempt: (params: unknown) => runEmbeddedAttemptMock(params),
   };
 });
 
-vi.mock("../infra/backoff.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+vi.mock("../infra/backoff.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/backoff.js")>("../infra/backoff.js");
   return {
     ...actual,
     computeBackoff: (
@@ -43,8 +45,8 @@ vi.mock("../infra/backoff.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./models-config.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("./models-config.js")>();
+vi.mock("./models-config.js", async () => {
+  const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
   return {
     ...mod,
     ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
@@ -68,8 +70,10 @@ const installRunEmbeddedMocks = () => {
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
-  vi.doMock("../plugins/provider-runtime.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  vi.doMock("../plugins/provider-runtime.js", async () => {
+    const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+      "../plugins/provider-runtime.js",
+    );
     return {
       ...actual,
       prepareProviderRuntimeAuth: vi.fn(async () => undefined),
@@ -94,6 +98,7 @@ beforeEach(() => {
 
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
+const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
 
 function makeConfig(): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
@@ -196,14 +201,36 @@ async function readUsageStats(agentDir: string) {
   return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
 }
 
+async function writeMultiProfileAuthStore(agentDir: string) {
+  await fs.writeFile(
+    path.join(agentDir, "auth-profiles.json"),
+    JSON.stringify({
+      version: 1,
+      profiles: {
+        "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
+        "openai:p2": { type: "api_key", provider: "openai", key: "sk-openai-2" },
+        "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
+        "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
+      },
+      usageStats: {
+        "openai:p1": { lastUsed: 1 },
+        "openai:p2": { lastUsed: 2 },
+        "openai:p3": { lastUsed: 3 },
+        "groq:p1": { lastUsed: 4 },
+      },
+    }),
+  );
+}
+
 async function runEmbeddedFallback(params: {
   agentDir: string;
   workspaceDir: string;
   sessionKey: string;
   runId: string;
   abortSignal?: AbortSignal;
+  config?: OpenClawConfig;
 }) {
-  const cfg = makeConfig();
+  const cfg = params.config ?? makeConfig();
   return await runWithModelFallback({
     cfg,
     provider: "openai",
@@ -235,6 +262,29 @@ function mockPrimaryOverloadedThenFallbackSuccess() {
   mockPrimaryErrorThenFallbackSuccess(OVERLOADED_ERROR_PAYLOAD);
 }
 
+function mockPrimaryPromptErrorThenFallbackSuccess(errorMessage: string) {
+  runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+    const attemptParams = params as { provider: string };
+    if (attemptParams.provider === "openai") {
+      return makeEmbeddedRunnerAttempt({
+        promptError: new Error(errorMessage),
+      });
+    }
+    if (attemptParams.provider === "groq") {
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["fallback ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "groq",
+          model: "mock-2",
+          stopReason: "stop",
+          content: [{ type: "text", text: "fallback ok" }],
+        }),
+      });
+    }
+    throw new Error(`Unexpected provider ${attemptParams.provider}`);
+  });
+}
+
 function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
   runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
     const attemptParams = params as { provider: string; modelId: string; authProfileId?: string };
@@ -245,6 +295,35 @@ function mockPrimaryErrorThenFallbackSuccess(errorMessage: string) {
           provider: "openai",
           model: "mock-1",
           stopReason: "error",
+          errorMessage,
+        }),
+      });
+    }
+    if (attemptParams.provider === "groq") {
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["fallback ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "groq",
+          model: "mock-2",
+          stopReason: "stop",
+          content: [{ type: "text", text: "fallback ok" }],
+        }),
+      });
+    }
+    throw new Error(`Unexpected provider ${attemptParams.provider}`);
+  });
+}
+
+function mockPrimaryRunLoopRateLimitThenFallbackSuccess(errorMessage: string) {
+  runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+    const attemptParams = params as { provider: string };
+    if (attemptParams.provider === "openai") {
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: [],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          provider: "openai",
+          model: "mock-1",
+          stopReason: "length",
           errorMessage,
         }),
       });
@@ -321,8 +400,8 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
       expectOpenAiThenGroqAttemptOrder();
-      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
@@ -358,8 +437,8 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(usageStats["groq:p1"]?.disabledUntil).toBeUndefined();
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-      expect(computeBackoffMock).toHaveBeenCalledTimes(2);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(2);
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
@@ -421,8 +500,8 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       const usageStats = await readUsageStats(agentDir);
       expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
       expect(usageStats["openai:p1"]?.failureCounts).toMatchObject({ overloaded: 2 });
-      expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-      expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
@@ -466,6 +545,10 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
           sessionKey: "agent:test:overloaded-backoff-abort",
           runId: "run:overloaded-backoff-abort",
           abortSignal: controller.signal,
+          config: {
+            ...makeConfig(),
+            auth: { cooldowns: { overloadedBackoffMs: 321 } },
+          },
         }),
       ).rejects.toMatchObject({
         name: "AbortError",
@@ -477,6 +560,291 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
         | { provider?: string }
         | undefined;
       expect(firstCall?.provider).toBe("openai");
+    });
+  });
+
+  it("caps overloaded profile rotations and escalates to cross-provider fallback (#58348)", async () => {
+    // When a provider has multiple auth profiles and all return overloaded_error,
+    // the runner should not exhaust all profiles before falling back. It should
+    // cap profile rotations at overloadedProfileRotations=1 and escalate
+    // to cross-provider fallback immediately.
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      // Write auth store with multiple profiles for openai
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
+            "openai:p2": { type: "api_key", provider: "openai", key: "sk-openai-2" },
+            "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
+            "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "openai:p2": { lastUsed: 2 },
+            "openai:p3": { lastUsed: 3 },
+            "groq:p1": { lastUsed: 4 },
+          },
+        }),
+      );
+
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as {
+          provider: string;
+          modelId: string;
+          authProfileId?: string;
+        };
+        if (attemptParams.provider === "openai") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: ["fallback ok"],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "groq",
+              model: "mock-2",
+              stopReason: "stop",
+              content: [{ type: "text", text: "fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:overloaded-multi-profile-cap",
+        runId: "run:overloaded-multi-profile-cap",
+      });
+
+      // Should fall back to groq instead of exhausting all 3 openai profiles
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      // With overloadedProfileRotations=1, we expect:
+      // - 1 initial openai attempt (p1)
+      // - 1 rotation to p2 (capped)
+      // - escalation to groq (1 attempt)
+      // Total: 3 attempts, NOT 4 (which would mean all 3 openai profiles tried)
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(2);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("respects overloadedProfileRotations=0 and falls back immediately", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const attemptParams = params as { provider: string };
+        if (attemptParams.provider === "openai") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (attemptParams.provider === "groq") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: ["fallback ok"],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "groq",
+              model: "mock-2",
+              stopReason: "stop",
+              content: [{ type: "text", text: "fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${attemptParams.provider}`);
+      });
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:overloaded-no-rotation",
+        runId: "run:overloaded-no-rotation",
+        config: {
+          ...makeConfig(),
+          auth: { cooldowns: { overloadedProfileRotations: 0 } },
+        },
+      });
+
+      expect(result.provider).toBe("groq");
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(1);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("caps rate-limit profile rotations and escalates to cross-provider fallback (#58572)", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+
+      mockPrimaryErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:rate-limit-multi-profile-cap",
+        runId: "run:rate-limit-multi-profile-cap",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(2);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("falls back on classified rate limits even when stopReason is not error", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+
+      mockPrimaryRunLoopRateLimitThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:rate-limit-retry-limit-fallback",
+        runId: "run:rate-limit-retry-limit-fallback",
+        config: {
+          ...makeConfig(),
+          auth: { cooldowns: { rateLimitedProfileRotations: 999 } },
+        },
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(3);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("respects rateLimitedProfileRotations=0 and falls back immediately", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+
+      mockPrimaryErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:rate-limit-no-rotation",
+        runId: "run:rate-limit-no-rotation",
+        config: {
+          ...makeConfig(),
+          auth: { cooldowns: { rateLimitedProfileRotations: 0 } },
+        },
+      });
+
+      expect(result.provider).toBe("groq");
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(1);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("caps prompt-side rate-limit profile rotations before cross-provider fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+
+      mockPrimaryPromptErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:prompt-rate-limit-multi-profile-cap",
+        runId: "run:prompt-rate-limit-multi-profile-cap",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(2);
+      expect(groqAttempts.length).toBe(1);
+    });
+  });
+
+  it("respects prompt-side rateLimitedProfileRotations=0 and falls back immediately", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeMultiProfileAuthStore(agentDir);
+
+      mockPrimaryPromptErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:prompt-rate-limit-no-rotation",
+        runId: "run:prompt-rate-limit-no-rotation",
+        config: {
+          ...makeConfig(),
+          auth: { cooldowns: { rateLimitedProfileRotations: 0 } },
+        },
+      });
+
+      expect(result.provider).toBe("groq");
+      const openaiAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "openai",
+      );
+      const groqAttempts = runEmbeddedAttemptMock.mock.calls.filter(
+        (call) => (call[0] as { provider?: string })?.provider === "groq",
+      );
+      expect(openaiAttempts.length).toBe(1);
+      expect(groqAttempts.length).toBe(1);
     });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -12,11 +12,32 @@ const runtime: RuntimeEnv = {
   }) as RuntimeEnv["exit"],
 };
 
-function createPrompter(params: { selectValue?: string; textValue?: string }): {
+const SEARCH_PROVIDER_ENV_VARS = [
+  "BRAVE_API_KEY",
+  "FIRECRAWL_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_API_KEY",
+  "KIMI_API_KEY",
+  "MOONSHOT_API_KEY",
+  "OPENROUTER_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "TAVILY_API_KEY",
+  "XAI_API_KEY",
+] as const;
+
+let originalSearchProviderEnv: Partial<Record<(typeof SEARCH_PROVIDER_ENV_VARS)[number], string>> =
+  {};
+
+function createPrompter(params: {
+  selectValue?: string;
+  selectValues?: string[];
+  textValue?: string;
+}): {
   prompter: WizardPrompter;
   notes: Array<{ title?: string; message: string }>;
 } {
   const notes: Array<{ title?: string; message: string }> = [];
+  const remainingSelectValues = [...(params.selectValues ?? [])];
   const prompter: WizardPrompter = {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
@@ -24,7 +45,7 @@ function createPrompter(params: { selectValue?: string; textValue?: string }): {
       notes.push({ title, message });
     }),
     select: vi.fn(
-      async () => params.selectValue ?? "perplexity",
+      async () => remainingSelectValues.shift() ?? params.selectValue ?? "perplexity",
     ) as unknown as WizardPrompter["select"],
     multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
     text: vi.fn(async () => params.textValue ?? ""),
@@ -41,7 +62,17 @@ function createPerplexityConfig(apiKey: string, enabled?: boolean): OpenClawConf
         search: {
           provider: "perplexity",
           ...(enabled === undefined ? {} : { enabled }),
-          perplexity: { apiKey },
+        },
+      },
+    },
+    plugins: {
+      entries: {
+        perplexity: {
+          config: {
+            webSearch: {
+              apiKey,
+            },
+          },
         },
       },
     },
@@ -121,6 +152,26 @@ async function runQuickstartPerplexitySetup(
 }
 
 describe("setupSearch", () => {
+  beforeEach(() => {
+    originalSearchProviderEnv = Object.fromEntries(
+      SEARCH_PROVIDER_ENV_VARS.map((key) => [key, process.env[key]]),
+    );
+    for (const key of SEARCH_PROVIDER_ENV_VARS) {
+      delete process.env[key];
+    }
+  });
+
+  afterEach(() => {
+    for (const key of SEARCH_PROVIDER_ENV_VARS) {
+      const value = originalSearchProviderEnv[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+
   it("returns config unchanged when user skips", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({ selectValue: "__skip__" });
@@ -194,7 +245,6 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("firecrawl");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(readFirecrawlPluginApiKey(result)).toBe("fc-disabled-key");
   });
@@ -208,20 +258,29 @@ describe("setupSearch", () => {
     const result = await setupSearch(cfg, runtime, prompter);
     expect(result.tools?.web?.search?.provider).toBe("grok");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.grok?.apiKey).toBe("xai-test");
+    expect(pluginWebSearchApiKey(result, "xai")).toBe("xai-test");
+    expect(result.plugins?.entries?.xai?.enabled).toBe(true);
   });
 
   it("sets provider and key for kimi", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
-      selectValue: "kimi",
+      selectValues: ["kimi", "https://api.moonshot.ai/v1", "__keep__"],
       textValue: "sk-moonshot",
     });
     const result = await setupSearch(cfg, runtime, prompter);
+    const kimiWebSearchConfig = result.plugins?.entries?.moonshot?.config?.webSearch as
+      | {
+          baseUrl?: string;
+          model?: string;
+        }
+      | undefined;
     expect(result.tools?.web?.search?.provider).toBe("kimi");
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "moonshot")).toBe("sk-moonshot");
     expect(result.plugins?.entries?.moonshot?.enabled).toBe(true);
+    expect(kimiWebSearchConfig?.baseUrl).toBe("https://api.moonshot.ai/v1");
+    expect(kimiWebSearchConfig?.model).toBe("kimi-k2.5");
   });
 
   it("sets provider and key for tavily and enables the plugin", async () => {
@@ -264,7 +323,7 @@ describe("setupSearch", () => {
     const result = await runBlankPerplexityKeyEntry(
       "existing-key", // pragma: allowlist secret
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(true);
   });
 
@@ -273,7 +332,7 @@ describe("setupSearch", () => {
       "existing-key", // pragma: allowlist secret
       false,
     );
-    expect(result.tools?.web?.search?.perplexity?.apiKey).toBe("existing-key");
+    expect(pluginWebSearchApiKey(result, "perplexity")).toBe("existing-key");
     expect(result.tools?.web?.search?.enabled).toBe(false);
   });
 
@@ -395,7 +454,6 @@ describe("setupSearch", () => {
     expect(prompter.text).not.toHaveBeenCalled();
     expect(result.tools?.web?.search?.provider).toBe("firecrawl");
     expect(result.tools?.web?.search?.enabled).toBe(true);
-    expect(result.tools?.web?.search?.firecrawl?.apiKey).toBeUndefined();
     expect(result.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(readFirecrawlPluginApiKey(result)).toBe("fc-configured-key");
   });

@@ -49,7 +49,8 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /chat_id is empty/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
-  /ambiguous discord recipient/i,
+  /ambiguous .* recipient/i,
+  /User .* not in room/i,
 ];
 
 function createEmptyRecoverySummary(): RecoverySummary {

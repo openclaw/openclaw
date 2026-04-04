@@ -3,14 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Bot } from "grammy";
-import {
-  normalizeTelegramCommandName,
-  TELEGRAM_COMMAND_NAME_PATTERN,
-} from "openclaw/plugin-sdk/config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
@@ -25,6 +22,14 @@ type TelegramPluginCommandSpec = {
   description: unknown;
 };
 
+function readErrorTextField(value: unknown, key: "description" | "message"): string | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const text = (value as Record<"description" | "message", unknown>)[key];
+  return typeof text === "string" ? text : undefined;
+}
+
 function isBotCommandsTooMuchError(err: unknown): boolean {
   if (!err) {
     return false;
@@ -38,14 +43,13 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
       return true;
     }
   }
-  if (typeof err === "object") {
-    const maybe = err as { description?: unknown; message?: unknown };
-    if (typeof maybe.description === "string" && pattern.test(maybe.description)) {
-      return true;
-    }
-    if (typeof maybe.message === "string" && pattern.test(maybe.message)) {
-      return true;
-    }
+  const description = readErrorTextField(err, "description");
+  if (description && pattern.test(description)) {
+    return true;
+  }
+  const message = readErrorTextField(err, "message");
+  if (message && pattern.test(message)) {
+    return true;
   }
   return false;
 }

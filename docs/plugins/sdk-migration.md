@@ -46,9 +46,40 @@ The old approach caused problems:
 The modern plugin SDK fixes this: each import path (`openclaw/plugin-sdk/\<subpath\>`)
 is a small, self-contained module with a clear purpose and documented contract.
 
+Legacy provider convenience seams for bundled channels are also gone. Imports
+such as `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
+`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, and
+`openclaw/plugin-sdk/telegram-core` were private mono-repo shortcuts, not
+stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
+bundled plugin workspace, keep provider-owned helpers in that plugin's own
+`api.ts` or `runtime-api.ts`.
+
 ## How to migrate
 
 <Steps>
+  <Step title="Audit Windows wrapper fallback behavior">
+    If your plugin uses `openclaw/plugin-sdk/windows-spawn`, unresolved Windows
+    `.cmd`/`.bat` wrappers now fail closed unless you explicitly pass
+    `allowShellFallback: true`.
+
+    ```typescript
+    // Before
+    const program = applyWindowsSpawnProgramPolicy({ candidate });
+
+    // After
+    const program = applyWindowsSpawnProgramPolicy({
+      candidate,
+      // Only set this for trusted compatibility callers that intentionally
+      // accept shell-mediated fallback.
+      allowShellFallback: true,
+    });
+    ```
+
+    If your caller does not intentionally rely on shell fallback, do not set
+    `allowShellFallback` and handle the thrown error instead.
+
+  </Step>
+
   <Step title="Find deprecated imports">
     Search your plugin for imports from either deprecated surface:
 
@@ -116,7 +147,8 @@ is a small, self-contained module with a clear purpose and documented contract.
   | Import path | Purpose | Key exports |
   | --- | --- | --- |
   | `plugin-sdk/plugin-entry` | Canonical plugin entry helper | `definePluginEntry` |
-  | `plugin-sdk/core` | Channel entry definitions, channel builders, base types | `defineChannelPluginEntry`, `createChatChannelPlugin` |
+  | `plugin-sdk/core` | Legacy umbrella re-export for channel entry definitions/builders | `defineChannelPluginEntry`, `createChatChannelPlugin` |
+  | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
   | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface` |
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
@@ -124,14 +156,22 @@ is a small, self-contained module with a clear purpose and documented contract.
   | `plugin-sdk/channel-config-schema` | Config schema builders | Channel config schema types |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
   | `plugin-sdk/channel-lifecycle` | Account status tracking | `createAccountStatusSink` |
-  | `plugin-sdk/channel-runtime` | Runtime wiring helpers | Channel runtime utilities |
+  | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
   | `plugin-sdk/channel-send-result` | Send result types | Reply result types |
   | `plugin-sdk/runtime-store` | Persistent plugin storage | `createPluginRuntimeStore` |
+  | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers |
+  | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
+  | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
+  | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, error graph helpers |
+  | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers |
+  | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
+  | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
   | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
   | `plugin-sdk/allowlist-resolution` | Allowlist input mapping | `mapAllowlistResolutionInputs` |
-  | `plugin-sdk/command-auth` | Command gating | `resolveControlCommandGate` |
+  | `plugin-sdk/command-auth` | Command gating and command-surface helpers | `resolveControlCommandGate`, sender-authorization helpers, command registry helpers |
   | `plugin-sdk/secret-input` | Secret input parsing | Secret input helpers |
   | `plugin-sdk/webhook-ingress` | Webhook request helpers | Webhook target utilities |
+  | `plugin-sdk/webhook-request-guards` | Webhook body guard helpers | Request body read/limit helpers |
   | `plugin-sdk/reply-payload` | Message reply types | Reply payload types |
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |

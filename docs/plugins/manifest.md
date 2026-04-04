@@ -46,6 +46,10 @@ Use it for:
 - config validation
 - auth and onboarding metadata that should be available without booting plugin
   runtime
+- shorthand model-family ownership metadata that should auto-activate the
+  plugin before runtime loads
+- static capability ownership snapshots used for bundled compat wiring and
+  contract coverage
 - config UI hints
 
 Do not use it for:
@@ -78,6 +82,10 @@ Those belong in your plugin code and `package.json`.
   "description": "OpenRouter provider plugin",
   "version": "1.0.0",
   "providers": ["openrouter"],
+  "modelSupport": {
+    "modelPrefixes": ["router-"]
+  },
+  "cliBackends": ["openrouter-cli"],
   "providerAuthEnvVars": {
     "openrouter": ["OPENROUTER_API_KEY"]
   },
@@ -125,8 +133,11 @@ Those belong in your plugin code and `package.json`.
 | `kind`                | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                 |
 | `channels`            | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                  |
 | `providers`           | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                           |
+| `modelSupport`        | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                  |
+| `cliBackends`         | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                  |
 | `providerAuthEnvVars` | No       | `Record<string, string[]>`       | Cheap provider-auth env metadata that OpenClaw can inspect without loading plugin code.                                      |
 | `providerAuthChoices` | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                |
+| `contracts`           | No       | `object`                         | Static bundled capability snapshot for speech, media-understanding, image-generation, web search, and tool ownership.        |
 | `skills`              | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                      |
 | `name`                | No       | `string`                         | Human-readable plugin name.                                                                                                  |
 | `description`         | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                      |
@@ -182,6 +193,72 @@ Each field hint can include:
 | `sensitive`   | `boolean`  | Marks the field as secret or sensitive. |
 | `placeholder` | `string`   | Placeholder text for form inputs.       |
 
+## contracts reference
+
+Use `contracts` only for static capability ownership metadata that OpenClaw can
+read without importing the plugin runtime.
+
+```json
+{
+  "contracts": {
+    "speechProviders": ["openai"],
+    "realtimeTranscriptionProviders": ["openai"],
+    "realtimeVoiceProviders": ["openai"],
+    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "imageGenerationProviders": ["openai"],
+    "webSearchProviders": ["gemini"],
+    "tools": ["firecrawl_search", "firecrawl_scrape"]
+  }
+}
+```
+
+Each list is optional:
+
+| Field                            | Type       | What it means                                                  |
+| -------------------------------- | ---------- | -------------------------------------------------------------- |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                          |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.          |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.             |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                      |
+| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
+
+## modelSupport reference
+
+Use `modelSupport` when OpenClaw should infer your provider plugin from
+shorthand model ids like `gpt-5.4` or `claude-sonnet-4.6` before plugin runtime
+loads.
+
+```json
+{
+  "modelSupport": {
+    "modelPrefixes": ["gpt-", "o1", "o3", "o4"],
+    "modelPatterns": ["^computer-use-preview"]
+  }
+}
+```
+
+OpenClaw applies this precedence:
+
+- explicit `provider/model` refs use the owning `providers` manifest metadata
+- `modelPatterns` beat `modelPrefixes`
+- if one non-bundled plugin and one bundled plugin both match, the non-bundled
+  plugin wins
+- remaining ambiguity is ignored until the user or config specifies a provider
+
+Fields:
+
+| Field           | Type       | What it means                                                                   |
+| --------------- | ---------- | ------------------------------------------------------------------------------- |
+| `modelPrefixes` | `string[]` | Prefixes matched with `startsWith` against shorthand model ids.                 |
+| `modelPatterns` | `string[]` | Regex sources matched against shorthand model ids after profile suffix removal. |
+
+Legacy top-level `speechProviders`, `mediaUnderstandingProviders`, and
+`imageGenerationProviders` are deprecated. Use `openclaw doctor --fix` to move
+them under `contracts`; normal manifest loading no longer treats them as
+capability ownership.
+
 ## Manifest versus package.json
 
 The two files serve different jobs:
@@ -234,8 +311,14 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
   - `kind: "memory"` is selected by `plugins.slots.memory`.
   - `kind: "context-engine"` is selected by `plugins.slots.contextEngine`
     (default: built-in `legacy`).
-- `channels`, `providers`, and `skills` can be omitted when a plugin does not
-  need them.
+- `channels`, `providers`, `cliBackends`, and `skills` can be omitted when a
+  plugin does not need them.
 - If your plugin depends on native modules, document the build steps and any
   package-manager allowlist requirements (for example, pnpm `allow-build-scripts`
   - `pnpm rebuild <package>`).
+
+## Related
+
+- [Building Plugins](/plugins/building-plugins) — getting started with plugins
+- [Plugin Architecture](/plugins/architecture) — internal architecture
+- [SDK Overview](/plugins/sdk-overview) — Plugin SDK reference

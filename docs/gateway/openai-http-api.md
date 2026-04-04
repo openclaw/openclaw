@@ -43,8 +43,23 @@ Treat this endpoint as a **full operator-access** surface for the gateway instan
 - A valid Gateway token/password for this endpoint should be treated like an owner/operator credential.
 - Requests run through the same control-plane agent path as trusted operator actions.
 - There is no separate non-owner/per-user tool boundary on this endpoint; once a caller passes Gateway auth here, OpenClaw treats that caller as a trusted operator for this gateway.
+- For shared-secret auth modes (`token` and `password`), the endpoint restores the normal full operator defaults even if the caller sends a narrower `x-openclaw-scopes` header.
+- Trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`) honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set.
 - If the target agent policy allows sensitive tools, this endpoint can use them.
 - Keep this endpoint on loopback/tailnet/private ingress only; do not expose it directly to the public internet.
+
+Auth matrix:
+
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set
+  - treats chat turns on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - authenticate some outer trusted identity or deployment boundary
+  - honor `x-openclaw-scopes` when the header is present
+  - fall back to the normal operator default scope set when the header is absent
+  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
 See [Security](/gateway/security) and [Remote access](/gateway/remote).
 

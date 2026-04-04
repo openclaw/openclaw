@@ -1,12 +1,12 @@
-import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
-import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
@@ -73,18 +73,17 @@ async function mutateSignalReaction(params: {
 }
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listEnabledSignalAccounts(cfg);
-    if (accounts.length === 0) {
-      return null;
-    }
-    const configuredAccounts = accounts.filter((account) => account.configured);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const configuredAccounts = accountId
+      ? [resolveSignalAccount({ cfg, accountId })].filter(
+          (account) => account.enabled && account.configured,
+        )
+      : listEnabledSignalAccounts(cfg).filter((account) => account.configured);
     if (configuredAccounts.length === 0) {
       return null;
     }
 
     const actions = new Set<ChannelMessageActionName>(["send"]);
-
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );

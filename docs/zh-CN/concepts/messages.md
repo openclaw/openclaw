@@ -7,7 +7,7 @@ summary: 消息流程、会话、队列和推理可见性
 title: 消息
 x-i18n:
   generated_at: "2026-02-03T10:05:22Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 147362b61bee21ee6e303654d970a052325f076ddb45814306053f70409737b5
   source_path: concepts/messages.md

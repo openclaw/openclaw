@@ -1,4 +1,5 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveCopilotTransportApi } from "./models.js";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
@@ -30,10 +31,7 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
   return {
     id,
     name: id,
-    // pi-coding-agent's registry schema doesn't know about a "github-copilot" API.
-    // We use OpenAI-compatible responses API, while keeping the provider id as
-    // "github-copilot" (pi-ai uses that to attach Copilot-specific headers).
-    api: "openai-responses",
+    api: resolveCopilotTransportApi(id),
     reasoning: false,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

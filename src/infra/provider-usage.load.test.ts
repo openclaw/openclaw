@@ -10,16 +10,9 @@ import {
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 
-const resolveProviderUsageSnapshotWithPlugin = vi.hoisted(() => vi.fn(async () => null));
-
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderUsageSnapshotWithPlugin,
-}));
-
 describe("provider-usage.load", () => {
   beforeEach(() => {
-    resolveProviderUsageSnapshotWithPlugin.mockReset();
-    resolveProviderUsageSnapshotWithPlugin.mockResolvedValue(null);
+    vi.restoreAllMocks();
   });
 
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {

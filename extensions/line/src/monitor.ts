@@ -15,6 +15,11 @@ import {
   normalizePluginHttpPath,
   registerPluginHttpRoute,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import {
+  beginWebhookRequestPipelineOrReject,
+  createWebhookInFlightLimiter,
+} from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -64,6 +69,7 @@ const runtimeState = new Map<
     lastOutboundAt?: number | null;
   }
 >();
+const lineWebhookInFlightLimiter = createWebhookInFlightLimiter();
 
 function recordChannelRuntimeState(params: {
   channel: string;
@@ -135,7 +141,7 @@ export async function monitorLineProvider(
     abortSignal,
     webhookPath,
   } = opts;
-  const resolvedAccountId = accountId ?? "default";
+  const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
   const secret = channelSecret.trim();
 
@@ -283,6 +289,13 @@ export async function monitorLineProvider(
   });
 
   const normalizedPath = normalizePluginHttpPath(webhookPath, "/line/webhook") ?? "/line/webhook";
+  const createScopedLineWebhookHandler = (onRequestAuthenticated?: () => void) =>
+    createLineNodeWebhookHandler({
+      channelSecret: secret,
+      bot,
+      runtime,
+      onRequestAuthenticated,
+    });
   const unregisterHttp = registerPluginHttpRoute({
     path: normalizedPath,
     auth: "plugin",
@@ -290,7 +303,28 @@ export async function monitorLineProvider(
     pluginId: "line",
     accountId: resolvedAccountId,
     log: (msg) => logVerbose(msg),
-    handler: createLineNodeWebhookHandler({ channelSecret: secret, bot, runtime }),
+    handler: async (req, res) => {
+      if (req.method !== "POST") {
+        await createScopedLineWebhookHandler()(req, res);
+        return;
+      }
+
+      const requestLifecycle = beginWebhookRequestPipelineOrReject({
+        req,
+        res,
+        inFlightLimiter: lineWebhookInFlightLimiter,
+        inFlightKey: `line:${resolvedAccountId}`,
+      });
+      if (!requestLifecycle.ok) {
+        return;
+      }
+
+      try {
+        await createScopedLineWebhookHandler(requestLifecycle.release)(req, res);
+      } finally {
+        requestLifecycle.release();
+      }
+    },
   });
 
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);

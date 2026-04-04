@@ -8,6 +8,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -292,6 +293,11 @@ export function createFollowupRunner(params: {
           providerUsed: fallbackProvider,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
+          cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
+          usageIsContextSnapshot: isCliProvider(
+            fallbackProvider ?? queued.run.provider,
+            queued.run.config,
+          ),
           logLabel: "followup",
         });
       }
@@ -360,6 +366,7 @@ export function createFollowupRunner(params: {
       if (autoCompactionCount > 0) {
         const previousSessionId = queued.run.sessionId;
         const count = await incrementRunCompactionCount({
+          cfg: queued.run.config,
           sessionEntry,
           sessionStore,
           sessionKey,

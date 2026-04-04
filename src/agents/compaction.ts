@@ -1,6 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
+import {
+  estimateTokens,
+  generateSummary as piGenerateSummary,
+} from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -36,6 +39,30 @@ export type CompactionSummarizationInstructions = {
   identifierPolicy?: AgentCompactionIdentifierPolicy;
   identifierInstructions?: string;
 };
+
+type GenerateSummaryCompat = {
+  (
+    currentMessages: AgentMessage[],
+    model: NonNullable<ExtensionContext["model"]>,
+    reserveTokens: number,
+    apiKey: string,
+    signal?: AbortSignal,
+    customInstructions?: string,
+    previousSummary?: string,
+  ): Promise<string>;
+  (
+    currentMessages: AgentMessage[],
+    model: NonNullable<ExtensionContext["model"]>,
+    reserveTokens: number,
+    apiKey: string,
+    headers: Record<string, string> | undefined,
+    signal?: AbortSignal,
+    customInstructions?: string,
+    previousSummary?: string,
+  ): Promise<string>;
+};
+
+const generateSummaryCompat = piGenerateSummary as unknown as GenerateSummaryCompat;
 
 function resolveIdentifierPreservationInstructions(
   instructions?: CompactionSummarizationInstructions,
@@ -212,6 +239,7 @@ async function summarizeChunks(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -239,6 +267,7 @@ async function summarizeChunks(params: {
           params.model,
           params.reserveTokens,
           params.apiKey,
+          params.headers,
           params.signal,
           effectiveInstructions,
           summary,
@@ -257,6 +286,39 @@ async function summarizeChunks(params: {
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
 }
 
+function generateSummary(
+  currentMessages: AgentMessage[],
+  model: NonNullable<ExtensionContext["model"]>,
+  reserveTokens: number,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  signal: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+): Promise<string> {
+  if (piGenerateSummary.length >= 8) {
+    return generateSummaryCompat(
+      currentMessages,
+      model,
+      reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      customInstructions,
+      previousSummary,
+    );
+  }
+  return generateSummaryCompat(
+    currentMessages,
+    model,
+    reserveTokens,
+    apiKey,
+    signal,
+    customInstructions,
+    previousSummary,
+  );
+}
+
 /**
  * Summarize with progressive fallback for handling oversized messages.
  * If full summarization fails, tries partial summarization excluding oversized messages.
@@ -265,6 +327,7 @@ export async function summarizeWithFallback(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -334,6 +397,7 @@ export async function summarizeInStages(params: {
   messages: AgentMessage[];
   model: NonNullable<ExtensionContext["model"]>;
   apiKey: string;
+  headers?: Record<string, string>;
   signal: AbortSignal;
   reserveTokens: number;
   maxChunkTokens: number;
@@ -460,5 +524,7 @@ export function pruneHistoryForContextShare(params: {
 }
 
 export function resolveContextWindowTokens(model?: ExtensionContext["model"]): number {
-  return Math.max(1, Math.floor(model?.contextWindow ?? DEFAULT_CONTEXT_TOKENS));
+  const effective =
+    (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;
+  return Math.max(1, Math.floor(effective ?? DEFAULT_CONTEXT_TOKENS));
 }

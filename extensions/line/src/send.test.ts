@@ -63,8 +63,10 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
   recordChannelActivity: recordChannelActivityMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     logVerbose: logVerboseMock,
@@ -167,6 +169,64 @@ describe("LINE send helpers", () => {
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
     expect(result).toEqual({ messageId: "reply", chatId: "C1" });
+  });
+
+  it("sends video with explicit image preview URL", async () => {
+    await sendModule.sendMessageLine("line:user:U100", "Video", {
+      mediaUrl: "https://example.com/video.mp4",
+      mediaKind: "video",
+      previewImageUrl: "https://example.com/preview.jpg",
+      trackingId: "track-1",
+    });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U100",
+      messages: [
+        {
+          type: "video",
+          originalContentUrl: "https://example.com/video.mp4",
+          previewImageUrl: "https://example.com/preview.jpg",
+          trackingId: "track-1",
+        },
+        {
+          type: "text",
+          text: "Video",
+        },
+      ],
+    });
+  });
+
+  it("throws when video preview URL is missing", async () => {
+    await expect(
+      sendModule.sendMessageLine("line:user:U200", "Video", {
+        mediaUrl: "https://example.com/video.mp4",
+        mediaKind: "video",
+      }),
+    ).rejects.toThrow(/require previewimageurl/i);
+  });
+
+  it("omits trackingId for non-user destinations", async () => {
+    await sendModule.sendMessageLine("line:group:C100", "Video", {
+      mediaUrl: "https://example.com/video.mp4",
+      mediaKind: "video",
+      previewImageUrl: "https://example.com/preview.jpg",
+      trackingId: "track-group",
+    });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "C100",
+      messages: [
+        {
+          type: "video",
+          originalContentUrl: "https://example.com/video.mp4",
+          previewImageUrl: "https://example.com/preview.jpg",
+        },
+        {
+          type: "text",
+          text: "Video",
+        },
+      ],
+    });
   });
 
   it("throws when push messages are empty", async () => {

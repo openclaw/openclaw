@@ -1,43 +1,25 @@
-import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
+import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentMainSessionKey, resolveMainSessionKey } from "../../config/sessions.js";
-import { callGateway } from "../../gateway/call.js";
-import { sleepWithAbort } from "../../infra/backoff.js";
 import {
-  deliverOutboundPayloads,
-  type OutboundDeliveryResult,
-} from "../../infra/outbound/deliver.js";
-import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
-import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+} from "../../config/sessions/main-session.js";
+import { sleepWithAbort } from "../../infra/backoff.js";
+import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { logWarn, logError } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.js";
-import {
-  expectsSubagentFollowup,
-  isLikelyInterimCronMessage,
-  readDescendantSubagentFallbackReply,
-  waitForDescendantSubagentSummary,
-} from "./subagent-followup.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
-  const channelLower = channel.trim().toLowerCase();
   const toTrimmed = to.trim();
-  if (channelLower === "feishu" || channelLower === "lark") {
-    const lowered = toTrimmed.toLowerCase();
-    if (lowered.startsWith("user:")) {
-      return toTrimmed.slice("user:".length).trim();
-    }
-    if (lowered.startsWith("chat:")) {
-      return toTrimmed.slice("chat:".length).trim();
-    }
-  }
-  return toTrimmed;
+  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
 export function matchesMessagingToolDeliveryTarget(
@@ -63,13 +45,7 @@ export function matchesMessagingToolDeliveryTarget(
 }
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
-  if (typeof job.delivery?.bestEffort === "boolean") {
-    return job.delivery.bestEffort;
-  }
-  if (job.payload.kind === "agentTurn" && typeof job.payload.bestEffortDeliver === "boolean") {
-    return job.payload.bestEffortDeliver;
-  }
-  return false;
+  return job.delivery?.bestEffort === true;
 }
 
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -144,7 +120,34 @@ type CompletedDirectCronDelivery = {
   results: OutboundDeliveryResult[];
 };
 
+let gatewayCallRuntimePromise: Promise<typeof import("../../gateway/call.runtime.js")> | undefined;
+let deliveryOutboundRuntimePromise:
+  | Promise<typeof import("./delivery-outbound.runtime.js")>
+  | undefined;
+let subagentFollowupRuntimePromise:
+  | Promise<typeof import("./subagent-followup.runtime.js")>
+  | undefined;
+
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
+
+async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
+  gatewayCallRuntimePromise ??= import("../../gateway/call.runtime.js");
+  return await gatewayCallRuntimePromise;
+}
+
+async function loadDeliveryOutboundRuntime(): Promise<
+  typeof import("./delivery-outbound.runtime.js")
+> {
+  deliveryOutboundRuntimePromise ??= import("./delivery-outbound.runtime.js");
+  return await deliveryOutboundRuntimePromise;
+}
+
+async function loadSubagentFollowupRuntime(): Promise<
+  typeof import("./subagent-followup.runtime.js")
+> {
+  subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
+  return await subagentFollowupRuntimePromise;
+}
 
 function cloneDeliveryResults(
   results: readonly OutboundDeliveryResult[],
@@ -246,20 +249,21 @@ function resolveCronAwarenessMainSessionKey(params: {
     : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
 }
 
-function queueCronAwarenessSystemEvent(params: {
+async function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
   agentId: string;
   deliveryIdempotencyKey: string;
   outputText?: string;
   synthesizedText?: string;
-}): void {
+}): Promise<void> {
   const text = params.outputText?.trim() || params.synthesizedText?.trim() || undefined;
   if (!text) {
     return;
   }
 
   try {
+    const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
     enqueueSystemEvent(text, {
       sessionKey: resolveCronAwarenessMainSessionKey({
         cfg: params.cfg,
@@ -371,6 +375,12 @@ export async function dispatchCronDelivery(
     delivery: SuccessfulDeliveryTarget,
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
+    const {
+      buildOutboundSessionContext,
+      createOutboundSendDeps,
+      deliverOutboundPayloads,
+      resolveAgentOutboundIdentity,
+    } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
       runSessionId: params.runSessionId,
@@ -482,7 +492,7 @@ export async function dispatchCronDelivery(
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
       if (delivered && shouldQueueCronAwareness(params.job, params.deliveryBestEffort)) {
-        queueCronAwarenessSystemEvent({
+        await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
           agentId: params.agentId,
@@ -521,6 +531,7 @@ export async function dispatchCronDelivery(
         return;
       }
       try {
+        const { callGateway } = await loadGatewayCallRuntime();
         await callGateway({
           method: "sessions.delete",
           params: {
@@ -541,21 +552,27 @@ export async function dispatchCronDelivery(
     const initialSynthesizedText = synthesizedText.trim();
     let activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
     const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+    const shouldCheckCompletedDescendants =
+      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
+    const needsSubagentFollowupRuntime =
+      shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
+    const subagentFollowupRuntime = needsSubagentFollowupRuntime
+      ? await loadSubagentFollowupRuntime()
+      : undefined;
     // Also check for already-completed descendants. If the subagent finished
     // before delivery-dispatch runs, activeSubagentRuns is 0 and
     // expectedSubagentFollowup may be false (e.g. cron said "on it" which
     // doesn't match the narrow hint list). We still need to use the
     // descendant's output instead of the interim cron text.
-    const completedDescendantReply =
-      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText)
-        ? await readDescendantSubagentFallbackReply({
-            sessionKey: params.agentSessionKey,
-            runStartedAt: params.runStartedAt,
-          })
-        : undefined;
+    const completedDescendantReply = shouldCheckCompletedDescendants
+      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+          sessionKey: params.agentSessionKey,
+          runStartedAt: params.runStartedAt,
+        })
+      : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
-      let finalReply = await waitForDescendantSubagentSummary({
+      let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: params.agentSessionKey,
         initialReply: initialSynthesizedText,
         timeoutMs: params.timeoutMs,
@@ -563,7 +580,7 @@ export async function dispatchCronDelivery(
       });
       activeSubagentRuns = countActiveDescendantRuns(params.agentSessionKey);
       if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await readDescendantSubagentFallbackReply({
+        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
           sessionKey: params.agentSessionKey,
           runStartedAt: params.runStartedAt,
         });

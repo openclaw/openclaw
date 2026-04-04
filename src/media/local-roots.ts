@@ -1,20 +1,15 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveConfigDir } from "../utils.js";
 
 type BuildMediaLocalRootsOptions = {
   preferredTmpDir?: string;
 };
 
 let cachedPreferredTmpDir: string | undefined;
-const HTTP_URL_RE = /^https?:\/\//i;
-const DATA_URL_RE = /^data:/i;
-const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 
 function resolveCachedPreferredTmpDir(): string {
   if (!cachedPreferredTmpDir) {
@@ -23,29 +18,38 @@ function resolveCachedPreferredTmpDir(): string {
   return cachedPreferredTmpDir;
 }
 
-function buildMediaLocalRoots(
+export function buildMediaLocalRoots(
   stateDir: string,
+  configDir: string,
   options: BuildMediaLocalRootsOptions = {},
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
+  const resolvedConfigDir = path.resolve(configDir);
   const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
-  return [
-    preferredTmpDir,
-    path.join(resolvedStateDir, "media"),
-    path.join(resolvedStateDir, "workspace"),
-    path.join(resolvedStateDir, "sandboxes"),
-  ];
+  return Array.from(
+    new Set([
+      preferredTmpDir,
+      path.join(resolvedStateDir, "media"),
+      path.join(resolvedStateDir, "workspace"),
+      path.join(resolvedStateDir, "sandboxes"),
+      // Upgraded installs can still resolve the active state dir to the legacy
+      // ~/.clawdbot tree while new media writes already go under ~/.openclaw/media.
+      // Keep inbound media readable across that split without widening roots beyond
+      // the managed media cache.
+      path.join(resolvedConfigDir, "media"),
+    ]),
+  );
 }
 
 export function getDefaultMediaLocalRoots(): readonly string[] {
-  return buildMediaLocalRoots(resolveStateDir());
+  return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
 ): readonly string[] {
-  const roots = buildMediaLocalRoots(resolveStateDir());
+  const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
   if (!agentId?.trim()) {
     return roots;
   }
@@ -60,57 +64,24 @@ export function getAgentScopedMediaLocalRoots(
   return roots;
 }
 
-function resolveLocalMediaPath(source: string): string | undefined {
-  const trimmed = source.trim();
-  if (!trimmed || HTTP_URL_RE.test(trimmed) || DATA_URL_RE.test(trimmed)) {
-    return undefined;
-  }
-  if (trimmed.startsWith("file://")) {
-    try {
-      return safeFileURLToPath(trimmed);
-    } catch {
-      return undefined;
-    }
-  }
-  if (trimmed.startsWith("~")) {
-    return resolveUserPath(trimmed);
-  }
-  if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
-    return path.resolve(trimmed);
-  }
-  return undefined;
-}
-
+/**
+ * @deprecated Kept for plugin-sdk compatibility. Media sources no longer widen allowed roots.
+ */
 export function appendLocalMediaParentRoots(
   roots: readonly string[],
-  mediaSources?: readonly string[],
+  _mediaSources?: readonly string[],
 ): string[] {
-  const appended = Array.from(new Set(roots.map((root) => path.resolve(root))));
-  for (const source of mediaSources ?? []) {
-    const localPath = resolveLocalMediaPath(source);
-    if (!localPath) {
-      continue;
-    }
-    const parentDir = path.dirname(localPath);
-    if (parentDir === path.parse(parentDir).root) {
-      continue;
-    }
-    const normalizedParent = path.resolve(parentDir);
-    if (!appended.includes(normalizedParent)) {
-      appended.push(normalizedParent);
-    }
-  }
-  return appended;
+  return Array.from(new Set(roots.map((root) => path.resolve(root))));
 }
 
-export function getAgentScopedMediaLocalRootsForSources(params: {
+export function getAgentScopedMediaLocalRootsForSources({
+  cfg,
+  agentId,
+  mediaSources: _mediaSources,
+}: {
   cfg: OpenClawConfig;
   agentId?: string;
   mediaSources?: readonly string[];
 }): readonly string[] {
-  const roots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
-  if (resolveEffectiveToolFsWorkspaceOnly({ cfg: params.cfg, agentId: params.agentId })) {
-    return roots;
-  }
-  return appendLocalMediaParentRoots(roots, params.mediaSources);
+  return getAgentScopedMediaLocalRoots(cfg, agentId);
 }

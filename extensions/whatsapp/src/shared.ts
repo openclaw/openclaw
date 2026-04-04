@@ -1,29 +1,33 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import { createDelegatedSetupWizardProxy } from "openclaw/plugin-sdk/setup";
+import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import {
+  createDelegatedSetupWizardProxy,
+  type ChannelSetupWizard,
+} from "openclaw/plugin-sdk/setup";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
+  hasAnyWhatsAppAuth,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
+import { WhatsAppChannelConfigSchema } from "./config-schema.js";
+import { whatsappDoctor } from "./doctor.js";
+import { resolveWhatsAppGroupIntroHint } from "./group-intro.js";
 import {
-  buildChannelConfigSchema,
-  formatWhatsAppConfigAllowFromEntries,
-  getChatChannelMeta,
-  normalizeE164,
-  resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-  WhatsAppConfigSchema,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+} from "./group-policy.js";
+import { applyWhatsAppSecurityConfigFixes } from "./security-fix.js";
 
 export const WHATSAPP_CHANNEL = "whatsapp" as const;
 
@@ -56,8 +60,8 @@ const whatsappResolveDmPolicy = createScopedDmSecurityResolver<ResolvedWhatsAppA
 });
 
 export function createWhatsAppSetupWizardProxy(
-  loadWizard: () => Promise<NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>>,
-): NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]> {
+  loadWizard: () => Promise<ChannelSetupWizard>,
+): ChannelSetupWizard {
   return createDelegatedSetupWizardProxy({
     channel: WHATSAPP_CHANNEL,
     loadWizard,
@@ -69,8 +73,7 @@ export function createWhatsAppSetupWizardProxy(
       configuredScore: 5,
       unconfiguredScore: 4,
     },
-    resolveShouldPromptAccountIds: (params) =>
-      (params.shouldPromptAccountIds || params.options?.promptWhatsAppAccountId) ?? false,
+    resolveShouldPromptAccountIds: (params) => Boolean(params.shouldPromptAccountIds),
     credentials: [],
     delegateFinalize: true,
     disable: (cfg) => ({
@@ -84,7 +87,7 @@ export function createWhatsAppSetupWizardProxy(
       },
     }),
     onAccountRecorded: (accountId, options) => {
-      options?.onWhatsAppAccountId?.(accountId);
+      options?.onAccountId?.(WHATSAPP_CHANNEL, accountId);
     },
   });
 }
@@ -133,12 +136,13 @@ export function createWhatsAppPluginBase(params: {
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
     gatewayMethods: ["web.login.start", "web.login.wait"],
-    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
+    configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
       isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
+      hasPersistedAuthState: ({ cfg }) => hasAnyWhatsAppAuth(cfg),
       unconfiguredReason: () => "not linked",
       describeAccount: (account) =>
         describeAccountSnapshot({
@@ -152,9 +156,11 @@ export function createWhatsAppPluginBase(params: {
         }),
     },
     security: {
+      applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
       collectWarnings: collectWhatsAppSecurityWarnings,
     },
+    doctor: whatsappDoctor,
     setup: params.setup,
     groups: params.groups,
   });
@@ -179,6 +185,7 @@ export function createWhatsAppPluginBase(params: {
     | "configSchema"
     | "config"
     | "security"
+    | "doctor"
     | "setup"
     | "groups"
   >;

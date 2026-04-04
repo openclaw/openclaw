@@ -7,7 +7,7 @@ summary: Android 应用（节点）：连接操作手册 + Canvas/Chat/Camera
 title: Android 应用
 x-i18n:
   generated_at: "2026-02-03T07:51:34Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 9cd02f12065ce2bc483379c9afd7537489d9076094f4a412cf9f21ccc47f0e38
   source_path: platforms/android.md

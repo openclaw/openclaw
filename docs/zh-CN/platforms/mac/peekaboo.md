@@ -7,7 +7,7 @@ summary: 用于 macOS UI 自动化的 PeekabooBridge 集成
 title: Peekaboo Bridge
 x-i18n:
   generated_at: "2026-02-01T21:32:57Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b5b9ddb9a7c59e153a1d5d23c33616bb1542b5c7dadedc3af340aeee9ba03487
   source_path: platforms/mac/peekaboo.md

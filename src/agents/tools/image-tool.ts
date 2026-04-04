@@ -1,5 +1,10 @@
+import { resolve, isAbsolute } from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
+} from "../../media-understanding/defaults.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
 import { buildProviderRegistry } from "../../media-understanding/runner.js";
 import { loadWebMedia } from "../../media/web-media.js";
@@ -39,8 +44,6 @@ import {
 } from "./tool-runtime.helpers.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
-const ANTHROPIC_IMAGE_PRIMARY = "anthropic/claude-opus-4-6";
-const ANTHROPIC_IMAGE_FALLBACK = "anthropic/claude-opus-4-5";
 const DEFAULT_MAX_IMAGES = 20;
 
 const imageToolProviderDeps = {
@@ -102,28 +105,39 @@ export function resolveImageModelConfigForTool(params: {
     provider: primary.provider,
   });
   const primaryCandidates = (() => {
-    if (isMinimaxVlmProvider(primary.provider)) {
-      return [`${primary.provider}/MiniMax-VL-01`];
-    }
     if (providerVisionFromConfig) {
       return [providerVisionFromConfig];
     }
-    if (primary.provider === "zai") {
-      return ["zai/glm-4.6v"];
+    const providerDefault = resolveDefaultMediaModel({
+      cfg: params.cfg,
+      providerId: primary.provider,
+      capability: "image",
+    });
+    if (providerDefault) {
+      return [`${primary.provider}/${providerDefault}`];
     }
-    if (primary.provider === "openai") {
-      return ["openai/gpt-5-mini"];
-    }
-    if (primary.provider === "anthropic") {
-      return [ANTHROPIC_IMAGE_PRIMARY];
+    if (isMinimaxVlmProvider(primary.provider)) {
+      return [`${primary.provider}/MiniMax-VL-01`];
     }
     return [];
   })();
 
+  const autoCandidates = resolveAutoMediaKeyProviders({
+    cfg: params.cfg,
+    capability: "image",
+  }).map((providerId) => {
+    const modelId = resolveDefaultMediaModel({
+      cfg: params.cfg,
+      providerId,
+      capability: "image",
+    });
+    return modelId ? `${providerId}/${modelId}` : null;
+  });
+
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
-    candidates: [...primaryCandidates, "openai/gpt-5-mini", ANTHROPIC_IMAGE_FALLBACK],
+    candidates: [...primaryCandidates, ...autoCandidates],
   });
 }
 
@@ -403,6 +417,19 @@ export function createImageTool(options?: {
           }
           if (imageRaw.startsWith("~")) {
             return resolveUserPath(imageRaw);
+          }
+          // Resolve relative paths against workspaceDir so agents can reference
+          // workspace-relative paths (e.g. "inbox/photo.png") without needing to
+          // know the absolute workspace location — matching the read tool behaviour.
+          if (
+            !isDataUrl &&
+            !isFileUrl &&
+            !isHttpUrl &&
+            !looksLikeWindowsDrivePath &&
+            !isAbsolute(imageRaw) &&
+            options?.workspaceDir
+          ) {
+            return resolve(options.workspaceDir, imageRaw);
           }
           return imageRaw;
         })();

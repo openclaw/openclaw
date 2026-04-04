@@ -26,11 +26,21 @@ Always import from a specific subpath:
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 ```
 
 Each subpath is a small, self-contained module. This keeps startup fast and
-prevents circular dependency issues.
+prevents circular dependency issues. For channel-specific entry/build helpers,
+prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
+the broader umbrella surface and shared helpers such as
+`buildChannelConfigSchema`.
+
+Do not add or depend on provider-named convenience seams such as
+`openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
+`openclaw/plugin-sdk/signal`, or `openclaw/plugin-sdk/whatsapp`. Bundled plugins should compose generic SDK
+subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
+either use those plugin-local barrels or add a narrow generic SDK contract when
+the need is truly cross-channel.
 
 ## Subpath reference
 
@@ -48,6 +58,7 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
   <Accordion title="Channel subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
     | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
@@ -66,21 +77,24 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
   <Accordion title="Provider subpaths">
     | Subpath | Key exports |
     | --- | --- |
+    | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
-    | `plugin-sdk/provider-models` | `normalizeModelCompat` |
-    | `plugin-sdk/provider-catalog` | Catalog type re-exports |
+    | `plugin-sdk/provider-model-shared` | `normalizeModelCompat` |
+    | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | Stream wrapper types |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
+    | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
   </Accordion>
 
   <Accordion title="Auth and security subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/command-auth` | `resolveControlCommandGate` |
+    | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
+    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
   </Accordion>
 
   <Accordion title="Runtime and storage subpaths">
@@ -88,7 +102,14 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | --- | --- |
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
+    | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
+    | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
+    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
+    | `plugin-sdk/error-runtime` | Error graph and formatting helpers |
+    | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, and pinned lookup helpers |
+    | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
+    | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
     | `plugin-sdk/agent-runtime` | Agent dir/identity/workspace helpers |
     | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
     | `plugin-sdk/keyed-async-queue` | `KeyedAsyncQueue` |
@@ -111,14 +132,17 @@ methods:
 
 ### Capability registration
 
-| Method                                        | What it registers              |
-| --------------------------------------------- | ------------------------------ |
-| `api.registerProvider(...)`                   | Text inference (LLM)           |
-| `api.registerChannel(...)`                    | Messaging channel              |
-| `api.registerSpeechProvider(...)`             | Text-to-speech / STT synthesis |
-| `api.registerMediaUnderstandingProvider(...)` | Image/audio/video analysis     |
-| `api.registerImageGenerationProvider(...)`    | Image generation               |
-| `api.registerWebSearchProvider(...)`          | Web search                     |
+| Method                                           | What it registers                |
+| ------------------------------------------------ | -------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)             |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend      |
+| `api.registerChannel(...)`                       | Messaging channel                |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis   |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions   |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis       |
+| `api.registerImageGenerationProvider(...)`       | Image generation                 |
+| `api.registerWebSearchProvider(...)`             | Web search                       |
 
 ### Tools and commands
 
@@ -138,12 +162,75 @@ methods:
 | `api.registerService(service)`                 | Background service    |
 | `api.registerInteractiveHandler(registration)` | Interactive handler   |
 
+### CLI registration metadata
+
+`api.registerCli(registrar, opts?)` accepts two kinds of top-level metadata:
+
+- `commands`: explicit command roots owned by the registrar
+- `descriptors`: parse-time command descriptors used for root CLI help,
+  routing, and lazy plugin CLI registration
+
+If you want a plugin command to stay lazy-loaded in the normal root CLI path,
+provide `descriptors` that cover every top-level command root exposed by that
+registrar.
+
+```typescript
+api.registerCli(
+  async ({ program }) => {
+    const { registerMatrixCli } = await import("./src/cli.js");
+    registerMatrixCli({ program });
+  },
+  {
+    descriptors: [
+      {
+        name: "matrix",
+        description: "Manage Matrix accounts, verification, devices, and profile state",
+        hasSubcommands: true,
+      },
+    ],
+  },
+);
+```
+
+Use `commands` by itself only when you do not need lazy root CLI registration.
+That eager compatibility path remains supported, but it does not install
+descriptor-backed placeholders for parse-time lazy loading.
+
+### CLI backend registration
+
+`api.registerCliBackend(...)` lets a plugin own the default config for a local
+AI CLI backend such as `claude-cli` or `codex-cli`.
+
+- The backend `id` becomes the provider prefix in model refs like `claude-cli/opus`.
+- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
+- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
+  plugin default before running the CLI.
+- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
+  (for example normalizing old flag shapes).
+
 ### Exclusive slots
 
 | Method                                     | What it registers                     |
 | ------------------------------------------ | ------------------------------------- |
 | `api.registerContextEngine(id, factory)`   | Context engine (one active at a time) |
 | `api.registerMemoryPromptSection(builder)` | Memory prompt section builder         |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver            |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                |
+
+### Memory embedding adapters
+
+| Method                                         | What it registers                              |
+| ---------------------------------------------- | ---------------------------------------------- |
+| `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
+
+- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
+  `registerMemoryRuntime` are exclusive to memory plugins.
+- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
+  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
+  plugin-defined id).
+- User config such as `agents.defaults.memorySearch.provider` and
+  `agents.defaults.memorySearch.fallback` resolves against those registered
+  adapter ids.
 
 ### Events and lifecycle
 
@@ -156,25 +243,27 @@ methods:
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
+- `before_install`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
+- `before_install`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                               |
-| ------------------------ | ------------------------- | --------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                 |
-| `api.name`               | `string`                  | Display name                                              |
-| `api.version`            | `string?`                 | Plugin version (optional)                                 |
-| `api.description`        | `string?`                 | Plugin description (optional)                             |
-| `api.source`             | `string`                  | Plugin source path                                        |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                          |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                   |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)          |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, or `"setup-runtime"`            |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                      |
+| Field                    | Type                      | Description                                                                |
+| ------------------------ | ------------------------- | -------------------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                                  |
+| `api.name`               | `string`                  | Display name                                                               |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                  |
+| `api.description`        | `string?`                 | Plugin description (optional)                                              |
+| `api.source`             | `string`                  | Plugin source path                                                         |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                           |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available) |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                  |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                    |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                           |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"`           |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                       |
 
 ## Internal module convention
 
@@ -192,6 +281,18 @@ my-plugin/
   Never import your own plugin through `openclaw/plugin-sdk/<your-plugin>`
   from production code. Route internal imports through `./api.ts` or
   `./runtime-api.ts`. The SDK path is the external contract only.
+</Warning>
+
+Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
+`index.ts`, `setup-entry.ts`, and similar public entry files) now prefer the
+active runtime config snapshot when OpenClaw is already running. If no runtime
+snapshot exists yet, they fall back to the resolved config file on disk.
+
+<Warning>
+  Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
+  imports. If a helper is truly shared, promote it to a neutral SDK subpath
+  such as `openclaw/plugin-sdk/speech`, `.../provider-model-shared`, or another
+  capability-oriented surface instead of coupling two plugins together.
 </Warning>
 
 ## Related

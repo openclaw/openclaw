@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { compactEmbeddedPiSessionDirect } from "../agents/pi-embedded-runner/compact.runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 // ---------------------------------------------------------------------------
 // We dynamically import the registry so we can get a fresh module per test
 // group when needed.  For most groups we use the shared singleton directly.
@@ -24,8 +24,9 @@ import type {
   IngestResult,
 } from "./types.js";
 
-vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
-  compactEmbeddedPiSessionDirect: vi.fn(async () => ({
+async function installCompactRuntimeSpy() {
+  const runtimeModule = await import("../agents/pi-embedded-runner/compact.runtime.js");
+  return vi.spyOn(runtimeModule, "compactEmbeddedPiSessionDirect").mockResolvedValue({
     ok: true,
     compacted: false,
     reason: "mock compaction",
@@ -36,23 +37,38 @@ vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
       tokensAfter: 0,
       details: undefined,
     },
-  })),
-}));
-
-const mockedCompactEmbeddedPiSessionDirect = vi.mocked(compactEmbeddedPiSessionDirect);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /** Build a config object with a contextEngine slot for testing. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function configWithSlot(engineId: string): any {
+function configWithSlot(engineId: string): OpenClawConfig {
   return { plugins: { slots: { contextEngine: engineId } } };
 }
 
 function makeMockMessage(role: "user" | "assistant" = "user", text = "hello"): AgentMessage {
   return { role, content: text, timestamp: Date.now() } as AgentMessage;
+}
+
+function registerPromptTrackingEngine(engineId: string) {
+  const calls: Array<Record<string, unknown>> = [];
+  registerContextEngine(engineId, () => ({
+    info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
+    async ingest() {
+      return { ingested: false };
+    },
+    async assemble(params) {
+      calls.push({ ...params });
+      return { messages: params.messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
+  }));
+  return calls;
 }
 
 /** A minimal mock engine that satisfies the ContextEngine interface. */
@@ -293,7 +309,7 @@ class LegacyAssembleStrictEngine implements ContextEngine {
 
 describe("Engine contract tests", () => {
   beforeEach(() => {
-    mockedCompactEmbeddedPiSessionDirect.mockClear();
+    vi.restoreAllMocks();
   });
 
   it("a mock engine implementing ContextEngine can be registered and resolved", async () => {
@@ -309,6 +325,7 @@ describe("Engine contract tests", () => {
   });
 
   it("legacy compact preserves runtimeContext currentTokenCount when top-level value is absent", async () => {
+    const compactRuntimeSpy = await installCompactRuntimeSpy();
     const engine = new LegacyContextEngine();
 
     await engine.compact({
@@ -320,7 +337,7 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(mockedCompactEmbeddedPiSessionDirect).toHaveBeenCalledWith(
+    expect(compactRuntimeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         currentTokenCount: 277403,
       }),
@@ -328,6 +345,7 @@ describe("Engine contract tests", () => {
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
+    const compactRuntimeSpy = await installCompactRuntimeSpy();
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",
       sessionFile: "/tmp/session.json",
@@ -338,7 +356,7 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(mockedCompactEmbeddedPiSessionDirect).toHaveBeenCalledWith(
+    expect(compactRuntimeSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "s2",
         sessionFile: "/tmp/session.json",
@@ -700,20 +718,7 @@ describe("LegacyContextEngine parity", () => {
 describe("assemble() prompt forwarding", () => {
   it("forwards prompt to the underlying engine", async () => {
     const engineId = `prompt-fwd-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     await engine.assemble({
@@ -728,20 +733,7 @@ describe("assemble() prompt forwarding", () => {
 
   it("omits prompt when not provided", async () => {
     const engineId = `prompt-omit-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     await engine.assemble({
@@ -758,20 +750,7 @@ describe("assemble() prompt forwarding", () => {
     // is undefined — JavaScript keeps the key present with value undefined,
     // which breaks engines that guard with `'prompt' in params`.
     const engineId = `prompt-undef-${Date.now().toString(36)}`;
-    const calls: Array<Record<string, unknown>> = [];
-    registerContextEngine(engineId, () => ({
-      info: { id: engineId, name: "Prompt Tracker", version: "0.0.0" },
-      async ingest() {
-        return { ingested: false };
-      },
-      async assemble(params) {
-        calls.push({ ...params });
-        return { messages: params.messages, estimatedTokens: 0 };
-      },
-      async compact() {
-        return { ok: true, compacted: false };
-      },
-    }));
+    const calls = registerPromptTrackingEngine(engineId);
 
     const engine = await resolveContextEngine(configWithSlot(engineId));
     // Simulate the attempt.ts call-site pattern: conditional spread

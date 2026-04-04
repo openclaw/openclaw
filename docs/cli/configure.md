@@ -15,10 +15,35 @@ Note: The **Model** section now includes a multi-select for the
 Tip: `openclaw config` without a subcommand opens the same wizard. Use
 `openclaw config get|set|unset` for non-interactive edits.
 
+For web search, `openclaw configure --section web` lets you choose a provider
+and configure its credentials. Some providers also show provider-specific
+follow-up prompts:
+
+- **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY` and
+  let you pick an `x_search` model.
+- **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs
+  `api.moonshot.cn`) and the default Kimi web-search model.
+
 Related:
 
 - Gateway configuration reference: [Configuration](/gateway/configuration)
 - Config CLI: [Config](/cli/config)
+
+## Options
+
+- `--section <section>`: repeatable section filter
+
+Available sections:
+
+- `workspace`
+- `model`
+- `web`
+- `gateway`
+- `daemon`
+- `channels`
+- `plugins`
+- `skills`
+- `health`
 
 Notes:
 
@@ -32,5 +57,7 @@ Notes:
 
 ```bash
 openclaw configure
+openclaw configure --section web
 openclaw configure --section model --section channels
+openclaw configure --section gateway --section daemon
 ```

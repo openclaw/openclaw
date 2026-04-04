@@ -3,13 +3,18 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { installSkillFromClawHub, updateSkillsFromClawHub } from "../../agents/skills-clawhub.js";
+import {
+  installSkillFromClawHub,
+  searchSkillsFromClawHub,
+  updateSkillsFromClawHub,
+} from "../../agents/skills-clawhub.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -18,7 +23,9 @@ import {
   errorShape,
   formatValidationErrors,
   validateSkillsBinsParams,
+  validateSkillsDetailParams,
   validateSkillsInstallParams,
+  validateSkillsSearchParams,
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
@@ -112,6 +119,57 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { bins: [...bins].toSorted() }, undefined);
   },
+  "skills.search": async ({ params, respond }) => {
+    if (!validateSkillsSearchParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.search params: ${formatValidationErrors(validateSkillsSearchParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const results = await searchSkillsFromClawHub({
+        query: (params as { query?: string }).query,
+        limit: (params as { limit?: number }).limit,
+      });
+      respond(true, { results }, undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
+      );
+    }
+  },
+  "skills.detail": async ({ params, respond }) => {
+    if (!validateSkillsDetailParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.detail params: ${formatValidationErrors(validateSkillsDetailParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const detail = await fetchClawHubSkillDetail({
+        slug: (params as { slug: string }).slug,
+      });
+      respond(true, detail, undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
+      );
+    }
+  },
   "skills.install": async ({ params, respond }) => {
     if (!validateSkillsInstallParams(params)) {
       respond(
@@ -160,12 +218,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const p = params as {
       name: string;
       installId: string;
+      dangerouslyForceUnsafeInstall?: boolean;
       timeoutMs?: number;
     };
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
       installId: p.installId,
+      dangerouslyForceUnsafeInstall: p.dangerouslyForceUnsafeInstall,
       timeoutMs: p.timeoutMs,
       config: cfg,
     });

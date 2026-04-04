@@ -1,20 +1,19 @@
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  buildPluginSnapshotCacheEnvKey,
-  resolvePluginSnapshotCacheTtlMs,
-  shouldUsePluginSnapshotCache,
-} from "./cache-controls.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
   ProviderPluginWizardModelPicker,
   ProviderPluginWizardSetup,
 } from "./types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import {
+  buildPluginSnapshotCacheEnvKey,
+  resolvePluginSnapshotCacheTtlMs,
+  shouldUsePluginSnapshotCache,
+} from "./cache-controls.js";
+import { resolvePluginProviders } from "./providers.runtime.js";
 
 export const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
 type ProviderWizardCacheEntry = {
@@ -46,6 +45,8 @@ export type ProviderWizardOption = {
   groupLabel: string;
   groupHint?: string;
   onboardingScopes?: Array<"text-inference" | "image-generation">;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
 };
 
 export type ProviderModelPickerEntry = {
@@ -115,6 +116,13 @@ function buildSetupOptionForMethod(params: {
     groupLabel: params.wizard.groupLabel?.trim() || params.provider.label,
     groupHint: params.wizard.groupHint?.trim(),
     ...(params.wizard.onboardingScopes ? { onboardingScopes: params.wizard.onboardingScopes } : {}),
+    ...(typeof params.wizard.assistantPriority === "number" &&
+    Number.isFinite(params.wizard.assistantPriority)
+      ? { assistantPriority: params.wizard.assistantPriority }
+      : {}),
+    ...(params.wizard.assistantVisibility
+      ? { assistantVisibility: params.wizard.assistantVisibility }
+      : {}),
   };
 }
 
@@ -136,6 +144,8 @@ function resolveProviderWizardProviders(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     });
   }
   const cacheKey = buildProviderWizardCacheKey({
@@ -153,6 +163,8 @@ function resolveProviderWizardProviders(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
   });
   const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
   let nextConfigCache = configCache;
@@ -329,8 +341,16 @@ export async function runProviderModelSelectedHook(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const parsed = parseModelRef(params.model, DEFAULT_PROVIDER);
-  if (!parsed) {
+  const rawModel = params.model.trim();
+  if (!rawModel) {
+    return;
+  }
+  const slashIndex = rawModel.indexOf("/");
+  const selectedProviderId =
+    slashIndex === -1
+      ? DEFAULT_PROVIDER
+      : normalizeProviderId(rawModel.slice(0, slashIndex).trim());
+  if (!selectedProviderId || (slashIndex !== -1 && !rawModel.slice(slashIndex + 1).trim())) {
     return;
   }
 
@@ -339,9 +359,7 @@ export async function runProviderModelSelectedHook(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  const provider = providers.find(
-    (entry) => normalizeProviderId(entry.id) === normalizeProviderId(parsed.provider),
-  );
+  const provider = providers.find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;
   }

@@ -1,19 +1,17 @@
-import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
-  buildChannelConfigSchema,
   getChatChannelMeta,
   normalizeAccountId,
-  TelegramConfigSchema,
   type ChannelPlugin,
-  type OpenClawConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
@@ -21,6 +19,14 @@ import {
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
+import {
+  buildTelegramCommandsListChannelData,
+  buildTelegramModelBrowseChannelData,
+  buildTelegramModelsListChannelData,
+  buildTelegramModelsProviderChannelData,
+} from "./command-ui.js";
+import { TelegramChannelConfigSchema } from "./config-schema.js";
+import { telegramDoctor } from "./doctor.js";
 
 export const TELEGRAM_CHANNEL = "telegram" as const;
 
@@ -109,7 +115,16 @@ export function createTelegramPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedTelegramAccount>["setup"]>;
 }): Pick<
   ChannelPlugin<ResolvedTelegramAccount>,
-  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+  | "id"
+  | "meta"
+  | "setupWizard"
+  | "capabilities"
+  | "commands"
+  | "doctor"
+  | "reload"
+  | "configSchema"
+  | "config"
+  | "setup"
 > {
   return createChannelPluginBase({
     id: TELEGRAM_CHANNEL,
@@ -127,8 +142,17 @@ export function createTelegramPluginBase(params: {
       nativeCommands: true,
       blockStreaming: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: true,
+      buildCommandsListChannelData: buildTelegramCommandsListChannelData,
+      buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+      buildModelsListChannelData: buildTelegramModelsListChannelData,
+      buildModelBrowseChannelData: buildTelegramModelBrowseChannelData,
+    },
+    doctor: telegramDoctor,
     reload: { configPrefixes: ["channels.telegram"] },
-    configSchema: buildChannelConfigSchema(TelegramConfigSchema),
+    configSchema: TelegramChannelConfigSchema,
     config: {
       ...telegramConfigAdapter,
       isConfigured: (account, cfg) => {
@@ -197,6 +221,15 @@ export function createTelegramPluginBase(params: {
     setup: params.setup,
   }) as Pick<
     ChannelPlugin<ResolvedTelegramAccount>,
-    "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+    | "id"
+    | "meta"
+    | "setupWizard"
+    | "capabilities"
+    | "commands"
+    | "doctor"
+    | "reload"
+    | "configSchema"
+    | "config"
+    | "setup"
   >;
 }

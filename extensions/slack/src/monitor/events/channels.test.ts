@@ -4,13 +4,18 @@ const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 let registerSlackChannelEvents: typeof import("./channels.js").registerSlackChannelEvents;
 let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+async function createChannelRuntimeMock() {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
+    "openclaw/plugin-sdk/infra-runtime",
+  );
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   };
-});
+}
+
+vi.mock("openclaw/plugin-sdk/infra-runtime", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/infra-runtime.js", createChannelRuntimeMock);
 
 type SlackChannelHandler = (args: {
   event: Record<string, unknown>;

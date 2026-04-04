@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type DiscoveredModel = { id: string; contextWindow: number };
+type DiscoveredModel = { id: string; contextWindow?: number; contextTokens?: number };
+type ContextModule = typeof import("./context.js");
 
 function mockContextDeps(params: {
   loadConfig: () => unknown;
@@ -53,26 +54,36 @@ function createContextOverrideConfig(provider: string, model: string, contextWin
 }
 
 async function flushAsyncWarmup() {
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(0);
+    return;
+  }
   await new Promise((r) => setTimeout(r, 0));
 }
 
-async function importResolveContextTokensForModel() {
-  const { resolveContextTokensForModel } = await import("./context.js");
+let lastContextModule: ContextModule | null = null;
+
+async function importContextModule(): Promise<ContextModule> {
+  const module = await import("./context.js");
+  lastContextModule = module;
   await flushAsyncWarmup();
+  return module;
+}
+
+async function importResolveContextTokensForModel() {
+  const { resolveContextTokensForModel } = await importContextModule();
   return resolveContextTokensForModel;
 }
 
 describe("lookupContextTokens", () => {
   beforeEach(() => {
     vi.resetModules();
+    lastContextModule = null;
   });
 
   afterEach(async () => {
-    try {
-      const { resetContextWindowCacheForTest } = await import("./context.js");
-      resetContextWindowCacheForTest();
-    } catch {
-      // Ignore reset failures when a test aborts before the module loads.
+    if (lastContextModule) {
+      lastContextModule.resetContextWindowCacheForTest();
     }
     await flushAsyncWarmup();
   });
@@ -88,7 +99,7 @@ describe("lookupContextTokens", () => {
       },
     }));
 
-    const { lookupContextTokens } = await import("./context.js");
+    const { lookupContextTokens } = await importContextModule();
     expect(lookupContextTokens("openrouter/claude-sonnet")).toBe(321_000);
   });
 
@@ -103,10 +114,57 @@ describe("lookupContextTokens", () => {
       },
     }));
 
-    const { lookupContextTokens } = await import("./context.js");
+    const { lookupContextTokens } = await importContextModule();
     expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
       321_000,
     );
+  });
+
+  it("prefers config contextTokens over contextWindow on first lookup", async () => {
+    mockContextModuleDeps(() => ({
+      models: {
+        providers: {
+          "openai-codex": {
+            models: [{ id: "gpt-5.4", contextWindow: 1_050_000, contextTokens: 272_000 }],
+          },
+        },
+      },
+    }));
+
+    const { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("gpt-5.4", { allowAsyncLoad: false })).toBe(272_000);
+  });
+
+  it("rehydrates config-backed cache entries after module reload when runtime config survives", async () => {
+    const firstLoadConfigMock = vi.fn(() => ({
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "openrouter/claude-sonnet", contextWindow: 321_000 }],
+          },
+        },
+      },
+    }));
+    mockContextModuleDeps(firstLoadConfigMock);
+
+    let { lookupContextTokens } = await importContextModule();
+    expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
+      321_000,
+    );
+    expect(firstLoadConfigMock).toHaveBeenCalledTimes(1);
+
+    vi.resetModules();
+
+    const secondLoadConfigMock = vi.fn(() => {
+      throw new Error("config should come from shared runtime state");
+    });
+    mockContextModuleDeps(secondLoadConfigMock);
+
+    ({ lookupContextTokens } = await importContextModule());
+    expect(lookupContextTokens("openrouter/claude-sonnet", { allowAsyncLoad: false })).toBe(
+      321_000,
+    );
+    expect(secondLoadConfigMock).not.toHaveBeenCalled();
   });
 
   it("only warms eagerly for real openclaw startup commands that need model metadata", async () => {
@@ -138,8 +196,7 @@ describe("lookupContextTokens", () => {
         const loadConfigMock = vi.fn(() => ({ models: {} }));
         const { ensureOpenClawModelsJson } = mockContextModuleDeps(loadConfigMock);
         process.argv = scenario.argv;
-        await import("./context.js");
-        await flushAsyncWarmup();
+        await importContextModule();
         expect(loadConfigMock).toHaveBeenCalledTimes(scenario.expectedCalls);
         expect(ensureOpenClawModelsJson).toHaveBeenCalledTimes(scenario.expectedCalls);
       }
@@ -168,7 +225,7 @@ describe("lookupContextTokens", () => {
     mockContextModuleDeps(loadConfigMock);
 
     try {
-      const { lookupContextTokens } = await import("./context.js");
+      const { lookupContextTokens } = await importContextModule();
       expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
       expect(loadConfigMock).toHaveBeenCalledTimes(1);
       expect(lookupContextTokens("openrouter/claude-sonnet")).toBeUndefined();
@@ -187,7 +244,7 @@ describe("lookupContextTokens", () => {
       { id: "gemini-3.1-pro-preview", contextWindow: 128_000 },
     ]);
 
-    const { lookupContextTokens } = await import("./context.js");
+    const { lookupContextTokens } = await importContextModule();
     lookupContextTokens("gemini-3.1-pro-preview");
     await flushAsyncWarmup();
     // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
@@ -203,7 +260,7 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
@@ -257,7 +314,7 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google/gemini-2.5-pro");
     await flushAsyncWarmup();
 
@@ -278,7 +335,7 @@ describe("lookupContextTokens", () => {
   });
 
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
-    // When both "qwen" and "qwen-portal" exist as config keys (alias pattern),
+    // When both "bedrock" and "amazon-bedrock" exist as config keys (alias pattern),
     // resolveConfiguredProviderContextWindow must return the exact-key match first,
     // not the first normalized hit — mirroring pi-embedded-runner/model.ts behaviour.
     mockDiscoveryDeps([]);
@@ -286,30 +343,29 @@ describe("lookupContextTokens", () => {
     const cfg = {
       models: {
         providers: {
-          "qwen-portal": { models: [{ id: "qwen-max", contextWindow: 32_000 }] },
-          qwen: { models: [{ id: "qwen-max", contextWindow: 128_000 }] },
+          "amazon-bedrock": { models: [{ id: "claude-alias-test", contextWindow: 32_000 }] },
+          bedrock: { models: [{ id: "claude-alias-test", contextWindow: 128_000 }] },
         },
       },
     };
 
-    const { resolveContextTokensForModel } = await import("./context.js");
-    await flushAsyncWarmup();
+    const { resolveContextTokensForModel } = await importContextModule();
 
-    // Exact key "qwen" wins over the alias-normalized match "qwen-portal".
-    const qwenResult = resolveContextTokensForModel({
+    // Exact key "bedrock" wins over the alias-normalized match "amazon-bedrock".
+    const bedrockResult = resolveContextTokensForModel({
       cfg: cfg as never,
-      provider: "qwen",
-      model: "qwen-max",
+      provider: "bedrock",
+      model: "claude-alias-test",
     });
-    expect(qwenResult).toBe(128_000);
+    expect(bedrockResult).toBe(128_000);
 
-    // Exact key "qwen-portal" wins (no alias lookup needed).
-    const portalResult = resolveContextTokensForModel({
+    // Exact key "amazon-bedrock" wins (no alias lookup needed).
+    const canonicalResult = resolveContextTokensForModel({
       cfg: cfg as never,
-      provider: "qwen-portal",
-      model: "qwen-max",
+      provider: "amazon-bedrock",
+      model: "claude-alias-test",
     });
-    expect(portalResult).toBe(32_000);
+    expect(canonicalResult).toBe(32_000);
   });
 
   it("resolveContextTokensForModel(model-only) does not apply config scan for inferred provider", async () => {
@@ -321,7 +377,7 @@ describe("lookupContextTokens", () => {
     mockDiscoveryDeps([{ id: "google/gemini-2.5-pro", contextWindow: 999_000 }]);
 
     const cfg = createContextOverrideConfig("google", "gemini-2.5-pro", 2_000_000);
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google/gemini-2.5-pro");
     await flushAsyncWarmup();
 
@@ -354,7 +410,7 @@ describe("lookupContextTokens", () => {
       { id: "google-gemini-cli/gemini-3.1-pro-preview", contextWindow: 1_048_576 },
     ]);
 
-    const { lookupContextTokens, resolveContextTokensForModel } = await import("./context.js");
+    const { lookupContextTokens, resolveContextTokensForModel } = await importContextModule();
     lookupContextTokens("google-gemini-cli/gemini-3.1-pro-preview");
     await flushAsyncWarmup();
 
@@ -365,5 +421,19 @@ describe("lookupContextTokens", () => {
       model: "gemini-3.1-pro-preview",
     });
     expect(result).toBe(1_048_576);
+  });
+
+  it("resolveContextTokensForModel normalizes explicit provider aliases before config lookup", async () => {
+    mockDiscoveryDeps([]);
+
+    const cfg = createContextOverrideConfig("z.ai", "glm-5", 256_000);
+    const { resolveContextTokensForModel } = await importContextModule();
+
+    const result = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "z-ai",
+      model: "glm-5",
+    });
+    expect(result).toBe(256_000);
   });
 });

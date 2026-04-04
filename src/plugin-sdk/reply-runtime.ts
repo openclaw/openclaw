@@ -33,6 +33,10 @@ export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 export { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 export {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "../auto-reply/inbound-debounce.js";
+export {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchReplyWithDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.js";
@@ -47,9 +51,7 @@ export type {
 } from "../auto-reply/reply/reply-dispatcher.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext } from "../auto-reply/types.js";
 export type { FinalizedMsgContext, MsgContext } from "../auto-reply/templating.js";
-export {
-  resolveAutoTopicLabelConfig,
-  generateTopicLabel,
-} from "../auto-reply/reply/auto-topic-label.js";
-export type { AutoTopicLabelParams } from "../auto-reply/reply/auto-topic-label.js";
+export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
+export type { ConversationLabelParams } from "../auto-reply/reply/conversation-label-generator.js";

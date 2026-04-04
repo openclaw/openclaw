@@ -75,7 +75,6 @@ type QrCommandContext = {
 };
 
 type QrChannelSender = {
-  resolveSend: (api: OpenClawPluginApi) => QrSendFn | undefined;
   createOpts: (params: {
     ctx: QrCommandContext;
     qrFilePath: string;
@@ -84,24 +83,16 @@ type QrChannelSender = {
   }) => Record<string, unknown>;
 };
 
-type QrSendFn = (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
-
-function coerceQrSend(send: unknown): QrSendFn | undefined {
-  return typeof send === "function" ? (send as QrSendFn) : undefined;
-}
-
 const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
   telegram: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.telegram?.sendMessageTelegram),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(typeof ctx.messageThreadId === "number" ? { messageThreadId: ctx.messageThreadId } : {}),
+      ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   discord: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.discord?.sendMessageDiscord),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -109,16 +100,14 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   slack: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.slack?.sendMessageSlack),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(ctx.messageThreadId != null ? { threadTs: String(ctx.messageThreadId) } : {}),
+      ...(ctx.messageThreadId != null ? { threadId: String(ctx.messageThreadId) } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   signal: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.signal?.sendMessageSignal),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -126,7 +115,6 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   imessage: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.imessage?.sendMessageIMessage),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -134,7 +122,6 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   whatsapp: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.whatsapp?.sendMessageWhatsApp),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       verbose: false,
       mediaUrl: qrFilePath,
@@ -494,6 +481,34 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
   return ctx.senderId?.trim() || ctx.from?.trim() || ctx.to?.trim() || "";
 }
 
+function buildMissingPairingScopeReply(): { text: string } {
+  return {
+    text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+  };
+}
+
+function isMissingPairingScope(gatewayClientScopes: string[] | null): boolean {
+  return Boolean(
+    gatewayClientScopes &&
+    !gatewayClientScopes.includes("operator.pairing") &&
+    !gatewayClientScopes.includes("operator.admin"),
+  );
+}
+
+const PAIR_SETUP_NON_ISSUING_ACTIONS = new Set([
+  "approve",
+  "cleanup",
+  "clear",
+  "notify",
+  "pending",
+  "revoke",
+  "status",
+]);
+
+function issuesPairSetupCode(action: string): boolean {
+  return !action || action === "qr" || !PAIR_SETUP_NON_ISSUING_ACTIONS.has(action);
+}
+
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
   const issuedBootstrap = await issueDeviceBootstrapToken({
     profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -518,20 +533,22 @@ async function sendQrPngToSupportedChannel(params: {
   if (!sender) {
     return false;
   }
-  const send = sender.resolveSend(params.api);
+  const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
+  const send = adapter?.sendMedia;
   if (!send) {
     return false;
   }
-  await send(
-    params.target,
-    params.caption,
-    sender.createOpts({
+  await send({
+    cfg: params.api.config,
+    to: params.target,
+    text: params.caption,
+    ...sender.createOpts({
       ctx: params.ctx,
       qrFilePath: params.qrFilePath,
       mediaLocalRoots,
       accountId,
     }),
-  );
+  });
   return true;
 }
 
@@ -574,14 +591,8 @@ export default definePluginEntry({
         }
 
         if (action === "approve") {
-          if (
-            gatewayClientScopes &&
-            !gatewayClientScopes.includes("operator.pairing") &&
-            !gatewayClientScopes.includes("operator.admin")
-          ) {
-            return {
-              text: "⚠️ This command requires operator.pairing for internal gateway callers.",
-            };
+          if (isMissingPairingScope(gatewayClientScopes)) {
+            return buildMissingPairingScopeReply();
           }
           const requested = tokens[1]?.trim();
           const list = await listDevicePairing();
@@ -611,9 +622,16 @@ export default definePluginEntry({
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = await approveDevicePairing(pending.requestId);
+          const approved = gatewayClientScopes
+            ? await approveDevicePairing(pending.requestId, {
+                callerScopes: gatewayClientScopes,
+              })
+            : await approveDevicePairing(pending.requestId);
           if (!approved) {
             return { text: "Pairing request not found." };
+          }
+          if (approved.status === "forbidden") {
+            return { text: `⚠️ Cannot approve a request requiring ${approved.missingScope}.` };
           }
           const label = approved.device.displayName?.trim() || approved.device.deviceId;
           const platform = approved.device.platform?.trim();
@@ -622,6 +640,9 @@ export default definePluginEntry({
         }
 
         if (action === "cleanup" || action === "clear" || action === "revoke") {
+          if (isMissingPairingScope(gatewayClientScopes)) {
+            return buildMissingPairingScopeReply();
+          }
           const cleared = await clearDeviceBootstrapTokens();
           return {
             text:
@@ -634,6 +655,9 @@ export default definePluginEntry({
         const authLabelResult = resolveAuthLabel(api.config);
         if (authLabelResult.error) {
           return { text: `Error: ${authLabelResult.error}` };
+        }
+        if (issuesPairSetupCode(action) && isMissingPairingScope(gatewayClientScopes)) {
+          return buildMissingPairingScopeReply();
         }
 
         const urlResult = await resolveGatewayUrl(api);
@@ -762,7 +786,8 @@ export default definePluginEntry({
                 channelKeys.join(",") || "none"
               }`,
             );
-            const send = api.runtime?.channel?.telegram?.sendMessageTelegram;
+            const adapter = await api.runtime.channel.outbound.loadAdapter("telegram");
+            const send = adapter?.sendText;
             if (!send) {
               throw new Error(
                 `telegram runtime unavailable (runtime keys: ${runtimeKeys.join(",")}; channel keys: ${channelKeys.join(
@@ -770,10 +795,11 @@ export default definePluginEntry({
                 )})`,
               );
             }
-            await send(target, formatSetupInstructions(payload.expiresAtMs), {
-              ...(typeof ctx.messageThreadId === "number"
-                ? { messageThreadId: ctx.messageThreadId }
-                : {}),
+            await send({
+              cfg: api.config,
+              to: target,
+              text: formatSetupInstructions(payload.expiresAtMs),
+              ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
               ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
             });
             api.logger.info?.(

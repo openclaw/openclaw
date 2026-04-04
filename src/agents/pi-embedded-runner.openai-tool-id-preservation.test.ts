@@ -4,7 +4,7 @@ import {
   makeInMemorySessionManager,
   makeModelSnapshotEntry,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/google.js";
+import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 
 describe("sanitizeSessionHistory openai tool id preservation", () => {
@@ -13,7 +13,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2-codex",
+        modelId: "gpt-5.4",
       }),
     ]);
 
@@ -58,7 +58,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       messages: makeMessages(withReasoning),
       modelApi: "openai-responses",
       provider: "openai",
-      modelId: "gpt-5.2-codex",
+      modelId: "gpt-5.4",
       sessionManager: makeSessionManager(),
       sessionId: "test-session",
     });

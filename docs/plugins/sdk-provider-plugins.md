@@ -23,6 +23,7 @@ API key auth, and dynamic model resolution.
 ## Walkthrough
 
 <Steps>
+  <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     <CodeGroup>
     ```json package.json
@@ -32,7 +33,15 @@ API key auth, and dynamic model resolution.
       "type": "module",
       "openclaw": {
         "extensions": ["./index.ts"],
-        "providers": ["acme-ai"]
+        "providers": ["acme-ai"],
+        "compat": {
+          "pluginApi": ">=2026.3.24-beta.2",
+          "minGatewayVersion": "2026.3.24-beta.2"
+        },
+        "build": {
+          "openclawVersion": "2026.3.24-beta.2",
+          "pluginSdkVersion": "2026.3.24-beta.2"
+        }
       }
     }
     ```
@@ -43,6 +52,9 @@ API key auth, and dynamic model resolution.
       "name": "Acme AI",
       "description": "Acme AI model provider",
       "providers": ["acme-ai"],
+      "modelSupport": {
+        "modelPrefixes": ["acme-"]
+      },
       "providerAuthEnvVars": {
         "acme-ai": ["ACME_AI_API_KEY"]
       },
@@ -68,7 +80,11 @@ API key auth, and dynamic model resolution.
     </CodeGroup>
 
     The manifest declares `providerAuthEnvVars` so OpenClaw can detect
-    credentials without loading your plugin runtime.
+    credentials without loading your plugin runtime. `modelSupport` is optional
+    and lets OpenClaw auto-load your provider plugin from shorthand model ids
+    like `acme-large` before runtime hooks exist. If you publish the
+    provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
+    are required in `package.json`.
 
   </Step>
 
@@ -259,6 +275,28 @@ API key auth, and dynamic model resolution.
         },
         ```
       </Tab>
+      <Tab title="Native transport identity">
+        For providers that need native request/session headers or metadata on
+        generic HTTP or WebSocket transports:
+
+        ```typescript
+        resolveTransportTurnState: (ctx) => ({
+          headers: {
+            "x-request-id": ctx.turnId,
+          },
+          metadata: {
+            session_id: ctx.sessionId ?? "",
+            turn_id: ctx.turnId,
+          },
+        }),
+        resolveWebSocketSessionPolicy: (ctx) => ({
+          headers: {
+            "x-session-id": ctx.sessionId ?? "",
+          },
+          degradeCooldownMs: 60_000,
+        }),
+        ```
+      </Tab>
       <Tab title="Usage and billing">
         For providers that expose usage/billing data:
 
@@ -280,27 +318,36 @@ API key auth, and dynamic model resolution.
       | # | Hook | When to use |
       | --- | --- | --- |
       | 1 | `catalog` | Model catalog or base URL defaults |
-      | 2 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | 3 | `prepareDynamicModel` | Async metadata fetch before resolving |
-      | 4 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 5 | `capabilities` | Transcript/tooling metadata (data, not callable) |
-      | 6 | `prepareExtraParams` | Default request params |
-      | 7 | `wrapStreamFn` | Custom headers/body wrappers |
-      | 8 | `formatApiKey` | Custom runtime token shape |
-      | 9 | `refreshOAuth` | Custom OAuth refresh |
-      | 10 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 11 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 12 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 13 | `suppressBuiltInModel` | Hide stale upstream rows |
-      | 14 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 15 | `isBinaryThinking` | Binary thinking on/off |
-      | 16 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 17 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 18 | `isModernModelRef` | Live/smoke model matching |
-      | 19 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 20 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 21 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 22 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 2 | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
+      | 3 | `normalizeConfig` | Normalize `models.providers.<id>` config |
+      | 4 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
+      | 5 | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | 6 | `normalizeResolvedModel` | Transport rewrites before the runner |
+      | 7 | `capabilities` | Transcript/tooling metadata (data, not callable) |
+      | 8 | `prepareExtraParams` | Default request params |
+      | 9 | `wrapStreamFn` | Custom headers/body wrappers |
+      | 10 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 11 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 12 | `formatApiKey` | Custom runtime token shape |
+      | 13 | `refreshOAuth` | Custom OAuth refresh |
+      | 14 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 15 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 16 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 17 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 18 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 19 | `suppressBuiltInModel` | Hide stale upstream rows |
+      | 20 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 21 | `isBinaryThinking` | Binary thinking on/off |
+      | 22 | `supportsXHighThinking` | `xhigh` reasoning support |
+      | 23 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 24 | `isModernModelRef` | Live/smoke model matching |
+      | 25 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 26 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 27 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 28 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 29 | `buildReplayPolicy` | Custom transcript policy (e.g. thinking-block stripping) |
+      | 30 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 31 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
@@ -309,8 +356,9 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Add extra capabilities (optional)">
-    A provider plugin can register speech, media understanding, image
-    generation, and web search alongside text inference:
+    <a id="step-5-add-extra-capabilities"></a>
+    A provider plugin can register speech, realtime transcription, realtime voice, media
+    understanding, image generation, and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -325,6 +373,33 @@ API key auth, and dynamic model resolution.
           outputFormat: "mp3",
           fileExtension: ".mp3",
           voiceCompatible: false,
+        }),
+      });
+
+      api.registerRealtimeTranscriptionProvider({
+        id: "acme-ai",
+        label: "Acme Realtime Transcription",
+        isConfigured: () => true,
+        createSession: (req) => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          close: () => {},
+          isConnected: () => true,
+        }),
+      });
+
+      api.registerRealtimeVoiceProvider({
+        id: "acme-ai",
+        label: "Acme Realtime Voice",
+        isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
+        createBridge: (req) => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          setMediaTimestamp: () => {},
+          submitToolResult: () => {},
+          acknowledgeMark: () => {},
+          close: () => {},
+          isConnected: () => true,
         }),
       });
 
@@ -350,6 +425,7 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Test">
+    <a id="step-6-test"></a>
     ```typescript src/provider.test.ts
     import { describe, it, expect } from "vitest";
     // Export your provider config object from index.ts or a dedicated file
@@ -383,10 +459,22 @@ API key auth, and dynamic model resolution.
   </Step>
 </Steps>
 
+## Publish to ClawHub
+
+Provider plugins publish the same way as any other external code plugin:
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+```
+
+Do not use the legacy skill-only publish alias here; plugin packages should use
+`clawhub package publish`.
+
 ## File structure
 
 ```
-extensions/acme-ai/
+<bundled-plugin-root>/acme-ai/
 ├── package.json              # openclaw.providers metadata
 ├── openclaw.plugin.json      # Manifest with providerAuthEnvVars
 ├── index.ts                  # definePluginEntry + registerProvider

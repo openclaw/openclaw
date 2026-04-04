@@ -1,7 +1,7 @@
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThemeMode, ThemeName } from "../theme.ts";
-import { renderConfig } from "./config.ts";
+import { renderConfig, type ConfigProps } from "./config.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -58,6 +58,49 @@ describe("config view", () => {
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
     };
   }
+
+  function renderConfigView(overrides: Partial<ConfigProps> = {}): {
+    container: HTMLElement;
+    props: ConfigProps;
+  } {
+    const container = document.createElement("div");
+    const props = {
+      ...baseProps(),
+      ...overrides,
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+    return { container, props };
+  }
+
+  function normalizedText(container: HTMLElement): string {
+    return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
+  }
+
+  function resetRawRevealState() {
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      formValue: {
+        openai: {
+          apiKey: "supersecret",
+        },
+      },
+    });
+    container.querySelector<HTMLButtonElement>(".config-raw-toggle.active")?.click();
+  }
+
+  beforeEach(() => {
+    resetRawRevealState();
+  });
 
   it("allows save when form is unsafe", () => {
     const container = document.createElement("div");
@@ -164,6 +207,44 @@ describe("config view", () => {
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
   });
 
+  it("forces Form mode and disables Raw mode when raw text is unavailable", () => {
+    const onFormModeChange = vi.fn();
+    const { container } = renderConfigView({
+      formMode: "raw",
+      rawAvailable: false,
+      onFormModeChange,
+      schema: {
+        type: "object",
+        properties: {
+          gateway: {
+            type: "object",
+            properties: {
+              mode: { type: "string" },
+            },
+          },
+        },
+      },
+      formValue: { gateway: { mode: "local" } },
+      originalValue: { gateway: { mode: "local" } },
+    });
+
+    const formButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Form",
+    );
+    const rawButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Raw",
+    );
+    expect(formButton?.classList.contains("active")).toBe(true);
+    expect(rawButton?.disabled).toBe(true);
+    expect(normalizedText(container)).toContain(
+      "Raw mode disabled (snapshot cannot safely round-trip raw text).",
+    );
+    expect(container.querySelector(".config-raw-field")).toBeNull();
+
+    rawButton?.click();
+    expect(onFormModeChange).not.toHaveBeenCalled();
+  });
+
   it("switches sections from the sidebar", () => {
     const container = document.createElement("div");
     const onSectionChange = vi.fn();
@@ -242,7 +323,6 @@ describe("config view", () => {
     expect(tabs).toContain("Settings");
     expect(tabs).toContain("Agents");
     expect(tabs).toContain("Gateway");
-    expect(tabs).toContain("Appearance");
   });
 
   it("clears the active search query", () => {
@@ -261,5 +341,197 @@ describe("config view", () => {
     expect(clearButton).toBeTruthy();
     clearButton?.click();
     expect(onSearchChange).toHaveBeenCalledWith("");
+  });
+
+  it("keeps sensitive raw config hidden until reveal", () => {
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      formValue: {
+        openai: {
+          apiKey: "supersecret",
+        },
+      },
+    });
+
+    const text = normalizedText(container);
+    expect(text).toContain("1 secret redacted");
+    expect(text).toContain("Use the reveal button above to edit the raw config.");
+    expect(text).not.toContain("supersecret");
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
+  it("reveals sensitive raw config before editing", () => {
+    const onRawChange = vi.fn();
+    const { container } = renderConfigView({
+      formMode: "raw",
+      raw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      originalRaw: '{\n  "openai": { "apiKey": "supersecret" }\n}\n',
+      formValue: {
+        openai: {
+          apiKey: "supersecret",
+        },
+      },
+      onRawChange,
+    });
+
+    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
+    expect(revealButton).toBeTruthy();
+    revealButton?.click();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea).not.toBeNull();
+    expect(textarea?.value).toContain("supersecret");
+    if (!textarea) {
+      return;
+    }
+    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+  });
+
+  it("renders structured SecretRef values as read-only text inputs without stringifying", () => {
+    const onFormPatch = vi.fn();
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              discord: {
+                type: "object",
+                properties: {
+                  token: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "channels.discord.token": { sensitive: true },
+      },
+      formMode: "form",
+      formValue: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
+          },
+        },
+      },
+      originalValue: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      },
+      onFormPatch,
+    });
+
+    const input = container.querySelector<HTMLInputElement>(".cfg-input");
+    expect(input).not.toBeNull();
+    expect(input?.readOnly).toBe(true);
+    expect(input?.value).toBe("");
+    expect(input?.placeholder).toContain("Structured value (SecretRef)");
+    expect(container.textContent ?? "").not.toContain("[object Object]");
+
+    if (!input) {
+      return;
+    }
+    input.value = "[object Object]";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormPatch).not.toHaveBeenCalled();
+  });
+
+  it("uses a file-edit placeholder for structured SecretRefs when raw mode is unavailable", () => {
+    const { container } = renderConfigView({
+      rawAvailable: false,
+      formMode: "raw",
+      schema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              discord: {
+                type: "object",
+                properties: {
+                  token: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+      uiHints: {
+        "channels.discord.token": { sensitive: true },
+      },
+      formValue: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" },
+          },
+        },
+      },
+      originalValue: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      },
+    });
+
+    const input = container.querySelector<HTMLInputElement>(".cfg-input");
+    expect(input).not.toBeNull();
+    expect(input?.placeholder).toBe("Structured value (SecretRef) - edit the config file directly");
+  });
+
+  it("keeps malformed non-SecretRef object values editable when raw mode is unavailable", () => {
+    const onFormPatch = vi.fn();
+    const { container } = renderConfigView({
+      rawAvailable: false,
+      formMode: "raw",
+      schema: {
+        type: "object",
+        properties: {
+          gateway: {
+            type: "object",
+            properties: {
+              mode: { type: "string" },
+            },
+          },
+        },
+      },
+      formValue: {
+        gateway: {
+          mode: { malformed: true },
+        },
+      },
+      originalValue: {
+        gateway: {
+          mode: { malformed: true },
+        },
+      },
+      onFormPatch,
+    });
+
+    const input = container.querySelector<HTMLInputElement>(".cfg-input");
+    expect(input).not.toBeNull();
+    expect(input?.readOnly).toBe(false);
+    expect(input?.value).toContain("malformed");
+    expect(input?.value).not.toBe("[object Object]");
+    expect(input?.placeholder).not.toContain("Structured value (SecretRef)");
+
+    if (!input) {
+      return;
+    }
+    input.value = "local";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
   });
 });

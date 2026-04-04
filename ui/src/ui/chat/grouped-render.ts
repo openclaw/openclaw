@@ -177,11 +177,9 @@ export function renderMessageGroup(
           <span class="chat-group-timestamp">${timestamp}</span>
           ${renderMessageMeta(meta)}
           ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
-          ${
-            opts.onDelete
-              ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
-              : nothing
-          }
+          ${opts.onDelete
+            ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
+            : nothing}
         </div>
       </div>
     </div>
@@ -317,9 +315,15 @@ function extractGroupText(group: MessageGroup): string {
   return parts.join("\n\n");
 }
 
-const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
+export const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
 type DeleteConfirmSide = "left" | "right";
+type DeleteConfirmPopover = {
+  popover: HTMLDivElement;
+  cancel: HTMLButtonElement;
+  yes: HTMLButtonElement;
+  check: HTMLInputElement;
+};
 
 function shouldSkipDeleteConfirm(): boolean {
   try {
@@ -327,6 +331,45 @@ function shouldSkipDeleteConfirm(): boolean {
   } catch {
     return false;
   }
+}
+
+function createDeleteConfirmPopover(side: DeleteConfirmSide): DeleteConfirmPopover {
+  const popover = document.createElement("div");
+  popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
+
+  const text = document.createElement("p");
+  text.className = "chat-delete-confirm__text";
+  text.textContent = "Delete this message?";
+
+  const remember = document.createElement("label");
+  remember.className = "chat-delete-confirm__remember";
+
+  const check = document.createElement("input");
+  check.className = "chat-delete-confirm__check";
+  check.type = "checkbox";
+
+  const rememberText = document.createElement("span");
+  rememberText.textContent = "Don't ask again";
+
+  remember.append(check, rememberText);
+
+  const actions = document.createElement("div");
+  actions.className = "chat-delete-confirm__actions";
+
+  const cancel = document.createElement("button");
+  cancel.className = "chat-delete-confirm__cancel";
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+
+  const yes = document.createElement("button");
+  yes.className = "chat-delete-confirm__yes";
+  yes.type = "button";
+  yes.textContent = "Delete";
+
+  actions.append(cancel, yes);
+  popover.append(text, remember, actions);
+
+  return { popover, cancel, yes, check };
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
@@ -348,46 +391,36 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
             existing.remove();
             return;
           }
-          const popover = document.createElement("div");
-          popover.className = `chat-delete-confirm chat-delete-confirm--${side}`;
-          popover.innerHTML = `
-            <p class="chat-delete-confirm__text">Delete this message?</p>
-            <label class="chat-delete-confirm__remember">
-              <input type="checkbox" class="chat-delete-confirm__check" />
-              <span>Don't ask again</span>
-            </label>
-            <div class="chat-delete-confirm__actions">
-              <button class="chat-delete-confirm__cancel" type="button">Cancel</button>
-              <button class="chat-delete-confirm__yes" type="button">Delete</button>
-            </div>
-          `;
+          const { popover, cancel, yes, check } = createDeleteConfirmPopover(side);
           wrap.appendChild(popover);
 
-          const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
-          const yes = popover.querySelector(".chat-delete-confirm__yes")!;
-          const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
+          const removePopover = () => {
+            popover.remove();
+            document.removeEventListener("click", closeOnOutside, true);
+          };
 
-          cancel.addEventListener("click", () => popover.remove());
+          // Close on click outside.
+          const closeOnOutside = (evt: MouseEvent) => {
+            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
+              removePopover();
+            }
+          };
+
+          cancel.addEventListener("click", removePopover);
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {
                 getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
               } catch {}
             }
-            popover.remove();
+            removePopover();
             onDelete();
           });
-
-          // Close on click outside
-          const closeOnOutside = (evt: MouseEvent) => {
-            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
-              popover.remove();
-              document.removeEventListener("click", closeOnOutside, true);
-            }
-          };
           requestAnimationFrame(() => document.addEventListener("click", closeOnOutside, true));
         }}
-      >${icons.trash ?? icons.x}</button>
+      >
+        ${icons.trash ?? icons.x}
+      </button>
     </span>
   `;
 }
@@ -565,7 +598,9 @@ function renderCollapsedToolCards(
     <details class="chat-tools-collapse">
       <summary class="chat-tools-summary">
         <span class="chat-tools-summary__icon">${icons.zap}</span>
-        <span class="chat-tools-summary__count">${totalTools} tool${totalTools === 1 ? "" : "s"}</span>
+        <span class="chat-tools-summary__count"
+          >${totalTools} tool${totalTools === 1 ? "" : "s"}</span
+        >
         <span class="chat-tools-summary__names">${summaryLabel}</span>
       </summary>
       <div class="chat-tools-collapse__body">
@@ -693,80 +728,70 @@ function renderGroupedMessage(
 
   return html`
     <div class="${bubbleClasses}">
-      ${
-        hasActions
-          ? html`<div class="chat-bubble-actions">
-              ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
-              ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
-            </div>`
-          : nothing
-      }
-      ${
-        isToolMessage
-          ? html`
+      ${hasActions
+        ? html`<div class="chat-bubble-actions">
+            ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
+            ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
+          </div>`
+        : nothing}
+      ${isToolMessage
+        ? html`
             <details class="chat-tool-msg-collapse">
               <summary class="chat-tool-msg-summary">
                 <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
                 <span class="chat-tool-msg-summary__label">Tool output</span>
-                ${
-                  toolSummaryLabel
-                    ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
-                    : toolPreview
-                      ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
-                      : nothing
-                }
+                ${toolSummaryLabel
+                  ? html`<span class="chat-tool-msg-summary__names">${toolSummaryLabel}</span>`
+                  : toolPreview
+                    ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
+                    : nothing}
               </summary>
               <div class="chat-tool-msg-body">
                 ${renderMessageImages(images)}
-                ${
-                  reasoningMarkdown
-                    ? html`<div class="chat-thinking">${unsafeHTML(
-                        toSanitizedMarkdownHtml(reasoningMarkdown),
-                      )}</div>`
-                    : nothing
-                }
-                ${
-                  jsonResult
-                    ? html`<details class="chat-json-collapse">
-                        <summary class="chat-json-summary">
-                          <span class="chat-json-badge">JSON</span>
-                          <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                        </summary>
-                        <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                      </details>`
-                    : markdown
-                      ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
-                      : nothing
-                }
+                ${reasoningMarkdown
+                  ? html`<div class="chat-thinking">
+                      ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                    </div>`
+                  : nothing}
+                ${jsonResult
+                  ? html`<details class="chat-json-collapse">
+                      <summary class="chat-json-summary">
+                        <span class="chat-json-badge">JSON</span>
+                        <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                      </summary>
+                      <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                    </details>`
+                  : markdown
+                    ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                        ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                      </div>`
+                    : nothing}
                 ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
               </div>
             </details>
           `
-          : html`
+        : html`
             ${renderMessageImages(images)}
-            ${
-              reasoningMarkdown
-                ? html`<div class="chat-thinking">${unsafeHTML(
-                    toSanitizedMarkdownHtml(reasoningMarkdown),
-                  )}</div>`
-                : nothing
-            }
-            ${
-              jsonResult
-                ? html`<details class="chat-json-collapse">
-                    <summary class="chat-json-summary">
-                      <span class="chat-json-badge">JSON</span>
-                      <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                    </summary>
-                    <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                  </details>`
-                : markdown
-                  ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
-                  : nothing
-            }
+            ${reasoningMarkdown
+              ? html`<div class="chat-thinking">
+                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                </div>`
+              : nothing}
+            ${jsonResult
+              ? html`<details class="chat-json-collapse">
+                  <summary class="chat-json-summary">
+                    <span class="chat-json-badge">JSON</span>
+                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                  </summary>
+                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                </details>`
+              : markdown
+                ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                  </div>`
+                : nothing}
             ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar) : nothing}
-          `
-      }
+          `}
     </div>
   `;
 }

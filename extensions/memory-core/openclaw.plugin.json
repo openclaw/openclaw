@@ -1,9 +1,89 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "uiHints": {
+    "dreaming.mode": {
+      "label": "Dreaming Mode",
+      "placeholder": "core",
+      "help": "Select dreaming mode: off, core, deep, or rem."
+    },
+    "dreaming.frequency": {
+      "label": "Dreaming Frequency",
+      "placeholder": "0 3 * * *",
+      "help": "Optional cron cadence override for managed dreaming runs."
+    },
+    "dreaming.cron": {
+      "label": "Dreaming Cron",
+      "placeholder": "0 3 * * *",
+      "help": "Optional cron cadence override for managed dreaming runs."
+    },
+    "dreaming.timezone": {
+      "label": "Dreaming Timezone",
+      "placeholder": "America/Los_Angeles",
+      "help": "IANA timezone for the managed dreaming cron schedule."
+    },
+    "dreaming.limit": {
+      "label": "Promotion Limit",
+      "placeholder": "10",
+      "help": "Maximum short-term candidates promoted per dreaming run (set to 0 to skip promotions)."
+    },
+    "dreaming.minScore": {
+      "label": "Promotion Min Score",
+      "placeholder": "0.75",
+      "help": "Minimum weighted rank required for automatic promotion."
+    },
+    "dreaming.minRecallCount": {
+      "label": "Promotion Min Recalls",
+      "placeholder": "3",
+      "help": "Minimum recall count required for automatic promotion."
+    },
+    "dreaming.minUniqueQueries": {
+      "label": "Promotion Min Queries",
+      "placeholder": "2",
+      "help": "Minimum unique query count required for automatic promotion."
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "dreaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["off", "core", "deep", "rem"]
+          },
+          "frequency": {
+            "type": "string"
+          },
+          "cron": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minRecallCount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minUniqueQueries": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": ["mode"]
+      }
+    }
   }
 }

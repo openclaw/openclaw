@@ -156,7 +156,7 @@ read_when:
         "defaults": {
           "model": {
             "primary": "anthropic/claude-opus-4-6",
-            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-4o"]
+            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
           },
           "maxConcurrent": 4
         },
@@ -297,7 +297,7 @@ The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
 ### Config Not Being Read
 
-If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/openclaw.json` should be read on restart.
+`--allow-unconfigured` only bypasses the startup guard. It does not create or repair `/data/openclaw.json`, so make sure your real config exists and includes `gateway.mode="local"` when you want a normal local gateway start.
 
 Verify the config exists:
 

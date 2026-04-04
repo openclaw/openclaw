@@ -21,6 +21,12 @@ const MIN_INITIAL_CHARS = 20;
 /** Teams message text limit. */
 const TEAMS_MAX_CHARS = 4000;
 
+/**
+ * Stop streaming before Teams expires the content stream server-side.
+ * The exact service limit is opaque, so stay comfortably under it.
+ */
+const MAX_STREAM_AGE_MS = 45_000;
+
 type StreamSendFn = (activity: Record<string, unknown>) => Promise<{ id?: string } | unknown>;
 
 export type TeamsStreamOptions = {
@@ -35,6 +41,7 @@ export type TeamsStreamOptions = {
 };
 
 import { AI_GENERATED_ENTITY } from "./ai-entity.js";
+import { formatUnknownError } from "./errors.js";
 
 function extractId(response: unknown): string | undefined {
   if (response && typeof response === "object" && "id" in response) {
@@ -76,6 +83,7 @@ export class TeamsHttpStream {
   private finalized = false;
   private streamFailed = false;
   private lastStreamedText = "";
+  private streamStartedAt: number | undefined = undefined;
   private loop: DraftStreamLoop;
 
   constructor(options: TeamsStreamOptions) {
@@ -136,6 +144,15 @@ export class TeamsHttpStream {
     // Text exceeded Teams limit — finalize immediately with what we have
     // so the user isn't left waiting while the LLM keeps generating.
     if (this.accumulatedText.length > TEAMS_MAX_CHARS) {
+      this.streamFailed = true;
+      void this.finalize();
+      return;
+    }
+
+    // Stop early before Teams expires the stream server-side. finalize() will
+    // close the stream with the last good content, and reply-stream-controller
+    // will deliver any remaining suffix via normal fallback delivery.
+    if (this.streamStartedAt && Date.now() - this.streamStartedAt >= MAX_STREAM_AGE_MS) {
       this.streamFailed = true;
       void this.finalize();
       return;
@@ -214,6 +231,16 @@ export class TeamsHttpStream {
     return this.accumulatedText.length > 0 && !this.streamFailed;
   }
 
+  /** Whether streaming failed and fallback delivery is needed. */
+  get isFailed(): boolean {
+    return this.streamFailed;
+  }
+
+  /** Number of characters successfully streamed before failure. */
+  get streamedLength(): number {
+    return this.lastStreamedText.length;
+  }
+
   /** Whether the stream has been finalized. */
   get isFinalized(): boolean {
     return this.finalized;
@@ -245,6 +272,9 @@ export class TeamsHttpStream {
 
     try {
       const response = await this.sendActivity(activity);
+      if (!this.streamStartedAt) {
+        this.streamStartedAt = Date.now();
+      }
       if (!this.streamId) {
         this.streamId = extractId(response);
       }
@@ -254,7 +284,7 @@ export class TeamsHttpStream {
       const axiosData = (err as { response?: { data?: unknown; status?: number } })?.response;
       const statusCode = axiosData?.status ?? (err as { statusCode?: number })?.statusCode;
       const responseBody = axiosData?.data ? JSON.stringify(axiosData.data).slice(0, 300) : "";
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = formatUnknownError(err);
       this.onError?.(
         new Error(
           `stream POST failed (HTTP ${statusCode ?? "?"}): ${msg}${responseBody ? ` body=${responseBody}` : ""}`,

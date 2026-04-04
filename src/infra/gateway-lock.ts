@@ -1,11 +1,14 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -18,6 +21,13 @@ type LockPayload = {
   configPath: string;
   startTime?: number;
 };
+
+const LockPayloadSchema = z.object({
+  pid: z.number(),
+  createdAt: z.string(),
+  configPath: z.string(),
+  startTime: z.number().optional(),
+}) as z.ZodType<LockPayload>;
 
 export type GatewayLockHandle = {
   lockPath: string;
@@ -36,6 +46,8 @@ export type GatewayLockOptions = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   lockDir?: string;
+  /** Override process command-line reader (testing seam). */
+  readProcessCmdline?: (pid: number) => string[] | null;
 };
 
 export class GatewayLockError extends Error {
@@ -54,6 +66,61 @@ function readLinuxCmdline(pid: number): string[] | null {
   try {
     const raw = fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8");
     return parseProcCmdline(raw);
+  } catch {
+    return null;
+  }
+}
+
+const CMDLINE_EXEC_TIMEOUT_MS = 1000;
+
+/**
+ * Read the command line of a Windows process via `wmic`.
+ * Returns an argv-style array, or null when the lookup fails (process gone,
+ * `wmic` missing/deprecated, timeout, etc.).
+ */
+function readWindowsCmdline(pid: number): string[] | null {
+  try {
+    // Omit `encoding` so execFileSync returns a Buffer — wmic emits UTF-16LE
+    // (with BOM) on most Windows 10/11 builds, which would be garbled as UTF-8.
+    const buf = execFileSync(
+      "wmic",
+      ["process", "where", `processid=${pid}`, "get", "CommandLine", "/value"],
+      { timeout: CMDLINE_EXEC_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+    ) as Buffer;
+    const raw =
+      buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe
+        ? buf.toString("utf16le")
+        : buf.toString("utf8");
+    const match = raw.match(/CommandLine=(.+)/);
+    if (!match) {
+      return null;
+    }
+    return parseWindowsCmdline(match[1].trim());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the command line of a macOS/BSD process via `ps`.
+ *
+ * `ps -o command=` outputs an unquoted flat string, so the naive whitespace
+ * split will misparse paths containing spaces. This is acceptable because
+ * standard macOS install paths do not contain spaces, and when the split
+ * does fail the caller falls back to "alive" (conservative).
+ */
+function readDarwinCmdline(pid: number): string[] | null {
+  try {
+    const raw = execFileSync("ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf8",
+      timeout: CMDLINE_EXEC_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const line = raw.trim();
+    if (!line) {
+      return null;
+    }
+    return line.split(/\s+/).filter(Boolean);
   } catch {
     return null;
   }
@@ -103,11 +170,25 @@ async function checkPortFree(port: number, host = "127.0.0.1"): Promise<boolean>
   });
 }
 
+function defaultReadProcessCmdline(pid: number, platform: NodeJS.Platform): string[] | null {
+  if (platform === "linux") {
+    return readLinuxCmdline(pid);
+  }
+  if (platform === "win32") {
+    return readWindowsCmdline(pid);
+  }
+  if (platform === "darwin") {
+    return readDarwinCmdline(pid);
+  }
+  return null;
+}
+
 async function resolveGatewayOwnerStatus(
   pid: number,
   payload: LockPayload | null,
   platform: NodeJS.Platform,
   port: number | undefined,
+  readCmdline?: (pid: number) => string[] | null,
 ): Promise<LockOwnerStatus> {
   if (port != null) {
     const portFree = await checkPortFree(port);
@@ -119,22 +200,28 @@ async function resolveGatewayOwnerStatus(
   if (!isPidAlive(pid)) {
     return "dead";
   }
-  if (platform !== "linux") {
-    return "alive";
-  }
 
-  const payloadStartTime = payload?.startTime;
-  if (Number.isFinite(payloadStartTime)) {
-    const currentStartTime = readLinuxStartTime(pid);
-    if (currentStartTime == null) {
-      return "unknown";
+  // On Linux, an extra start-time comparison catches PID recycling even when
+  // the replacement process also looks like a gateway (same argv shape).
+  if (platform === "linux") {
+    const payloadStartTime = payload?.startTime;
+    if (Number.isFinite(payloadStartTime)) {
+      const currentStartTime = readLinuxStartTime(pid);
+      if (currentStartTime == null) {
+        return "unknown";
+      }
+      return currentStartTime === payloadStartTime ? "alive" : "dead";
     }
-    return currentStartTime === payloadStartTime ? "alive" : "dead";
   }
 
-  const args = readLinuxCmdline(pid);
+  const readFn = readCmdline ?? ((p: number) => defaultReadProcessCmdline(p, platform));
+  const args = readFn(pid);
   if (!args) {
-    return "unknown";
+    // Cmdline reader unavailable or failed. On Linux legacy locks (no
+    // start-time), "unknown" lets the stale-lock heuristic eventually reclaim
+    // very old locks. On win32/darwin/other, conservatively assume "alive" to
+    // preserve single-instance guarantees when wmic/ps is unavailable.
+    return platform === "linux" ? "unknown" : "alive";
   }
   return isGatewayArgv(args) ? "alive" : "dead";
 }
@@ -142,23 +229,7 @@ async function resolveGatewayOwnerStatus(
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<LockPayload>;
-    if (typeof parsed.pid !== "number") {
-      return null;
-    }
-    if (typeof parsed.createdAt !== "string") {
-      return null;
-    }
-    if (typeof parsed.configPath !== "string") {
-      return null;
-    }
-    const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
-    return {
-      pid: parsed.pid,
-      createdAt: parsed.createdAt,
-      configPath: parsed.configPath,
-      startTime,
-    };
+    return safeParseJsonWithSchema(LockPayloadSchema, raw);
   } catch {
     return null;
   }
@@ -228,7 +299,13 @@ export async function acquireGatewayLock(
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
       const ownerStatus = ownerPid
-        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port)
+        ? await resolveGatewayOwnerStatus(
+            ownerPid,
+            lastPayload,
+            platform,
+            port,
+            opts.readProcessCmdline,
+          )
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });

@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import AjvPkg from "ajv";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -7,10 +8,15 @@ import {
   resolveDiffImageRenderOptions,
   resolveDiffsPluginDefaults,
   resolveDiffsPluginSecurity,
+  resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
-import { renderDiffDocument } from "./render.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
-import { getServedViewerAsset, VIEWER_LOADER_PATH, VIEWER_RUNTIME_PATH } from "./viewer-assets.js";
+import {
+  getServedViewerAsset,
+  resolveViewerRuntimeFileUrl,
+  VIEWER_LOADER_PATH,
+  VIEWER_RUNTIME_PATH,
+} from "./viewer-assets.js";
 import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const FULL_DEFAULTS = {
@@ -29,6 +35,15 @@ const FULL_DEFAULTS = {
   fileMaxWidth: 1280,
   mode: "file",
 } as const;
+
+function compileManifestConfigSchema() {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: Record<string, unknown> };
+  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
+  const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
+  return ajv.compile(manifest.configSchema);
+}
 
 describe("resolveDiffsPluginDefaults", () => {
   it("returns built-in defaults when config is missing", () => {
@@ -158,6 +173,36 @@ describe("resolveDiffsPluginDefaults", () => {
       fileMaxWidth: 1024,
     });
   });
+
+  it("keeps loader-applied schema defaults from shadowing aliases and quality-derived defaults", () => {
+    const validate = compileManifestConfigSchema();
+
+    const aliasOnly = {
+      defaults: {
+        format: "pdf",
+        imageQuality: "hq",
+      },
+    };
+    expect(validate(aliasOnly)).toBe(true);
+    expect(resolveDiffsPluginDefaults(aliasOnly)).toMatchObject({
+      fileFormat: "pdf",
+      fileQuality: "hq",
+      fileScale: 2.5,
+      fileMaxWidth: 1200,
+    });
+
+    const qualityOnly = {
+      defaults: {
+        fileQuality: "hq",
+      },
+    };
+    expect(validate(qualityOnly)).toBe(true);
+    expect(resolveDiffsPluginDefaults(qualityOnly)).toMatchObject({
+      fileQuality: "hq",
+      fileScale: 2.5,
+      fileMaxWidth: 1200,
+    });
+  });
 });
 
 describe("resolveDiffsPluginSecurity", () => {
@@ -172,7 +217,107 @@ describe("resolveDiffsPluginSecurity", () => {
   });
 });
 
+describe("resolveDiffsPluginViewerBaseUrl", () => {
+  it("defaults to undefined when config is missing", () => {
+    expect(resolveDiffsPluginViewerBaseUrl(undefined)).toBeUndefined();
+  });
+
+  it("normalizes configured viewer base URLs", () => {
+    expect(
+      resolveDiffsPluginViewerBaseUrl({
+        viewerBaseUrl: "https://example.com/openclaw/",
+      }),
+    ).toBe("https://example.com/openclaw");
+  });
+});
+
 describe("diffs plugin schema surfaces", () => {
+  it("rejects invalid viewerBaseUrl values at manifest-validation time too", () => {
+    const validate = compileManifestConfigSchema();
+
+    expect(validate({ viewerBaseUrl: "javascript:alert(1)" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw?x=1" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw#frag" })).toBe(false);
+    expect(validate({ viewerBaseUrl: "https://example.com/openclaw/" })).toBe(true);
+  });
+
+  it("preserves defaults and security for direct safeParse callers", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        viewerBaseUrl: "https://example.com/openclaw/",
+        defaults: {
+          theme: "light",
+        },
+        security: {
+          allowRemoteViewer: true,
+        },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        viewerBaseUrl: "https://example.com/openclaw",
+        defaults: {
+          fontFamily: "Fira Code",
+          fontSize: 15,
+          lineSpacing: 1.6,
+          layout: "unified",
+          showLineNumbers: true,
+          diffIndicators: "bars",
+          wordWrap: true,
+          background: true,
+          theme: "light",
+          fileFormat: "png",
+          fileQuality: "standard",
+          fileScale: 2,
+          fileMaxWidth: 960,
+          mode: "both",
+        },
+        security: {
+          allowRemoteViewer: true,
+        },
+      },
+    });
+  });
+
+  it("canonicalizes alias-driven defaults for direct safeParse callers", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        defaults: {
+          format: "pdf",
+          imageQuality: "hq",
+        },
+      }),
+    ).toMatchObject({
+      success: true,
+      data: {
+        defaults: {
+          fileFormat: "pdf",
+          fileQuality: "hq",
+          fileScale: 2.5,
+          fileMaxWidth: 1200,
+        },
+      },
+    });
+  });
+
+  it("rejects invalid viewerBaseUrl config values", () => {
+    expect(
+      diffsPluginConfigSchema.safeParse?.({
+        viewerBaseUrl: "javascript:alert(1)",
+      }),
+    ).toMatchObject({
+      success: false,
+      error: {
+        issues: [
+          {
+            path: ["viewerBaseUrl"],
+            message: "viewerBaseUrl must use http or https: javascript:alert(1)",
+          },
+        ],
+      },
+    });
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
@@ -225,6 +370,16 @@ describe("diffs viewer URL helpers", () => {
     ).toBe("https://example.com/openclaw/plugins/diffs/view/id/token");
   });
 
+  it("prefers normalized viewerBaseUrl strings too", () => {
+    expect(
+      buildViewerUrl({
+        config: {},
+        baseUrl: "https://example.com/openclaw/",
+        viewerPath: "/plugins/diffs/view/id/token",
+      }),
+    ).toBe("https://example.com/openclaw/plugins/diffs/view/id/token");
+  });
+
   it("rejects base URLs with query/hash", () => {
     expect(() => normalizeViewerBaseUrl("https://example.com?a=1")).toThrow(
       "baseUrl must not include query/hash",
@@ -233,117 +388,61 @@ describe("diffs viewer URL helpers", () => {
       "baseUrl must not include query/hash",
     );
   });
-});
 
-describe("renderDiffDocument", () => {
-  it("renders before/after input into a complete viewer document", async () => {
-    const rendered = await renderDiffDocument(
-      {
-        kind: "before_after",
-        before: "const value = 1;\n",
-        after: "const value = 2;\n",
-        path: "src/example.ts",
-      },
-      {
-        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-        expandUnchanged: false,
-      },
+  it("uses the configured field name in viewerBaseUrl validation errors", () => {
+    expect(() => normalizeViewerBaseUrl("https://example.com?a=1", "viewerBaseUrl")).toThrow(
+      "viewerBaseUrl must not include query/hash",
     );
-
-    expect(rendered.title).toBe("src/example.ts");
-    expect(rendered.fileCount).toBe(1);
-    expect(rendered.html).toContain("data-openclaw-diff-root");
-    expect(rendered.html).toContain("src/example.ts");
-    expect(rendered.html).toContain("/plugins/diffs/assets/viewer.js");
-    expect(rendered.imageHtml).toContain("/plugins/diffs/assets/viewer.js");
-    expect(rendered.imageHtml).toContain("max-width: 960px;");
-    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
-    expect(rendered.html).toContain("min-height: 100vh;");
-    expect(rendered.html).toContain('"diffIndicators":"bars"');
-    expect(rendered.html).toContain('"disableLineNumbers":false');
-    expect(rendered.html).toContain("--diffs-line-height: 24px;");
-    expect(rendered.html).toContain("--diffs-font-size: 15px;");
-    expect(rendered.html).not.toContain("fonts.googleapis.com");
-  });
-
-  it("renders multi-file patch input", async () => {
-    const patch = [
-      "diff --git a/a.ts b/a.ts",
-      "--- a/a.ts",
-      "+++ b/a.ts",
-      "@@ -1 +1 @@",
-      "-const a = 1;",
-      "+const a = 2;",
-      "diff --git a/b.ts b/b.ts",
-      "--- a/b.ts",
-      "+++ b/b.ts",
-      "@@ -1 +1 @@",
-      "-const b = 1;",
-      "+const b = 2;",
-    ].join("\n");
-
-    const rendered = await renderDiffDocument(
-      {
-        kind: "patch",
-        patch,
-        title: "Workspace patch",
-      },
-      {
-        presentation: {
-          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
-          layout: "split",
-          theme: "dark",
-        },
-        image: resolveDiffImageRenderOptions({
-          defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-          fileQuality: "hq",
-          fileMaxWidth: 1180,
-        }),
-        expandUnchanged: true,
-      },
-    );
-
-    expect(rendered.title).toBe("Workspace patch");
-    expect(rendered.fileCount).toBe(2);
-    expect(rendered.html).toContain("Workspace patch");
-    expect(rendered.imageHtml).toContain("max-width: 1180px;");
-  });
-
-  it("rejects patches that exceed file-count limits", async () => {
-    const patch = Array.from({ length: 129 }, (_, i) => {
-      return [
-        `diff --git a/f${i}.ts b/f${i}.ts`,
-        `--- a/f${i}.ts`,
-        `+++ b/f${i}.ts`,
-        "@@ -1 +1 @@",
-        "-const x = 1;",
-        "+const x = 2;",
-      ].join("\n");
-    }).join("\n");
-
-    await expect(
-      renderDiffDocument(
-        {
-          kind: "patch",
-          patch,
-        },
-        {
-          presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
-          image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
-          expandUnchanged: false,
-        },
-      ),
-    ).rejects.toThrow("too many files");
   });
 });
 
 describe("viewer assets", () => {
+  it("prefers the built plugin asset layout when present", async () => {
+    const stat = vi.fn(async (path: string) => {
+      if (path === "/repo/dist/extensions/diffs/assets/viewer-runtime.js") {
+        return { mtimeMs: 1 };
+      }
+      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
+      throw error;
+    });
+
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/dist/extensions/diffs/index.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/dist/extensions/diffs/assets/viewer-runtime.js",
+    });
+    expect(stat).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the source asset layout when the built artifact is absent", async () => {
+    const stat = vi.fn(async (path: string) => {
+      if (path === "/repo/extensions/diffs/assets/viewer-runtime.js") {
+        return { mtimeMs: 1 };
+      }
+      const error = Object.assign(new Error(`missing: ${path}`), { code: "ENOENT" });
+      throw error;
+    });
+
+    await expect(
+      resolveViewerRuntimeFileUrl({
+        baseUrl: "file:///repo/extensions/diffs/src/viewer-assets.js",
+        stat,
+      }),
+    ).resolves.toMatchObject({
+      pathname: "/repo/extensions/diffs/assets/viewer-runtime.js",
+    });
+    expect(stat).toHaveBeenNthCalledWith(1, "/repo/extensions/diffs/src/assets/viewer-runtime.js");
+    expect(stat).toHaveBeenNthCalledWith(2, "/repo/extensions/diffs/assets/viewer-runtime.js");
+  });
+
   it("serves a stable loader that points at the current runtime bundle", async () => {
     const loader = await getServedViewerAsset(VIEWER_LOADER_PATH);
 
     expect(loader?.contentType).toBe("text/javascript; charset=utf-8");
-    expect(String(loader?.body)).toContain(`${VIEWER_RUNTIME_PATH}?v=`);
+    expect(String(loader?.body)).toContain(`./viewer-runtime.js?v=`);
   });
 
   it("serves the runtime bundle body", async () => {
@@ -351,6 +450,8 @@ describe("viewer assets", () => {
 
     expect(runtime?.contentType).toBe("text/javascript; charset=utf-8");
     expect(String(runtime?.body)).toContain("openclawDiffsReady");
+    expect(String(runtime?.body)).toContain('style.width="24px"');
+    expect(String(runtime?.body)).toContain('style.gap="6px"');
   });
 
   it("returns null for unknown asset paths", async () => {

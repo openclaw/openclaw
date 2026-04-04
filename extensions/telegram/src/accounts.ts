@@ -9,15 +9,18 @@ import {
   resolveListedDefaultAccountId,
   resolveAccountWithDefaultFallback,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/account-resolution";
-import { isTruthyEnvValue } from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/account-core";
+import type {
+  TelegramAccountConfig,
+  TelegramActionConfig,
+} from "openclaw/plugin-sdk/config-runtime";
 import {
   listBoundAccountIds,
   resolveDefaultAgentBoundAccountId,
 } from "openclaw/plugin-sdk/routing";
 import { formatSetExplicitDefaultInstruction } from "openclaw/plugin-sdk/routing";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramAccountConfig, TelegramActionConfig } from "../runtime-api.js";
+import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramTransport } from "./fetch.js";
 import { resolveTelegramToken } from "./token.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
@@ -53,6 +56,14 @@ export type ResolvedTelegramAccount = {
   token: string;
   tokenSource: "env" | "tokenFile" | "config" | "none";
   config: TelegramAccountConfig;
+};
+
+export type TelegramMediaRuntimeOptions = {
+  token: string;
+  transport?: TelegramTransport;
+  apiRoot?: string;
+  trustedLocalFileRoots?: readonly string[];
+  dangerouslyAllowPrivateNetwork?: boolean;
 };
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -146,11 +157,32 @@ export function createTelegramActionGate(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+  );
   return createAccountActionGate({
     baseActions: params.cfg.channels?.telegram?.actions,
     accountActions: resolveTelegramAccountConfig(params.cfg, accountId)?.actions,
   });
+}
+
+export function resolveTelegramMediaRuntimeOptions(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  token: string;
+  transport?: TelegramTransport;
+}): TelegramMediaRuntimeOptions {
+  const normalizedAccountId = normalizeOptionalAccountId(params.accountId);
+  const accountCfg = normalizedAccountId
+    ? mergeTelegramAccountConfig(params.cfg, normalizedAccountId)
+    : params.cfg.channels?.telegram;
+  return {
+    token: params.token,
+    transport: params.transport,
+    apiRoot: accountCfg?.apiRoot,
+    trustedLocalFileRoots: accountCfg?.trustedLocalFileRoots,
+    dangerouslyAllowPrivateNetwork: accountCfg?.network?.dangerouslyAllowPrivateNetwork,
+  };
 }
 
 export type TelegramPollActionGateState = {

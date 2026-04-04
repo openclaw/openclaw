@@ -9,9 +9,9 @@ const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
 export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
-export type ExecApprovalRecord = {
+export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   id: string;
-  request: ExecApprovalRequestPayload;
+  request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
   // Caller metadata (best-effort). Used to prevent other clients from replaying an approval id.
@@ -23,8 +23,8 @@ export type ExecApprovalRecord = {
   resolvedBy?: string | null;
 };
 
-type PendingEntry = {
-  record: ExecApprovalRecord;
+type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
+  record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -36,17 +36,13 @@ export type ExecApprovalIdLookupResult =
   | { kind: "ambiguous"; ids: string[] }
   | { kind: "none" };
 
-export class ExecApprovalManager {
-  private pending = new Map<string, PendingEntry>();
+export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
+  private pending = new Map<string, PendingEntry<TPayload>>();
 
-  create(
-    request: ExecApprovalRequestPayload,
-    timeoutMs: number,
-    id?: string | null,
-  ): ExecApprovalRecord {
+  create(request: TPayload, timeoutMs: number, id?: string | null): ExecApprovalRecord<TPayload> {
     const now = Date.now();
     const resolvedId = id && id.trim().length > 0 ? id.trim() : randomUUID();
-    const record: ExecApprovalRecord = {
+    const record: ExecApprovalRecord<TPayload> = {
       id: resolvedId,
       request,
       createdAtMs: now,
@@ -60,7 +56,10 @@ export class ExecApprovalManager {
    * This separates registration (synchronous) from waiting (async), allowing callers to
    * confirm registration before the decision is made.
    */
-  register(record: ExecApprovalRecord, timeoutMs: number): Promise<ExecApprovalDecision | null> {
+  register(
+    record: ExecApprovalRecord<TPayload>,
+    timeoutMs: number,
+  ): Promise<ExecApprovalDecision | null> {
     const existing = this.pending.get(record.id);
     if (existing) {
       // Idempotent: return existing promise if still pending
@@ -77,7 +76,7 @@ export class ExecApprovalManager {
       rejectPromise = reject;
     });
     // Create entry first so we can capture it in the closure (not re-fetch from map)
-    const entry: PendingEntry = {
+    const entry: PendingEntry<TPayload> = {
       record,
       resolve: resolvePromise!,
       reject: rejectPromise!,
@@ -95,7 +94,7 @@ export class ExecApprovalManager {
    * @deprecated Use register() instead for explicit separation of registration and waiting.
    */
   async waitForDecision(
-    record: ExecApprovalRecord,
+    record: ExecApprovalRecord<TPayload>,
     timeoutMs: number,
   ): Promise<ExecApprovalDecision | null> {
     return this.register(record, timeoutMs);
@@ -147,7 +146,7 @@ export class ExecApprovalManager {
     return true;
   }
 
-  getSnapshot(recordId: string): ExecApprovalRecord | null {
+  getSnapshot(recordId: string): ExecApprovalRecord<TPayload> | null {
     const entry = this.pending.get(recordId);
     return entry?.record ?? null;
   }

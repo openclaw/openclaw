@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCanonicalSentMessageHookContext,
   deriveInboundMessageHookContext,
+  toPluginInboundClaimEvent,
   toPluginInboundClaimContext,
   toInternalMessagePreprocessedContext,
   toInternalMessageReceivedContext,
@@ -16,18 +19,18 @@ import {
 
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
-    From: "telegram:user:123",
-    To: "telegram:chat:456",
+    From: "demo-chat:user:123",
+    To: "demo-chat:chat:456",
     Body: "body",
     BodyForAgent: "body-for-agent",
     BodyForCommands: "commands-body",
     RawBody: "raw-body",
     Transcript: "hello transcript",
     Timestamp: 1710000000,
-    Provider: "telegram",
-    Surface: "telegram",
-    OriginatingChannel: "telegram",
-    OriginatingTo: "telegram:chat:456",
+    Provider: "demo-chat",
+    Surface: "demo-chat",
+    OriginatingChannel: "demo-chat",
+    OriginatingTo: "demo-chat:chat:456",
     AccountId: "acc-1",
     MessageSid: "msg-1",
     SenderId: "sender-1",
@@ -45,15 +48,50 @@ function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): Finalized
 }
 
 describe("message hook mappers", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "claim-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "claim-chat", label: "Claim chat" }),
+            messaging: {
+              resolveInboundConversation: ({
+                from,
+                to,
+                isGroup,
+              }: {
+                from?: string;
+                to?: string;
+                isGroup?: boolean;
+              }) => {
+                const normalizedTo = to?.replace(/^channel:/i, "").trim();
+                const normalizedFrom = from?.replace(/^claim-chat:/i, "").trim();
+                if (isGroup && normalizedTo) {
+                  return { conversationId: `channel:${normalizedTo}` };
+                }
+                if (normalizedFrom) {
+                  return { conversationId: `user:${normalizedFrom}` };
+                }
+                return null;
+              },
+            },
+          },
+        },
+      ]),
+    );
+  });
+
   it("derives canonical inbound context with body precedence and group metadata", () => {
     const canonical = deriveInboundMessageHookContext(makeInboundCtx());
 
     expect(canonical.content).toBe("commands-body");
-    expect(canonical.channelId).toBe("telegram");
-    expect(canonical.conversationId).toBe("telegram:chat:456");
+    expect(canonical.channelId).toBe("demo-chat");
+    expect(canonical.conversationId).toBe("demo-chat:chat:456");
     expect(canonical.messageId).toBe("msg-1");
     expect(canonical.isGroup).toBe(true);
-    expect(canonical.groupId).toBe("telegram:chat:456");
+    expect(canonical.groupId).toBe("demo-chat:chat:456");
     expect(canonical.guildId).toBe("guild-1");
   });
 
@@ -67,16 +105,42 @@ describe("message hook mappers", () => {
     expect(canonical.messageId).toBe("override-msg");
   });
 
+  it("preserves multi-attachment arrays for inbound claim metadata", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        MediaPath: undefined,
+        MediaType: undefined,
+        MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        MediaTypes: ["image/jpeg", "image/jpeg"],
+      }),
+    );
+
+    expect(canonical.mediaPath).toBe("/tmp/tree.jpg");
+    expect(canonical.mediaType).toBe("image/jpeg");
+    expect(canonical.mediaPaths).toEqual(["/tmp/tree.jpg", "/tmp/ramp.jpg"]);
+    expect(canonical.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
+    expect(toPluginInboundClaimEvent(canonical)).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          mediaPath: "/tmp/tree.jpg",
+          mediaType: "image/jpeg",
+          mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+          mediaTypes: ["image/jpeg", "image/jpeg"],
+        }),
+      }),
+    );
+  });
+
   it("maps canonical inbound context to plugin/internal received payloads", () => {
     const canonical = deriveInboundMessageHookContext(makeInboundCtx());
 
     expect(toPluginMessageContext(canonical)).toEqual({
-      channelId: "telegram",
+      channelId: "demo-chat",
       accountId: "acc-1",
-      conversationId: "telegram:chat:456",
+      conversationId: "demo-chat:chat:456",
     });
     expect(toPluginMessageReceivedEvent(canonical)).toEqual({
-      from: "telegram:user:123",
+      from: "demo-chat:user:123",
       content: "commands-body",
       timestamp: 1710000000,
       metadata: expect.objectContaining({
@@ -86,12 +150,12 @@ describe("message hook mappers", () => {
       }),
     });
     expect(toInternalMessageReceivedContext(canonical)).toEqual({
-      from: "telegram:user:123",
+      from: "demo-chat:user:123",
       content: "commands-body",
       timestamp: 1710000000,
-      channelId: "telegram",
+      channelId: "demo-chat",
       accountId: "acc-1",
-      conversationId: "telegram:chat:456",
+      conversationId: "demo-chat:chat:456",
       messageId: "msg-1",
       metadata: expect.objectContaining({
         senderUsername: "userone",
@@ -100,12 +164,12 @@ describe("message hook mappers", () => {
     });
   });
 
-  it("normalizes Discord channel targets for inbound claim contexts", () => {
+  it("uses channel plugin claim resolvers for grouped conversations", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
+        Provider: "claim-chat",
+        Surface: "claim-chat",
+        OriginatingChannel: "claim-chat",
         To: "channel:123456789012345678",
         OriginatingTo: "channel:123456789012345678",
         GroupChannel: "general",
@@ -114,7 +178,7 @@ describe("message hook mappers", () => {
     );
 
     expect(toPluginInboundClaimContext(canonical)).toEqual({
-      channelId: "discord",
+      channelId: "claim-chat",
       accountId: "acc-1",
       conversationId: "channel:123456789012345678",
       parentConversationId: undefined,
@@ -123,13 +187,13 @@ describe("message hook mappers", () => {
     });
   });
 
-  it("normalizes Discord DM targets for inbound claim contexts", () => {
+  it("uses channel plugin claim resolvers for direct-message conversations", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({
-        Provider: "discord",
-        Surface: "discord",
-        OriginatingChannel: "discord",
-        From: "discord:1177378744822943744",
+        Provider: "claim-chat",
+        Surface: "claim-chat",
+        OriginatingChannel: "claim-chat",
+        From: "claim-chat:1177378744822943744",
         To: "channel:1480574946919846079",
         OriginatingTo: "channel:1480574946919846079",
         GroupChannel: undefined,
@@ -138,7 +202,7 @@ describe("message hook mappers", () => {
     );
 
     expect(toPluginInboundClaimContext(canonical)).toEqual({
-      channelId: "discord",
+      channelId: "claim-chat",
       accountId: "acc-1",
       conversationId: "user:1177378744822943744",
       parentConversationId: undefined,
@@ -158,45 +222,45 @@ describe("message hook mappers", () => {
     const preprocessed = toInternalMessagePreprocessedContext(canonical, cfg);
     expect(preprocessed.transcript).toBeUndefined();
     expect(preprocessed.isGroup).toBe(true);
-    expect(preprocessed.groupId).toBe("telegram:chat:456");
+    expect(preprocessed.groupId).toBe("demo-chat:chat:456");
     expect(preprocessed.cfg).toBe(cfg);
   });
 
   it("maps sent context consistently for plugin/internal hooks", () => {
     const canonical = buildCanonicalSentMessageHookContext({
-      to: "telegram:chat:456",
+      to: "demo-chat:chat:456",
       content: "reply",
       success: false,
       error: "network error",
-      channelId: "telegram",
+      channelId: "demo-chat",
       accountId: "acc-1",
       messageId: "out-1",
       isGroup: true,
-      groupId: "telegram:chat:456",
+      groupId: "demo-chat:chat:456",
     });
 
     expect(toPluginMessageContext(canonical)).toEqual({
-      channelId: "telegram",
+      channelId: "demo-chat",
       accountId: "acc-1",
-      conversationId: "telegram:chat:456",
+      conversationId: "demo-chat:chat:456",
     });
     expect(toPluginMessageSentEvent(canonical)).toEqual({
-      to: "telegram:chat:456",
+      to: "demo-chat:chat:456",
       content: "reply",
       success: false,
       error: "network error",
     });
     expect(toInternalMessageSentContext(canonical)).toEqual({
-      to: "telegram:chat:456",
+      to: "demo-chat:chat:456",
       content: "reply",
       success: false,
       error: "network error",
-      channelId: "telegram",
+      channelId: "demo-chat",
       accountId: "acc-1",
-      conversationId: "telegram:chat:456",
+      conversationId: "demo-chat:chat:456",
       messageId: "out-1",
       isGroup: true,
-      groupId: "telegram:chat:456",
+      groupId: "demo-chat:chat:456",
     });
   });
 });

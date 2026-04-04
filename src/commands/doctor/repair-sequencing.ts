@@ -1,10 +1,10 @@
 import { sanitizeForLog } from "../../terminal/ansi.js";
-import { maybeRepairDiscordNumericIds } from "./providers/discord.js";
-import {
-  collectTelegramEmptyAllowlistExtraWarnings,
-  maybeRepairTelegramAllowFromUsernames,
-} from "./providers/telegram.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
+import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
+import {
+  collectChannelDoctorEmptyAllowlistExtraWarnings,
+  collectChannelDoctorRepairMutations,
+} from "./shared/channel-doctor.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
@@ -46,15 +46,20 @@ export async function runDoctorRepairSequence(params: {
     }
   };
 
-  applyMutation(await maybeRepairTelegramAllowFromUsernames(state.candidate));
-  applyMutation(maybeRepairDiscordNumericIds(state.candidate));
+  for (const mutation of await collectChannelDoctorRepairMutations({
+    cfg: state.candidate,
+    doctorFixCommand: params.doctorFixCommand,
+  })) {
+    applyMutation(mutation);
+  }
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
+  applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, process.env));
   applyMutation(maybeRepairStalePluginConfig(state.candidate, process.env));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,
-    extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
+    extraWarningsForAccount: collectChannelDoctorEmptyAllowlistExtraWarnings,
   });
   if (emptyAllowlistWarnings.length > 0) {
     warningNotes.push(sanitizeLines(emptyAllowlistWarnings));

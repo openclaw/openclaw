@@ -5,7 +5,7 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
-import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
+import { replaceConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
@@ -17,7 +17,7 @@ import {
 } from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
-import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
+import { channelLabel, requireValidConfigFileSnapshot, shouldUseWizard } from "./shared.js";
 
 export type ChannelsAddOptions = {
   channel?: string;
@@ -46,10 +46,12 @@ export async function channelsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
-  const cfg = await requireValidConfig(runtime);
-  if (!cfg) {
+  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!configSnapshot) {
     return;
   }
+  const cfg = (configSnapshot.sourceConfig ?? configSnapshot.config) as OpenClawConfig;
+  const baseHash = configSnapshot.hash;
   let nextConfig = cfg;
 
   const useWizard = shouldUseWizard(params);
@@ -177,7 +179,10 @@ export async function channelsAddCommand(
       }
     }
 
-    await writeConfigFile(nextConfig);
+    await replaceConfigFile({
+      nextConfig,
+      ...(baseHash !== undefined ? { baseHash } : {}),
+    });
     await runCollectedChannelOnboardingPostWriteHooks({
       hooks: postWriteHooks.drain(),
       cfg: nextConfig,
@@ -348,7 +353,10 @@ export async function channelsAddCommand(
     runtime,
   });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(baseHash !== undefined ? { baseHash } : {}),
+  });
   runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {

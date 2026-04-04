@@ -20,45 +20,6 @@ const cliMocks = vi.hoisted(() => ({
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
 
-describe("openshell plugin config", () => {
-  it("applies defaults", () => {
-    expect(resolveOpenShellPluginConfig(undefined)).toEqual({
-      mode: "mirror",
-      command: "openshell",
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      from: "openclaw",
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
-      remoteWorkspaceDir: "/sandbox",
-      remoteAgentWorkspaceDir: "/agent",
-      timeoutMs: 120_000,
-    });
-  });
-
-  it("accepts remote mode", () => {
-    expect(resolveOpenShellPluginConfig({ mode: "remote" }).mode).toBe("remote");
-  });
-
-  it("rejects relative remote paths", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "sandbox",
-      }),
-    ).toThrow("OpenShell remote path must be absolute");
-  });
-
-  it("rejects unknown mode", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        mode: "bogus",
-      }),
-    ).toThrow("mode must be one of mirror, remote");
-  });
-});
-
 describe("openshell cli helpers", () => {
   afterEach(() => {
     setBundledOpenShellCommandResolverForTest();
@@ -113,9 +74,8 @@ describe("openshell cli helpers", () => {
 
 describe("openshell backend manager", () => {
   beforeAll(async () => {
-    vi.resetModules();
-    vi.doMock("./cli.js", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("./cli.js")>();
+    vi.doMock("./cli.js", async () => {
+      const actual = await vi.importActual<typeof import("./cli.js")>("./cli.js");
       return {
         ...actual,
         runOpenShellCli: cliMocks.runOpenShellCli,
@@ -377,8 +337,8 @@ async function emulateRemoteShell(params: {
     }
 
     if (params.script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'")) {
-      await applyMutation(params.args, params.stdin);
-      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), code: 0 };
+      const stdout = (await applyMutation(params.args, params.stdin)) ?? Buffer.alloc(0);
+      return { stdout, stderr: Buffer.alloc(0), code: 0 };
     }
 
     throw new Error(`unsupported remote shell script: ${params.script}`);
@@ -436,8 +396,12 @@ async function isSymlink(target: string) {
   }
 }
 
-async function applyMutation(args: string[], stdin?: Buffer) {
+async function applyMutation(args: string[], stdin?: Buffer): Promise<Buffer | void> {
   const operation = args[0];
+  if (operation === "read") {
+    const [root, relativeParent, basename] = args.slice(1);
+    return await fs.readFile(path.join(root ?? "", relativeParent ?? "", basename ?? ""));
+  }
   if (operation === "write") {
     const [root, relativeParent, basename, mkdir] = args.slice(1);
     const parent = path.join(root ?? "", relativeParent ?? "");

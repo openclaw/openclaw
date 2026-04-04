@@ -204,9 +204,10 @@ export const ModelCompatSchema = z
     requiresToolResultName: z.boolean().optional(),
     requiresAssistantAfterToolResult: z.boolean().optional(),
     requiresThinkingAsText: z.boolean().optional(),
-    toolSchemaProfile: z.literal("xai").optional(),
+    toolSchemaProfile: z.string().optional(),
+    unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
     nativeWebSearchTool: z.boolean().optional(),
-    toolCallArgumentsEncoding: z.literal("html-entities").optional(),
+    toolCallArgumentsEncoding: z.string().optional(),
     requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
@@ -222,6 +223,72 @@ type _ModelCompatTypeAssignableToSchema = AssertAssignable<
   ModelCompatConfig | undefined,
   z.infer<typeof ModelCompatSchema>
 >;
+
+const ConfiguredProviderRequestTlsSchema = z
+  .object({
+    ca: SecretInputSchema.optional().register(sensitive),
+    cert: SecretInputSchema.optional().register(sensitive),
+    key: SecretInputSchema.optional().register(sensitive),
+    passphrase: SecretInputSchema.optional().register(sensitive),
+    serverName: z.string().optional(),
+    insecureSkipVerify: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
+const ConfiguredProviderRequestAuthSchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("provider-default"),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("authorization-bearer"),
+        token: SecretInputSchema.register(sensitive),
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("header"),
+        headerName: z.string().min(1),
+        value: SecretInputSchema.register(sensitive),
+        prefix: z.string().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestProxySchema = z
+  .union([
+    z
+      .object({
+        mode: z.literal("env-proxy"),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+    z
+      .object({
+        mode: z.literal("explicit-proxy"),
+        url: z.string().min(1),
+        tls: ConfiguredProviderRequestTlsSchema,
+      })
+      .strict(),
+  ])
+  .optional();
+
+const ConfiguredProviderRequestSchema = z
+  .object({
+    headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+    auth: ConfiguredProviderRequestAuthSchema,
+    proxy: ConfiguredProviderRequestProxySchema,
+    tls: ConfiguredProviderRequestTlsSchema,
+  })
+  .strict()
+  .optional();
+
+const ConfiguredModelProviderRequestSchema = ConfiguredProviderRequestSchema;
 
 export const ModelDefinitionSchema = z
   .object({
@@ -240,6 +307,7 @@ export const ModelDefinitionSchema = z
       .strict()
       .optional(),
     contextWindow: z.number().positive().optional(),
+    contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     headers: z.record(z.string(), z.string()).optional(),
     compat: ModelCompatSchema,
@@ -257,6 +325,7 @@ export const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
+    request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema),
   })
   .strict();
@@ -335,6 +404,7 @@ export const TypingModeSchema = z.union([
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+export const ContextVisibilityModeSchema = z.enum(["all", "allowlist", "allowlist_quote"]);
 
 export const BlockStreamingCoalesceSchema = z
   .object({
@@ -347,6 +417,7 @@ export const BlockStreamingCoalesceSchema = z
 export const ReplyRuntimeConfigSchemaShape = {
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  contextVisibility: ContextVisibilityModeSchema.optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
@@ -366,7 +437,7 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
-export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
+export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code", "block"]);
 
 export const MarkdownConfigSchema = z
   .object({
@@ -378,21 +449,20 @@ export const MarkdownConfigSchema = z
 export const TtsProviderSchema = z.string().min(1);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
-const TtsMicrosoftConfigSchema = z
+const TtsProviderConfigSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    voice: z.string().optional(),
-    lang: z.string().optional(),
-    outputFormat: z.string().optional(),
-    pitch: z.string().optional(),
-    rate: z.string().optional(),
-    volume: z.string().optional(),
-    saveSubtitles: z.boolean().optional(),
-    proxy: z.string().optional(),
-    timeoutMs: z.number().int().min(1000).max(120000).optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
   })
-  .strict()
-  .optional();
+  .catchall(
+    z.union([
+      z.string(),
+      z.number(),
+      z.boolean(),
+      z.null(),
+      z.array(z.unknown()),
+      z.record(z.string(), z.unknown()),
+    ]),
+  );
 export const TtsConfigSchema = z
   .object({
     auto: TtsAutoSchema.optional(),
@@ -413,41 +483,7 @@ export const TtsConfigSchema = z
       })
       .strict()
       .optional(),
-    elevenlabs: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        voiceId: z.string().optional(),
-        modelId: z.string().optional(),
-        seed: z.number().int().min(0).max(4294967295).optional(),
-        applyTextNormalization: z.enum(["auto", "on", "off"]).optional(),
-        languageCode: z.string().optional(),
-        voiceSettings: z
-          .object({
-            stability: z.number().min(0).max(1).optional(),
-            similarityBoost: z.number().min(0).max(1).optional(),
-            style: z.number().min(0).max(1).optional(),
-            useSpeakerBoost: z.boolean().optional(),
-            speed: z.number().min(0.5).max(2).optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
-    openai: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
-        model: z.string().optional(),
-        voice: z.string().optional(),
-        speed: z.number().min(0.25).max(4).optional(),
-        instructions: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    edge: TtsMicrosoftConfigSchema,
-    microsoft: TtsMicrosoftConfigSchema,
+    providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
@@ -679,6 +715,7 @@ const MediaUnderstandingRuntimeFields = {
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  request: ConfiguredProviderRequestSchema,
 };
 
 export const MediaUnderstandingModelSchema = z

@@ -1,5 +1,4 @@
 import { Routes } from "discord-api-types/v10";
-import { getRuntimeConfigSnapshot, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
@@ -9,6 +8,10 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import {
+  getRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createDiscordRestClient } from "../client.js";
 import {

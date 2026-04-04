@@ -165,7 +165,7 @@ flowchart TD
 
     Common log signatures:
 
-    - `Gateway start blocked: set gateway.mode=local` → gateway mode is unset/remote.
+    - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → gateway mode is remote, or the config file is missing the local-mode stamp and should be repaired.
     - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
@@ -231,7 +231,7 @@ flowchart TD
     Deep pages:
 
     - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-    - [/automation/troubleshooting](/automation/troubleshooting)
+    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
     - [/gateway/heartbeat](/gateway/heartbeat)
 
   </Accordion>
@@ -266,6 +266,52 @@ flowchart TD
 
   </Accordion>
 
+  <Accordion title="Exec suddenly asks for approval">
+    ```bash
+    openclaw config get tools.exec.host
+    openclaw config get tools.exec.security
+    openclaw config get tools.exec.ask
+    openclaw gateway restart
+    ```
+
+    What changed:
+
+    - If `tools.exec.host` is unset, the default is `auto`.
+    - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
+    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
+    - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
+    - Unset `tools.exec.ask` defaults to `off`.
+    - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
+
+    Restore current default no-approval behavior:
+
+    ```bash
+    openclaw config set tools.exec.host gateway
+    openclaw config set tools.exec.security full
+    openclaw config set tools.exec.ask off
+    openclaw gateway restart
+    ```
+
+    Safer alternatives:
+
+    - Set only `tools.exec.host=gateway` if you just want stable host routing.
+    - Use `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
+    - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
+
+    Common log signatures:
+
+    - `Approval required.` → command is waiting on `/approve ...`.
+    - `SYSTEM_RUN_DENIED: approval required` → node-host exec approval is pending.
+    - `exec host=sandbox requires a sandbox runtime for this session` → implicit/explicit sandbox selection but sandbox mode is off.
+
+    Deep pages:
+
+    - [/tools/exec](/tools/exec)
+    - [/tools/exec-approvals](/tools/exec-approvals)
+    - [/gateway/security#runtime-expectation-drift](/gateway/security#runtime-expectation-drift)
+
+  </Accordion>
+
   <Accordion title="Browser tool fails">
     ```bash
     openclaw status
@@ -282,6 +328,7 @@ flowchart TD
 
     Common log signatures:
 
+    - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
     - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
@@ -290,8 +337,17 @@ flowchart TD
     Deep pages:
 
     - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
+    - [/tools/browser#missing-browser-command-or-tool](/tools/browser#missing-browser-command-or-tool)
     - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
     - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [FAQ](/help/faq) — frequently asked questions
+- [Gateway Troubleshooting](/gateway/troubleshooting) — gateway-specific issues
+- [Doctor](/gateway/doctor) — automated health checks and repairs
+- [Channel Troubleshooting](/channels/troubleshooting) — channel connectivity issues
+- [Automation Troubleshooting](/automation/cron-jobs#troubleshooting) — cron and heartbeat issues
