@@ -240,27 +240,56 @@ type CachedSkillEntry = {
   skillDir: string;
   source: string;
   skillMdPath: string;
+  skillMdRealPath: string;
   mtimeMs: number;
   size: number;
   skills: Skill[];
+  lastAccessedAt: number;
 };
 
 const skillCache = new Map<string, CachedSkillEntry>();
 
+const SKILL_CACHE_TTL_MS = 30 * 60 * 1000; // 30 min
+const MAX_GLOBAL_SKILL_CACHE_ENTRIES = 1000;
 
 function getSkillKey(dir: string, source: string) {
   return `${source}::${path.resolve(dir)}`;
 }
 
-
 function isUnderBaseDir(skillDir: string, baseDir: string): boolean {
-  return skillDir === baseDir || skillDir.startsWith(baseDir + path.sep);
+  const resolvedSkillDir = path.resolve(skillDir);
+  const resolvedBaseDir = path.resolve(baseDir);
+  return (
+    resolvedSkillDir === resolvedBaseDir ||
+    resolvedSkillDir.startsWith(resolvedBaseDir + path.sep)
+  );
+}
+
+function pruneGlobalSkillCache(now = Date.now()): void {
+  for (const [key, value] of skillCache.entries()) {
+    if (now - value.lastAccessedAt > SKILL_CACHE_TTL_MS) {
+      skillCache.delete(key);
+    }
+  }
+
+  if (skillCache.size <= MAX_GLOBAL_SKILL_CACHE_ENTRIES) {
+    return;
+  }
+
+  const entriesByAge = Array.from(skillCache.entries()).sort(
+    (a, b) => a[1].lastAccessedAt - b[1].lastAccessedAt,
+  );
+
+  const overflow = skillCache.size - MAX_GLOBAL_SKILL_CACHE_ENTRIES;
+  for (let i = 0; i < overflow; i++) {
+    skillCache.delete(entriesByAge[i][0]);
+  }
 }
 
 function pruneStaleSkillCache(
   source: string,
   baseDir: string,
-  seenKeys: Set<string>
+  seenKeys: Set<string>,
 ) {
   for (const [key, value] of skillCache.entries()) {
     const isSameSource = value.source === source;
@@ -299,11 +328,15 @@ export function loadSkillsFromCache(params: {
   source: string;
   limits: ResolvedSkillsLimits;
 }): Skill[] {
+  pruneGlobalSkillCache();
+
   const rootDir = path.resolve(params.dir);
   const rootRealPath = tryRealpath(rootDir) ?? rootDir;
+
   const resolved = resolveNestedSkillsRoot(params.dir, {
     maxEntriesToScan: params.limits.maxCandidatesPerRoot,
   });
+
   const baseDir = resolved.baseDir;
   const baseDirRealPath = resolveContainedSkillPath({
     source: params.source,
@@ -318,8 +351,8 @@ export function loadSkillsFromCache(params: {
   const rootSkillMd = path.join(baseDir, "SKILL.md");
   const seenKeys = new Set<string>();
 
-  // Root skills are not cached to avoid stale results, 
-  // as changes in child skill files are not reflected 
+  // Root skills are not cached to avoid stale results,
+  // as changes in child skill files are not reflected
   // in the root SKILL.md metadata used for cache invalidation.
   if (fs.existsSync(rootSkillMd)) {
     const rootSkillRealPath = resolveContainedSkillPath({
@@ -343,8 +376,6 @@ export function loadSkillsFromCache(params: {
         });
         return [];
       }
-
-      const stat = fs.statSync(rootSkillMd);
 
       const loaded = loadSkillsFromDirSafe({
         dir: baseDir,
@@ -389,6 +420,7 @@ export function loadSkillsFromCache(params: {
   }
 
   const loadedSkills: Skill[] = [];
+  const now = Date.now();
 
   // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
   for (const name of limitedChildren) {
@@ -435,43 +467,66 @@ export function loadSkillsFromCache(params: {
       seenKeys.add(skillKey);
 
       const cached = skillCache.get(skillKey);
+      const cacheUsable =
+        cached &&
+        cached.mtimeMs === stat.mtimeMs &&
+        cached.size === stat.size &&
+        cached.skillMdPath === skillMd &&
+        cached.skillMdRealPath === skillMdRealPath;
 
-      if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-        loadedSkills.push(...cached.skills);
-
-        if (loadedSkills.length >= params.limits.maxSkillsLoadedPerSource) {
-          break;
-        }
-      } else {
-        const loaded = loadSkillsFromDirSafe({
-          dir: skillDir,
-          source: params.source,
-          maxBytes: params.limits.maxSkillFileBytes,
-        });
-
-        const filteredSkills = filterLoadedSkillsInsideRoot({
-          skills: unwrapLoadedSkills(loaded),
+      if (cacheUsable) {
+        // Revalidate SKILL.md path before serving cached entries so the
+        // cache-hit path preserves the same safety guarantees as the miss path.
+        const revalidatedSkillMdRealPath = resolveContainedSkillPath({
           source: params.source,
           rootDir,
           rootRealPath: baseDirRealPath,
+          candidatePath: skillMd,
         });
 
-        if (filteredSkills.length > 0) {
-          skillCache.set(skillKey, {
-            skillDir,
-            source: params.source,
-            skillMdPath: skillMd,
-            mtimeMs: stat.mtimeMs,
-            size: stat.size,
-            skills: filteredSkills,
-          });
-        }
+        if (revalidatedSkillMdRealPath && revalidatedSkillMdRealPath === cached.skillMdRealPath) {
+          cached.lastAccessedAt = now;
+          loadedSkills.push(...cached.skills);
 
-        loadedSkills.push(...filteredSkills);
-
-        if (loadedSkills.length >= params.limits.maxSkillsLoadedPerSource) {
-          break;
+          if (loadedSkills.length >= params.limits.maxSkillsLoadedPerSource) {
+            break;
+          }
+          continue;
         }
+      }
+
+      const loaded = loadSkillsFromDirSafe({
+        dir: skillDir,
+        source: params.source,
+        maxBytes: params.limits.maxSkillFileBytes,
+      });
+
+      const filteredSkills = filterLoadedSkillsInsideRoot({
+        skills: unwrapLoadedSkills(loaded),
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+      });
+
+      if (filteredSkills.length > 0) {
+        skillCache.set(skillKey, {
+          skillDir,
+          source: params.source,
+          skillMdPath: skillMd,
+          skillMdRealPath,
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          skills: filteredSkills,
+          lastAccessedAt: now,
+        });
+      } else {
+        skillCache.delete(skillKey);
+      }
+
+      loadedSkills.push(...filteredSkills);
+
+      if (loadedSkills.length >= params.limits.maxSkillsLoadedPerSource) {
+        break;
       }
     } catch {
       continue;
