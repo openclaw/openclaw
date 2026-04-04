@@ -1,5 +1,5 @@
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { resolveDefaultModelForAgent, resolvePersistedModelRef } from "./model-selection.js";
 import {
   consumeEmbeddedRunModelSwitch,
   requestEmbeddedRunModelSwitch,

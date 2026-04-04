@@ -11,6 +11,19 @@ import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+function createCliBackendTestConfig() {
+  return {
+    agents: {
+      defaults: {
+        cliBackends: {
+          "claude-cli": {},
+          "google-gemini-cli": {},
+        },
+      },
+    },
+  };
+}
+
 const runEmbeddedPiAgentMock = vi.fn();
 const runCliAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
