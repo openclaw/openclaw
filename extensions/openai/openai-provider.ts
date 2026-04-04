@@ -256,7 +256,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         ...(hasExplicitWarmup ? {} : { openaiWsWarmup: true }),
       };
     },
-    wrapStreamFn: (ctx) => OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn?.(ctx),
+    ...OPENAI_RESPONSES_STREAM_HOOKS,
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
