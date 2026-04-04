@@ -543,7 +543,7 @@ function resolveHeartbeatRunPrompt(params: {
       isTaskDue(
         (params.preflight.session.entry?.heartbeatTaskState as Record<string, number>)?.[task.name],
         task.interval,
-        startedAt,
+        params.startedAt,
       ),
     );
 
@@ -715,13 +715,12 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "no-tasks-due" };
   }
 
-  // Track if heartbeat completed successfully (for updating task timestamps)
-  let heartbeatSuccess = false;
-
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
-    if (!preflight.tasks || preflight.tasks.length === 0) return;
-    
+    if (!preflight.tasks || preflight.tasks.length === 0) {
+      return;
+    }
+
     const store = loadSessionStore(storePath);
     const current = store[sessionKey];
     // Initialize stub entry on first run when current doesn't exist
@@ -731,16 +730,16 @@ export async function runHeartbeatOnce(opts: {
       createdAt: startedAt,
       messageCount: 0,
       lastMessageAt: startedAt,
-      heartbeatTaskState: {}
+      heartbeatTaskState: {},
     };
-    const taskState = { ...((base.heartbeatTaskState as Record<string, number>) || {}) };
-    
+    const taskState = { ...base.heartbeatTaskState };
+
     for (const task of preflight.tasks) {
       if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
         taskState[task.name] = startedAt;
       }
     }
-    
+
     store[sessionKey] = { ...base, heartbeatTaskState: taskState };
     await saveSessionStore(storePath, store);
   };
@@ -853,7 +852,6 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
-      heartbeatSuccess = true;
       await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -891,7 +889,6 @@ export async function runHeartbeatOnce(opts: {
         silent: !okSent,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
-      heartbeatSuccess = true;
       await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -929,7 +926,6 @@ export async function runHeartbeatOnce(opts: {
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         accountId: delivery.accountId,
       });
-      heartbeatSuccess = true;
       await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -951,13 +947,11 @@ export async function runHeartbeatOnce(opts: {
         hasMedia: mediaUrls.length > 0,
         accountId: delivery.accountId,
       });
-      heartbeatSuccess = true;
       await updateTaskTimestamps();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
     if (!visibility.showAlerts) {
-      heartbeatSuccess = true;
       await updateTaskTimestamps();
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -1048,7 +1042,6 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
-    heartbeatSuccess = true;
     await updateTaskTimestamps();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
