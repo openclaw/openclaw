@@ -88,6 +88,46 @@ describe("checkBrowserOrigin", () => {
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
+    {
+      name: "accepts loopback origin from loopback socket even when not local client (proxy headers present)",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "http://localhost:5173",
+        isLocalClient: false,
+        isLoopbackSocket: true,
+      },
+      expected: { ok: true as const, matchedBy: "loopback-socket" as const },
+    },
+    {
+      name: "accepts loopback origin from loopback socket with local client",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "http://127.0.0.1:5173",
+        isLocalClient: true,
+        isLoopbackSocket: true,
+      },
+      expected: { ok: true as const, matchedBy: "local-loopback" as const },
+    },
+    {
+      name: "rejects loopback origin from non-loopback socket",
+      input: {
+        requestHost: "192.168.1.1:18789",
+        origin: "http://localhost:5173",
+        isLocalClient: false,
+        isLoopbackSocket: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "rejects non-loopback origin even from loopback socket",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "https://attacker.example.com",
+        isLocalClient: false,
+        isLoopbackSocket: true,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
   ])("$name", ({ input, expected }) => {
     expect(checkBrowserOrigin(input)).toEqual(expected);
   });

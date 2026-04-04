@@ -412,6 +412,7 @@ export function attachGatewayWsMessageHandler(params: {
             allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
             allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
             isLocalClient,
+            isLoopbackSocket: isLoopbackAddress(remoteAddr),
           });
           if (!originCheck.ok) {
             const errorMessage =
