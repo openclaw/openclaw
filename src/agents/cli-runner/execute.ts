@@ -279,7 +279,7 @@ export async function executePreparedCliRun(
           });
         }
         const err = stderr || stdout || "CLI failed.";
-        const reason = classifyFailoverReason(err) ?? "unknown";
+        const reason = classifyFailoverReason(err, { provider: params.provider }) ?? "unknown";
         const status = resolveFailoverStatus(reason);
         throw new FailoverError(err, {
           reason,

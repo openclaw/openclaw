@@ -7,6 +7,7 @@ const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const XAI_BASE_URL = "https://api.x.ai/v1";
 const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_GEMINI_CLI_BASE_URL = "https://cloudcode-pa.googleapis.com";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -353,6 +354,32 @@ function buildDynamicModel(
         },
       );
     }
+    case "google-antigravity": {
+      if (lower !== "claude-opus-4-6-thinking") {
+        return undefined;
+      }
+      return cloneTemplate(
+        undefined,
+        modelId,
+        {
+          provider: "google-antigravity",
+          api: "google-gemini-cli",
+          baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
+          reasoning: true,
+          input: ["text", "image"],
+        },
+        {
+          provider: "google-antigravity",
+          api: "google-gemini-cli",
+          baseUrl: GOOGLE_GEMINI_CLI_BASE_URL,
+          reasoning: true,
+          input: ["text", "image"],
+          cost: OPENROUTER_FALLBACK_COST,
+          contextWindow: DEFAULT_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_MAX_TOKENS,
+        },
+      );
+    }
     case "zai": {
       if (lower !== "glm-5") {
         return undefined;
@@ -393,6 +420,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       "openai",
       "xai",
       "anthropic",
+      "google-antigravity",
       "zai",
     ],
   );

@@ -775,9 +775,9 @@ api.registerProvider({
   scoped to Claude ids instead of every `anthropic-messages` transport.
 - Amazon Bedrock uses `buildReplayPolicy`, `matchesContextOverflowError`,
   `classifyFailoverReason`, and `resolveDefaultThinkingLevel` because it owns
-  Bedrock-specific replay policy plus throttle/not-ready/context-overflow
-  error classification for Anthropic-on-Bedrock traffic; its replay policy
-  shares the same Claude-only `anthropic-by-model` guard.
+  Bedrock-specific throttle/not-ready/context-overflow error classification
+  for Anthropic-on-Bedrock traffic; its replay policy still shares the same
+  Claude-only `anthropic-by-model` guard.
 - OpenRouter, Kilocode, Opencode, and Opencode Go use `buildReplayPolicy`
   through the `passthrough-gemini` replay family because they proxy Gemini
   models through OpenAI-compatible transports and need Gemini
@@ -796,13 +796,24 @@ api.registerProvider({
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
   `isCacheTtlEligible` because it needs provider-owned request headers,
   reasoning payload normalization, Gemini transcript hints, and Anthropic
-  cache-TTL gating.
+  cache-TTL gating; the `kilocode-thinking` stream family keeps Kilo thinking
+  injection on the shared proxy stream path while skipping `kilo/auto` and
+  other proxy model ids that do not support explicit reasoning payloads.
 - Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
   `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
   `tool_stream` defaults, binary thinking UX, modern-model matching, and both
   usage auth + quota fetching; the `tool-stream-default-on` stream family keeps
   the default-on `tool_stream` wrapper out of per-provider handwritten glue.
+- xAI uses `normalizeResolvedModel`, `normalizeTransport`,
+  `contributeResolvedModelCompat`, `prepareExtraParams`, `wrapStreamFn`,
+  `resolveSyntheticAuth`, `resolveDynamicModel`, and `isModernModelRef`
+  because it owns native xAI Responses transport normalization, Grok fast-mode
+  alias rewrites, default `tool_stream`, strict-tool / reasoning-payload
+  cleanup, fallback auth reuse for plugin-owned tools, forward-compat Grok
+  model resolution, and provider-owned compat patches such as xAI tool-schema
+  profile, unsupported schema keywords, native `web_search`, and HTML-entity
+  tool-call argument decoding.
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
@@ -1034,7 +1045,12 @@ authoring plugins:
 
 - `openclaw/plugin-sdk/plugin-entry` for plugin registration primitives.
 - `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
+- `openclaw/plugin-sdk/config-schema` for the root `openclaw.json` Zod schema
+  export (`OpenClawSchema`).
 - Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
+  `openclaw/plugin-sdk/setup-runtime`,
+  `openclaw/plugin-sdk/setup-adapter-runtime`,
+  `openclaw/plugin-sdk/setup-tools`,
   `openclaw/plugin-sdk/channel-pairing`,
   `openclaw/plugin-sdk/channel-contract`,
   `openclaw/plugin-sdk/channel-feedback`,
@@ -1046,9 +1062,17 @@ authoring plugins:
   `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
   wiring. `channel-inbound` is the shared home for debounce, mention matching,
   envelope formatting, and inbound envelope context helpers.
+  `channel-setup` is the narrow optional-install setup seam.
+  `setup-runtime` is the runtime-safe setup surface used by `setupEntry` /
+  deferred startup.
+  `setup-adapter-runtime` is the env-aware account-setup adapter seam.
+  `setup-tools` is the small CLI/archive/docs helper seam (`formatCliCommand`,
+  `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`,
+  `CONFIG_DIR`).
 - Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
   `openclaw/plugin-sdk/allow-from`,
   `openclaw/plugin-sdk/channel-config-schema`,
+  `openclaw/plugin-sdk/telegram-command-config`,
   `openclaw/plugin-sdk/channel-policy`,
   `openclaw/plugin-sdk/approval-runtime`,
   `openclaw/plugin-sdk/config-runtime`,
@@ -1060,6 +1084,9 @@ authoring plugins:
   `openclaw/plugin-sdk/status-helpers`,
   `openclaw/plugin-sdk/runtime-store`, and
   `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
+  `telegram-command-config` is the narrow public seam for Telegram custom
+  command normalization/validation and stays available even if the bundled
+  Telegram contract surface is temporarily unavailable.
 - Approval-specific channel seams should prefer one `approvalCapability`
   contract on the plugin. Core then reads approval auth, delivery, render, and
   native-routing behavior through that one capability instead of mixing
@@ -1292,6 +1319,21 @@ must register every channel-owned capability that startup depends on, such as:
 If your full entry still owns any required startup capability, do not enable
 this flag. Keep the plugin on the default behavior and let OpenClaw load the
 full entry during startup.
+
+Bundled channels can also publish setup-only contract-surface helpers that core
+can consult before the full channel runtime is loaded. The current setup
+promotion surface is:
+
+- `singleAccountKeysToMove`
+- `namedAccountPromotionKeys`
+- `resolveSingleAccountPromotionTarget(...)`
+
+Core uses that surface when it needs to promote a legacy single-account channel
+config into `channels.<id>.accounts.*` without loading the full plugin entry.
+Matrix is the current bundled example: it moves only auth/bootstrap keys into a
+named promoted account when named accounts already exist, and it can preserve a
+configured non-canonical default-account key instead of always creating
+`accounts.default`.
 
 When those startup surfaces include gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,

@@ -6,7 +6,6 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  CLAUDE_CLI_PROFILE_ID,
   applyAuthProfileConfig,
   ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
@@ -16,20 +15,15 @@ import {
   type ProviderAuthResult,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
-import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfig,
 } from "./config-defaults.js";
-import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
-import {
-  wrapAnthropicProviderStream,
-} from "./stream-wrappers.js";
+import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
@@ -207,13 +201,61 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
 }
 
 export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<void> {
-  api.registerCliBackend(buildAnthropicCliBackend());
+  const claudeCliProfileId = "anthropic:claude-cli";
+  const providerId = "anthropic";
+  const defaultAnthropicModel = "anthropic/claude-sonnet-4-6";
+  const anthropicOauthAllowlist = [
+    "anthropic/claude-sonnet-4-6",
+    "anthropic/claude-opus-4-6",
+    "anthropic/claude-opus-4-5",
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-haiku-4-5",
+  ] as const;
+  let createApiKeyAuthMethod:
+    | (typeof import("openclaw/plugin-sdk/provider-auth-api-key"))["createProviderApiKeyAuthMethod"]
+    | undefined;
+  let mediaUnderstandingProvider:
+    | (typeof import("./media-understanding-provider.js"))["anthropicMediaUnderstandingProvider"]
+    | undefined;
+
+  // Avoid touching a partially initialized static binding during cyclic bootstrap.
+  try {
+    const cliBackendModule = await import("./cli-backend.js");
+    const cliBackend =
+      typeof cliBackendModule.buildAnthropicCliBackend === "function"
+        ? cliBackendModule.buildAnthropicCliBackend()
+        : undefined;
+    if (cliBackend) {
+      api.registerCliBackend(cliBackend);
+    }
+  } catch {
+    // Best-effort during test bootstrap; provider registration still proceeds.
+  }
+  try {
+    const providerApiKeyAuthModule = await import("openclaw/plugin-sdk/provider-auth-api-key");
+    createApiKeyAuthMethod =
+      typeof providerApiKeyAuthModule.createProviderApiKeyAuthMethod === "function"
+        ? providerApiKeyAuthModule.createProviderApiKeyAuthMethod
+        : undefined;
+  } catch {
+    createApiKeyAuthMethod = undefined;
+  }
+  if (!createApiKeyAuthMethod) {
+    return;
+  }
+  try {
+    const mediaUnderstandingModule = await import("./media-understanding-provider.js");
+    mediaUnderstandingProvider =
+      mediaUnderstandingModule.anthropicMediaUnderstandingProvider ?? undefined;
+  } catch {
+    mediaUnderstandingProvider = undefined;
+  }
   api.registerProvider({
-    id: PROVIDER_ID,
+    id: providerId,
     label: "Anthropic",
     docsPath: "/providers/models",
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
-    deprecatedProfileIds: [CLAUDE_CLI_PROFILE_ID],
+    deprecatedProfileIds: [claudeCliProfileId],
     oauthProfileIdRepairs: [
       {
         legacyProfileId: "anthropic:default",
@@ -235,7 +277,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
           groupLabel: "Anthropic",
           groupHint: "Claude CLI + API key",
           modelAllowlist: {
-            allowedKeys: [...ANTHROPIC_OAUTH_ALLOWLIST].map((model) =>
+            allowedKeys: [...anthropicOauthAllowlist].map((model) =>
               model.replace(/^anthropic\//, "claude-cli/"),
             ),
             initialSelections: ["claude-cli/claude-sonnet-4-6"],
@@ -249,8 +291,8 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
             runtime: ctx.runtime,
           }),
       },
-      createProviderApiKeyAuthMethod({
-        providerId: PROVIDER_ID,
+      createApiKeyAuthMethod({
+        providerId,
         methodId: "api-key",
         label: "Anthropic API key",
         hint: "Direct Anthropic API key",
@@ -258,7 +300,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
         flagName: "--anthropic-api-key",
         envVar: "ANTHROPIC_API_KEY",
         promptMessage: "Enter Anthropic API key",
-        defaultModel: DEFAULT_ANTHROPIC_MODEL,
+        defaultModel: defaultAnthropicModel,
         expectedProviders: ["anthropic"],
         wizard: {
           choiceId: "apiKey",
@@ -272,10 +314,10 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
     normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
-    buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
+    buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
-    wrapStreamFn: (ctx) => wrapAnthropicProviderStream(ctx),
+    wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
       matchesAnthropicModernModel(modelId) &&
       (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
@@ -295,5 +337,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
         profileId: ctx.profileId,
       }),
   });
-  api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
+  if (mediaUnderstandingProvider) {
+    api.registerMediaUnderstandingProvider(mediaUnderstandingProvider);
+  }
 }

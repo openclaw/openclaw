@@ -61,8 +61,10 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 **Notes:**
 
-- Local connections (`127.0.0.1`) are auto-approved.
-- Remote connections (LAN, Tailnet, etc.) require explicit approval.
+- Direct local loopback browser connections (`127.0.0.1` / `localhost`) are
+  auto-approved.
+- Tailnet and LAN browser connects still require explicit approval, even when
+  they originate from the same machine.
 - Each browser profile generates a unique device ID, so switching browsers or
   clearing browser data will require re-pairing.
 
@@ -79,7 +81,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
+- Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
@@ -146,6 +148,10 @@ request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
 `gateway.auth.allowTailscale: false` if you want to require explicit shared-secret
 credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or
 `"password"`.
+For that async Serve identity path, failed auth attempts for the same client IP
+and auth scope are serialized before rate-limit writes. Concurrent bad retries
+from the same browser can therefore show `retry later` on the second request
+instead of two plain mismatches racing in parallel.
 Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
 code may run on that host, require token/password auth.
 
