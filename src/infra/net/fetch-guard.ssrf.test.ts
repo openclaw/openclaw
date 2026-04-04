@@ -29,6 +29,11 @@ function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
   return new Headers(secondInit.headers);
 }
 
+function getSecondRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
+  const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+  return secondInit;
+}
+
 async function expectRedirectFailure(params: {
   url: string;
   responses: Response[];
@@ -159,6 +164,52 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("blocks explicit proxies that resolve to private hosts by default", async () => {
+    const lookupFn = vi.fn(async (hostname: string) => [
+      {
+        address: hostname === "proxy.internal" ? "127.0.0.1" : "93.184.216.34",
+        family: 4,
+      },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn();
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn,
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://proxy.internal:7890",
+        },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit private proxies only when the SSRF policy allows private network access", async () => {
+    const lookupFn = vi.fn(async (hostname: string) => [
+      {
+        address: hostname === "proxy.internal" ? "127.0.0.1" : "93.184.216.34",
+        family: 4,
+      },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      policy: { allowPrivateNetwork: true },
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.internal:7890",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
   it("blocks redirect chains that hop to private hosts", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = await expectRedirectFailure({
@@ -246,6 +297,173 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("rewrites POST redirects to GET and clears the body for cross-origin 302 responses", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example.com/collect"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/login",
+      fetchImpl,
+      lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": "19",
+        },
+        body: "password=hunter2",
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("GET");
+    expect(secondInit.body).toBeUndefined();
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBeNull();
+    expect(headers.get("content-length")).toBeNull();
+    await result.release();
+  });
+
+  it("rewrites same-origin 302 POST redirects to GET and preserves auth headers", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://api.example.com/next"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/login",
+      fetchImpl,
+      lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": "19",
+        },
+        body: "password=hunter2",
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("GET");
+    expect(secondInit.body).toBeUndefined();
+    expect(headers.get("authorization")).toBe("Bearer secret");
+    expect(headers.get("content-type")).toBeNull();
+    expect(headers.get("content-length")).toBeNull();
+    await result.release();
+  });
+
+  it("rewrites 303 redirects to GET and clears the body", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 303,
+          headers: { location: "https://api.example.com/final" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn,
+      init: {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": "17",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("GET");
+    expect(secondInit.body).toBeUndefined();
+    expect(headers.get("content-type")).toBeNull();
+    expect(headers.get("content-length")).toBeNull();
+    await result.release();
+  });
+
+  it("preserves method and body for 307 redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 307,
+          headers: { location: "https://api.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBe('{"secret":"123"}');
+    expect(headers.get("content-type")).toBe("application/json");
+    await result.release();
+  });
+
+  it("preserves body while stripping auth headers for cross-origin 307 redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 307,
+          headers: { location: "https://cdn.example.com/upload-2" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/upload",
+      fetchImpl,
+      lookupFn,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer secret",
+          "Content-Type": "application/json",
+        },
+        body: '{"secret":"123"}',
+      },
+    });
+
+    const secondInit = getSecondRequestInit(fetchImpl);
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(secondInit.method).toBe("POST");
+    expect(secondInit.body).toBe('{"secret":"123"}');
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBe("application/json");
+    await result.release();
+  });
+
   it("keeps the exported redirect-header helper functional", () => {
     const headers = retainSafeHeadersForCrossOriginRedirectHeaders({
       Authorization: "Bearer secret",
@@ -315,6 +533,18 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectedError,
       lookupFn: createPublicLookup(),
       maxRedirects,
+    });
+  });
+
+  it("rejects redirect loops that return to the original URL", async () => {
+    await expectRedirectFailure({
+      url: "https://public.example/start",
+      responses: [
+        redirectResponse("https://public.example/next"),
+        redirectResponse("https://public.example/start"),
+      ],
+      expectedError: /redirect loop/i,
+      lookupFn: createPublicLookup(),
     });
   });
 

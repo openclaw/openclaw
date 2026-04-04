@@ -27,6 +27,10 @@ import {
   resolveXaiInlineCitations,
   resolveXaiWebSearchModel,
 } from "./src/web-search-shared.js";
+import {
+  resolveEffectiveXSearchConfig,
+  setPluginXSearchConfigValue,
+} from "./src/x-search-config.js";
 import { XAI_DEFAULT_X_SEARCH_MODEL } from "./src/x-search-shared.js";
 
 const XAI_WEB_SEARCH_CACHE = new Map<
@@ -50,28 +54,7 @@ const X_SEARCH_MODEL_OPTIONS = [
 function resolveXSearchConfigRecord(
   config?: WebSearchProviderSetupContext["config"],
 ): Record<string, unknown> | undefined {
-  const xSearch = config?.tools?.web?.x_search;
-  return xSearch && typeof xSearch === "object" ? (xSearch as Record<string, unknown>) : undefined;
-}
-
-function applyXSearchSetupConfig(
-  config: WebSearchProviderSetupContext["config"],
-  params: { enabled: boolean; model: string },
-): WebSearchProviderSetupContext["config"] {
-  return {
-    ...config,
-    tools: {
-      ...config.tools,
-      web: {
-        ...config.tools?.web,
-        x_search: {
-          ...config.tools?.web?.x_search,
-          enabled: params.enabled,
-          model: params.model,
-        },
-      },
-    },
-  };
+  return resolveEffectiveXSearchConfig(config);
 }
 
 async function runXaiSearchProviderSetup(
@@ -136,10 +119,10 @@ async function runXaiSearchProviderSetup(
     model = customModel.trim() || XAI_DEFAULT_X_SEARCH_MODEL;
   }
 
-  return applyXSearchSetupConfig(ctx.config, {
-    enabled: true,
-    model: model || XAI_DEFAULT_X_SEARCH_MODEL,
-  });
+  const next = structuredClone(ctx.config);
+  setPluginXSearchConfigValue(next, "enabled", true);
+  setPluginXSearchConfigValue(next, "model", model || XAI_DEFAULT_X_SEARCH_MODEL);
+  return next;
 }
 
 function runXaiWebSearch(params: {

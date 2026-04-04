@@ -7,7 +7,7 @@ summary: Chrome 扩展：让 OpenClaw 驱动你现有的 Chrome 标签页
 title: Chrome 扩展
 x-i18n:
   generated_at: "2026-02-03T07:55:32Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3b77bdad7d3dab6adb76ff25b144412d6b54b915993b1c1f057f36dea149938b
   source_path: tools/chrome-extension.md

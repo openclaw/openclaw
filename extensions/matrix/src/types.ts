@@ -1,5 +1,11 @@
-import type { DmPolicy, GroupPolicy, OpenClawConfig, SecretInput } from "./runtime-api.js";
-export type { DmPolicy, GroupPolicy };
+import type {
+  ContextVisibilityMode,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  SecretInput,
+} from "./runtime-api.js";
+export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";
 
@@ -17,10 +23,8 @@ export type MatrixDmConfig = {
 export type MatrixRoomConfig = {
   /** Restrict this room entry to a specific Matrix account in multi-account setups. */
   account?: string;
-  /** If false, disable the bot in this room (alias for allow: false). */
+  /** If false, disable the bot in this room. */
   enabled?: boolean;
-  /** Legacy room allow toggle; prefer enabled. */
-  allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
   /**
@@ -56,6 +60,21 @@ export type MatrixThreadBindingsConfig = {
   maxAgeHours?: number;
   spawnSubagentSessions?: boolean;
   spawnAcpSessions?: boolean;
+};
+
+export type MatrixExecApprovalTarget = "dm" | "channel" | "both";
+
+export type MatrixExecApprovalConfig = {
+  /** If true, deliver exec approvals through Matrix-native prompts. */
+  enabled?: boolean;
+  /** Optional approver Matrix user IDs. Falls back to dm.allowFrom. */
+  approvers?: Array<string | number>;
+  /** Optional agent allowlist for approval delivery. */
+  agentFilter?: string[];
+  /** Optional session allowlist for approval delivery. */
+  sessionFilter?: string[];
+  /** Where approval prompts should go. Default: dm. */
+  target?: MatrixExecApprovalTarget;
 };
 
 /** Per-account Matrix config (excludes the accounts field to prevent recursion). */
@@ -101,6 +120,8 @@ export type MatrixConfig = {
   allowBots?: boolean | "mentions";
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /**
    * Enable shared block-streaming replies for Matrix.
    *
@@ -146,6 +167,8 @@ export type MatrixConfig = {
   autoJoinAllowlist?: Array<string | number>;
   /** Direct message policy + allowlist overrides. */
   dm?: MatrixDmConfig;
+  /** Matrix-native exec approval delivery config. */
+  execApprovals?: MatrixExecApprovalConfig;
   /** Room config allowlist keyed by room ID or alias (names resolved to IDs when possible). */
   groups?: Record<string, MatrixRoomConfig>;
   /** Room config allowlist keyed by room ID or alias. Legacy; use groups. */
@@ -172,6 +195,7 @@ export type CoreConfig = {
     matrix?: MatrixConfig;
     defaults?: {
       groupPolicy?: "open" | "allowlist" | "disabled";
+      contextVisibility?: ContextVisibilityMode;
     };
   };
   commands?: {

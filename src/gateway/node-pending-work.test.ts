@@ -64,4 +64,21 @@ describe("node pending work", () => {
     expect(acked).toEqual({ revision: 0, removedItemIds: [] });
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
+
+  it("prunes the state entry once all explicit items are acknowledged", () => {
+    const { item } = enqueueNodePendingWork({ nodeId: "node-5", type: "status.request" });
+    expect(getNodePendingWorkStateCountForTests()).toBe(1);
+
+    acknowledgeNodePendingWork({ nodeId: "node-5", itemIds: [item.id] });
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
+  it("prunes the state entry when all items expire naturally via drain", () => {
+    enqueueNodePendingWork({ nodeId: "node-6", type: "location.request", expiresInMs: 5_000 });
+    expect(getNodePendingWorkStateCountForTests()).toBe(1);
+
+    // Drain well after the item has expired (Date.now() + 60s > enqueue time + 5s)
+    drainNodePendingWork("node-6", { nowMs: Date.now() + 60_000 });
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
 });

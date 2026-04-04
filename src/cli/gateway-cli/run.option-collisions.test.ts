@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
@@ -19,9 +20,13 @@ const ensureDevGatewayConfig = vi.fn(async (_opts?: unknown) => {});
 const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }) => {
   await start();
 });
+const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { exists: false } as Record<string, unknown>,
+}));
+const controlUiState = vi.hoisted(() => ({
+  root: "/tmp/openclaw-control-ui" as string | null,
 }));
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -64,6 +69,10 @@ vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
+vi.mock("../../infra/control-ui-assets.js", () => ({
+  resolveControlUiRootSync: () => controlUiState.root,
+}));
+
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: (style: string) => setGatewayWsLogStyle(style),
 }));
@@ -88,7 +97,9 @@ vi.mock("../../logging/console.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
-    info: () => undefined,
+    info: (message: string) => {
+      gatewayLogMessages.push(message);
+    },
     warn: () => undefined,
     error: () => undefined,
   }),
@@ -131,6 +142,8 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { exists: false };
+    controlUiState.root = "/tmp/openclaw-control-ui";
+    gatewayLogMessages.length = 0;
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
@@ -207,6 +220,16 @@ describe("gateway run option collisions", () => {
     );
   });
 
+  it("logs when first startup will build missing Control UI assets", async () => {
+    controlUiState.root = null;
+
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+
+    expect(gatewayLogMessages).toContain(
+      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. Prebuild with `pnpm ui:build` for a faster first boot.",
+    );
+  });
+
   it("blocks startup when the observed snapshot loses gateway.mode even if loadConfig still says local", async () => {
     configState.cfg = {
       gateway: {
@@ -227,7 +250,10 @@ describe("gateway run option collisions", () => {
     await expect(runGatewayCli(["gateway", "run"])).rejects.toThrow("__exit__:1");
 
     expect(runtimeErrors).toContain(
-      "Gateway start blocked: set gateway.mode=local (current: unset) or pass --allow-unconfigured.",
+      "Gateway start blocked: existing config is missing gateway.mode. Treat this as suspicious or clobbered config. Re-run `openclaw onboard --mode local` or `openclaw setup`, set gateway.mode=local manually, or pass --allow-unconfigured.",
+    );
+    expect(runtimeErrors).toContain(
+      `Config write audit: ${path.join("/tmp", "logs", "config-audit.jsonl")}`,
     );
     expect(startGatewayServer).not.toHaveBeenCalled();
   });

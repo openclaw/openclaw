@@ -1,9 +1,24 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { getBundledChannelContractSurfaces } from "../../channels/plugins/contract-surfaces.js";
 import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
 
 const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
+
+type LegacyGroupSessionSurface = {
+  resolveLegacyGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
+};
+
+function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
+  for (const surface of getBundledChannelContractSurfaces() as LegacyGroupSessionSurface[]) {
+    const resolved = surface.resolveLegacyGroupSessionKey?.(ctx);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
 
 function normalizeGroupLabel(raw?: string) {
   return normalizeHyphenSlug(raw);
@@ -57,13 +72,13 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const normalizedChatType =
     chatType === "channel" ? "channel" : chatType === "group" ? "group" : undefined;
 
-  const isWhatsAppGroupId = from.toLowerCase().endsWith("@g.us");
+  const legacyResolution = resolveLegacyGroupSessionKey(ctx);
   const looksLikeGroup =
     normalizedChatType === "group" ||
     normalizedChatType === "channel" ||
     from.includes(":group:") ||
     from.includes(":channel:") ||
-    isWhatsAppGroupId;
+    legacyResolution !== null;
   if (!looksLikeGroup) {
     return null;
   }
@@ -74,9 +89,11 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const head = parts[0]?.trim().toLowerCase() ?? "";
   const headIsSurface = head ? getGroupSurfaces().has(head) : false;
 
-  const provider = headIsSurface
-    ? head
-    : (providerHint ?? (isWhatsAppGroupId ? "whatsapp" : undefined));
+  if (!headIsSurface && !providerHint && legacyResolution) {
+    return legacyResolution;
+  }
+
+  const provider = headIsSurface ? head : (providerHint ?? legacyResolution?.channel);
   if (!provider) {
     return null;
   }

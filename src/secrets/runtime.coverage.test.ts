@@ -1,8 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import type {
+  PluginWebFetchProviderEntry,
+  PluginWebSearchProviderEntry,
+} from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
+import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type SecretRegistryEntry = ReturnType<typeof listSecretTargetRegistryEntries>[number];
@@ -11,6 +15,11 @@ const { resolveBundledPluginWebSearchProvidersMock, resolvePluginWebSearchProvid
   vi.hoisted(() => ({
     resolveBundledPluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
     resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
+  }));
+const { resolveBundledPluginWebFetchProvidersMock, resolvePluginWebFetchProvidersMock } =
+  vi.hoisted(() => ({
+    resolveBundledPluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
+    resolvePluginWebFetchProvidersMock: vi.fn(() => buildTestWebFetchProviders()),
   }));
 
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
@@ -24,8 +33,16 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
+vi.mock("../plugins/web-fetch-providers.js", () => ({
+  resolveBundledPluginWebFetchProviders: resolveBundledPluginWebFetchProvidersMock,
+}));
+
+vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
+  resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
+}));
+
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
+  id: "brave" | "gemini" | "grok" | "kimi" | "minimax" | "perplexity" | "firecrawl" | "tavily";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -83,9 +100,46 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
     createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
     createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
     createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
+    createTestProvider({ id: "minimax", pluginId: "minimax", order: 15 }),
     createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
     createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
     createTestProvider({ id: "tavily", pluginId: "tavily", order: 70 }),
+  ];
+}
+
+function buildTestWebFetchProviders(): PluginWebFetchProviderEntry[] {
+  return [
+    {
+      pluginId: "firecrawl",
+      id: "firecrawl",
+      label: "firecrawl",
+      hint: "firecrawl test provider",
+      envVars: ["FIRECRAWL_API_KEY"],
+      placeholder: "fc-...",
+      signupUrl: "https://example.com/firecrawl",
+      autoDetectOrder: 50,
+      credentialPath: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      inactiveSecretPaths: ["plugins.entries.firecrawl.config.webFetch.apiKey"],
+      getCredentialValue: (fetchConfig) => fetchConfig?.apiKey,
+      setCredentialValue: (fetchConfigTarget, value) => {
+        fetchConfigTarget.apiKey = value;
+      },
+      getConfiguredCredentialValue: (config) => {
+        const entryConfig = config?.plugins?.entries?.firecrawl?.config;
+        return entryConfig && typeof entryConfig === "object"
+          ? (entryConfig as { webFetch?: { apiKey?: unknown } }).webFetch?.apiKey
+          : undefined;
+      },
+      setConfiguredCredentialValue: (configTarget, value) => {
+        const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
+        const entries = (plugins.entries ??= {});
+        const entry = (entries.firecrawl ??= {}) as { config?: Record<string, unknown> };
+        const config = (entry.config ??= {});
+        const webFetch = (config.webFetch ??= {}) as { apiKey?: unknown };
+        webFetch.apiKey = value;
+      },
+      createTool: () => null,
+    },
   ];
 }
 
@@ -106,8 +160,19 @@ function toConcretePathSegments(pathPattern: string): string[] {
   return out;
 }
 
+function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string): string {
+  return entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey"
+    ? "FIRECRAWL_API_KEY"
+    : fallbackEnvId;
+}
+
+function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
+  return canonicalizeSecretTargetCoverageId(entry.id);
+}
+
 function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string): OpenClawConfig {
   const config = {} as OpenClawConfig;
+  const resolvedEnvId = resolveCoverageEnvId(entry, envId);
   const refTargetPath =
     entry.secretShape === "sibling_ref" && entry.refPathPattern // pragma: allowlist secret
       ? entry.refPathPattern
@@ -115,8 +180,16 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   setPathCreateStrict(config, toConcretePathSegments(refTargetPath), {
     source: "env",
     provider: "default",
-    id: envId,
+    id: resolvedEnvId,
   });
+  if (entry.id.startsWith("models.providers.")) {
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "baseUrl"],
+      "https://api.example/v1",
+    );
+    setPathCreateStrict(config, ["models", "providers", "sample", "models"], []);
+  }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
   }
@@ -188,11 +261,42 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.firecrawl.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "firecrawl");
   }
+  if (entry.id === "plugins.entries.minimax.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "minimax");
+  }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
   }
-  if (entry.id === "tools.web.x_search.apiKey") {
-    setPathCreateStrict(config, ["tools", "web", "x_search", "enabled"], true);
+  if (entry.id === "models.providers.*.request.auth.token") {
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "auth", "mode"],
+      "authorization-bearer",
+    );
+  }
+  if (entry.id === "models.providers.*.request.auth.value") {
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "auth", "mode"],
+      "header",
+    );
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "auth", "headerName"],
+      "x-api-key",
+    );
+  }
+  if (entry.id.startsWith("models.providers.*.request.proxy.tls.")) {
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "proxy", "mode"],
+      "explicit-proxy",
+    );
+    setPathCreateStrict(
+      config,
+      ["models", "providers", "sample", "request", "proxy", "url"],
+      "http://proxy.example:8080",
+    );
   }
   return config;
 }
@@ -233,15 +337,20 @@ function buildAuthStoreForTarget(entry: SecretRegistryEntry, envId: string): Aut
 }
 
 describe("secrets runtime target coverage", () => {
+  beforeAll(async () => {
+    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
+  });
+
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
+    resolveBundledPluginWebFetchProvidersMock.mockReset();
+    resolvePluginWebFetchProvidersMock.mockReset();
   });
 
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
+  beforeEach(() => {
+    clearSecretsRuntimeSnapshot();
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
@@ -250,14 +359,18 @@ describe("secrets runtime target coverage", () => {
     );
     for (const [index, entry] of entries.entries()) {
       const envId = `OPENCLAW_SECRET_TARGET_${index}`;
+      const runtimeEnvId = resolveCoverageEnvId(entry, envId);
       const expectedValue = `resolved-${entry.id}`;
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config: buildConfigForOpenClawTarget(entry, envId),
-        env: { [envId]: expectedValue },
+        env: { [runtimeEnvId]: expectedValue },
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
       });
-      const resolved = getPath(snapshot.config, toConcretePathSegments(entry.pathPattern));
+      const resolved = getPath(
+        snapshot.config,
+        toConcretePathSegments(resolveCoverageResolvedPath(entry)),
+      );
       if (entry.expectedResolvedValue === "string") {
         expect(resolved).toBe(expectedValue);
       } else {

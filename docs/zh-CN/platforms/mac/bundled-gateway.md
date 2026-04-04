@@ -7,7 +7,7 @@ summary: macOS 上的 Gateway 网关运行时（外部 launchd 服务）
 title: macOS 上的 Gateway 网关
 x-i18n:
   generated_at: "2026-02-03T07:52:30Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 4a3e963d13060b123538005439213e786e76127b370a6c834d85a369e4626fe5
   source_path: platforms/mac/bundled-gateway.md

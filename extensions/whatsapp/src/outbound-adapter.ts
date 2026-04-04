@@ -3,13 +3,14 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { resolveOutboundSendDep, sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveSendableOutboundReplyParts,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "openclaw/plugin-sdk/reply-runtime";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { resolveWhatsAppOutboundTarget } from "./runtime-api.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "./send.js";
 
@@ -22,6 +23,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   chunker: chunkText,
   chunkerMode: "text",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) =>
     resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
@@ -51,8 +53,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         return createEmptyChannelResult("whatsapp");
       }
       const send =
-        resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp") ??
-        (await import("./send.js")).sendMessageWhatsApp;
+        resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp", {
+          legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+        }) ?? (await import("./send.js")).sendMessageWhatsApp;
       return await send(to, normalizedText, {
         verbose: false,
         cfg,
@@ -73,8 +76,9 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
     }) => {
       const normalizedText = trimLeadingWhitespace(text);
       const send =
-        resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp") ??
-        (await import("./send.js")).sendMessageWhatsApp;
+        resolveOutboundSendDep<typeof import("./send.js").sendMessageWhatsApp>(deps, "whatsapp", {
+          legacyKeys: WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS,
+        }) ?? (await import("./send.js")).sendMessageWhatsApp;
       return await send(to, normalizedText, {
         verbose: false,
         cfg,

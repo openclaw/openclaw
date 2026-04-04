@@ -54,12 +54,12 @@ describe("exec approval reply helpers", () => {
     );
   });
 
-  it("mentions Slack in the fallback approval-client guidance", () => {
+  it("mentions native chat approval clients in the fallback guidance", () => {
     expect(
       buildExecApprovalUnavailableReplyPayload({
         reason: "no-approval-route",
       }).text,
-    ).toContain("Discord, Slack, or Telegram exec approvals");
+    ).toContain("native chat approval client such as Discord, Slack, or Telegram");
   });
 
   it.each(invalidReplyMetadataCases)(
@@ -76,14 +76,19 @@ describe("exec approval reply helpers", () => {
           execApproval: {
             approvalId: " req-1 ",
             approvalSlug: " slug-1 ",
+            agentId: " agent-1 ",
             allowedDecisions: ["allow-once", "bad", "deny", "allow-always", 3],
+            sessionKey: " session-1 ",
           },
         },
       }),
     ).toEqual({
       approvalId: "req-1",
       approvalSlug: "slug-1",
+      approvalKind: "exec",
+      agentId: "agent-1",
       allowedDecisions: ["allow-once", "deny", "allow-always"],
+      sessionKey: "session-1",
     });
   });
 
@@ -104,7 +109,10 @@ describe("exec approval reply helpers", () => {
       execApproval: {
         approvalId: "req-1",
         approvalSlug: "slug-1",
+        approvalKind: "exec",
+        agentId: undefined,
         allowedDecisions: ["allow-once", "allow-always", "deny"],
+        sessionKey: undefined,
       },
     });
     expect(payload.interactive).toEqual({
@@ -119,7 +127,7 @@ describe("exec approval reply helpers", () => {
             },
             {
               label: "Allow Always",
-              value: "/approve req-1 always",
+              value: "/approve req-1 allow-always",
               style: "primary",
             },
             {
@@ -151,6 +159,7 @@ describe("exec approval reply helpers", () => {
       execApproval: {
         approvalId: "req-ask-always",
         approvalSlug: "slug-always",
+        approvalKind: "exec",
         allowedDecisions: ["allow-once", "deny"],
       },
     });
@@ -177,6 +186,28 @@ describe("exec approval reply helpers", () => {
           ],
         },
       ],
+    });
+  });
+
+  it("stores agent and session metadata for downstream suppression checks", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-meta",
+      approvalSlug: "slug-meta",
+      agentId: "ops-agent",
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "req-meta",
+        approvalSlug: "slug-meta",
+        approvalKind: "exec",
+        agentId: "ops-agent",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      },
     });
   });
 
@@ -236,7 +267,7 @@ describe("exec approval reply helpers", () => {
         decision: "allow-always",
         label: "Allow Always",
         style: "primary",
-        command: "/approve req-1 always",
+        command: "/approve req-1 allow-always",
       },
       {
         decision: "deny",
@@ -256,7 +287,7 @@ describe("exec approval reply helpers", () => {
           type: "buttons",
           buttons: [
             { label: "Allow Once", value: "/approve req-1 allow-once", style: "success" },
-            { label: "Allow Always", value: "/approve req-1 always", style: "primary" },
+            { label: "Allow Always", value: "/approve req-1 allow-always", style: "primary" },
             { label: "Deny", value: "/approve req-1 deny", style: "danger" },
           ],
         },
@@ -270,7 +301,7 @@ describe("exec approval reply helpers", () => {
         approvalCommandId: "req-1",
         decision: "allow-always",
       }),
-    ).toBe("/approve req-1 always");
+    ).toBe("/approve req-1 allow-always");
 
     expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
       approvalId: "req-1",

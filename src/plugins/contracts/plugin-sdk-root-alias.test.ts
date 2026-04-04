@@ -311,12 +311,38 @@ describe("plugin-sdk root alias", () => {
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("publishes the Discord plugin-sdk subpath", () => {
+  it("does not publish removed channel-specific plugin-sdk subpaths", () => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
       exports?: Record<string, unknown>;
     };
 
-    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeDefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/signal"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-core"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-runtime-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-thread-bindings"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-timeouts"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-session-key"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/discord-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/signal-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/signal-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-runtime-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-target-parser"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/slack-targets"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-account"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-allow-from"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-command-config"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/telegram-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-auth-presence"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-core"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-shared"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-surface"]).toBeUndefined();
+    expect(packageJson.exports?.["./plugin-sdk/whatsapp-targets"]).toBeUndefined();
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {

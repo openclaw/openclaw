@@ -5,7 +5,7 @@ summary: 运行具有 shell 访问权限的 AI 网关的安全注意事项和威
 title: 安全性
 x-i18n:
   generated_at: "2026-02-03T10:10:39Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: fedc7fabc4ecc486210cec646bf1e40cded6f0266867c4455a1998b7fd997f6b
   source_path: gateway/security/index.md
@@ -228,7 +228,7 @@ OpenClaw 有两个独立的"谁可以触发我？"层：
 - 在沙箱中运行敏感的工具执行；将秘密保持在智能体可访问的文件系统之外。
 - 注意：沙箱隔离是可选启用的。如果沙箱模式关闭，即使 tools.exec.host 默认为 sandbox，exec 也会在 Gateway 网关主机上运行，并且宿主机 exec 不需要批准，除非你设置 host=gateway 并配置 exec 批准。
 - 将高风险工具（`exec`、`browser`、`web_fetch`、`web_search`）限制给受信任的智能体或显式白名单。
-- **模型选择很重要：** 旧版/传统模型可能对提示词注入和工具滥用的抵抗力较弱。对于任何带有工具的机器人，优先使用现代的、经过指令强化的模型。我们推荐 Anthropic Opus 4.5，因为它在识别提示词注入方面相当出色（参见["安全性的进步"](https://www.anthropic.com/news/claude-opus-4-5)）。
+- **模型选择很重要：** 旧版/传统模型可能对提示词注入和工具滥用的抵抗力较弱。对于任何带有工具的机器人，优先使用现代的、经过指令强化的模型。我们推荐 Anthropic Opus 4.5，因为它在识别提示词注入方面相当出色（参见["安全性的进步"](https://www.anthropic.com/news/claude-opus-4-6)）。
 
 应视为不可信的危险信号：
 

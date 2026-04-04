@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { normalizeOpenClawVersionBase } from "../config/version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
@@ -16,6 +17,7 @@ import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import { resolveBundledProviderCompatPluginIds } from "./providers.js";
 import type { PluginRegistry } from "./registry.js";
+import { listImportedRuntimePluginIds } from "./runtime.js";
 import type { PluginDiagnostic, PluginHookName } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -26,6 +28,8 @@ export type PluginCapabilityKind =
   | "cli-backend"
   | "text-inference"
   | "speech"
+  | "realtime-transcription"
+  | "realtime-voice"
   | "media-understanding"
   | "image-generation"
   | "web-search"
@@ -130,7 +134,7 @@ function resolveStatusConfig(
   return applyPluginAutoEnable({
     config,
     env: env ?? process.env,
-  }).config;
+  });
 }
 
 function resolveReportedPluginVersion(
@@ -147,14 +151,20 @@ function resolveReportedPluginVersion(
   );
 }
 
-export function buildPluginStatusReport(params?: {
+type PluginReportParams = {
   config?: ReturnType<typeof loadConfig>;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
-}): PluginStatusReport {
+};
+
+function buildPluginReport(
+  params: PluginReportParams | undefined,
+  loadModules: boolean,
+): PluginStatusReport {
   const rawConfig = params?.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params?.env);
+  const autoEnabled = resolveStatusConfig(rawConfig, params?.env);
+  const config = autoEnabled.config;
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
@@ -182,19 +192,42 @@ export function buildPluginStatusReport(params?: {
 
   const registry = loadOpenClawPlugins({
     config: runtimeCompatConfig,
+    activationSourceConfig: rawConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     env: params?.env,
     logger: createPluginLoaderLogger(log),
+    activate: false,
+    cache: false,
+    loadModules,
   });
+  const importedPluginIds = new Set([
+    ...(loadModules
+      ? registry.plugins
+          .filter((plugin) => plugin.status === "loaded" && plugin.format !== "bundle")
+          .map((plugin) => plugin.id)
+      : []),
+    ...listImportedRuntimePluginIds(),
+    ...listImportedBundledPluginFacadeIds(),
+  ]);
 
   return {
     workspaceDir,
     ...registry,
     plugins: registry.plugins.map((plugin) => ({
       ...plugin,
+      imported: plugin.format !== "bundle" && importedPluginIds.has(plugin.id),
       version: resolveReportedPluginVersion(plugin, params?.env),
     })),
   };
+}
+
+export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {
+  return buildPluginReport(params, false);
+}
+
+export function buildPluginDiagnosticsReport(params?: PluginReportParams): PluginStatusReport {
+  return buildPluginReport(params, true);
 }
 
 function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
@@ -202,6 +235,8 @@ function buildCapabilityEntries(plugin: PluginRegistry["plugins"][number]) {
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
+    { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
+    { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
@@ -248,11 +283,12 @@ export function buildPluginInspectReport(params: {
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
   const rawConfig = params.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params.env);
+  const resolvedConfig = resolveStatusConfig(rawConfig, params.env);
+  const config = resolvedConfig.config;
   const report =
     params.report ??
-    buildPluginStatusReport({
-      config,
+    buildPluginDiagnosticsReport({
+      config: rawConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
@@ -382,11 +418,10 @@ export function buildAllPluginInspectReports(params?: {
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
   const rawConfig = params?.config ?? loadConfig();
-  const config = resolveStatusConfig(rawConfig, params?.env);
   const report =
     params?.report ??
-    buildPluginStatusReport({
-      config,
+    buildPluginDiagnosticsReport({
+      config: rawConfig,
       workspaceDir: params?.workspaceDir,
       env: params?.env,
     });
@@ -395,7 +430,7 @@ export function buildAllPluginInspectReports(params?: {
     .map((plugin) =>
       buildPluginInspectReport({
         id: plugin.id,
-        config,
+        config: rawConfig,
         report,
       }),
     )

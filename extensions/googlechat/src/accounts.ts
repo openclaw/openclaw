@@ -130,7 +130,9 @@ export function resolveGoogleChatAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedGoogleChatAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? params.cfg.channels?.["googlechat"]?.defaultAccount,
+  );
   const baseEnabled = params.cfg.channels?.["googlechat"]?.enabled !== false;
   const merged = mergeGoogleChatAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;

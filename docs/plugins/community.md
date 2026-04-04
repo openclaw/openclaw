@@ -77,18 +77,19 @@ Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
 mentions, channel messages, and rich media including voice, images, videos,
 and files.
 
-- **npm:** `@sliverp/qqbot`
-- **repo:** [github.com/sliverp/qqbot](https://github.com/sliverp/qqbot)
+- **npm:** `@tencent-connect/openclaw-qqbot`
+- **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)
 
 ```bash
-openclaw plugins install @sliverp/qqbot
+openclaw plugins install @tencent-connect/openclaw-qqbot
 ```
 
 ### wecom
 
-OpenClaw Enterprise WeCom Channel Plugin.
-A bot plugin powered by WeCom AI Bot WebSocket persistent connections,
-supports direct messages & group chats, streaming replies, and proactive messaging.
+WeCom channel plugin for OpenClaw by the Tencent WeCom team. Powered by
+WeCom Bot WebSocket persistent connections, it supports direct messages & group
+chats, streaming replies, proactive messaging, image/file processing, Markdown
+formatting, built-in access control, and document/meeting/messaging skills.
 
 - **npm:** `@wecom/wecom-openclaw-plugin`
 - **repo:** [github.com/WecomTeam/wecom-openclaw-plugin](https://github.com/WecomTeam/wecom-openclaw-plugin)

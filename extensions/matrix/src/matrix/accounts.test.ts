@@ -218,6 +218,29 @@ describe("resolveMatrixAccount", () => {
     expect(resolveDefaultMatrixAccountId(cfg)).toBe("ops");
   });
 
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          homeserver: "https://matrix.example.org",
+          accessToken: "default-token",
+          accounts: {
+            ops: {
+              homeserver: "https://ops.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMatrixAccount({ cfg });
+    expect(account.accountId).toBe("ops");
+    expect(account.homeserver).toBe("https://ops.example.org");
+    expect(account.configured).toBe(true);
+  });
+
   it("includes env-backed named accounts in plugin account enumeration", () => {
     const keys = getMatrixScopedEnvVarNames("team-ops");
     process.env[keys.homeserver] = "https://matrix.example.org";
@@ -453,15 +476,15 @@ describe("resolveMatrixAccount", () => {
         matrix: {
           groups: {
             "!default-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "default",
             },
             "!axis-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "axis",
             },
             "!unassigned-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {
@@ -480,20 +503,20 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.groups).toEqual({
       "!default-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "default",
       },
       "!unassigned-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
     expect(resolveMatrixAccount({ cfg, accountId: "axis" }).config.groups).toEqual({
       "!axis-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "axis",
       },
       "!unassigned-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
   });
@@ -506,15 +529,15 @@ describe("resolveMatrixAccount", () => {
           accessToken: "default-token",
           groups: {
             "!default-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "default",
             },
             "!ops-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "ops",
             },
             "!shared-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {
@@ -529,20 +552,20 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.groups).toEqual({
       "!default-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "default",
       },
       "!shared-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
     expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toEqual({
       "!ops-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "ops",
       },
       "!shared-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
   });
@@ -553,15 +576,15 @@ describe("resolveMatrixAccount", () => {
         matrix: {
           rooms: {
             "!default-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "default",
             },
             "!axis-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "axis",
             },
             "!unassigned-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {
@@ -580,20 +603,20 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.rooms).toEqual({
       "!default-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "default",
       },
       "!unassigned-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
     expect(resolveMatrixAccount({ cfg, accountId: "axis" }).config.rooms).toEqual({
       "!axis-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "axis",
       },
       "!unassigned-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
   });
@@ -606,15 +629,15 @@ describe("resolveMatrixAccount", () => {
           accessToken: "default-token",
           rooms: {
             "!default-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "default",
             },
             "!ops-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "ops",
             },
             "!shared-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {
@@ -629,20 +652,20 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "default" }).config.rooms).toEqual({
       "!default-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "default",
       },
       "!shared-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
     expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toEqual({
       "!ops-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "ops",
       },
       "!shared-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
   });
@@ -660,15 +683,15 @@ describe("resolveMatrixAccount", () => {
         matrix: {
           groups: {
             "!default-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "default",
             },
             "!ops-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "ops",
             },
             "!shared-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
         },
@@ -677,11 +700,11 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "ops", env }).config.groups).toEqual({
       "!ops-room:example.org": {
-        allow: true,
+        enabled: true,
         account: "ops",
       },
       "!shared-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
   });
@@ -692,11 +715,11 @@ describe("resolveMatrixAccount", () => {
         matrix: {
           groups: {
             "!default-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "default",
             },
             "!shared-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {
@@ -711,7 +734,7 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.groups).toEqual({
       "!shared-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
   });
@@ -722,11 +745,11 @@ describe("resolveMatrixAccount", () => {
         matrix: {
           rooms: {
             "!default-room:example.org": {
-              allow: true,
+              enabled: true,
               account: "default",
             },
             "!shared-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {
@@ -741,7 +764,7 @@ describe("resolveMatrixAccount", () => {
 
     expect(resolveMatrixAccount({ cfg, accountId: "ops" }).config.rooms).toEqual({
       "!shared-room:example.org": {
-        allow: true,
+        enabled: true,
       },
     });
   });
@@ -752,7 +775,7 @@ describe("resolveMatrixAccount", () => {
         matrix: {
           groups: {
             "!shared-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {
@@ -775,7 +798,7 @@ describe("resolveMatrixAccount", () => {
         matrix: {
           rooms: {
             "!shared-room:example.org": {
-              allow: true,
+              enabled: true,
             },
           },
           accounts: {

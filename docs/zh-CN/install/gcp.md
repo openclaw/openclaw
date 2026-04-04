@@ -7,7 +7,7 @@ summary: 在 GCP Compute Engine VM（Docker）上 24/7 运行 OpenClaw Gateway �
 title: GCP
 x-i18n:
   generated_at: "2026-02-03T07:52:50Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: abb236dd421505d307bb3869340c9a0c940de095b93af9ad1f130cc08a9deadb
   source_path: platforms/gcp.md

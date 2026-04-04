@@ -1,4 +1,4 @@
-import type { BrowserBridge } from "../../plugin-sdk/browser-runtime.js";
+import type { BrowserBridge } from "../../../extensions/browser/runtime-api.js";
 
 export const BROWSER_BRIDGES = new Map<
   string,

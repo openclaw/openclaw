@@ -113,6 +113,8 @@ describe("deviceHandlers", () => {
   it("disconnects active clients after rotating a device token", async () => {
     getPairedDeviceMock.mockResolvedValue({
       deviceId: "device-1",
+      role: "operator",
+      roles: ["operator"],
       scopes: ["operator.pairing"],
       tokens: {
         operator: {
@@ -170,6 +172,47 @@ describe("deviceHandlers", () => {
         rotatedAtMs: 789,
       },
       undefined,
+    );
+  });
+
+  it("rejects rotating a token for a role that was never approved", async () => {
+    getPairedDeviceMock.mockResolvedValue({
+      deviceId: "device-1",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.pairing"],
+      tokens: {
+        operator: {
+          token: "old-token",
+          role: "operator",
+          scopes: ["operator.pairing"],
+          createdAtMs: 123,
+        },
+      },
+    });
+    const opts = createOptions(
+      "device.token.rotate",
+      {
+        deviceId: "device-1",
+        role: "node",
+      },
+      {
+        client: {
+          connect: {
+            scopes: ["operator.pairing"],
+          },
+        } as never,
+      },
+    );
+
+    await deviceHandlers["device.token.rotate"](opts);
+
+    expect(rotateDeviceTokenMock).not.toHaveBeenCalled();
+    expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
+    expect(opts.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "device token rotation denied" }),
     );
   });
 

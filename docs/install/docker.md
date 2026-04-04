@@ -176,6 +176,12 @@ Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
 survive container replacement.
 
+That mounted config directory is where OpenClaw keeps:
+
+- `openclaw.json` for behavior config
+- `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
+- `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
+
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
