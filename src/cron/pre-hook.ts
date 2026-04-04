@@ -88,9 +88,18 @@ export async function runPreHook(
           return;
         }
 
-        // child_process.ExecException: error.code is a string (e.g. "ERR_..."),
-        // the numeric exit code is in error.status (available on both Unix and Windows).
-        const exitCode = (error as NodeJS.ErrnoException & { status?: number }).status ?? 1;
+        // child_process.ExecException is inconsistent across Node versions/platforms:
+        // sometimes the numeric exit code is in error.code, sometimes in error.status.
+        const execError = error as NodeJS.ErrnoException & {
+          status?: number;
+          code?: string | number;
+        };
+        const exitCode =
+          typeof execError.code === "number"
+            ? execError.code
+            : typeof execError.status === "number"
+              ? execError.status
+              : 1;
 
         if (error.killed) {
           const reason = abortSignal?.aborted
