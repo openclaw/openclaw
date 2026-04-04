@@ -79,3 +79,16 @@ describe("getResolvedLoggerSettings", () => {
     expect(fallbackRequireMock).not.toHaveBeenCalled();
   });
 });
+
+describe("getChildLogger", () => {
+  it("inherits the parent minLevel when no child level override is provided", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    logging.setLoggerOverride({ level: "info" });
+
+    const parent = logging.getLogger();
+    const child = logging.getChildLogger({ module: "cron" });
+
+    expect(parent.settings.minLevel).toBeDefined();
+    expect(child.settings.minLevel).toBe(parent.settings.minLevel);
+  });
+});
