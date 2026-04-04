@@ -18,15 +18,14 @@ If you are on an older build or a custom install that excludes Zalo, install it
 manually:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalo`
-- Or select **Zalo** during setup and confirm the install prompt
+- Or from a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
 - Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Ensure the Zalo bundled plugin is available:
-   - From a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
-   - From npm (if published): `openclaw plugins install @openclaw/zalo`
-   - Or pick **Zalo** in setup and confirm the install prompt
+1. Ensure the Zalo plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Set the token:
    - Env: `ZALO_BOT_TOKEN=...`
    - Or config: `channels.zalo.accounts.default.botToken: "..."`.
