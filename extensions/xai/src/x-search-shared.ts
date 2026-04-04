@@ -1,12 +1,17 @@
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import {
+  buildXaiResponsesToolBody,
+  resolveXaiResponseTextAndCitations,
+  XAI_RESPONSES_ENDPOINT,
+} from "./responses-tool-shared.js";
+import {
   coerceXaiToolConfig,
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
 import { extractXaiWebSearchContent, type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_X_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_X_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 
 export type XaiXSearchConfig = {
@@ -112,23 +117,19 @@ export async function requestXaiXSearch(params: {
       url: XAI_X_SEARCH_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
-      body: {
+      body: buildXaiResponsesToolBody({
         model: params.model,
-        input: [{ role: "user", content: params.options.query }],
+        inputText: params.options.query,
         tools: [buildXSearchTool(params.options)],
-        ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
-      },
+        maxTurns: params.maxTurns,
+      }),
       errorLabel: "xAI",
     },
     async (response) => {
       const data = (await response.json()) as XaiWebSearchResponse;
-      const { text, annotationCitations } = extractXaiWebSearchContent(data);
-      const citations =
-        Array.isArray(data.citations) && data.citations.length > 0
-          ? data.citations
-          : annotationCitations;
+      const { content, citations } = resolveXaiResponseTextAndCitations(data);
       return {
-        content: text ?? "No response",
+        content,
         citations,
         inlineCitations:
           params.inlineCitations && Array.isArray(data.inline_citations)
