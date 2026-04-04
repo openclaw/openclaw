@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  buildContinuityManifest,
+  formatContinuityManifest,
+  formatContinuitySnapshotForPrompt,
+  readRecentContinuitySnapshot,
+} from "../../../packages/memory-host-sdk/src/host/continuity.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -73,16 +79,15 @@ export async function readPostCompactionContext(
       rootPath: workspaceDir,
       boundaryLabel: "workspace root",
     });
-    if (!opened.ok) {
-      return null;
-    }
-    const content = (() => {
-      try {
-        return fs.readFileSync(opened.fd, "utf-8");
-      } finally {
-        fs.closeSync(opened.fd);
-      }
-    })();
+    const content = opened.ok
+      ? (() => {
+          try {
+            return fs.readFileSync(opened.fd, "utf-8");
+          } finally {
+            fs.closeSync(opened.fd);
+          }
+        })()
+      : "";
 
     // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
     // An explicit empty array disables post-compaction context injection entirely.
@@ -96,7 +101,7 @@ export async function readPostCompactionContext(
     }
 
     const foundSectionNames: string[] = [];
-    let sections = extractSections(content, sectionNames, foundSectionNames);
+    let sections = content ? extractSections(content, sectionNames, foundSectionNames) : [];
 
     // Fall back to legacy section names ("Every Session" / "Safety") when using
     // defaults and the current headings aren't found — preserves compatibility
@@ -106,11 +111,20 @@ export async function readPostCompactionContext(
     const isDefaultSections =
       !Array.isArray(configuredSections) ||
       matchesSectionSet(configuredSections, DEFAULT_POST_COMPACTION_SECTIONS);
-    if (sections.length === 0 && isDefaultSections) {
+    if (content && sections.length === 0 && isDefaultSections) {
       sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
     }
 
-    if (sections.length === 0) {
+    const recentSnapshot = await readRecentContinuitySnapshot(workspaceDir);
+    const recentSnapshotText = recentSnapshot
+      ? formatContinuitySnapshotForPrompt(recentSnapshot.content)
+      : "";
+    const continuityManifest = formatContinuityManifest(
+      await buildContinuityManifest({ workspaceDir }),
+      5,
+    );
+
+    if (sections.length === 0 && !recentSnapshotText && !continuityManifest) {
       return null;
     }
 
@@ -129,6 +143,18 @@ export async function readPostCompactionContext(
       combined.length > MAX_CONTEXT_CHARS
         ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
         : combined;
+    const continuityBlocks: string[] = [];
+    if (recentSnapshotText) {
+      continuityBlocks.push(
+        `Recent continuity snapshot (${recentSnapshot?.path ?? "memory/recent/latest.md"}):\n\n${recentSnapshotText}`,
+      );
+    }
+    if (continuityManifest) {
+      continuityBlocks.push(
+        "Continuity manifest (use this to pick the next files before widening recovery):\n\n" +
+          continuityManifest,
+      );
+    }
 
     // When using the default section set, use precise prose that names the
     // "Session Startup" sequence explicitly. When custom sections are configured,
@@ -140,15 +166,23 @@ export async function readPostCompactionContext(
       : `Session was just compacted. The conversation summary above is a hint, NOT a substitute for your full startup sequence. ` +
         `Re-read the sections injected below (${displayNames.join(", ")}) and follow your configured startup procedure before responding to the user.`;
 
-    const sectionLabel = isDefaultSections
-      ? "Critical rules from AGENTS.md:"
-      : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
+    const sectionLabel =
+      sections.length === 0
+        ? ""
+        : isDefaultSections
+          ? "Critical rules from AGENTS.md:"
+          : `Injected sections from AGENTS.md (${displayNames.join(", ")}):`;
 
-    return (
-      "[Post-compaction context refresh]\n\n" +
-      `${prose}\n\n` +
-      `${sectionLabel}\n\n${safeContent}\n\n${timeLine}`
-    );
+    const bodyParts = ["[Post-compaction context refresh]", "", prose];
+
+    if (sectionLabel && safeContent) {
+      bodyParts.push("", sectionLabel, "", safeContent);
+    }
+    if (continuityBlocks.length > 0) {
+      bodyParts.push("", ...continuityBlocks);
+    }
+    bodyParts.push("", timeLine);
+    return bodyParts.join("\n");
   } catch {
     return null;
   }

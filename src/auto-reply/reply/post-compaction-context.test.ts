@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { renderContinuitySnapshotMarkdown } from "../../../packages/memory-host-sdk/src/host/continuity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 
@@ -42,6 +43,33 @@ describe("readPostCompactionContext", () => {
     expect(result).toBeNull();
   });
 
+  it("injects recent continuity snapshot even when AGENTS.md is missing", async () => {
+    fs.mkdirSync(path.join(tmpDir, "memory", "recent", "snapshots"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "memory", "recent", "latest.md"),
+      renderContinuitySnapshotMarkdown({
+        status: "active",
+        priority: "high",
+        updatedAt: "2026-04-03T09:00:00.000Z",
+        source: "session-memory:command",
+        project: "system-repair",
+        sessionKey: "agent:main:main",
+        validUntil: "2026-04-04T09:00:00.000Z",
+        currentTask: "Ship memory iteration",
+        currentPhase: "verification",
+        latestUserRequest: "Implement the meeting plan",
+        blockers: ["Need to finish tests"],
+        nextSteps: ["Run vitest"],
+        keyArtifacts: ["memory/recent/latest.md"],
+      }),
+    );
+
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Recent continuity snapshot");
+    expect(result).toContain("Ship memory iteration");
+  });
+
   it("returns null when AGENTS.md has no relevant sections", async () => {
     fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "# My Agent\n\nSome content.\n");
     const result = await readPostCompactionContext(tmpDir);
@@ -68,6 +96,51 @@ Not relevant.
     expect(result).toContain("WORKFLOW_AUTO.md");
     expect(result).toContain("Post-compaction context refresh");
     expect(result).not.toContain("Other Section");
+  });
+
+  it("includes continuity manifest hints when recent memory files exist", async () => {
+    fs.writeFileSync(
+      path.join(tmpDir, "AGENTS.md"),
+      `## Session Startup
+
+Read startup files.
+`,
+    );
+    fs.mkdirSync(path.join(tmpDir, "memory", "recent", "snapshots"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, "memory", "recent", "latest.md"),
+      renderContinuitySnapshotMarkdown({
+        status: "active",
+        priority: "highest",
+        updatedAt: "2026-04-03T09:00:00.000Z",
+        source: "session-memory:command",
+        project: "system-repair",
+        sessionKey: "agent:main:main",
+        validUntil: "2026-04-04T09:00:00.000Z",
+        currentTask: "Ship memory iteration",
+        currentPhase: "verification",
+        latestUserRequest: "Implement the meeting plan",
+        blockers: ["Need to finish tests"],
+        nextSteps: ["Run vitest"],
+        keyArtifacts: ["memory/recent/latest.md"],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, "memory", "active-topics.md"),
+      `# Active Topics
+
+- 状态：active
+- 优先级：high
+- updated_at：2026-04-03 15:00 CST
+- 当前主任务：记忆系统迭代与官方贡献目标
+`,
+    );
+
+    const result = await readPostCompactionContext(tmpDir);
+    expect(result).not.toBeNull();
+    expect(result).toContain("Continuity manifest");
+    expect(result).toContain("memory/recent/latest.md");
+    expect(result).toContain("memory/active-topics.md");
   });
 
   it("extracts Red Lines section", async () => {

@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
+import {
+  buildContinuityManifest,
+  formatContinuityManifest,
+  formatContinuitySnapshotForPrompt,
+  readRecentContinuitySnapshot,
+} from "../../../packages/memory-host-sdk/src/host/continuity.js";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -541,17 +547,38 @@ async function readWorkspaceContextForSummary(): Promise<string> {
       sections = extractSections(content, ["Every Session", "Safety"]);
     }
 
-    if (sections.length === 0) {
+    const recentSnapshot = await readRecentContinuitySnapshot(workspaceDir);
+    const recentSnapshotText = recentSnapshot
+      ? formatContinuitySnapshotForPrompt(recentSnapshot.content, 800)
+      : "";
+    const continuityManifest = formatContinuityManifest(
+      await buildContinuityManifest({ workspaceDir }),
+      4,
+    );
+
+    if (sections.length === 0 && !recentSnapshotText && !continuityManifest) {
       return "";
     }
 
-    const combined = sections.join("\n\n");
-    const safeContent =
-      combined.length > MAX_SUMMARY_CONTEXT_CHARS
-        ? combined.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
-        : combined;
+    const blocks: string[] = [];
+    if (sections.length > 0) {
+      const combined = sections.join("\n\n");
+      const safeContent =
+        combined.length > MAX_SUMMARY_CONTEXT_CHARS
+          ? combined.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
+          : combined;
+      blocks.push(`<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`);
+    }
+    if (recentSnapshotText) {
+      blocks.push(
+        `<recent-continuity-snapshot>\n${recentSnapshotText}\n</recent-continuity-snapshot>`,
+      );
+    }
+    if (continuityManifest) {
+      blocks.push(continuityManifest);
+    }
 
-    return `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;
+    return blocks.length > 0 ? `\n\n${blocks.join("\n\n")}` : "";
   } catch {
     return "";
   }

@@ -5,6 +5,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderContinuitySnapshotMarkdown } from "../../../packages/memory-host-sdk/src/host/continuity.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as compactionModule from "../compaction.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
@@ -1938,6 +1939,40 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
 }
 
 describe("readWorkspaceContextForSummary", () => {
+  it("includes recent continuity snapshot when present in workspace memory", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-context-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      fs.writeFileSync(path.join(root, "AGENTS.md"), "## Session Startup\n\nRead startup files.\n");
+      fs.mkdirSync(path.join(root, "memory", "recent", "snapshots"), { recursive: true });
+      fs.writeFileSync(
+        path.join(root, "memory", "recent", "latest.md"),
+        renderContinuitySnapshotMarkdown({
+          status: "active",
+          priority: "high",
+          updatedAt: "2026-04-03T09:00:00.000Z",
+          source: "session-memory:command",
+          project: "system-repair",
+          sessionKey: "agent:main:main",
+          validUntil: "2026-04-04T09:00:00.000Z",
+          currentTask: "Ship memory iteration",
+          currentPhase: "verification",
+          latestUserRequest: "Implement the meeting plan",
+          blockers: ["Need to finish tests"],
+          nextSteps: ["Run vitest"],
+          keyArtifacts: ["memory/recent/latest.md"],
+        }),
+      );
+
+      const summary = await readWorkspaceContextForSummary();
+      expect(summary).toContain("<recent-continuity-snapshot>");
+      expect(summary).toContain("Ship memory iteration");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {

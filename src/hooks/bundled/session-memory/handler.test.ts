@@ -71,7 +71,13 @@ async function runNewWithPreviousSessionEntry(params: {
   action?: "new" | "reset";
   sessionKey?: string;
   workspaceDirOverride?: string;
-}): Promise<{ files: string[]; memoryContent: string }> {
+}): Promise<{
+  files: string[];
+  archiveFiles: string[];
+  memoryContent: string;
+  recentLatestContent: string;
+  snapshotFiles: string[];
+}> {
   const event = createHookEvent(
     "command",
     params.action ?? "new",
@@ -91,16 +97,39 @@ async function runNewWithPreviousSessionEntry(params: {
 
   const memoryDir = path.join(params.tempDir, "memory");
   const files = await fs.readdir(memoryDir);
+  const archiveFiles = files.filter((name) => name.endsWith(".md"));
   const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
-  return { files, memoryContent };
+    archiveFiles.length > 0
+      ? await fs.readFile(path.join(memoryDir, archiveFiles[0]), "utf-8")
+      : "";
+  const latestPath = path.join(memoryDir, "recent", "latest.md");
+  let recentLatestContent = "";
+  try {
+    recentLatestContent = await fs.readFile(latestPath, "utf-8");
+  } catch {
+    recentLatestContent = "";
+  }
+  const snapshotsDir = path.join(memoryDir, "recent", "snapshots");
+  let snapshotFiles: string[] = [];
+  try {
+    snapshotFiles = await fs.readdir(snapshotsDir);
+  } catch {
+    snapshotFiles = [];
+  }
+  return { files, archiveFiles, memoryContent, recentLatestContent, snapshotFiles };
 }
 
 async function runNewWithPreviousSession(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
   action?: "new" | "reset";
-}): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
+}): Promise<{
+  tempDir: string;
+  files: string[];
+  memoryContent: string;
+  recentLatestContent: string;
+  snapshotFiles: string[];
+}> {
   const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
@@ -117,16 +146,66 @@ async function runNewWithPreviousSession(params: {
       agents: { defaults: { workspace: tempDir } },
     } satisfies OpenClawConfig);
 
-  const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+  const { archiveFiles, memoryContent, recentLatestContent, snapshotFiles } =
+    await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg,
+      action: params.action,
+      previousSessionEntry: {
+        sessionId: "test-123",
+        sessionFile,
+      },
+    });
+  return {
     tempDir,
-    cfg,
-    action: params.action,
-    previousSessionEntry: {
-      sessionId: "test-123",
+    files: archiveFiles,
+    memoryContent,
+    recentLatestContent,
+    snapshotFiles,
+  };
+}
+
+async function runCompactionCheckpoint(params: {
+  sessionContent: string;
+  sessionKey?: string;
+}): Promise<{
+  tempDir: string;
+  archiveFiles: string[];
+  recentLatestContent: string;
+  snapshotFiles: string[];
+}> {
+  const tempDir = await createCaseWorkspace("workspace");
+  const sessionsDir = path.join(tempDir, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  const sessionFile = await writeWorkspaceFile({
+    dir: sessionsDir,
+    name: "active-session.jsonl",
+    content: params.sessionContent,
+  });
+
+  const event = createHookEvent(
+    "session",
+    "compact:before",
+    params.sessionKey ?? "agent:main:main",
+    {
+      workspaceDir: tempDir,
+      sessionId: "compact-123",
       sessionFile,
     },
-  });
-  return { tempDir, files, memoryContent };
+  );
+
+  await handler(event);
+
+  const memoryDir = path.join(tempDir, "memory");
+  const files = await fs.readdir(memoryDir);
+  const archiveFiles = files.filter((name) => /^\d{4}-\d{2}-\d{2}.*\.md$/.test(name));
+  const recentLatestContent = await fs.readFile(
+    path.join(memoryDir, "recent", "latest.md"),
+    "utf-8",
+  );
+  const snapshotFiles = await fs.readdir(path.join(memoryDir, "recent", "snapshots"));
+
+  return { tempDir, archiveFiles, recentLatestContent, snapshotFiles };
 }
 
 async function createSessionMemoryWorkspace(params?: {
@@ -232,6 +311,39 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
+  it("writes recent continuity latest and snapshot files", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "We need to keep continuity stable" },
+      { role: "assistant", content: "I will add a recent snapshot layer" },
+      { role: "user", content: "Then wire it into compaction" },
+    ]);
+    const { recentLatestContent, snapshotFiles } = await runNewWithPreviousSession({
+      sessionContent,
+    });
+
+    expect(snapshotFiles.length).toBe(1);
+    expect(recentLatestContent).toContain("type: recent_snapshot");
+    expect(recentLatestContent).toContain("## Current Task");
+    expect(recentLatestContent).toContain("## Conversation Summary");
+    expect(recentLatestContent).toContain("We need to keep continuity stable");
+  });
+
+  it("writes only recent continuity on pre-compaction checkpoints", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "We are about to hit compaction" },
+      { role: "assistant", content: "Capture the current task before the window shrinks" },
+    ]);
+
+    const { archiveFiles, recentLatestContent, snapshotFiles } = await runCompactionCheckpoint({
+      sessionContent,
+    });
+
+    expect(archiveFiles).toEqual([]);
+    expect(snapshotFiles.length).toBe(1);
+    expect(recentLatestContent).toContain("source: session-memory:compaction");
+    expect(recentLatestContent).toContain("We are about to hit compaction");
+  });
+
   it("creates memory file with session content on /reset command", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Please reset and keep notes" },
@@ -262,7 +374,7 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+    const { archiveFiles, memoryContent } = await runNewWithPreviousSessionEntry({
       tempDir: naviWorkspace,
       cfg: {
         agents: {
@@ -278,7 +390,7 @@ describe("session-memory hook", () => {
       },
     });
 
-    expect(files.length).toBe(1);
+    expect(archiveFiles.length).toBe(1);
     expect(memoryContent).toContain("user: Remember this under Navi");
     expect(memoryContent).toContain("assistant: Stored in the bound workspace");
     expect(memoryContent).toContain("- **Session Key**: agent:navi:main");
@@ -410,7 +522,7 @@ describe("session-memory hook", () => {
   });
 
   it("handles reset-path session pointers from previousSessionEntry", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
+    const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
 
     const sessionId = "reset-pointer-session";
     const resetSessionFile = await writeWorkspaceFile({
@@ -428,14 +540,27 @@ describe("session-memory hook", () => {
       sessionId,
     });
     expect(previousSessionFile).toBeUndefined();
+    const { archiveFiles, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      previousSessionEntry: {
+        sessionId,
+        sessionFile: resetSessionFile,
+      },
+    });
+    expect(archiveFiles.length).toBe(1);
 
-    const memoryContent = await getRecentSessionContentWithResetFallback(resetSessionFile);
+    const transcriptContent = await getRecentSessionContentWithResetFallback(resetSessionFile);
+    expect(transcriptContent).toContain("user: Message from reset pointer");
+    expect(transcriptContent).toContain("assistant: Recovered directly from reset file");
     expect(memoryContent).toContain("user: Message from reset pointer");
     expect(memoryContent).toContain("assistant: Recovered directly from reset file");
   });
 
   it("recovers transcript when previousSessionEntry.sessionFile is missing", async () => {
-    const { sessionsDir } = await createSessionMemoryWorkspace();
+    const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
 
     const sessionId = "missing-session-file";
     await writeWorkspaceFile({
@@ -457,8 +582,20 @@ describe("session-memory hook", () => {
       sessionId,
     });
     expect(previousSessionFile).toBe(path.join(sessionsDir, `${sessionId}.jsonl`));
+    const { archiveFiles, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg: {
+        agents: { defaults: { workspace: tempDir } },
+      } satisfies OpenClawConfig,
+      previousSessionEntry: {
+        sessionId,
+      },
+    });
+    expect(archiveFiles.length).toBe(1);
 
-    const memoryContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
+    const transcriptContent = await getRecentSessionContentWithResetFallback(previousSessionFile!);
+    expect(transcriptContent).toContain("user: Recovered with missing sessionFile pointer");
+    expect(transcriptContent).toContain("assistant: Recovered by sessionId fallback");
     expect(memoryContent).toContain("user: Recovered with missing sessionFile pointer");
     expect(memoryContent).toContain("assistant: Recovered by sessionId fallback");
   });
