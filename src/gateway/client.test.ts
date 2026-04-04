@@ -412,48 +412,37 @@ describe("GatewayClient connect auth payload", () => {
     storeDeviceAuthTokenMock.mockReset();
   });
 
-  function connectFrameFrom(ws: MockWebSocket) {
+  type ParsedConnectRequest = {
+    id?: string;
+    params?: {
+      scopes?: string[];
+      auth?: {
+        token?: string;
+        bootstrapToken?: string;
+        deviceToken?: string;
+        password?: string;
+      };
+    };
+  };
+
+  function parseConnectRequest(ws: MockWebSocket): ParsedConnectRequest {
     const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
     if (!raw) {
       throw new Error("missing connect frame");
     }
-    const parsed = JSON.parse(raw) as {
-      params?: {
-        auth?: {
-          token?: string;
-          bootstrapToken?: string;
-          deviceToken?: string;
-          password?: string;
-        };
-      };
-    };
-    return parsed.params?.auth ?? {};
+    return JSON.parse(raw) as ParsedConnectRequest;
+  }
+
+  function connectFrameFrom(ws: MockWebSocket) {
+    return parseConnectRequest(ws).params?.auth ?? {};
   }
 
   function connectScopesFrom(ws: MockWebSocket) {
-    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
-    expect(raw).toBeTruthy();
-    const parsed = JSON.parse(raw ?? "{}") as {
-      params?: {
-        scopes?: string[];
-      };
-    };
-    return parsed.params?.scopes ?? [];
+    return parseConnectRequest(ws).params?.scopes ?? [];
   }
 
   function connectRequestFrom(ws: MockWebSocket) {
-    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
-    expect(raw).toBeTruthy();
-    return JSON.parse(raw ?? "{}") as {
-      id?: string;
-      params?: {
-        scopes?: string[];
-        auth?: {
-          token?: string;
-          deviceToken?: string;
-        };
-      };
-    };
+    return parseConnectRequest(ws);
   }
 
   function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {

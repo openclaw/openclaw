@@ -66,6 +66,11 @@ type SelectedConnectAuth = {
   usingStoredDeviceToken?: boolean;
 };
 
+type StoredDeviceAuth = {
+  token?: string;
+  scopes?: string[];
+};
+
 class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -435,12 +440,10 @@ export class GatewayClient {
           }
         : undefined;
     const signedAtMs = Date.now();
-    // Reuse cached scopes only when the client is reusing the cached device token.
-    // Explicit device tokens should keep the caller-requested scope set.
-    const scopes =
-      usingStoredDeviceToken && storedScopes && storedScopes.length > 0
-        ? storedScopes
-        : (this.opts.scopes ?? ["operator.admin"]);
+    const scopes = this.resolveConnectScopes({
+      usingStoredDeviceToken,
+      storedScopes,
+    });
     const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
@@ -540,6 +543,39 @@ export class GatewayClient {
       });
   }
 
+  private resolveConnectScopes(params: {
+    usingStoredDeviceToken?: boolean;
+    storedScopes?: string[];
+  }): string[] {
+    // Reuse cached scopes only when the client is reusing the cached device token.
+    // Explicit device tokens should keep the caller-requested scope set.
+    if (
+      params.usingStoredDeviceToken &&
+      Array.isArray(params.storedScopes) &&
+      params.storedScopes.length > 0
+    ) {
+      return params.storedScopes;
+    }
+    return this.opts.scopes ?? ["operator.admin"];
+  }
+
+  private loadStoredDeviceAuth(role: string): StoredDeviceAuth | null {
+    if (!this.opts.deviceIdentity) {
+      return null;
+    }
+    const storedAuth = loadDeviceAuthToken({
+      deviceId: this.opts.deviceIdentity.deviceId,
+      role,
+    });
+    if (!storedAuth) {
+      return null;
+    }
+    return {
+      token: storedAuth.token,
+      scopes: storedAuth.scopes,
+    };
+  }
+
   private shouldPauseReconnectAfterAuthFailure(detailCode: string | null): boolean {
     if (!detailCode) {
       return false;
@@ -626,9 +662,7 @@ export class GatewayClient {
     const explicitBootstrapToken = this.opts.bootstrapToken?.trim() || undefined;
     const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
     const authPassword = this.opts.password?.trim() || undefined;
-    const storedAuth = this.opts.deviceIdentity
-      ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })
-      : null;
+    const storedAuth = this.loadStoredDeviceAuth(role);
     const storedToken = storedAuth?.token ?? null;
     const storedScopes = storedAuth?.scopes;
     const shouldUseDeviceRetryToken =
@@ -643,7 +677,7 @@ export class GatewayClient {
       (!(explicitGatewayToken || authPassword) && (!explicitBootstrapToken || Boolean(storedToken)))
         ? (storedToken ?? undefined)
         : undefined);
-    const usingStoredDeviceToken =
+    const reusingStoredDeviceToken =
       Boolean(resolvedDeviceToken) &&
       !explicitDeviceToken &&
       Boolean(storedToken) &&
@@ -662,7 +696,7 @@ export class GatewayClient {
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
       storedScopes,
-      usingStoredDeviceToken,
+      usingStoredDeviceToken: reusingStoredDeviceToken,
     };
   }
 
