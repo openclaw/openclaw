@@ -1,0 +1,106 @@
+{
+  "id": "whatsapp-lead-bot",
+  "name": "WhatsApp Lead Bot",
+  "version": "0.1.0",
+  "description": "AI-powered lead qualification bot for WhatsApp with admin commands, rate limiting, and follow-ups",
+  "author": "OpenClaw",
+  "license": "MIT",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "whatsappAccounts": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "WhatsApp account IDs to handle (e.g. ['default']). Leave empty to handle all accounts."
+      },
+      "agentNumbers": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Phone numbers to receive handoff/lead notifications"
+      },
+      "teamNumbers": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Phone numbers that bypass lead pipeline (coworker mode)"
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Agent ID for session key construction (defaults to first whatsappAccount or 'main')"
+      },
+      "dbPath": {
+        "type": "string"
+      },
+      "rateLimit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "messagesPerHour": { "type": "number" },
+          "windowMs": { "type": "number" },
+          "notifyOnLimit": { "type": "boolean" },
+          "global": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "maxMessagesPerHour": { "type": "number" },
+              "windowMs": { "type": "number" }
+            }
+          },
+          "circuitBreaker": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "hitRateThreshold": { "type": "number" },
+              "windowMs": { "type": "number" },
+              "minChecks": { "type": "number" }
+            }
+          }
+        }
+      },
+      "followup": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "silenceThresholdHours": { "type": "number" },
+          "maxFollowups": { "type": "number" },
+          "checkIntervalMinutes": { "type": "number" }
+        }
+      },
+      "qualificationPrompt": {
+        "type": "string"
+      },
+      "autoHandoffWhenQualified": {
+        "type": "boolean"
+      },
+      "notifyNewLeads": {
+        "type": "boolean"
+      },
+      "notifyQualified": {
+        "type": "boolean"
+      },
+      "notifyHandoff": {
+        "type": "boolean"
+      },
+      "receiptExtraction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "apiKey": { "type": "string" },
+          "mediaDir": { "type": "string" },
+          "maxAgeSeconds": { "type": "number" },
+          "maxAttemptsPerLead": { "type": "number" },
+          "maxFileSizeMB": { "type": "number" },
+          "timeoutSeconds": { "type": "number" }
+        }
+      }
+    }
+  }
+}

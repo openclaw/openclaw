@@ -60,9 +60,10 @@ export function formatBillingErrorMessage(provider?: string, model?: string): st
 
 export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const RATE_LIMIT_ERROR_USER_MESSAGE =
+  "Permitenos un momento. Te atenderemos tan pronto nos sea posible.";
 const OVERLOADED_ERROR_USER_MESSAGE =
-  "The AI service is temporarily overloaded. Please try again in a moment.";
+  "Permitenos un momento. Te atenderemos tan pronto nos sea posible.";
 
 /**
  * Check whether the raw rate-limit error contains provider-specific details

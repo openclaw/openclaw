@@ -183,3 +183,74 @@ describe("createWebSendApi", () => {
     expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
   });
 });
+
+describe("createWebSendApi — label operations", () => {
+  const sendMessage = vi.fn(async () => ({ key: { id: "msg-1" } }));
+  const sendPresenceUpdate = vi.fn(async () => {});
+  const addChatLabel = vi.fn(async () => {});
+  const removeChatLabel = vi.fn(async () => {});
+  const getLabels = vi.fn(async () => [
+    { id: "1", name: "New Customer", color: 0, deleted: false, predefinedId: "1" },
+    { id: "6", name: "Hot Lead", color: 3, deleted: false },
+  ]);
+  const createLabel = vi.fn(async () => ({ id: "7", name: "Cold Lead", color: 5 }));
+
+  const api = createWebSendApi({
+    sock: {
+      sendMessage,
+      sendPresenceUpdate,
+      addChatLabel,
+      removeChatLabel,
+      getLabels,
+      createLabel,
+    },
+    defaultAccountId: "main",
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("addChatLabel normalizes JID and delegates to sock", async () => {
+    await api.addChatLabel("+5215512345678", "6");
+    expect(addChatLabel).toHaveBeenCalledWith("5215512345678@s.whatsapp.net", "6");
+  });
+
+  it("removeChatLabel normalizes JID and delegates to sock", async () => {
+    await api.removeChatLabel("+5215512345678", "6");
+    expect(removeChatLabel).toHaveBeenCalledWith("5215512345678@s.whatsapp.net", "6");
+  });
+
+  it("getLabels returns cached labels from sock", async () => {
+    const labels = await api.getLabels();
+    expect(getLabels).toHaveBeenCalled();
+    expect(labels).toEqual([
+      { id: "1", name: "New Customer", color: 0, deleted: false, predefinedId: "1" },
+      { id: "6", name: "Hot Lead", color: 3, deleted: false },
+    ]);
+  });
+
+  it("createLabel delegates to sock and returns new label", async () => {
+    const result = await api.createLabel("Cold Lead", 5);
+    expect(createLabel).toHaveBeenCalledWith("Cold Lead", 5);
+    expect(result).toEqual({ id: "7", name: "Cold Lead", color: 5 });
+  });
+
+  it("getLabels returns empty array when sock.getLabels is undefined", async () => {
+    const minimalApi = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate, addChatLabel, removeChatLabel },
+      defaultAccountId: "main",
+    });
+    const labels = await minimalApi.getLabels();
+    expect(labels).toEqual([]);
+  });
+
+  it("createLabel returns undefined when sock.createLabel is undefined", async () => {
+    const minimalApi = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate, addChatLabel, removeChatLabel },
+      defaultAccountId: "main",
+    });
+    const result = await minimalApi.createLabel("Test", 0);
+    expect(result).toBeUndefined();
+  });
+});

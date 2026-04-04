@@ -236,9 +236,17 @@ export const es: TranslationMap = {
       payloadKind: "¿Qué debe ejecutarse?",
       systemEvent: "Publicar mensaje en la línea de tiempo principal",
       agentTurn: "Ejecutar tarea del asistente (aislada)",
+      script: "Ejecutar script (sin LLM)",
       systemEventHelp:
         "Envía tu texto a la línea de tiempo principal de la puerta de enlace (ideal para recordatorios/activadores).",
       agentTurnHelp: "Inicia una ejecución del asistente en su propia sesión usando tu indicación.",
+      scriptHelp: "Ejecuta un comando de shell directamente. Sin LLM, sin tokens.",
+      scriptCommand: "Comando",
+      scriptCommandPlaceholder: "ej. node, bash, python3",
+      scriptArgs: "Argumentos",
+      scriptArgsPlaceholder: "Separados por espacios, ej. script.mjs --flag",
+      scriptCwd: "Directorio de trabajo",
+      scriptCwdPlaceholder: "Opcional, ej. /Users/me/.openclaw",
       timeoutSeconds: "Tiempo de espera (segundos)",
       timeoutPlaceholder: "Opcional, ej. 90",
       timeoutHelp:
@@ -310,6 +318,7 @@ export const es: TranslationMap = {
     jobDetail: {
       system: "Sistema",
       prompt: "Indicación",
+      script: "Script",
       delivery: "Entrega",
       agent: "Agente",
     },
@@ -333,6 +342,7 @@ export const es: TranslationMap = {
       staggerAmountInvalid: "El escalonamiento debe ser mayor a 0.",
       systemTextRequired: "El texto del sistema es requerido.",
       agentMessageRequired: "El mensaje del agente es requerido.",
+      scriptCommandRequired: "El comando del script es requerido.",
       timeoutInvalid: "Si se establece, el tiempo de espera debe ser mayor a 0 segundos.",
       webhookUrlRequired: "La URL del webhook es requerida.",
       webhookUrlInvalid: "La URL del webhook debe comenzar con http:// o https://.",

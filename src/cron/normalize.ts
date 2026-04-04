@@ -145,13 +145,18 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = "agentTurn";
   } else if (kindRaw === "systemevent") {
     next.kind = "systemEvent";
+  } else if (kindRaw === "script") {
+    next.kind = "script";
   } else if (kindRaw) {
     next.kind = kindRaw;
   }
   if (!next.kind) {
     const hasMessage = typeof next.message === "string" && next.message.trim().length > 0;
     const hasText = typeof next.text === "string" && next.text.trim().length > 0;
-    if (hasMessage) {
+    const hasCommand = typeof next.command === "string" && next.command.trim().length > 0;
+    if (hasCommand) {
+      next.kind = "script";
+    } else if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
       next.kind = "systemEvent";
@@ -170,6 +175,12 @@ function coercePayload(payload: UnknownRecord) {
     const trimmed = next.text.trim();
     if (trimmed) {
       next.text = trimmed;
+    }
+  }
+  if (typeof next.command === "string") {
+    const trimmed = next.command.trim();
+    if (trimmed) {
+      next.command = trimmed;
     }
   }
   if ("model" in next) {
@@ -283,6 +294,11 @@ function coerceDelivery(delivery: UnknownRecord) {
 }
 
 function inferTopLevelPayload(next: UnknownRecord) {
+  const command = typeof next.command === "string" ? next.command.trim() : "";
+  if (command) {
+    return { kind: "script", command } satisfies UnknownRecord;
+  }
+
   const message = typeof next.message === "string" ? next.message.trim() : "";
   if (message) {
     return { kind: "agentTurn", message } satisfies UnknownRecord;
@@ -389,6 +405,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.allowUnsafeExternalContent;
   delete next.message;
   delete next.text;
+  delete next.command;
   delete next.deliver;
   delete next.channel;
   delete next.to;
@@ -529,6 +546,9 @@ export function normalizeCronJobInput(
       if (kind === "systemEvent") {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
+        next.sessionTarget = "isolated";
+      }
+      if (kind === "script") {
         next.sessionTarget = "isolated";
       }
     }

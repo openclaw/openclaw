@@ -5,6 +5,7 @@ import {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
+  proto,
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
@@ -126,6 +127,9 @@ export async function createWaSocket(
     printQRInTerminal: false,
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
+    // Allow on-demand history sync while keeping full sync disabled
+    shouldSyncHistoryMessage: (msg) =>
+      Number(msg.syncType) === Number(proto.HistorySync.HistorySyncType.ON_DEMAND),
     markOnlineOnConnect: false,
   });
 

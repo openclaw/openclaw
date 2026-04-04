@@ -1252,6 +1252,41 @@ async function executeDetachedCronJob(
 ): Promise<
   CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
 > {
+  if (job.payload.kind === "script") {
+    if (abortSignal?.aborted) {
+      return resolveAbortError();
+    }
+    const scriptPayload = job.payload;
+    const scriptTimeoutMs = (scriptPayload.timeoutSeconds ?? 120) * 1000;
+    const { execFile: execFileNode } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFileNode);
+
+    const scriptAbort = new AbortController();
+    const scriptTimer = setTimeout(() => scriptAbort.abort(), scriptTimeoutMs);
+    const onParentAbort = () => scriptAbort.abort();
+    abortSignal?.addEventListener("abort", onParentAbort, { once: true });
+
+    try {
+      const result = await execFileAsync(scriptPayload.command, scriptPayload.args ?? [], {
+        cwd: scriptPayload.cwd,
+        timeout: scriptTimeoutMs,
+        maxBuffer: 1024 * 1024,
+        signal: scriptAbort.signal,
+      });
+      const stdout = (result.stdout ?? "").toString().trim();
+      const stderr = (result.stderr ?? "").toString().trim();
+      const summary = stdout || stderr || "(no output)";
+      return { status: "ok", summary };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { status: "error", error: msg };
+    } finally {
+      clearTimeout(scriptTimer);
+      abortSignal?.removeEventListener("abort", onParentAbort);
+    }
+  }
+
   if (job.payload.kind !== "agentTurn") {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
   }

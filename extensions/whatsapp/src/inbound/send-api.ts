@@ -3,6 +3,10 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import type { ActiveWebSendOptions } from "../active-listener.js";
 
+export type LabelActionBody =
+  | { id: string; name?: string; color?: number; deleted?: boolean; predefinedId?: number }
+  | { id: string }[];
+
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
     channel: "whatsapp",
@@ -21,6 +25,42 @@ export function createWebSendApi(params: {
   sock: {
     sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
+    addChatLabel: (jid: string, labelId: string) => Promise<void>;
+    removeChatLabel: (jid: string, labelId: string) => Promise<void>;
+    getLabels?: () => Promise<
+      { id: string; name: string; color: number; deleted: boolean; predefinedId?: string }[]
+    >;
+    createLabel?: (
+      name: string,
+      color: number,
+    ) => Promise<{ id: string; name: string; color: number }>;
+    addLabel?: (jid: string, labels: LabelActionBody) => Promise<void>;
+    addMessageLabel?: (jid: string, messageId: string, labelId: string) => Promise<void>;
+    removeMessageLabel?: (jid: string, messageId: string, labelId: string) => Promise<void>;
+    onWhatsApp?: (
+      ...phoneNumbers: string[]
+    ) => Promise<{ jid: string; exists: boolean }[] | undefined>;
+    getBusinessProfile?: (jid: string) => Promise<unknown>;
+    fetchStatus?: (...jids: string[]) => Promise<unknown>;
+    chatModify?: (mod: unknown, jid: string) => Promise<void>;
+    fetchBlocklist?: () => Promise<(string | undefined)[]>;
+    profilePictureUrl?: (
+      jid: string,
+      type?: "preview" | "image",
+      timeoutMs?: number,
+    ) => Promise<string | undefined>;
+    groupMetadata?: (jid: string) => Promise<unknown>;
+    readMessages?: (keys: unknown[]) => Promise<void>;
+    star?: (
+      jid: string,
+      messages: { id: string; fromMe?: boolean }[],
+      star: boolean,
+    ) => Promise<void>;
+    fetchMessageHistory?: (
+      count: number,
+      oldestMsgKey: { remoteJid: string; fromMe: boolean; id: string },
+      oldestMsgTimestamp: number,
+    ) => Promise<string>;
   };
   defaultAccountId: string;
 }) {
@@ -107,6 +147,77 @@ export function createWebSendApi(params: {
           },
         },
       } as AnyMessageContent);
+    },
+    addChatLabel: async (chatJid: string, labelId: string): Promise<void> => {
+      const jid = toWhatsappJid(chatJid);
+      await params.sock.addChatLabel(jid, labelId);
+    },
+    removeChatLabel: async (chatJid: string, labelId: string): Promise<void> => {
+      const jid = toWhatsappJid(chatJid);
+      await params.sock.removeChatLabel(jid, labelId);
+    },
+    getLabels: async () => {
+      return (await params.sock.getLabels?.()) ?? [];
+    },
+    createLabel: async (name: string, color: number) => {
+      return await params.sock.createLabel?.(name, color);
+    },
+    addLabel: async (chatJid: string, labels: LabelActionBody): Promise<void> => {
+      const jid = toWhatsappJid(chatJid);
+      await params.sock.addLabel?.(jid, labels);
+    },
+    addMessageLabel: async (chatJid: string, messageId: string, labelId: string): Promise<void> => {
+      const jid = toWhatsappJid(chatJid);
+      await params.sock.addMessageLabel?.(jid, messageId, labelId);
+    },
+    removeMessageLabel: async (
+      chatJid: string,
+      messageId: string,
+      labelId: string,
+    ): Promise<void> => {
+      const jid = toWhatsappJid(chatJid);
+      await params.sock.removeMessageLabel?.(jid, messageId, labelId);
+    },
+    onWhatsApp: async (...phoneNumbers: string[]) => {
+      return await params.sock.onWhatsApp?.(...phoneNumbers);
+    },
+    getBusinessProfile: async (jid: string) => {
+      return await params.sock.getBusinessProfile?.(toWhatsappJid(jid));
+    },
+    fetchStatus: async (...jids: string[]) => {
+      return await params.sock.fetchStatus?.(...jids);
+    },
+    chatModify: async (mod: unknown, jid: string): Promise<void> => {
+      await params.sock.chatModify?.(mod, toWhatsappJid(jid));
+    },
+    fetchBlocklist: async () => {
+      return await params.sock.fetchBlocklist?.();
+    },
+    profilePictureUrl: async (jid: string, type?: "preview" | "image", timeoutMs?: number) => {
+      return await params.sock.profilePictureUrl?.(toWhatsappJid(jid), type, timeoutMs);
+    },
+    groupMetadata: async (jid: string) => {
+      return await params.sock.groupMetadata?.(toWhatsappJid(jid));
+    },
+    readMessages: async (keys: unknown[]): Promise<void> => {
+      await params.sock.readMessages?.(keys);
+    },
+    star: async (
+      jid: string,
+      messages: { id: string; fromMe?: boolean }[],
+      star: boolean,
+    ): Promise<void> => {
+      await params.sock.star?.(toWhatsappJid(jid), messages, star);
+    },
+    fetchMessageHistory: async (
+      count: number,
+      oldestMsgKey: { remoteJid: string; fromMe: boolean; id: string },
+      oldestMsgTimestamp: number,
+    ): Promise<string> => {
+      if (!params.sock.fetchMessageHistory) {
+        throw new Error("fetchMessageHistory not available on this socket");
+      }
+      return await params.sock.fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestamp);
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);

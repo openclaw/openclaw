@@ -504,9 +504,17 @@ export const en: TranslationMap = {
       payloadKind: "What should run?",
       systemEvent: "Post message to main timeline",
       agentTurn: "Run assistant task (isolated)",
+      script: "Run script (no LLM)",
       systemEventHelp:
         "Sends your text to the gateway main timeline (good for reminders/triggers).",
       agentTurnHelp: "Starts an assistant run in its own session using your prompt.",
+      scriptHelp: "Runs a shell command directly. No LLM, no tokens.",
+      scriptCommand: "Command",
+      scriptCommandPlaceholder: "e.g. node, bash, python3",
+      scriptArgs: "Arguments",
+      scriptArgsPlaceholder: "Space-separated, e.g. script.mjs --flag",
+      scriptCwd: "Working directory",
+      scriptCwdPlaceholder: "Optional, e.g. /Users/me/.openclaw",
       timeoutSeconds: "Timeout (seconds)",
       timeoutPlaceholder: "Optional, e.g. 90",
       timeoutHelp:
@@ -574,6 +582,7 @@ export const en: TranslationMap = {
     jobDetail: {
       system: "System",
       prompt: "Prompt",
+      script: "Script",
       delivery: "Delivery",
       agent: "Agent",
     },
@@ -597,6 +606,7 @@ export const en: TranslationMap = {
       staggerAmountInvalid: "Stagger must be greater than 0.",
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
+      scriptCommandRequired: "Script command is required.",
       timeoutInvalid: "If set, timeout must be greater than 0 seconds.",
       webhookUrlRequired: "Webhook URL is required.",
       webhookUrlInvalid: "Webhook URL must start with http:// or https://.",

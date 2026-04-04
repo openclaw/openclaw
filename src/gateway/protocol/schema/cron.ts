@@ -127,6 +127,28 @@ export const CronScheduleSchema = Type.Union([
   ),
 ]);
 
+const CronScriptPayloadSchema = Type.Object(
+  {
+    kind: Type.Literal("script"),
+    command: NonEmptyString,
+    args: Type.Optional(Type.Array(Type.String())),
+    cwd: Type.Optional(Type.String()),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+const CronScriptPayloadPatchSchema = Type.Object(
+  {
+    kind: Type.Literal("script"),
+    command: Type.Optional(NonEmptyString),
+    args: Type.Optional(Type.Array(Type.String())),
+    cwd: Type.Optional(Type.String()),
+    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 export const CronPayloadSchema = Type.Union([
   Type.Object(
     {
@@ -139,6 +161,7 @@ export const CronPayloadSchema = Type.Union([
     message: NonEmptyString,
     toolsAllow: Type.Array(Type.String()),
   }),
+  CronScriptPayloadSchema,
 ]);
 
 export const CronPayloadPatchSchema = Type.Union([
@@ -153,6 +176,7 @@ export const CronPayloadPatchSchema = Type.Union([
     message: Type.Optional(NonEmptyString),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
   }),
+  CronScriptPayloadPatchSchema,
 ]);
 
 export const CronFailureAlertSchema = Type.Object(

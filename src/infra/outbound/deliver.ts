@@ -451,6 +451,7 @@ async function applyMessageSendingHook(params: {
           channel: params.channel,
           accountId: params.accountId,
           mediaUrls: params.payloadSummary.mediaUrls,
+          openclawInitiated: true,
         },
       },
       {

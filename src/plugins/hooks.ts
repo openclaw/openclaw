@@ -37,6 +37,7 @@ import type {
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookMessageReceivedResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -88,6 +89,7 @@ export type {
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
+  PluginHookMessageReceivedResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -642,13 +644,26 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run message_received hook.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to suppress messages from reaching the agent/LLM.
+   * Runs sequentially.
    */
   async function runMessageReceived(
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
-  ): Promise<void> {
-    return runVoidHook("message_received", event, ctx);
+  ): Promise<PluginHookMessageReceivedResult | undefined> {
+    return runModifyingHook<"message_received", PluginHookMessageReceivedResult>(
+      "message_received",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => ({
+          // If ANY handler returns suppress: true, suppress the message
+          suppress: acc?.suppress || next.suppress || false,
+          // Last hook that sets content wins
+          content: next.content ?? acc?.content,
+        }),
+      },
+    );
   }
 
   /**

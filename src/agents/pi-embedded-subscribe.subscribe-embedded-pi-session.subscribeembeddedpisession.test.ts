@@ -502,6 +502,6 @@ describe("subscribeEmbeddedPiSession", () => {
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
     expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+    expect(lifecycleError?.data?.error).toContain("Permitenos un momento");
   });
 });

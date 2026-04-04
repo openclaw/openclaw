@@ -140,6 +140,7 @@ export function buildInboundUserContextPrefix(
     has_reply_context: ctx.ReplyToBody ? true : undefined,
     has_forwarded_context: ctx.ForwardedFrom ? true : undefined,
     has_thread_starter: safeTrim(ctx.ThreadStarterBody) ? true : undefined,
+    ctwa_clid: safeTrim(ctx.CtwaClid),
     history_count:
       Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
         ? ctx.InboundHistory.length

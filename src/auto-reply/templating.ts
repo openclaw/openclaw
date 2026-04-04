@@ -138,6 +138,8 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  /** True when message sent by account owner via WhatsApp Web (fromMe: true). */
+  IsAccountOwnerMessage?: boolean;
   Timestamp?: number;
   /** Provider label (e.g. whatsapp, telegram). */
   Provider?: string;
@@ -177,6 +179,7 @@ export type MsgContext = {
    * The chat/channel/user ID where the reply should be sent.
    */
   OriginatingTo?: string;
+  CtwaClid?: string;
   /**
    * True when the current turn intentionally requested external delivery to
    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.

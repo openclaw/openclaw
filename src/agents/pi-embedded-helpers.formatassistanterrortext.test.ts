@@ -61,7 +61,7 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}',
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
+      "Permitenos un momento. Te atenderemos tan pronto nos sea posible.",
     );
   });
   it("returns a recovery hint when tool call input is missing", () => {

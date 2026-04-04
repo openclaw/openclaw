@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 
 type SessionHeaderEntry = { type: "session"; id?: string; cwd?: string };
-type SessionMessageEntry = { type: "message"; message?: { role?: string } };
+type SessionMessageEntry = {
+  type: "message";
+  message?: { role?: string; content?: unknown };
+};
 
 /**
  * pi-coding-agent SessionManager persistence quirk:
@@ -49,5 +52,26 @@ export async function prepareSessionManagerForRun(params: {
     sm.labelsById?.clear?.();
     sm.leafId = null;
     sm.flushed = false;
+    return;
+  }
+
+  if (params.hadSessionFile) {
+    // Strip trailing empty assistant messages left by aborted runs.
+    // An abort mid-stream can write an assistant entry with content:[] before any
+    // tokens arrive, causing the next "continue" to loop on the same tool calls.
+    const lastEntry = sm.fileEntries[sm.fileEntries.length - 1];
+    const lastMsg = (lastEntry as SessionMessageEntry | undefined)?.message;
+    const isEmptyAssistant =
+      lastEntry?.type === "message" &&
+      lastMsg?.role === "assistant" &&
+      Array.isArray(lastMsg.content) &&
+      (lastMsg.content as unknown[]).length === 0;
+
+    if (isEmptyAssistant) {
+      sm.fileEntries.pop();
+      // Rewrite file without the trailing empty assistant entry.
+      const repaired = sm.fileEntries.map((e) => JSON.stringify(e)).join("\n") + "\n";
+      await fs.writeFile(params.sessionFile, repaired, "utf-8");
+    }
   }
 }

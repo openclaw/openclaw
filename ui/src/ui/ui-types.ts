@@ -36,8 +36,11 @@ export type CronFormState = {
   staggerUnit: "seconds" | "minutes";
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn";
+  payloadKind: "systemEvent" | "agentTurn" | "script";
   payloadText: string;
+  scriptCommand: string;
+  scriptArgs: string;
+  scriptCwd: string;
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;

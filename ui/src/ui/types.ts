@@ -461,6 +461,13 @@ export type CronPayload =
       channel?: string;
       to?: string;
       bestEffortDeliver?: boolean;
+    }
+  | {
+      kind: "script";
+      command: string;
+      args?: string[];
+      cwd?: string;
+      timeoutSeconds?: number;
     };
 
 export type CronDelivery = {

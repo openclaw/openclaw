@@ -109,6 +109,7 @@ export function createWebOnMessageHandler(params: {
         SenderName: sender.name ?? undefined,
         SenderId: getPrimaryIdentityId(sender) ?? undefined,
         SenderE164: sender.e164 ?? undefined,
+        IsAccountOwnerMessage: msg.isAccountOwnerMessage,
         Provider: "whatsapp",
         Surface: "whatsapp",
         OriginatingChannel: "whatsapp",

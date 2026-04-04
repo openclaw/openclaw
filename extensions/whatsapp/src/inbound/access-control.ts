@@ -19,6 +19,7 @@ export type InboundAccessControlResult = {
   shouldMarkRead: boolean;
   isSelfChat: boolean;
   resolvedAccountId: string;
+  isAccountOwnerMessage?: boolean; // True when message sent by account owner via WhatsApp Web (fromMe: true)
 };
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
@@ -149,12 +150,15 @@ export async function checkInboundAccessControl(params: {
   // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled".
   if (!params.group) {
     if (params.isFromMe && !isSamePhone) {
-      logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
+      // Allow fromMe messages to pass through to hooks (for handoff detection)
+      // but mark them specially so plugins can detect account owner messages
+      logVerbose("Allowing outbound DM (fromMe) to reach hooks for handoff detection");
       return {
-        allowed: false,
+        allowed: true,
         shouldMarkRead: false,
         isSelfChat,
         resolvedAccountId: account.accountId,
+        isAccountOwnerMessage: true,
       };
     }
     if (access.decision === "block" && access.reason === "dmPolicy=disabled") {

@@ -420,15 +420,32 @@ export async function dispatchReplyFromConfig(params: {
     }
   }
 
-  // Trigger plugin hooks (fire-and-forget)
+  // Trigger plugin hooks and check for message suppression
   if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetHook(
-      hookRunner.runMessageReceived(
+    const hookResult = await hookRunner
+      .runMessageReceived(
         toPluginMessageReceivedEvent(hookContext),
         toPluginMessageContext(hookContext),
-      ),
-      "dispatch-from-config: message_received plugin hook failed",
-    );
+      )
+      .catch((err) => {
+        logVerbose(`dispatch-from-config: message_received plugin hook failed: ${String(err)}`);
+        return undefined;
+      });
+
+    // Check if message should be suppressed
+    if (hookResult?.suppress) {
+      recordProcessed("skipped", { reason: "suppressed_by_hook" });
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+
+    // Apply content rewrite from plugin hook
+    if (hookResult?.content != null) {
+      ctx.Body = hookResult.content;
+      ctx.RawBody = hookResult.content;
+      if (ctx.BodyForCommands != null) {
+        ctx.BodyForCommands = hookResult.content;
+      }
+    }
   }
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807

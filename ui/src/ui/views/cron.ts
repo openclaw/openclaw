@@ -282,6 +282,7 @@ function fieldLabelForKey(
     cronExpr: t("cron.form.expression"),
     staggerAmount: t("cron.form.staggerWindow"),
     payloadText: t("cron.form.assistantTaskPrompt"),
+    scriptCommand: t("cron.form.scriptCommand"),
     payloadModel: t("cron.form.model"),
     payloadThinking: t("cron.form.thinking"),
     timeoutSeconds: t("cron.form.timeoutSeconds"),
@@ -304,6 +305,7 @@ function collectBlockingFields(
     "cronExpr",
     "staggerAmount",
     "payloadText",
+    "scriptCommand",
     "payloadModel",
     "payloadThinking",
     "timeoutSeconds",
@@ -353,6 +355,7 @@ function renderFieldLabel(text: string, required = false) {
 export function renderCron(props: CronProps) {
   const isEditing = Boolean(props.editingJobId);
   const isAgentTurn = props.form.payloadKind === "agentTurn";
+  const isScript = props.form.payloadKind === "script";
   const isCronSchedule = props.form.scheduleKind === "cron";
   const channelOptions = buildChannelOptions(props);
   const selectedJob =
@@ -831,14 +834,17 @@ export function renderCron(props: CronProps) {
                 >
                   <option value="systemEvent">${t("cron.form.systemEvent")}</option>
                   <option value="agentTurn">${t("cron.form.agentTurn")}</option>
+                  <option value="script">${t("cron.form.script")}</option>
                 </select>
                 <div class="cron-help">
                   ${props.form.payloadKind === "systemEvent"
                     ? t("cron.form.systemEventHelp")
-                    : t("cron.form.agentTurnHelp")}
+                    : props.form.payloadKind === "script"
+                      ? t("cron.form.scriptHelp")
+                      : t("cron.form.agentTurnHelp")}
                 </div>
               </label>
-              ${isAgentTurn
+              ${isAgentTurn || isScript
                 ? html`
                     <label class="field">
                       ${renderFieldLabel(t("cron.form.timeoutSeconds"))}
@@ -866,28 +872,72 @@ export function renderCron(props: CronProps) {
                   `
                 : nothing}
             </div>
-            <label class="field cron-span-2">
-              ${renderFieldLabel(
-                props.form.payloadKind === "systemEvent"
-                  ? t("cron.form.mainTimelineMessage")
-                  : t("cron.form.assistantTaskPrompt"),
-                true,
-              )}
-              <textarea
-                id="cron-payload-text"
-                .value=${props.form.payloadText}
-                aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
-                aria-describedby=${ifDefined(
-                  props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
-                )}
-                @input=${(e: Event) =>
-                  props.onFormChange({
-                    payloadText: (e.target as HTMLTextAreaElement).value,
-                  })}
-                rows="4"
-              ></textarea>
-              ${renderFieldError(props.fieldErrors.payloadText, errorIdForField("payloadText"))}
-            </label>
+            ${isScript
+              ? html`
+                  <label class="field">
+                    ${renderFieldLabel(t("cron.form.scriptCommand"), true)}
+                    <input
+                      id="cron-script-command"
+                      .value=${props.form.scriptCommand}
+                      placeholder=${t("cron.form.scriptCommandPlaceholder")}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          scriptCommand: (e.target as HTMLInputElement).value,
+                        })}
+                    />
+                  </label>
+                  <label class="field">
+                    ${renderFieldLabel(t("cron.form.scriptArgs"))}
+                    <input
+                      id="cron-script-args"
+                      .value=${props.form.scriptArgs}
+                      placeholder=${t("cron.form.scriptArgsPlaceholder")}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          scriptArgs: (e.target as HTMLInputElement).value,
+                        })}
+                    />
+                  </label>
+                  <label class="field cron-span-2">
+                    ${renderFieldLabel(t("cron.form.scriptCwd"))}
+                    <input
+                      id="cron-script-cwd"
+                      .value=${props.form.scriptCwd}
+                      placeholder=${t("cron.form.scriptCwdPlaceholder")}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          scriptCwd: (e.target as HTMLInputElement).value,
+                        })}
+                    />
+                  </label>
+                `
+              : html`
+                  <label class="field cron-span-2">
+                    ${renderFieldLabel(
+                      props.form.payloadKind === "systemEvent"
+                        ? t("cron.form.mainTimelineMessage")
+                        : t("cron.form.assistantTaskPrompt"),
+                      true,
+                    )}
+                    <textarea
+                      id="cron-payload-text"
+                      .value=${props.form.payloadText}
+                      aria-invalid=${props.fieldErrors.payloadText ? "true" : "false"}
+                      aria-describedby=${ifDefined(
+                        props.fieldErrors.payloadText ? errorIdForField("payloadText") : undefined,
+                      )}
+                      @input=${(e: Event) =>
+                        props.onFormChange({
+                          payloadText: (e.target as HTMLTextAreaElement).value,
+                        })}
+                      rows="4"
+                    ></textarea>
+                    ${renderFieldError(
+                      props.fieldErrors.payloadText,
+                      errorIdForField("payloadText"),
+                    )}
+                  </label>
+                `}
           </section>
 
           <section class="cron-form-section">
@@ -1571,6 +1621,22 @@ function renderJobPayload(job: CronJob) {
     return html`<div class="cron-job-detail">
       <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>
       <span class="muted cron-job-detail-value">${job.payload.text}</span>
+    </div>`;
+  }
+
+  if (job.payload.kind === "script") {
+    const cmdLine = [job.payload.command, ...(job.payload.args ?? [])].join(" ");
+    return html`<div class="cron-job-detail">
+      <span class="cron-job-detail-label">${t("cron.jobDetail.script")}</span>
+      <span class="muted cron-job-detail-value"><code>${cmdLine}</code></span>
+    </div>`;
+  }
+
+  if (job.payload.kind === "script") {
+    const cmdLine = [job.payload.command, ...(job.payload.args ?? [])].join(" ");
+    return html`<div class="cron-job-detail">
+      <span class="cron-job-detail-label">${t("cron.jobDetail.script")}</span>
+      <span class="muted cron-job-detail-value"><code>${cmdLine}</code></span>
     </div>`;
   }
 

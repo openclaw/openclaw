@@ -16,7 +16,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
-import { setActiveWebListener } from "../active-listener.js";
+import { setActiveWebListener, type ActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
 import {
   computeBackoff,
@@ -227,7 +227,7 @@ export async function monitorWebChannel(
       sessionKey: connectRoute.sessionKey,
     });
 
-    setActiveWebListener(account.accountId, listener);
+    setActiveWebListener(account.accountId, listener as unknown as ActiveWebListener);
     active.unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) {
         return false;

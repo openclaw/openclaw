@@ -47,6 +47,9 @@ export function registerCronEditCommand(cron: Command) {
       .option("--exact", "Disable cron staggering (set stagger to 0)")
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
+      .option("--script <command>", "Set script command payload (no LLM needed)")
+      .option("--script-args <args...>", "Arguments for --script command")
+      .option("--script-cwd <path>", "Working directory for --script command")
       .option(
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
@@ -87,6 +90,11 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.session === "main" && opts.message) {
             throw new Error(
               "Main jobs cannot use --message; use --system-event or --session isolated.",
+            );
+          }
+          if (opts.session === "main" && opts.script) {
+            throw new Error(
+              "Main jobs cannot use --script; use --system-event or --session isolated.",
             );
           }
           if (opts.session === "isolated" && opts.systemEvent) {
@@ -169,6 +177,7 @@ export function registerCronEditCommand(cron: Command) {
           }
 
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
+          const hasScriptPatch = typeof opts.script === "string";
           const model =
             typeof opts.model === "string" && opts.model.trim() ? opts.model.trim() : undefined;
           const thinking =
@@ -195,7 +204,10 @@ export function registerCronEditCommand(cron: Command) {
             hasDeliveryTarget ||
             hasDeliveryAccount ||
             hasBestEffort;
-          if (hasSystemEventPatch && hasAgentTurnPatch) {
+          const payloadKindCount = [hasSystemEventPatch, hasAgentTurnPatch, hasScriptPatch].filter(
+            Boolean,
+          ).length;
+          if (payloadKindCount > 1) {
             throw new Error("Choose at most one payload change");
           }
           if (hasSystemEventPatch) {
@@ -203,6 +215,22 @@ export function registerCronEditCommand(cron: Command) {
               kind: "systemEvent",
               text: String(opts.systemEvent),
             };
+          } else if (hasScriptPatch) {
+            const payload: Record<string, unknown> = {
+              kind: "script",
+              command: String(opts.script).trim(),
+            };
+            const scriptArgs = Array.isArray(opts.scriptArgs)
+              ? (opts.scriptArgs as string[])
+              : undefined;
+            const scriptCwd =
+              typeof opts.scriptCwd === "string" && opts.scriptCwd.trim()
+                ? opts.scriptCwd.trim()
+                : undefined;
+            assignIf(payload, "args", scriptArgs, Boolean(scriptArgs));
+            assignIf(payload, "cwd", scriptCwd, Boolean(scriptCwd));
+            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            patch.payload = payload;
           } else if (hasAgentTurnPatch) {
             const payload: Record<string, unknown> = { kind: "agentTurn" };
             assignIf(payload, "message", String(opts.message), typeof opts.message === "string");

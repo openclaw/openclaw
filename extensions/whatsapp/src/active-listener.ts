@@ -25,8 +25,66 @@ export type ActiveWebListener = {
     participant?: string,
   ) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
+  addChatLabel: (chatJid: string, labelId: string) => Promise<void>;
+  removeChatLabel: (chatJid: string, labelId: string) => Promise<void>;
+  getLabels?: () => Promise<
+    { id: string; name: string; color: number; deleted: boolean; predefinedId?: string }[]
+  >;
+  createLabel?: (
+    name: string,
+    color: number,
+  ) => Promise<{ id: string; name: string; color: number } | undefined>;
+  addLabel?: (
+    jid: string,
+    labels: { id: string; name?: string; color?: number; deleted?: boolean; predefinedId?: number },
+  ) => Promise<void>;
+  addMessageLabel?: (jid: string, messageId: string, labelId: string) => Promise<void>;
+  removeMessageLabel?: (jid: string, messageId: string, labelId: string) => Promise<void>;
+  onWhatsApp?: (
+    ...phoneNumbers: string[]
+  ) => Promise<{ jid: string; exists: boolean }[] | undefined>;
+  getBusinessProfile?: (jid: string) => Promise<unknown>;
+  fetchStatus?: (...jids: string[]) => Promise<unknown>;
+  chatModify?: (mod: unknown, jid: string) => Promise<void>;
+  fetchBlocklist?: () => Promise<(string | undefined)[]>;
+  profilePictureUrl?: (
+    jid: string,
+    type?: "preview" | "image",
+    timeoutMs?: number,
+  ) => Promise<string | undefined>;
+  groupMetadata?: (jid: string) => Promise<unknown>;
+  readMessages?: (keys: unknown[]) => Promise<void>;
+  star?: (
+    jid: string,
+    messages: { id: string; fromMe?: boolean }[],
+    star: boolean,
+  ) => Promise<void>;
+  fetchMessageHistory?: (
+    count: number,
+    oldestMsgKey: { remoteJid: string; fromMe: boolean; id: string },
+    oldestMsgTimestamp: number,
+  ) => Promise<string>;
   close?: () => Promise<void>;
 };
+
+// Raw message subscribers — plugins can register to receive every WAMessage
+type RawMessageCallback = (accountId: string, msg: unknown) => void;
+const rawMessageSubscribers = new Set<RawMessageCallback>();
+
+export function onRawWhatsAppMessage(cb: RawMessageCallback): () => void {
+  rawMessageSubscribers.add(cb);
+  return () => rawMessageSubscribers.delete(cb);
+}
+
+export function emitRawWhatsAppMessage(accountId: string, msg: unknown): void {
+  for (const cb of rawMessageSubscribers) {
+    try {
+      cb(accountId, msg);
+    } catch (err) {
+      console.error("[whatsapp] Raw message subscriber error:", err);
+    }
+  }
+}
 
 // WhatsApp shares a live Baileys socket between inbound and outbound runtime
 // chunks. Keep this on a direct globalThis symbol lookup; the generic

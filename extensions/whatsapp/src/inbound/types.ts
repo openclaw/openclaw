@@ -37,6 +37,7 @@ export type WebInboundMessage = {
   selfJid?: string | null;
   selfLid?: string | null;
   selfE164?: string | null;
+  isAccountOwnerMessage?: boolean; // True when sent by account owner via WhatsApp Web (fromMe: true)
   fromMe?: boolean;
   location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
@@ -46,5 +47,6 @@ export type WebInboundMessage = {
   mediaType?: string;
   mediaFileName?: string;
   mediaUrl?: string;
+  ctwaClid?: string;
   wasMentioned?: boolean;
 };

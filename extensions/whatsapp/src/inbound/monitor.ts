@@ -7,6 +7,7 @@ import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { resolveJidToE164 } from "openclaw/plugin-sdk/text-runtime";
+import { emitRawWhatsAppMessage } from "../active-listener.js";
 import { readWebSelfIdentity } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
@@ -20,6 +21,7 @@ import {
   describeReplyContext,
   extractLocationData,
   extractMediaPlaceholder,
+  extractContextInfo,
   extractMentionedJids,
   extractText,
 } from "./extract.js";
@@ -320,6 +322,7 @@ export async function monitorWebInbox(options: {
     mediaPath?: string;
     mediaType?: string;
     mediaFileName?: string;
+    ctwaClid?: string;
   };
 
   const enrichInboundMessage = async (msg: WAMessage): Promise<EnrichedInboundMessage | null> => {
@@ -336,6 +339,10 @@ export async function monitorWebInbox(options: {
       }
     }
     const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+    const ctwaContextInfo = extractContextInfo(msg.message as proto.IMessage | undefined);
+    const ctwaClid = (ctwaContextInfo as Record<string, unknown> | undefined)?.ctwaClid as
+      | string
+      | undefined;
 
     let mediaPath: string | undefined;
     let mediaType: string | undefined;
@@ -370,6 +377,7 @@ export async function monitorWebInbox(options: {
       mediaPath,
       mediaType,
       mediaFileName,
+      ctwaClid,
     };
   };
 
@@ -449,6 +457,7 @@ export async function monitorWebInbox(options: {
       mediaPath: enriched.mediaPath,
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
+      ctwaClid: enriched.ctwaClid,
     };
     try {
       const task = Promise.resolve(debouncer.enqueue(inboundMessage));
@@ -467,6 +476,7 @@ export async function monitorWebInbox(options: {
       return;
     }
     for (const msg of upsert.messages ?? []) {
+      emitRawWhatsAppMessage(options.accountId, msg);
       recordChannelActivity({
         channel: "whatsapp",
         accountId: options.accountId,
@@ -552,6 +562,8 @@ export async function monitorWebInbox(options: {
     sock: {
       sendMessage: (jid: string, content: AnyMessageContent) => sendTrackedMessage(jid, content),
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
+      addChatLabel: sock.addChatLabel?.bind(sock),
+      removeChatLabel: sock.removeChatLabel?.bind(sock),
     },
     defaultAccountId: options.accountId,
   });
@@ -570,7 +582,7 @@ export async function monitorWebInbox(options: {
     signalClose: (reason?: WebListenerCloseReason) => {
       resolveClose(reason ?? { status: undefined, isLoggedOut: false, error: "closed" });
     },
-    // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo)
+    // IPC surface (sendMessage/sendPoll/sendReaction/sendComposingTo + Baileys extras)
     ...sendApi,
-  } as const;
+  };
 }

@@ -43,6 +43,9 @@ export type CanonicalInboundMessageHookContext = {
   channelName?: string;
   isGroup: boolean;
   groupId?: string;
+  isAccountOwnerMessage?: boolean;
+  fromMe?: boolean;
+  ctwaClid?: string;
 };
 
 export type CanonicalSentMessageHookContext = {
@@ -124,6 +127,8 @@ export function deriveInboundMessageHookContext(
     channelName: ctx.GroupChannel,
     isGroup,
     groupId: isGroup ? conversationId : undefined,
+    isAccountOwnerMessage: ctx.IsAccountOwnerMessage,
+    ctwaClid: ctx.CtwaClid,
   };
 }
 
@@ -316,6 +321,8 @@ export function toPluginMessageReceivedEvent(
       senderE164: canonical.senderE164,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
+      sentByAccountOwner: canonical.isAccountOwnerMessage,
+      ctwaClid: canonical.ctwaClid,
     },
   };
 }
@@ -353,6 +360,8 @@ export function toInternalMessageReceivedContext(
       senderE164: canonical.senderE164,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
+      sentByAccountOwner: canonical.isAccountOwnerMessage,
+      ctwaClid: canonical.ctwaClid,
     },
   };
 }
