@@ -190,6 +190,16 @@ openclaw browser --browser-profile chrome-live tabs
 
 This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
 
+Current existing-session limits:
+
+- snapshot-driven actions use refs, not CSS selectors
+- `click` is left-click only
+- `type` does not support `slowly=true`
+- `press` does not support `delayMs`
+- `wait --load networkidle` is not supported
+- `responsebody`, download interception, PDF export, and batch actions still
+  require a managed browser or raw CDP profile
+
 ## Remote browser control (node host proxy)
 
 If the Gateway runs on a different machine than the browser, run a **node host** on the machine that has Chrome/Brave/Edge/Chromium. The Gateway will proxy browser actions to that node (no separate browser control server required).

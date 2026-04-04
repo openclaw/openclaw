@@ -481,10 +481,20 @@ Notes:
   Chromium user data directory.
 - Existing-session screenshots support page captures and `--ref` element
   captures from snapshots, but not CSS `--element` selectors.
+- Existing-session actions are still more limited than the managed browser
+  path:
+  - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require
+    snapshot refs instead of CSS selectors
+  - `click` is left-button only (no button overrides or modifiers)
+  - `type` does not support `slowly=true`; use `fill` or `press`
+  - `press` does not support `delayMs`
+  - `hover`, `scrollIntoView`, `drag`, `select`, and `evaluate` do not support
+    per-call timeout overrides
+  - `select` currently supports a single value only
 - Existing-session `wait --url` supports exact, substring, and glob patterns
   like other browser drivers. `wait --load networkidle` is not supported yet.
-- Some features still require the managed browser path, such as PDF export and
-  download interception.
+- Some features still require the managed browser path, including batch
+  actions, PDF export, download interception, and `responsebody`.
 - Existing-session is host-local. If Chrome lives on a different machine or a
   different network namespace, use remote CDP or a node host instead.
 
