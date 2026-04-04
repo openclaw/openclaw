@@ -127,30 +127,6 @@ export async function applyNonInteractiveAuthChoice(params: {
     return null;
   }
 
-  if (authChoice === "setup-token") {
-    runtime.error(
-      [
-        'Auth choice "setup-token" is no longer supported for Anthropic onboarding.',
-        "Existing Anthropic token profiles still run if they are already configured.",
-        'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
-  if (authChoice === "token") {
-    runtime.error(
-      [
-        'Auth choice "token" is no longer supported for Anthropic onboarding.',
-        "Existing Anthropic token profiles still run if they are already configured.",
-        'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
-  }
-
   const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
     nextConfig,
     authChoice,
@@ -167,6 +143,17 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (pluginProviderChoice !== undefined) {
     return pluginProviderChoice;
+  }
+
+  if (authChoice === "setup-token" || authChoice === "token") {
+    runtime.error(
+      [
+        `Auth choice "${params.authChoice}" was not matched to a provider setup flow.`,
+        'For Anthropic legacy token auth, use "--auth-choice setup-token --token-provider anthropic --token <token>" or pass "--auth-choice token --token-provider anthropic".',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
   }
 
   const deprecatedChoice = resolveManifestDeprecatedProviderAuthChoice(authChoice as string, {
@@ -261,11 +248,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   ) {
     runtime.error(
       authChoice === "oauth"
-        ? [
-            'Auth choice "oauth" is no longer supported for Anthropic onboarding.',
-            "Existing Anthropic token profiles still run if they are already configured.",
-            'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
-          ].join("\n")
+        ? 'Auth choice "oauth" is no longer supported directly. Use "--auth-choice setup-token --token-provider anthropic" for Anthropic legacy token auth, or a provider-specific OAuth choice.'
         : "OAuth requires interactive mode.",
     );
     runtime.exit(1);

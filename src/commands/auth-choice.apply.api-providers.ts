@@ -10,11 +10,20 @@ export function normalizeApiKeyTokenProviderAuthChoice(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): AuthChoice {
-  if (params.authChoice !== "apiKey" || !params.tokenProvider) {
+  if (!params.tokenProvider) {
     return params.authChoice;
   }
   const normalizedTokenProvider = normalizeTokenProviderInput(params.tokenProvider);
   if (!normalizedTokenProvider) {
+    return params.authChoice;
+  }
+  if (
+    (params.authChoice === "token" || params.authChoice === "setup-token") &&
+    normalizedTokenProvider === "anthropic"
+  ) {
+    return "setup-token";
+  }
+  if (params.authChoice !== "apiKey") {
     return params.authChoice;
   }
   return (
