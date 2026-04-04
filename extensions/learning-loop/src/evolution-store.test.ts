@@ -214,6 +214,32 @@ describe("EvolutionStore", () => {
     expect(firstStore.loadEvolutionFile("shared-skill").entries).toEqual([firstEntry, secondEntry]);
   });
 
+  it("solidifies entries when the section name contains regex metacharacters", async () => {
+    const { dir, store } = createStore();
+    const skillName = "regex-skill";
+    const skillDir = join(dir, skillName);
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      "# regex-skill\n\n## Instructions(\n\nExisting rule.\n",
+      "utf-8",
+    );
+
+    const bodyEntry = createEvolutionEntry("execution_failure", "regex", {
+      section: "Instructions(",
+      action: "append",
+      content: "Do not crash when a section name includes regex characters.",
+      target: "body",
+    });
+
+    await store.appendEntry(skillName, bodyEntry);
+    await expect(store.solidify(skillName)).resolves.toBe(1);
+
+    expect(readFileSync(join(skillDir, "SKILL.md"), "utf-8")).toContain(
+      "Do not crash when a section name includes regex characters.",
+    );
+  });
+
   it("builds unique temp file names for atomic writes", () => {
     const filePath = "/tmp/openclaw/evolutions.json";
     const tempPathA = buildAtomicTempPath(filePath);

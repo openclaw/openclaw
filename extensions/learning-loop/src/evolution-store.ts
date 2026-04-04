@@ -19,6 +19,10 @@ export function buildAtomicTempPath(filePath: string): string {
   return `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID()}`;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // ============================================================================
 // Store
 // ============================================================================
@@ -305,7 +309,7 @@ export class EvolutionStore {
    */
   private injectIntoSection(markdown: string, sectionName: string, content: string): string {
     const trimmedContent = content.trim();
-    const headerRegex = new RegExp(`^(##\\s+${sectionName})\\s*$`, "mi");
+    const headerRegex = new RegExp(`^(##\\s+${escapeRegExp(sectionName)})\\s*$`, "mi");
     const match = headerRegex.exec(markdown);
 
     if (match) {
