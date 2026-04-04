@@ -1,0 +1,229 @@
+/* ================================================
+   Session Sidebar Styles
+   Part of: ui/src/styles/components.css (added section)
+   ================================================ */
+
+/* --- Session Sidebar Container --- */
+.session-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  min-width: 280px;
+  max-width: 280px;
+  height: 100%;
+  background: var(--card);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.session-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.session-sidebar__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin: 0;
+}
+
+.session-sidebar__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.session-sidebar__close:hover {
+  background: var(--bg-muted);
+  color: var(--text);
+}
+
+.session-sidebar__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.session-sidebar__loading,
+.session-sidebar__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px 16px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.session-sidebar__footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* --- Session Groups --- */
+.session-sidebar__group {
+  margin-bottom: 8px;
+}
+
+.session-sidebar__group-label {
+  padding: 4px 16px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+/* --- Session Item --- */
+.session-sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.session-sidebar-item:hover {
+  background: var(--bg-muted);
+}
+
+.session-sidebar-item--active {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.session-sidebar-item--active:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.session-sidebar-item__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.session-sidebar-item--active .session-sidebar-item__icon {
+  color: var(--accent);
+}
+
+.session-sidebar-item__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-sidebar-item__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-sidebar-item--active .session-sidebar-item__name {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.session-sidebar-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.session-sidebar-item__model {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 80px;
+}
+
+.session-sidebar-item__context {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-muted);
+  flex-shrink: 0;
+}
+
+.session-sidebar-item__context-bar {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* --- New Chat Button --- */
+.session-sidebar__new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.session-sidebar__new-btn:hover {
+  background: var(--bg-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- Collapsed mode (icon only) --- */
+.session-sidebar--collapsed {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+}
+
+.session-sidebar--collapsed .session-sidebar__header {
+  padding: 12px 8px;
+}
+
+.session-sidebar--collapsed .session-sidebar__title,
+.session-sidebar--collapsed .session-sidebar__footer span {
+  display: none;
+}
+
+.session-sidebar--collapsed .session-sidebar-item__content,
+.session-sidebar--collapsed .session-sidebar-item__context {
+  display: none;
+}
+
+.session-sidebar--collapsed .session-sidebar-item {
+  padding: 10px 8px;
+  justify-content: center;
+}

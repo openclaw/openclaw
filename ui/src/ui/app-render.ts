@@ -3,7 +3,7 @@ import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
-} from "../../../src/routing/session-key.js";
+} from "./session-key.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
@@ -1544,6 +1544,13 @@ export function renderApp(state: AppViewState) {
               onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
               onCloseSidebar: () => state.handleCloseSidebar(),
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+              // Session sidebar props
+              sessionSidebarOpen: state.sessionSidebarOpen,
+              sessionSidebarOnClose: () => state.handleCloseSessionSidebar(),
+              sessionSidebarOnSessionSelect: (key: string) => state.handleSessionSelectFromSidebar(key),
+              sessionSidebarOnNewSession: () => state.handleNewSessionFromSidebar(),
+              sessionSidebarLoading: state.sessionsLoading,
+              sessionSidebarOnOpen: () => state.handleOpenSessionSidebar(),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
               basePath: state.basePath ?? "",

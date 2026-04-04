@@ -6,6 +6,7 @@
 @import "./styles/config.css";
 @import "./styles/usage.css";
 @import "@create-markdown/preview/themes/system.css";
+@import "./styles/session-sidebar.css";
 
 .cm-preview {
   --cm-mono: var(--mono);

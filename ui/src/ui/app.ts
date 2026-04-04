@@ -1,6 +1,6 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -20,6 +20,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
+import { loadChatHistory, type ChatState } from "./controllers/chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
@@ -184,6 +185,9 @@ export class OpenClawApp extends LitElement {
   @state() sidebarContent: string | null = null;
   @state() sidebarError: string | null = null;
   @state() splitRatio = this.settings.splitRatio;
+
+  // Session sidebar for chat view
+  @state() sessionSidebarOpen = false;
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -484,6 +488,15 @@ export class OpenClawApp extends LitElement {
         this.paletteActiveIndex = 0;
       }
     }
+    // Ctrl+\` (or Cmd+\` on Mac) — toggle session sidebar
+    if ((e.metaKey || e.ctrlKey) && e.key === "`") {
+      e.preventDefault();
+      if (this.sessionSidebarOpen) {
+        this.handleCloseSessionSidebar();
+      } else {
+        this.handleOpenSessionSidebar();
+      }
+    }
   };
 
   createRenderRoot() {
@@ -751,6 +764,7 @@ export class OpenClawApp extends LitElement {
 
   handleCloseSidebar() {
     this.sidebarOpen = false;
+    this.sessionSidebarOpen = false; // Also close session sidebar when outer sidebar closes
     // Clear content after transition
     if (this.sidebarCloseTimer != null) {
       window.clearTimeout(this.sidebarCloseTimer);
@@ -769,6 +783,41 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  // Session sidebar handlers
+  handleOpenSessionSidebar() {
+    this.sessionSidebarOpen = true;
+    // Also open the outer sidebar (tool output sidebar) so session sidebar has a container
+    if (!this.sidebarOpen) {
+      this.sidebarOpen = true;
+    }
+  }
+
+  handleCloseSessionSidebar() {
+    this.sessionSidebarOpen = false;
+  }
+
+  handleSessionSelectFromSidebar(key: string) {
+    // Clear old messages immediately so they don't flash during load
+    this.chatMessages = [];
+    this.chatMessage = "";
+    this.chatStream = null;
+    this.chatQueue = [];
+    this.chatStreamStartedAt = null;
+    this.chatRunId = null;
+    this.sessionKey = key;
+    this.applySettings({ ...this.settings, sessionKey: key, lastActiveSessionKey: key });
+    void this.loadAssistantIdentity();
+    // Close sidebar first (sync), then load history (async)
+    this.handleCloseSessionSidebar();
+    void loadChatHistory(this as unknown as ChatState);
+  }
+
+  handleNewSessionFromSidebar() {
+    // Use /new command to create a truly new session
+    this.handleCloseSessionSidebar();
+    void this.handleSendChat("/new");
   }
 
   render() {

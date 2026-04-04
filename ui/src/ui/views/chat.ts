@@ -37,6 +37,7 @@ import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
 import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
+import { renderSessionSidebar } from "../components/session-sidebar.ts";
 import "../components/resizable-divider.ts";
 
 export type ChatProps = {
@@ -95,6 +96,13 @@ export type ChatProps = {
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
+  // Session sidebar props
+  sessionSidebarOpen?: boolean;
+  sessionSidebarOnClose?: () => void;
+  sessionSidebarOnNewSession?: () => void;
+  sessionSidebarOnSessionSelect?: (key: string) => void;
+  sessionSidebarLoading?: boolean;
+  sessionSidebarOnOpen?: () => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
 };
@@ -1136,6 +1144,39 @@ export function renderChat(props: ChatProps) {
       return;
     }
 
+    // Cmd+` for session sidebar toggle (Ctrl+\` on Windows/Linux)
+    if ((e.metaKey || e.ctrlKey) && e.key === "`") {
+      e.preventDefault();
+      if (props.sessionSidebarOpen) {
+        props.sessionSidebarOnClose?.();
+      } else {
+        props.sessionSidebarOnOpen?.();
+      }
+      return;
+    }
+
+    // Cmd+\\ (Ctrl+Shift+\\) for session sidebar (alternative)
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "\\") {
+      e.preventDefault();
+      if (props.sessionSidebarOpen) {
+        props.sessionSidebarOnClose?.();
+      } else {
+        props.sessionSidebarOnOpen?.();
+      }
+      return;
+    }
+
+    // Cmd+N for new session (when not in input)
+    if ((e.metaKey || e.ctrlKey) && e.key === "n" && !vs.slashMenuOpen) {
+      // Only trigger when not typing in textarea (textarea has its own handler)
+      const target = e.target as HTMLElement;
+      if (target.tagName !== "TEXTAREA" && target.tagName !== "INPUT") {
+        e.preventDefault();
+        props.sessionSidebarOnNewSession?.();
+        return;
+      }
+    }
+
     // Send on Enter (without shift)
     if (e.key === "Enter" && !e.shiftKey) {
       if (e.isComposing || e.keyCode === 229) {
@@ -1203,17 +1244,29 @@ export function renderChat(props: ChatProps) {
                 @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
               ></resizable-divider>
               <div class="chat-sidebar">
-                ${renderMarkdownSidebar({
-                  content: props.sidebarContent ?? null,
-                  error: props.sidebarError ?? null,
-                  onClose: props.onCloseSidebar!,
-                  onViewRawText: () => {
-                    if (!props.sidebarContent || !props.onOpenSidebar) {
-                      return;
-                    }
-                    props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
-                  },
-                })}
+                ${
+                  props.sessionSidebarOpen
+                    ? renderSessionSidebar({
+                        sessions: props.sessions,
+                        activeSessionKey: props.sessionKey,
+                        onSessionSelect: (key) => props.sessionSidebarOnSessionSelect?.(key),
+                        onNewSession: () => props.sessionSidebarOnNewSession?.(),
+                        onClose: () => props.sessionSidebarOnClose?.(),
+                        loading: props.sessionSidebarLoading ?? false,
+                        basePath: props.basePath,
+                      })
+                    : renderMarkdownSidebar({
+                        content: props.sidebarContent ?? null,
+                        error: props.sidebarError ?? null,
+                        onClose: props.onCloseSidebar!,
+                        onViewRawText: () => {
+                          if (!props.sidebarContent || !props.onOpenSidebar) {
+                            return;
+                          }
+                          props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
+                        },
+                      })
+                }
               </div>
             `
             : nothing
@@ -1390,6 +1443,14 @@ export function renderChat(props: ChatProps) {
               ?disabled=${props.messages.length === 0}
             >
               ${icons.download}
+            </button>
+            <button
+              class="btn btn--ghost ${props.sessionSidebarOpen ? "btn--active" : ""}"
+              @click=${() => props.sessionSidebarOnOpen?.()}
+              title="Session list"
+              aria-label="Open session list"
+            >
+              ${icons.panelLeftOpen}
             </button>
 
             ${

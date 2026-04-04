@@ -1,4 +1,4 @@
-import { resolveAgentIdFromSessionKey } from "../../../../src/routing/session-key.js";
+import { resolveAgentIdFromSessionKey } from "../session-key.ts";
 import {
   resolveChatModelOverride,
   resolvePreferredServerChatModelValue,

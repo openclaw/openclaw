@@ -14,7 +14,7 @@ import {
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
-} from "../../../../src/routing/session-key.js";
+} from "../session-key.ts";
 import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
