@@ -157,7 +157,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
   clearBaseFields: [
     "name",
     "homeserver",
-    "allowPrivateNetwork",
+    "network",
     "proxy",
     "userId",
     "accessToken",

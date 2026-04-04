@@ -3,8 +3,10 @@ import type { LookupFn } from "../infra/net/ssrf.js";
 import {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  hasLegacyFlatAllowPrivateNetworkAlias,
   isPrivateNetworkOptInEnabled,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  migrateLegacyFlatAllowPrivateNetworkAlias,
   normalizeHostnameSuffixAllowlist,
   ssrfPolicyFromAllowPrivateNetwork,
   ssrfPolicyFromPrivateNetworkOptIn,
@@ -102,6 +104,52 @@ describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(ssrfPolicyFromPrivateNetworkOptIn(input)).toEqual(expected);
+  });
+});
+
+describe("legacy private-network alias helpers", () => {
+  it("detects the flat allowPrivateNetwork alias", () => {
+    expect(hasLegacyFlatAllowPrivateNetworkAlias({ allowPrivateNetwork: true })).toBe(true);
+    expect(hasLegacyFlatAllowPrivateNetworkAlias({ network: {} })).toBe(false);
+  });
+
+  it("migrates the flat alias into network.dangerouslyAllowPrivateNetwork", () => {
+    const changes: string[] = [];
+    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+      entry: { allowPrivateNetwork: true },
+      pathPrefix: "channels.matrix",
+      changes,
+    });
+
+    expect(migrated.entry).toEqual({
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
+    expect(changes).toEqual([
+      "Moved channels.matrix.allowPrivateNetwork → channels.matrix.network.dangerouslyAllowPrivateNetwork (true).",
+    ]);
+  });
+
+  it("preserves the effective opt-in when both old and new keys are present", () => {
+    const changes: string[] = [];
+    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+      entry: {
+        allowPrivateNetwork: true,
+        network: {
+          dangerouslyAllowPrivateNetwork: false,
+        },
+      },
+      pathPrefix: "channels.matrix.accounts.default",
+      changes,
+    });
+
+    expect(migrated.entry).toEqual({
+      network: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
+    });
+    expect(changes[0]).toContain("(true)");
   });
 });
 

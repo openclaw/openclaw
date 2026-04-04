@@ -23,18 +23,26 @@ export type PrivateNetworkOptInInput =
         | undefined;
     };
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): boolean {
   if (input === true) {
     return true;
   }
-  if (!input || typeof input !== "object") {
+  const record = asRecord(input);
+  if (!record) {
     return false;
   }
+  const network = asRecord(record.network);
   return (
-    input.allowPrivateNetwork === true ||
-    input.dangerouslyAllowPrivateNetwork === true ||
-    input.network?.allowPrivateNetwork === true ||
-    input.network?.dangerouslyAllowPrivateNetwork === true
+    record.allowPrivateNetwork === true ||
+    record.dangerouslyAllowPrivateNetwork === true ||
+    network?.allowPrivateNetwork === true ||
+    network?.dangerouslyAllowPrivateNetwork === true
   );
 }
 
@@ -42,6 +50,56 @@ export function ssrfPolicyFromPrivateNetworkOptIn(
   input: PrivateNetworkOptInInput,
 ): SsrFPolicy | undefined {
   return isPrivateNetworkOptInEnabled(input) ? { allowPrivateNetwork: true } : undefined;
+}
+
+export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
+  const entry = asRecord(value);
+  return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allowPrivateNetwork"));
+}
+
+export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  if (!hasLegacyFlatAllowPrivateNetworkAlias(params.entry)) {
+    return { entry: params.entry, changed: false };
+  }
+
+  const legacyAllowPrivateNetwork = params.entry.allowPrivateNetwork;
+  const currentNetworkRecord = asRecord(params.entry.network);
+  const currentNetwork = currentNetworkRecord ? { ...currentNetworkRecord } : {};
+  const currentDangerousAllowPrivateNetwork = currentNetwork.dangerouslyAllowPrivateNetwork;
+
+  let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
+  if (
+    typeof legacyAllowPrivateNetwork === "boolean" ||
+    typeof currentDangerousAllowPrivateNetwork === "boolean"
+  ) {
+    // Preserve current effective posture while collapsing to the canonical key.
+    resolvedDangerousAllowPrivateNetwork =
+      legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
+  } else if (currentDangerousAllowPrivateNetwork === undefined) {
+    resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
+  }
+
+  delete currentNetwork.dangerouslyAllowPrivateNetwork;
+  if (resolvedDangerousAllowPrivateNetwork !== undefined) {
+    currentNetwork.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
+  }
+
+  const nextEntry = { ...params.entry };
+  delete nextEntry.allowPrivateNetwork;
+  if (Object.keys(currentNetwork).length > 0) {
+    nextEntry.network = currentNetwork;
+  } else {
+    delete nextEntry.network;
+  }
+
+  params.changes.push(
+    `Moved ${params.pathPrefix}.allowPrivateNetwork → ${params.pathPrefix}.network.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
+  );
+  return { entry: nextEntry, changed: true };
 }
 
 export function ssrfPolicyFromAllowPrivateNetwork(

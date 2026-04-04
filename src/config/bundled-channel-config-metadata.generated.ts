@@ -232,8 +232,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         sendReadReceipts: {
           type: "boolean",
         },
-        allowPrivateNetwork: {
-          type: "boolean",
+        network: {
+          type: "object",
+          properties: {
+            dangerouslyAllowPrivateNetwork: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         blockStreaming: {
           type: "boolean",
@@ -503,8 +509,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               sendReadReceipts: {
                 type: "boolean",
               },
-              allowPrivateNetwork: {
-                type: "boolean",
+              network: {
+                type: "object",
+                properties: {
+                  dangerouslyAllowPrivateNetwork: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               blockStreaming: {
                 type: "boolean",
@@ -6473,8 +6485,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         homeserver: {
           type: "string",
         },
-        allowPrivateNetwork: {
-          type: "boolean",
+        network: {
+          type: "object",
+          properties: {
+            dangerouslyAllowPrivateNetwork: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         proxy: {
           type: "string",
@@ -7272,8 +7290,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           },
           additionalProperties: false,
         },
-        allowPrivateNetwork: {
-          type: "boolean",
+        network: {
+          type: "object",
+          properties: {
+            dangerouslyAllowPrivateNetwork: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         dmChannelRetry: {
           type: "object",
@@ -7553,8 +7577,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
                 additionalProperties: false,
               },
-              allowPrivateNetwork: {
-                type: "boolean",
+              network: {
+                type: "object",
+                properties: {
+                  dangerouslyAllowPrivateNetwork: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               dmChannelRetry: {
                 type: "object",
@@ -7752,6 +7782,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         chunkMode: {
           type: "string",
           enum: ["length", "newline"],
+        },
+        typingIndicator: {
+          type: "boolean",
         },
         blockStreaming: {
           type: "boolean",
@@ -8303,8 +8336,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             additionalProperties: false,
           },
         },
-        allowPrivateNetwork: {
-          type: "boolean",
+        network: {
+          type: "object",
+          properties: {
+            dangerouslyAllowPrivateNetwork: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         historyLimit: {
           type: "integer",
@@ -8638,8 +8677,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   additionalProperties: false,
                 },
               },
-              allowPrivateNetwork: {
-                type: "boolean",
+              network: {
+                type: "object",
+                properties: {
+                  dangerouslyAllowPrivateNetwork: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               historyLimit: {
                 type: "integer",
@@ -13905,8 +13950,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         code: {
           type: "string",
         },
-        allowPrivateNetwork: {
-          type: "boolean",
+        network: {
+          type: "object",
+          properties: {
+            dangerouslyAllowPrivateNetwork: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         groupChannels: {
           type: "array",
@@ -14001,8 +14052,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               code: {
                 type: "string",
               },
-              allowPrivateNetwork: {
-                type: "boolean",
+              network: {
+                type: "object",
+                properties: {
+                  dangerouslyAllowPrivateNetwork: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               groupChannels: {
                 type: "array",

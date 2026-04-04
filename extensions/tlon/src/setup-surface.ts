@@ -46,7 +46,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
         initialValue: allowPrivateNetwork,
       });
       if (!allowPrivateNetwork) {
-        throw new Error("Refusing private/internal Ship URL without explicit approval");
+        throw new Error("Refusing private/internal ship URL without explicit network opt-in");
       }
     }
     next = applyTlonSetupConfig({
