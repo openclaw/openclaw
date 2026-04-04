@@ -303,6 +303,14 @@ export async function runCommandWithTimeout(
       closeFallbackTimer = null;
     };
 
+    const killChild = () => {
+      if (settled || typeof child?.kill !== "function") {
+        return;
+      }
+      killIssuedByTimeout = true;
+      child.kill("SIGKILL");
+    };
+
     const armNoOutputTimer = () => {
       if (!shouldTrackOutputTimeout || settled) {
         return;
@@ -313,19 +321,13 @@ export async function runCommandWithTimeout(
           return;
         }
         noOutputTimedOut = true;
-        if (typeof child.kill === "function") {
-          killIssuedByTimeout = true;
-          child.kill("SIGKILL");
-        }
+        killChild();
       }, Math.floor(noOutputTimeoutMs));
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      if (typeof child.kill === "function") {
-        killIssuedByTimeout = true;
-        child.kill("SIGKILL");
-      }
+      killChild();
     }, timeoutMs);
     armNoOutputTimer();
 

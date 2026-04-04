@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/main-session.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { logWarn, logError } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -17,18 +18,8 @@ import type { RunCronAgentTurnResult } from "./run.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
-  const channelLower = channel.trim().toLowerCase();
   const toTrimmed = to.trim();
-  if (channelLower === "feishu" || channelLower === "lark") {
-    const lowered = toTrimmed.toLowerCase();
-    if (lowered.startsWith("user:")) {
-      return toTrimmed.slice("user:".length).trim();
-    }
-    if (lowered.startsWith("chat:")) {
-      return toTrimmed.slice("chat:".length).trim();
-    }
-  }
-  return toTrimmed;
+  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
 export function matchesMessagingToolDeliveryTarget(

@@ -5,7 +5,7 @@ summary: 智能体循环生命周期、流和等待语义
 title: 智能体循环
 x-i18n:
   generated_at: "2026-02-03T10:05:11Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0775b96eb3451e137297661a1095eaefb2bafeebb5f78123174a46290e18b014
   source_path: concepts/agent-loop.md

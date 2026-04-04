@@ -19,6 +19,7 @@ export {
 } from "../globals.js";
 export * from "../logging.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
+export { createBackupArchive } from "../infra/backup-create.js";
 export {
   detectPluginInstallPathIssue,
   formatPluginInstallPathIssue,
@@ -26,11 +27,6 @@ export {
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 export { removePluginFromConfig } from "../plugins/uninstall.js";
-export {
-  isDiscordMutableAllowEntry,
-  isSlackMutableAllowEntry,
-  isZalouserMutableGroupEntry,
-} from "../security/mutable-allowlist-detectors.js";
 
 /** Minimal logger contract accepted by runtime-adapter helpers. */
 type LoggerLike = {

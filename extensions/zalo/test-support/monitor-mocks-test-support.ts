@@ -1,4 +1,3 @@
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { vi, type Mock } from "vitest";
 import {
   createEmptyPluginRegistry,
@@ -6,6 +5,7 @@ import {
 } from "../../../test/helpers/plugins/plugin-registry.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
 type MonitorModule = typeof import("../src/monitor.js");
@@ -55,8 +55,8 @@ export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
 
 function installLifecycleModuleMocks() {
-  vi.doMock(apiModuleId, async (importOriginal) => {
-    const actual = await importOriginal<object>();
+  vi.doMock(apiModuleId, async () => {
+    const actual = await vi.importActual<object>(apiModuleId);
     return {
       ...actual,
       deleteWebhook: lifecycleMocks.deleteWebhookMock,

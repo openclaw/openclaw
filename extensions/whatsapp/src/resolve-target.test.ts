@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   isWhatsAppGroupJid,
+  looksLikeWhatsAppTargetId,
   isWhatsAppUserTarget,
+  normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
 
@@ -69,5 +71,20 @@ describe("isWhatsAppGroupJid", () => {
     expect(isWhatsAppGroupJid("@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("120@g.usx")).toBe(false);
     expect(isWhatsAppGroupJid("+1555123")).toBe(false);
+  });
+});
+
+describe("normalizeWhatsAppMessagingTarget", () => {
+  it("normalizes blank inputs to undefined", () => {
+    expect(normalizeWhatsAppMessagingTarget("   ")).toBeUndefined();
+  });
+});
+
+describe("looksLikeWhatsAppTargetId", () => {
+  it("detects common WhatsApp target forms", () => {
+    expect(looksLikeWhatsAppTargetId("whatsapp:+15555550123")).toBe(true);
+    expect(looksLikeWhatsAppTargetId("15555550123@c.us")).toBe(true);
+    expect(looksLikeWhatsAppTargetId("+15555550123")).toBe(true);
+    expect(looksLikeWhatsAppTargetId("")).toBe(false);
   });
 });

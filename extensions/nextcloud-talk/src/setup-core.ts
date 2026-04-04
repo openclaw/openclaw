@@ -192,9 +192,7 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
     });
     return setNextcloudTalkAccountConfig(cfg as CoreConfig, resolvedAccountId, {
       dmPolicy: policy,
-      ...(policy === "open"
-        ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) }
-        : {}),
+      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
     });
   },
   promptAllowFrom: promptNextcloudTalkAllowFromForAccount,

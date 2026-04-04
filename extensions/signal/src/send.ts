@@ -39,6 +39,28 @@ type SignalTarget =
   | { type: "group"; groupId: string }
   | { type: "username"; username: string };
 
+let signalConfigRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/config-runtime")>
+  | undefined;
+
+async function loadSignalConfigRuntime() {
+  signalConfigRuntimePromise ??= import("openclaw/plugin-sdk/config-runtime");
+  return await signalConfigRuntimePromise;
+}
+
+async function resolveSignalRpcAccountInfo(
+  opts: Pick<SignalSendOpts, "cfg" | "baseUrl" | "account" | "accountId">,
+) {
+  if (opts.baseUrl?.trim() && opts.account?.trim()) {
+    return undefined;
+  }
+  const cfg = opts.cfg ?? (await loadSignalConfigRuntime()).loadConfig();
+  return resolveSignalAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+}
+
 function parseTarget(raw: string): SignalTarget {
   let value = raw.trim();
   if (!value) {
@@ -203,7 +225,8 @@ export async function sendTypingSignal(
   to: string,
   opts: SignalRpcOpts & { stop?: boolean } = {},
 ): Promise<boolean> {
-  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
     group: true,
@@ -233,7 +256,8 @@ export async function sendReadReceiptSignal(
   if (!Number.isFinite(targetTimestamp) || targetTimestamp <= 0) {
     return false;
   }
-  const { baseUrl, account } = resolveSignalRpcContext(opts);
+  const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
   });

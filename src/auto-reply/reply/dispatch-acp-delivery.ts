@@ -42,9 +42,9 @@ function resolveDeliveryAccountId(params: {
   if (!channelId) {
     return undefined;
   }
-  const channelCfg = (params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>)[
-    channelId
-  ];
+  const channelCfg = (
+    params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>
+  )[channelId];
   const configuredDefault = channelCfg?.defaultAccount;
   return typeof configuredDefault === "string" && configuredDefault.trim()
     ? configuredDefault.trim()

@@ -10,6 +10,7 @@ import {
   buildToolsMessage,
 } from "../status.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
+import { resolveChannelAccountId } from "./channel-context.js";
 import { buildContextReply } from "./commands-context-report.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildStatusReply } from "./commands-status.js";
@@ -105,6 +106,11 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
+    const effectiveAccountId = resolveChannelAccountId({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      command: params.command,
+    });
     const agentId =
       params.agentId ??
       resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
@@ -127,7 +133,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       senderName: params.ctx.SenderName,
       senderUsername: params.ctx.SenderUsername,
       senderE164: params.ctx.SenderE164,
-      accountId: params.ctx.AccountId,
+      accountId: effectiveAccountId,
       currentChannelId: threadingContext.currentChannelId,
       currentThreadTs:
         typeof params.ctx.MessageThreadId === "string" ||
@@ -142,7 +148,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       replyToMode: resolveReplyToMode(
         params.cfg,
         params.ctx.OriginatingChannel ?? params.ctx.Provider,
-        params.ctx.AccountId,
+        effectiveAccountId,
         params.ctx.ChatType,
       ),
     });

@@ -15,6 +15,7 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
+import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import type { OpenClawConfig } from "./config.js";
@@ -36,6 +37,11 @@ export type PluginAutoEnableCandidate =
       pluginId: string;
       kind: "provider-auth-configured";
       providerId: string;
+    }
+  | {
+      pluginId: string;
+      kind: "provider-model-configured";
+      modelRef: string;
     }
   | {
       pluginId: string;
@@ -382,6 +388,15 @@ function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
 }
 
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
+  if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
+    return true;
+  }
+  if (cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {
+    return true;
+  }
+  if (collectModelRefs(cfg).length > 0) {
+    return true;
+  }
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
   if (!configuredChannels || typeof configuredChannels !== "object") {
     return false;
@@ -506,6 +521,8 @@ export function resolvePluginAutoEnableCandidateReason(
       break;
     case "provider-auth-configured":
       return `${candidate.providerId} auth configured`;
+    case "provider-model-configured":
+      return `${candidate.modelRef} model configured`;
     case "web-fetch-provider-selected":
       return `${candidate.providerId} web fetch provider selected`;
     case "plugin-web-search-configured":
@@ -549,6 +566,22 @@ function resolveConfiguredPlugins(
         providerId,
       });
     }
+  }
+  for (const modelRef of collectModelRefs(cfg)) {
+    const owningPluginIds = resolveOwningPluginIdsForModelRef({
+      model: modelRef,
+      config: cfg,
+      env,
+      manifestRegistry: registry,
+    });
+    if (owningPluginIds?.length !== 1) {
+      continue;
+    }
+    changes.push({
+      pluginId: owningPluginIds[0],
+      kind: "provider-model-configured",
+      modelRef,
+    });
   }
   const webFetchProvider =
     typeof cfg.tools?.web?.fetch?.provider === "string" ? cfg.tools.web.fetch.provider : undefined;

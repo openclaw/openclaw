@@ -7,7 +7,7 @@ summary: 节点：配对、能力、权限以及 canvas/camera/screen/system 的
 title: 节点
 x-i18n:
   generated_at: "2026-02-03T07:51:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 74e9420f61c653e4ceeb00f5a27e4266bd1c7715c1000edd969c3ee185e74de9
   source_path: nodes/index.md

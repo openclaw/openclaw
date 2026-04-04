@@ -25,10 +25,6 @@ import {
   collectMissingDefaultAccountBindingWarnings,
   collectMissingExplicitDefaultAccountWarnings,
 } from "./doctor/shared/default-account-warnings.js";
-import {
-  collectMutableAllowlistWarnings,
-  scanMutableAllowlistEntries,
-} from "./doctor/shared/mutable-allowlist.js";
 import { collectDoctorPreviewWarnings } from "./doctor/shared/preview-warnings.js";
 
 function hasLegacyInternalHookHandlers(raw: unknown): boolean {
@@ -165,13 +161,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     });
   }
 
-  const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
-  const mutableAllowlistWarnings = [
-    ...(mutableAllowlistHits.length > 0
-      ? collectMutableAllowlistWarnings(mutableAllowlistHits)
-      : []),
-    ...(await collectChannelDoctorMutableAllowlistWarnings({ cfg: candidate })),
-  ];
+  const mutableAllowlistWarnings = await collectChannelDoctorMutableAllowlistWarnings({
+    cfg: candidate,
+  });
   if (mutableAllowlistWarnings.length > 0) {
     note(mutableAllowlistWarnings.join("\n"), "Doctor warnings");
   }

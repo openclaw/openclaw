@@ -621,7 +621,7 @@ describe("preflightDiscordMessage", () => {
         [guildId]: {
           channels: {
             [channelId]: {
-              allow: true,
+              enabled: true,
               requireMention: true,
             },
           },
@@ -655,7 +655,7 @@ describe("preflightDiscordMessage", () => {
         "guild-1": {
           channels: {
             "ch-1": {
-              allow: true,
+              enabled: true,
               requireMention: false,
             },
           },
@@ -704,7 +704,7 @@ describe("preflightDiscordMessage", () => {
         "guild-1": {
           channels: {
             [parentId]: {
-              allow: true,
+              enabled: true,
               requireMention: false,
             },
           },
@@ -890,7 +890,7 @@ describe("preflightDiscordMessage", () => {
         "guild-1": {
           channels: {
             [channelId]: {
-              allow: true,
+              enabled: true,
               requireMention: true,
             },
           },
@@ -958,7 +958,7 @@ describe("preflightDiscordMessage", () => {
         [guildId]: {
           channels: {
             [channelId]: {
-              allow: true,
+              enabled: true,
               requireMention: true,
               users: ["user-1"],
             },
@@ -1004,7 +1004,7 @@ describe("preflightDiscordMessage", () => {
         }),
         discordConfig: {} as DiscordConfig,
         guildEntries: {
-          "guild-1": { channels: { [channelId]: { allow: true, requireMention: true } } },
+          "guild-1": { channels: { [channelId]: { enabled: true, requireMention: true } } },
         },
       });
       expect(result).toBeNull();
@@ -1048,7 +1048,7 @@ describe("preflightDiscordMessage", () => {
         }),
         discordConfig: {} as DiscordConfig,
         guildEntries: {
-          "guild-1": { channels: { [channelId]: { allow: true, requireMention: true } } },
+          "guild-1": { channels: { [channelId]: { enabled: true, requireMention: true } } },
         },
       });
       expect(result).not.toBeNull();

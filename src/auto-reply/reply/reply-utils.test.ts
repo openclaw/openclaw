@@ -461,14 +461,14 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "model",
         template: "[{model}]",
-        values: { model: "gpt-5.2" },
-        expected: "[gpt-5.2]",
+        values: { model: "gpt-5.4" },
+        expected: "[gpt-5.4]",
       },
       {
         name: "modelFull",
         template: "[{modelFull}]",
-        values: { modelFull: "openai-codex/gpt-5.2" },
-        expected: "[openai-codex/gpt-5.2]",
+        values: { modelFull: "openai-codex/gpt-5.4" },
+        expected: "[openai-codex/gpt-5.4]",
       },
       {
         name: "provider",
@@ -503,8 +503,8 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "case-insensitive variables",
         template: "[{MODEL} | {ThinkingLevel}]",
-        values: { model: "gpt-5.2", thinkingLevel: "low" },
-        expected: "[gpt-5.2 | low]",
+        values: { model: "gpt-5.4", thinkingLevel: "low" },
+        expected: "[gpt-5.4 | low]",
       },
       {
         name: "all variables",
@@ -512,10 +512,10 @@ describe("resolveResponsePrefixTemplate", () => {
         values: {
           identityName: "OpenClaw",
           provider: "anthropic",
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           thinkingLevel: "high",
         },
-        expected: "[OpenClaw] anthropic/claude-opus-4-5 (think:high)",
+        expected: "[OpenClaw] anthropic/claude-opus-4-6 (think:high)",
       },
     ] as const;
     expectResolvedTemplateCases(cases);
@@ -534,14 +534,14 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "unrecognized variable",
         template: "[{unknownVar}]",
-        values: { model: "gpt-5.2" },
+        values: { model: "gpt-5.4" },
         expected: "[{unknownVar}]",
       },
       {
         name: "mixed resolved/unresolved",
         template: "[{model} | {provider}]",
-        values: { model: "gpt-5.2" },
-        expected: "[gpt-5.2 | {provider}]",
+        values: { model: "gpt-5.4" },
+        expected: "[gpt-5.4 | {provider}]",
       },
     ] as const;
     expectResolvedTemplateCases(cases);
@@ -764,6 +764,50 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("does not coalesce reasoning blocks into visible reply text", async () => {
+    const flushes: Array<{ text?: string; isReasoning?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isReasoning: payload.isReasoning,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    coalescer.enqueue({ text: "Visible answer" });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      { text: "Reasoning:\n_hidden_", isReasoning: true },
+      { text: "Visible answer", isReasoning: undefined },
+    ]);
+    coalescer.stop();
+  });
+
+  it("preserves compaction notice markers across flushes", async () => {
+    const flushes: Array<{ text?: string; isCompactionNotice?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({
+          text: payload.text,
+          isCompactionNotice: payload.isCompactionNotice,
+        });
+      },
+    });
+
+    coalescer.enqueue({ text: "Compacting context...", isCompactionNotice: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([{ text: "Compacting context...", isCompactionNotice: true }]);
+    coalescer.stop();
+  });
+
   it("flushes immediately per enqueue when flushOnEnqueue is set", async () => {
     const cases = [
       {
@@ -913,9 +957,9 @@ describe("createStreamingDirectiveAccumulator", () => {
 describe("extractShortModelName", () => {
   it("normalizes provider/date/latest suffixes while preserving other IDs", () => {
     const cases = [
-      ["openai-codex/gpt-5.2-codex", "gpt-5.2-codex"],
-      ["claude-opus-4-5-20251101", "claude-opus-4-5"],
-      ["gpt-5.2-latest", "gpt-5.2"],
+      ["openai-codex/gpt-5.4", "gpt-5.4"],
+      ["claude-opus-4-6-20251101", "claude-opus-4-6"],
+      ["gpt-5.4-latest", "gpt-5.4"],
       // Date suffix must be exactly 8 digits at the end.
       ["model-123456789", "model-123456789"],
     ] as const;

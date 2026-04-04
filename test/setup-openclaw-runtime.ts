@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import type {
   ChannelId,
   ChannelOutboundAdapter,
@@ -21,11 +21,14 @@ type WorkerRuntimeState = {
 };
 
 type WorkerCleanupDeps = {
-  resetContextWindowCacheForTest: typeof import("../src/agents/context.js").resetContextWindowCacheForTest;
-  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config.js").resetModelsJsonReadyCacheForTest;
+  clearSessionStoreCaches: typeof import("../src/config/sessions/store-cache.js").clearSessionStoreCaches;
+  drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
+  drainSessionStoreLockQueuesForTest: typeof import("../src/config/sessions/store-lock-state.js").drainSessionStoreLockQueuesForTest;
   drainSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").drainSessionWriteLockStateForTest;
+  resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
+  resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
+  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelsJsonReadyCacheForTest;
   resetSessionWriteLockStateForTest: typeof import("../src/agents/session-write-lock.js").resetSessionWriteLockStateForTest;
-  cleanupSessionStateForTest: typeof import("../src/test-utils/session-state-cleanup.js").cleanupSessionStateForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -49,21 +52,38 @@ async function loadWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
   const [
     { resetContextWindowCacheForTest },
     { resetModelsJsonReadyCacheForTest },
+    { clearSessionStoreCaches },
+    { drainSessionStoreLockQueuesForTest },
+    { drainFileLockStateForTest, resetFileLockStateForTest },
     { drainSessionWriteLockStateForTest, resetSessionWriteLockStateForTest },
-    { cleanupSessionStateForTest },
   ] = await Promise.all([
-    import("../src/agents/context.js"),
-    import("../src/agents/models-config.js"),
-    import("../src/agents/session-write-lock.js"),
-    import("../src/test-utils/session-state-cleanup.js"),
+    vi.importActual<typeof import("../src/agents/context-runtime-state.js")>(
+      "../src/agents/context-runtime-state.js",
+    ),
+    vi.importActual<typeof import("../src/agents/models-config-state.js")>(
+      "../src/agents/models-config-state.js",
+    ),
+    vi.importActual<typeof import("../src/config/sessions/store-cache.js")>(
+      "../src/config/sessions/store-cache.js",
+    ),
+    vi.importActual<typeof import("../src/config/sessions/store-lock-state.js")>(
+      "../src/config/sessions/store-lock-state.js",
+    ),
+    vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
+    vi.importActual<typeof import("../src/agents/session-write-lock.js")>(
+      "../src/agents/session-write-lock.js",
+    ),
   ]);
 
   return {
+    clearSessionStoreCaches,
+    drainFileLockStateForTest,
+    drainSessionStoreLockQueuesForTest,
     resetContextWindowCacheForTest,
     resetModelsJsonReadyCacheForTest,
     drainSessionWriteLockStateForTest,
+    resetFileLockStateForTest,
     resetSessionWriteLockStateForTest,
-    cleanupSessionStateForTest,
   };
 }
 
@@ -74,11 +94,6 @@ function getWorkerCleanupDeps(): Promise<WorkerCleanupDeps> {
   globalState[WORKER_CLEANUP_DEPS] ??= loadWorkerCleanupDeps();
   return globalState[WORKER_CLEANUP_DEPS];
 }
-
-// Preload cleanup/runtime helpers before per-file vi.mock hoists run in
-// non-isolated workers, otherwise test-scoped module mocks can leak into the
-// shared cleanup dependency graph.
-void getWorkerCleanupDeps();
 
 const pickSendFn = (id: ChannelId, deps?: OutboundSendDeps) => {
   return deps?.[id] as ((...args: unknown[]) => Promise<unknown>) | undefined;
@@ -110,6 +125,8 @@ function createTestRegistryForSetup(
     })),
     providers: [],
     speechProviders: [],
+    realtimeTranscriptionProviders: [],
+    realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     webFetchProviders: [],
@@ -353,12 +370,20 @@ beforeAll(() => {
 
 afterEach(async () => {
   const {
-    cleanupSessionStateForTest,
+    clearSessionStoreCaches,
+    drainFileLockStateForTest,
+    drainSessionStoreLockQueuesForTest,
+    drainSessionWriteLockStateForTest,
     resetContextWindowCacheForTest,
+    resetFileLockStateForTest,
     resetModelsJsonReadyCacheForTest,
     resetSessionWriteLockStateForTest,
   } = await getWorkerCleanupDeps();
-  await cleanupSessionStateForTest();
+  await drainSessionStoreLockQueuesForTest();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
+  await drainSessionWriteLockStateForTest();
+  resetFileLockStateForTest();
   resetContextWindowCacheForTest();
   resetModelsJsonReadyCacheForTest();
   resetSessionWriteLockStateForTest();
@@ -366,9 +391,10 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const { cleanupSessionStateForTest, drainSessionWriteLockStateForTest } =
+  const { clearSessionStoreCaches, drainFileLockStateForTest, drainSessionWriteLockStateForTest } =
     await getWorkerCleanupDeps();
-  await cleanupSessionStateForTest();
+  clearSessionStoreCaches();
+  await drainFileLockStateForTest();
   await drainSessionWriteLockStateForTest();
   testEnv.cleanup();
 });

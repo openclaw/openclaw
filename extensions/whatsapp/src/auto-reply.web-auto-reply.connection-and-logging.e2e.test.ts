@@ -188,7 +188,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("keeps watchdog message age across reconnects", async () => {
+  it("gives a reconnected listener a fresh watchdog window", async () => {
     vi.useFakeTimers();
     try {
       const { scripted, controller, run } = await startWatchdogScenario({
@@ -203,7 +203,11 @@ describe("web auto-reply connection", () => {
         { timeout: 250, interval: 2 },
       );
 
-      await vi.advanceTimersByTimeAsync(200);
+      await vi.advanceTimersByTimeAsync(20);
+      await Promise.resolve();
+      expect(scripted.getListenerCount()).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(20);
       await Promise.resolve();
       await vi.waitFor(
         () => {

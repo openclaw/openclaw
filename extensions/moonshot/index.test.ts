@@ -3,8 +3,8 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import plugin from "./index.js";
 
 describe("moonshot provider plugin", () => {
-  it("owns replay policy for OpenAI-compatible Moonshot transports", () => {
-    const provider = registerSingleProviderPlugin(plugin);
+  it("owns replay policy for OpenAI-compatible Moonshot transports", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
       provider.buildReplayPolicy?.({

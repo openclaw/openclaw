@@ -120,6 +120,13 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
+export type ChannelLegacyStateMigrationPlan = {
+  kind: "copy" | "move";
+  label: string;
+  sourcePath: string;
+  targetPath: string;
+};
+
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {
   id: ChannelId;
@@ -458,6 +465,11 @@ export type ChannelMessagingAdapter = {
    */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
   buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
+  transformReplyPayload?: (params: {
+    payload: ReplyPayload;
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => ReplyPayload | null;
   enableInteractiveReplies?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

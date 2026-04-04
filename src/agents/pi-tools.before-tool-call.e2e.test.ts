@@ -390,6 +390,22 @@ describe("before_tool_call requireApproval handling", () => {
     expect(mockCallGateway).not.toHaveBeenCalled();
   });
 
+  it("blocks when before_tool_call hook execution throws", async () => {
+    hookRunner.runBeforeToolCall.mockRejectedValueOnce(new Error("hook crashed"));
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "ls" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Tool call blocked because before_tool_call hook failed",
+    );
+  });
+
   it("calls gateway RPC and unblocks on allow-once", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {

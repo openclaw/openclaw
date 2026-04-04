@@ -246,9 +246,9 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
   it("drops authProfileId when provider changes during fallback", async () => {
     runWithModelFallbackMock.mockImplementationOnce(
       async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("openai-codex", "gpt-5.2"),
+        result: await run("openai-codex", "gpt-5.4"),
         provider: "openai-codex",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       }),
     );
 
@@ -296,7 +296,7 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
     } as unknown as FollowupRun;
 
     const sessionKey = "main";
-    const sessionEntry = {
+    const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
       totalTokens: 1,
@@ -318,7 +318,7 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath: undefined,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -338,6 +338,115 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
     expect(call.provider).toBe("openai-codex");
     expect(call.authProfileId).toBeUndefined();
     expect(call.authProfileIdSource).toBeUndefined();
+    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
+    expect(sessionEntry.authProfileOverride).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("persists same-provider fallback model while keeping the scoped auth profile", async () => {
+    runWithModelFallbackMock.mockImplementationOnce(
+      async ({ run }: RunWithModelFallbackParams) => ({
+        result: await run("anthropic", "claude-sonnet"),
+        provider: "anthropic",
+        model: "claude-sonnet",
+      }),
+    );
+
+    runEmbeddedPiAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat",
+      AccountId: "primary",
+      MessageSid: "msg",
+      Surface: "telegram",
+    } as unknown as TemplateContext;
+
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: createCliBackendTestConfig(),
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude-opus",
+        authProfileId: "anthropic:openclaw",
+        authProfileIdSource: "user",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 5_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+      authProfileOverride: "anthropic:openclaw",
+      authProfileOverrideSource: "user" as const,
+    };
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath: undefined,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      authProfileId?: unknown;
+      authProfileIdSource?: unknown;
+      provider?: unknown;
+      model?: unknown;
+    };
+
+    expect(call.provider).toBe("anthropic");
+    expect(call.model).toBe("claude-sonnet");
+    expect(call.authProfileId).toBe("anthropic:openclaw");
+    expect(call.authProfileIdSource).toBe("user");
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+    expect(sessionEntry.modelOverride).toBe("claude-sonnet");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:openclaw");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
   });
 });
 
@@ -471,7 +580,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -538,7 +647,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -577,9 +686,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         // Expected first-attempt failure.
       }
       return {
-        result: await run("openai", "gpt-5.2"),
+        result: await run("openai", "gpt-5.4"),
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
       };
     });
@@ -627,7 +736,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -662,9 +771,9 @@ describe("runReplyAgent auto-compaction token update", () => {
         // Expected first-attempt failure.
       }
       return {
-        result: await run("openai", "gpt-5.2"),
+        result: await run("openai", "gpt-5.4"),
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         attempts: [{ provider: "anthropic", model: "claude", error: "attempt failed" }],
       };
     });
@@ -712,7 +821,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -769,7 +878,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -850,7 +959,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 200_000,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -936,7 +1045,7 @@ describe("runReplyAgent block streaming", () => {
       opts: { onBlockReply },
       typing,
       sessionCtx,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: true,
@@ -1038,7 +1147,7 @@ describe("runReplyAgent block streaming", () => {
       opts: { onBlockReply, blockReplyTimeoutMs: 1 },
       typing,
       sessionCtx,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: true,
@@ -1209,7 +1318,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       sessionCtx,
       sessionKey,
       storePath: opts.storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -1294,7 +1403,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       meta: {
         agentMeta: {
           usage: { input: 10, output: 5 },
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           provider: "anthropic",
         },
       },
@@ -1308,7 +1417,7 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(store[sessionKey]?.outputTokens).toBe(5);
     expect(store[sessionKey]?.totalTokens).toBeUndefined();
     expect(store[sessionKey]?.totalTokensFresh).toBe(false);
-    expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+    expect(store[sessionKey]?.model).toBe("claude-opus-4-6");
   });
 
   it("persists totalTokens from promptTokens when snapshot is available", async () => {
@@ -1328,7 +1437,7 @@ describe("runReplyAgent messaging tool suppression", () => {
         agentMeta: {
           usage: { input: 10, output: 5 },
           promptTokens: 42_000,
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           provider: "anthropic",
         },
       },
@@ -1340,7 +1449,7 @@ describe("runReplyAgent messaging tool suppression", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     expect(store[sessionKey]?.totalTokens).toBe(42_000);
     expect(store[sessionKey]?.totalTokensFresh).toBe(true);
-    expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+    expect(store[sessionKey]?.model).toBe("claude-opus-4-6");
   });
 
   it("persists totalTokens from promptTokens when provider omits usage", async () => {
@@ -1364,7 +1473,7 @@ describe("runReplyAgent messaging tool suppression", () => {
       meta: {
         agentMeta: {
           promptTokens: 41_000,
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
           provider: "anthropic",
         },
       },
@@ -1431,7 +1540,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       typing,
       sessionCtx,
       ...(params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" }),
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -1653,7 +1762,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
       sessionCtx,
       sessionEntry: params?.sessionEntry,
       sessionKey,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: params?.agentCfgContextTokens,
       resolvedVerboseLevel: "off",
       isNewSession: false,
@@ -1782,7 +1891,7 @@ describe("runReplyAgent response usage footer", () => {
       sessionCtx,
       sessionEntry,
       sessionKey: params.sessionKey,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,
@@ -1889,7 +1998,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       isStreaming: false,
       typing,
       sessionCtx,
-      defaultModel: "anthropic/claude-opus-4-5",
+      defaultModel: "anthropic/claude-opus-4-6",
       resolvedVerboseLevel: "off",
       isNewSession: false,
       blockStreamingEnabled: false,

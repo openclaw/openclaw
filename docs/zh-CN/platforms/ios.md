@@ -7,7 +7,7 @@ summary: iOS 节点应用：连接到 Gateway 网关、配对、canvas 和故障
 title: iOS 应用
 x-i18n:
   generated_at: "2026-02-03T07:52:17Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 692eebdc82e4bb8dc221bcbabf6a344a861a839fc377f1aeeb6eecaa4917a232
   source_path: platforms/ios.md
