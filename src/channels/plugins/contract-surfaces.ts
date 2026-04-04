@@ -46,17 +46,29 @@ function createModuleLoader() {
 
 const loadModule = createModuleLoader();
 
-function resolveContractSurfaceModulePath(rootDir: string | undefined): string | null {
+function resolveContractSurfaceModulePaths(rootDir: string | undefined): string[] {
   if (typeof rootDir !== "string" || rootDir.length === 0) {
-    return null;
+    return [];
   }
+  const modulePaths: string[] = [];
   for (const basename of CONTRACT_SURFACE_BASENAMES) {
     const modulePath = path.join(rootDir, basename);
-    if (fs.existsSync(modulePath)) {
-      return modulePath;
+    if (!fs.existsSync(modulePath)) {
+      continue;
     }
+    const compiledDistModulePath = modulePath.replace(
+      `${path.sep}dist-runtime${path.sep}`,
+      `${path.sep}dist${path.sep}`,
+    );
+    // Prefer the compiled dist module over the dist-runtime shim so Jiti sees
+    // the full named export surface instead of only local wrapper exports.
+    if (compiledDistModulePath !== modulePath && fs.existsSync(compiledDistModulePath)) {
+      modulePaths.push(compiledDistModulePath);
+      continue;
+    }
+    modulePaths.push(modulePath);
   }
-  return null;
+  return modulePaths;
 }
 
 function loadBundledChannelContractSurfaces(): unknown[] {
@@ -79,14 +91,18 @@ function loadBundledChannelContractSurfaceEntries(): Array<{
     if (manifest.origin !== "bundled" || manifest.channels.length === 0) {
       continue;
     }
-    const modulePath = resolveContractSurfaceModulePath(manifest.rootDir);
-    if (!modulePath) {
+    const modulePaths = resolveContractSurfaceModulePaths(manifest.rootDir);
+    if (modulePaths.length === 0) {
       continue;
     }
     try {
+      const surface = Object.assign(
+        {},
+        ...modulePaths.map((modulePath) => loadModule(modulePath)(modulePath) as object),
+      );
       surfaces.push({
         pluginId: manifest.id,
-        surface: loadModule(modulePath)(modulePath),
+        surface,
       });
     } catch {
       continue;

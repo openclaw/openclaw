@@ -12,12 +12,31 @@ export const unsupportedSecretRefSurfacePatterns = [
   "channels.whatsapp.accounts.*.creds.json",
 ] as const;
 
-export { canonicalizeLegacySessionKey, isLegacyGroupSessionKey } from "./src/session-contract.js";
-export { createWhatsAppPollFixture, expectWhatsAppPollSent } from "./src/outbound-test-support.js";
-export { whatsappCommandPolicy } from "./src/command-policy.js";
-export { resolveLegacyGroupSessionKey } from "./src/group-session-contract.js";
-export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./src/normalize-target.js";
-export { __testing as whatsappAccessControlTesting } from "./src/inbound/access-control.js";
+import { whatsappCommandPolicy as whatsappCommandPolicyImpl } from "./src/command-policy.js";
+import { resolveLegacyGroupSessionKey as resolveLegacyGroupSessionKeyImpl } from "./src/group-session-contract.js";
+import { __testing as whatsappAccessControlTestingImpl } from "./src/inbound/access-control.js";
+import {
+  isWhatsAppGroupJid as isWhatsAppGroupJidImpl,
+  normalizeWhatsAppTarget as normalizeWhatsAppTargetImpl,
+} from "./src/normalize-target.js";
+import {
+  createWhatsAppPollFixture as createWhatsAppPollFixtureImpl,
+  expectWhatsAppPollSent as expectWhatsAppPollSentImpl,
+} from "./src/outbound-test-support.js";
+import {
+  canonicalizeLegacySessionKey as canonicalizeLegacySessionKeyImpl,
+  isLegacyGroupSessionKey as isLegacyGroupSessionKeyImpl,
+} from "./src/session-contract.js";
+
+export const canonicalizeLegacySessionKey = canonicalizeLegacySessionKeyImpl;
+export const createWhatsAppPollFixture = createWhatsAppPollFixtureImpl;
+export const expectWhatsAppPollSent = expectWhatsAppPollSentImpl;
+export const isLegacyGroupSessionKey = isLegacyGroupSessionKeyImpl;
+export const isWhatsAppGroupJid = isWhatsAppGroupJidImpl;
+export const normalizeWhatsAppTarget = normalizeWhatsAppTargetImpl;
+export const resolveLegacyGroupSessionKey = resolveLegacyGroupSessionKeyImpl;
+export const whatsappAccessControlTesting = whatsappAccessControlTestingImpl;
+export const whatsappCommandPolicy = whatsappCommandPolicyImpl;
 
 export function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,

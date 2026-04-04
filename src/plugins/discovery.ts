@@ -567,10 +567,19 @@ function discoverInDirectory(params: {
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
+  recurseDirectories?: boolean;
   skipDirectories?: Set<string>;
+  visitedDirectories?: Set<string>;
 }) {
   if (!fs.existsSync(params.dir)) {
     return;
+  }
+  const resolvedDir = safeRealpathSync(params.dir) ?? path.resolve(params.dir);
+  if (params.recurseDirectories) {
+    if (params.visitedDirectories?.has(resolvedDir)) {
+      return;
+    }
+    params.visitedDirectories?.add(resolvedDir);
   }
   let entries: fs.Dirent[] = [];
   try {
@@ -694,6 +703,14 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
         manifest,
         packageDir: fullPath,
+      });
+      continue;
+    }
+
+    if (params.recurseDirectories) {
+      discoverInDirectory({
+        ...params,
+        dir: fullPath,
       });
     }
   }
@@ -894,6 +911,18 @@ export function discoverOpenClawPlugins(params: {
     });
   }
   if (roots.workspace && workspaceRoot) {
+    discoverInDirectory({
+      dir: workspaceRoot,
+      origin: "workspace",
+      ownershipUid: params.ownershipUid,
+      workspaceDir: workspaceRoot,
+      candidates,
+      diagnostics,
+      seen,
+      recurseDirectories: true,
+      skipDirectories: new Set([".openclaw"]),
+      visitedDirectories: new Set<string>(),
+    });
     discoverInDirectory({
       dir: roots.workspace,
       origin: "workspace",
