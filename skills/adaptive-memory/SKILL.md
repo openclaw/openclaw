@@ -217,7 +217,7 @@ Remove from `MEMORY.md`:
 
 Record when distillation last ran to avoid redundant work:
 
-In `memory/heartbeat-state.json` (or a similar state file):
+In `memory/distillation-state.json`:
 
 ```json
 {

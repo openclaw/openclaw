@@ -35,8 +35,8 @@ def get_workspace(args_dir: str | None = None) -> Path:
 
 
 def load_state(workspace: Path) -> dict:
-    """Load heartbeat-state.json."""
-    state_path = workspace / "memory" / "heartbeat-state.json"
+    """Load distillation-state.json."""
+    state_path = workspace / "memory" / "distillation-state.json"
     if state_path.exists():
         with open(state_path) as f:
             return json.load(f)
@@ -44,8 +44,8 @@ def load_state(workspace: Path) -> dict:
 
 
 def save_state(workspace: Path, state: dict) -> None:
-    """Save heartbeat-state.json."""
-    state_path = workspace / "memory" / "heartbeat-state.json"
+    """Save distillation-state.json."""
+    state_path = workspace / "memory" / "distillation-state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     with open(state_path, "w") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
