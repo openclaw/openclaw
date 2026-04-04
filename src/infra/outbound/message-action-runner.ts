@@ -369,7 +369,7 @@ async function handleBroadcastAction(
   }
   return {
     kind: "broadcast",
-    channel: targetChannels[0] ?? "discord",
+    channel: targetChannels[0] ?? channelHint?.trim().toLowerCase() ?? "unknown",
     action: "broadcast",
     handledBy: input.dryRun ? "dry-run" : "core",
     payload: { results },

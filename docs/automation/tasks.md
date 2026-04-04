@@ -50,6 +50,15 @@ openclaw tasks notify <lookup> state_changes
 
 # Run a health audit
 openclaw tasks audit
+
+# Preview or apply maintenance
+openclaw tasks maintenance
+openclaw tasks maintenance --apply
+
+# Inspect TaskFlow state
+openclaw tasks flow list
+openclaw tasks flow show <lookup>
+openclaw tasks flow cancel <lookup>
 ```
 
 ## What creates a task
@@ -171,6 +180,27 @@ Surfaces operational issues. Findings also appear in `openclaw status` when issu
 | `delivery_failed`         | warn     | Delivery failed and notify policy is not `silent`     |
 | `missing_cleanup`         | warn     | Terminal task with no cleanup timestamp               |
 | `inconsistent_timestamps` | warn     | Timeline violation (for example ended before started) |
+
+### `tasks maintenance`
+
+```bash
+openclaw tasks maintenance [--json]
+openclaw tasks maintenance --apply [--json]
+```
+
+Use this to preview or apply reconciliation, cleanup stamping, and pruning for
+tasks and Task Flow state.
+
+### `tasks flow list|show|cancel`
+
+```bash
+openclaw tasks flow list [--status <status>] [--json]
+openclaw tasks flow show <lookup> [--json]
+openclaw tasks flow cancel <lookup>
+```
+
+Use these when the orchestrating Task Flow is the thing you care about rather
+than one individual background task record.
 
 ## Chat task board (`/tasks`)
 

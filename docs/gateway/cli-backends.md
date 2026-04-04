@@ -20,6 +20,10 @@ rate-limited, or temporarily misbehaving. This is intentionally conservative:
 This is designed as a **safety net** rather than a primary path. Use it when you
 want “always works” text responses without relying on external APIs.
 
+If you want a full harness runtime with ACP session controls, background tasks,
+thread/conversation binding, and persistent external coding sessions, use
+[ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
+
 ## Beginner-friendly quick start
 
 You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
@@ -157,6 +161,12 @@ The provider id becomes the left side of your model ref:
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
+
+Serialization notes:
+
+- `serialize: true` keeps same-lane runs ordered.
+- Most CLIs serialize on one provider lane.
+- `claude-cli` is narrower: resumed runs serialize per Claude session id, and fresh runs serialize per workspace path. Independent workspaces can run in parallel.
 
 ## Images (pass-through)
 

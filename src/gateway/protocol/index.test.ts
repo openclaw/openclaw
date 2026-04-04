@@ -89,11 +89,6 @@ describe("validateTalkConfigResult", () => {
                 },
               },
             },
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "ELEVENLABS_API_KEY",
-            },
           },
         },
       }),

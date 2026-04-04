@@ -6,7 +6,7 @@ summary: "`openclaw reset`（重置本地状态/配置）的 CLI 参考"
 title: reset
 x-i18n:
   generated_at: "2026-02-01T20:21:22Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 08afed5830f892e07d6e2e167f09aaf2d79fd5b2ba2a26a65dca857ebdbf873c
   source_path: cli/reset.md

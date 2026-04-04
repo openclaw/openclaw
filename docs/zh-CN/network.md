@@ -7,7 +7,7 @@ summary: 网络中心：Gateway 网关接口、配对、设备发现和安全
 title: 网络
 x-i18n:
   generated_at: "2026-02-03T10:07:45Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0fe4e7dbc8ddea312c8f3093af9b6bc71d9ae4007df76ae24b85889871933bc8
   source_path: network.md

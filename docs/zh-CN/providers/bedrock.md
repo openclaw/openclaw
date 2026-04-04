@@ -6,7 +6,7 @@ summary: 在 OpenClaw 中使用 Amazon Bedrock（Converse API）模型
 title: Amazon Bedrock
 x-i18n:
   generated_at: "2026-02-03T10:04:01Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 318f1048451a1910b70522e2f7f9dfc87084de26d9e3938a29d372eed32244a8
   source_path: providers/bedrock.md
@@ -80,7 +80,7 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
         auth: "aws-sdk",
         models: [
           {
-            id: "anthropic.claude-opus-4-5-20251101-v1:0",
+            id: "anthropic.claude-opus-4-6-20251101-v1:0",
             name: "Claude Opus 4.5 (Bedrock)",
             reasoning: true,
             input: ["text", "image"],
@@ -94,7 +94,7 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
   },
   agents: {
     defaults: {
-      model: { primary: "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0" },
+      model: { primary: "amazon-bedrock/anthropic.claude-opus-4-6-20251101-v1:0" },
     },
   },
 }

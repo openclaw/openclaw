@@ -3,7 +3,7 @@ import type { ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { sanitizeSessionHistory } from "./google.js";
+import { sanitizeSessionHistory } from "./replay-history.js";
 
 describe("sanitizeSessionHistory toolResult details stripping", () => {
   it("strips toolResult.details so untrusted payloads are not fed back to the model", async () => {
@@ -12,7 +12,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
     const messages: AgentMessage[] = [
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call_1", name: "web_fetch", arguments: { url: "x" } }],
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         stopReason: "toolUse",
         timestamp: 1,
       }),
@@ -38,7 +38,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
       messages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
-      modelId: "claude-opus-4-5",
+      modelId: "claude-opus-4-6",
       sessionManager: sm,
       sessionId: "test",
     });

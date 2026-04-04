@@ -254,7 +254,7 @@ OpenClaw 附带 pi‑ai 目录。这些提供商**不需要**
 ### 其他内置提供商插件
 
 - OpenRouter：`openrouter`（`OPENROUTER_API_KEY`）
-- 示例模型：`openrouter/anthropic/claude-sonnet-4-5`
+- 示例模型：`openrouter/anthropic/claude-sonnet-4-6`
 - Kilo Gateway：`kilocode`（`KILOCODE_API_KEY`）
 - 示例模型：`kilocode/anthropic/claude-opus-4.6`
 - MiniMax：`minimax`（`MINIMAX_API_KEY`）

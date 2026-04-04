@@ -79,16 +79,6 @@ export type TalkConfig = {
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
-
-  /**
-   * Legacy ElevenLabs compatibility fields.
-   * Kept during rollout while older clients migrate to provider/providers.
-   */
-  voiceId?: string;
-  voiceAliases?: Record<string, string>;
-  modelId?: string;
-  outputFormat?: string;
-  apiKey?: SecretInput;
 };
 
 export type TalkConfigResponse = TalkConfig & {

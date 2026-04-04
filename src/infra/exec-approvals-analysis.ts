@@ -3,7 +3,6 @@ import {
   resolveCommandResolutionFromArgv,
   type CommandResolution,
 } from "./exec-command-resolution.js";
-export { DEFAULT_SAFE_BINS } from "./exec-safe-bin-policy.js";
 
 export {
   matchAllowlist,

@@ -6,7 +6,7 @@ summary: OpenClaw 日志：滚动诊断文件日志 + 统一日志隐私标志
 title: macOS 日志
 x-i18n:
   generated_at: "2026-02-01T21:32:54Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: c4c201d154915e0eb08bf5e32bac98fa93766f50f2a24bf56ab4424eb7781526
   source_path: platforms/mac/logging.md

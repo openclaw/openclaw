@@ -7,7 +7,7 @@ summary: 符合模式的常见 OpenClaw 设置配置示例
 title: 配置示例
 x-i18n:
   generated_at: "2026-02-03T07:48:39Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 00e9286722653f2748137d5bc641d528b160de16a58015ca7674a3a302f4b2c3
   source_path: gateway/configuration-examples.md
@@ -42,7 +42,7 @@ x-i18n:
   },
   agent: {
     workspace: "~/.openclaw/workspace",
-    model: { primary: "anthropic/claude-sonnet-4-5" },
+    model: { primary: "anthropic/claude-sonnet-4-6" },
   },
   channels: {
     whatsapp: {
@@ -232,16 +232,16 @@ x-i18n:
       workspace: "~/.openclaw/workspace",
       userTimezone: "America/Chicago",
       model: {
-        primary: "anthropic/claude-sonnet-4-5",
-        fallbacks: ["anthropic/claude-opus-4-5", "openai/gpt-5.2"],
+        primary: "anthropic/claude-sonnet-4-6",
+        fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.4"],
       },
       imageModel: {
-        primary: "openrouter/anthropic/claude-sonnet-4-5",
+        primary: "openrouter/anthropic/claude-sonnet-4-6",
       },
       models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
-        "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
-        "openai/gpt-5.2": { alias: "gpt" },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
+        "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+        "openai/gpt-5.4": { alias: "gpt" },
       },
       thinkingDefault: "low",
       verboseDefault: "off",
@@ -265,7 +265,7 @@ x-i18n:
       maxConcurrent: 3,
       heartbeat: {
         every: "30m",
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
         target: "last",
         to: "+15555550123",
         prompt: "HEARTBEAT",
@@ -476,8 +476,8 @@ x-i18n:
   agent: {
     workspace: "~/.openclaw/workspace",
     model: {
-      primary: "anthropic/claude-sonnet-4-5",
-      fallbacks: ["anthropic/claude-opus-4-5"],
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: ["anthropic/claude-opus-4-6"],
     },
   },
 }
@@ -515,7 +515,7 @@ x-i18n:
   agent: {
     workspace: "~/.openclaw/workspace",
     model: {
-      primary: "anthropic/claude-opus-4-5",
+      primary: "anthropic/claude-opus-4-6",
       fallbacks: ["minimax/MiniMax-M2.1"],
     },
   },

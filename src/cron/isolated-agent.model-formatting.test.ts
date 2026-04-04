@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   loadModelCatalogMock,
   getModelRefStatusMock,
+  normalizeProviderIdMock,
   normalizeModelSelectionMock,
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
@@ -10,6 +11,9 @@ const {
 } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
+  normalizeProviderIdMock: vi.fn((value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "",
+  ),
   normalizeModelSelectionMock: vi.fn((value: unknown) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
   ),
@@ -24,6 +28,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/model-selection.js", () => ({
   getModelRefStatus: getModelRefStatusMock,
+  normalizeProviderId: normalizeProviderIdMock,
   normalizeModelSelection: normalizeModelSelectionMock,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
@@ -34,7 +39,7 @@ import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 
 const DEFAULT_MESSAGE = "do it";
 const DEFAULT_PROVIDER = "anthropic";
-const DEFAULT_MODEL = "claude-opus-4-5";
+const DEFAULT_MODEL = "claude-opus-4-6";
 
 type AgentTurnPayload = {
   kind: "agentTurn";
@@ -71,7 +76,7 @@ function parseModelRef(raw: string): { provider: string; model: string } | { err
   }
 
   const provider = providerRaw === "bedrock" ? "amazon-bedrock" : providerRaw;
-  const model = provider === "anthropic" && modelRaw === "opus-4.5" ? "claude-opus-4-5" : modelRaw;
+  const model = provider === "anthropic" && modelRaw === "opus-4.5" ? "claude-opus-4-6" : modelRaw;
   return { provider, model };
 }
 
@@ -220,7 +225,7 @@ describe("cron model formatting and precedence edge cases", () => {
             model: "anthropic/opus-4.5",
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-5" },
+        { provider: "anthropic", model: "claude-opus-4-6" },
       );
     });
 
@@ -230,10 +235,10 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "bedrock/claude-sonnet-4-5",
+            model: "bedrock/claude-sonnet-4-6",
           },
         },
-        { provider: "amazon-bedrock", model: "claude-sonnet-4-5" },
+        { provider: "amazon-bedrock", model: "claude-sonnet-4-6" },
       );
     });
   });
@@ -270,14 +275,14 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
           },
           sessionEntry: {
             providerOverride: "openai",
             modelOverride: "gpt-4.1-mini",
           },
         },
-        { provider: "anthropic", model: "claude-sonnet-4-5" },
+        { provider: "anthropic", model: "claude-sonnet-4-6" },
       );
     });
 
@@ -314,14 +319,14 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "anthropic/claude-opus-4-5",
+            model: "anthropic/claude-opus-4-6",
           },
           sessionEntry: {
             providerOverride: "openai",
             modelOverride: "gpt-4.1-mini",
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-5" },
+        { provider: "anthropic", model: "claude-opus-4-6" },
       );
     });
 
@@ -426,10 +431,10 @@ describe("cron model formatting and precedence edge cases", () => {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
           },
         },
-        { provider: "anthropic", model: "claude-sonnet-4-5" },
+        { provider: "anthropic", model: "claude-sonnet-4-6" },
       );
     });
   });

@@ -1,10 +1,10 @@
 import { expect } from "vitest";
 
 export const openaiCodexCatalogEntries = [
-  { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-  { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-  { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
-  { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
+  { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
+  { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.2 Pro" },
+  { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5 mini" },
+  { provider: "openai", id: "gpt-5.4-nano", name: "GPT-5 nano" },
   { provider: "openai-codex", id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
 ];
 
@@ -14,6 +14,7 @@ export const expectedAugmentedOpenaiCodexCatalogEntries = [
   { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
   { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
   { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+  { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
   {
     provider: "openai-codex",
     id: "gpt-5.3-codex-spark",

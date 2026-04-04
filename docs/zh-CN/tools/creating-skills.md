@@ -2,7 +2,7 @@
 title: 创建 Skills
 x-i18n:
   generated_at: "2026-02-03T10:10:19Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ad801da34fe361ffa584ded47f775d1c104a471a3f7b7f930652255e98945c3a
   source_path: tools/creating-skills.md

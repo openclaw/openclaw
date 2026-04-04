@@ -1,6 +1,6 @@
 import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test/helpers/plugins/fetch-mock.js";
 import { createRequestCaptureJsonFetch } from "../../test/helpers/plugins/media-understanding.js";
 import { describeGeminiVideo } from "./media-understanding-provider.js";
 
@@ -60,6 +60,29 @@ describe("describeGeminiVideo", () => {
 
     expect(seenKey).toBe("override");
     expect(result.text).toBe("video ok");
+  });
+
+  it("keeps private-network disabled for the default Google media endpoint", async () => {
+    const fetchFn = withFetchPreconnect(async () => {
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    await describeGeminiVideo({
+      buffer: Buffer.from("video"),
+      fileName: "clip.mp4",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+    });
+
+    expect(resolvePinnedHostnameWithPolicySpy).toHaveBeenCalled();
+    const [, options] = resolvePinnedHostnameWithPolicySpy.mock.calls[0] ?? [];
+    expect(options?.policy?.allowPrivateNetwork).toBeUndefined();
   });
 
   it("builds the expected request payload", async () => {

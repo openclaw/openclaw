@@ -1,5 +1,10 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import type { MessageCliHelpers } from "./helpers.js";
 import { registerMessageThreadCommands } from "./register.thread.js";
 
@@ -18,10 +23,47 @@ describe("registerMessageThreadCommands", () => {
   );
 
   beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "topic-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "topic-chat", label: "Topic chat" }),
+            actions: {
+              resolveCliActionRequest: ({
+                action,
+                args,
+              }: {
+                action: string;
+                args: Record<string, unknown>;
+              }) => {
+                if (action !== "thread-create") {
+                  return null;
+                }
+                const { threadName, ...rest } = args;
+                return {
+                  action: "topic-create",
+                  args: {
+                    ...rest,
+                    name: threadName,
+                  },
+                };
+              },
+            },
+          },
+        },
+        {
+          pluginId: "plain-chat",
+          source: "test",
+          plugin: createChannelTestPluginBase({ id: "plain-chat", label: "Plain chat" }),
+        },
+      ]),
+    );
     runMessageAction.mockClear();
   });
 
-  it("routes Telegram thread create to topic-create with Telegram params", async () => {
+  it("routes plugin-remapped thread create actions through channel hooks", async () => {
     const message = new Command().exitOverride();
     registerMessageThreadCommands(message, createHelpers(runMessageAction));
 
@@ -30,9 +72,9 @@ describe("registerMessageThreadCommands", () => {
         "thread",
         "create",
         "--channel",
-        " Telegram ",
+        " topic-chat ",
         "-t",
-        "-1001234567890",
+        "room-1",
         "--thread-name",
         "Build Updates",
         "-m",
@@ -44,17 +86,17 @@ describe("registerMessageThreadCommands", () => {
     expect(runMessageAction).toHaveBeenCalledWith(
       "topic-create",
       expect.objectContaining({
-        channel: " Telegram ",
-        target: "-1001234567890",
+        channel: " topic-chat ",
+        target: "room-1",
         name: "Build Updates",
         message: "hello",
       }),
     );
-    const telegramCall = runMessageAction.mock.calls.at(0);
-    expect(telegramCall?.[1]).not.toHaveProperty("threadName");
+    const remappedCall = runMessageAction.mock.calls.at(0);
+    expect(remappedCall?.[1]).not.toHaveProperty("threadName");
   });
 
-  it("keeps non-Telegram thread create on thread-create params", async () => {
+  it("keeps default thread create params when the channel does not remap the action", async () => {
     const message = new Command().exitOverride();
     registerMessageThreadCommands(message, createHelpers(runMessageAction));
 
@@ -63,7 +105,7 @@ describe("registerMessageThreadCommands", () => {
         "thread",
         "create",
         "--channel",
-        "discord",
+        "plain-chat",
         "-t",
         "channel:123",
         "--thread-name",
@@ -77,13 +119,13 @@ describe("registerMessageThreadCommands", () => {
     expect(runMessageAction).toHaveBeenCalledWith(
       "thread-create",
       expect.objectContaining({
-        channel: "discord",
+        channel: "plain-chat",
         target: "channel:123",
         threadName: "Build Updates",
         message: "hello",
       }),
     );
-    const discordCall = runMessageAction.mock.calls.at(0);
-    expect(discordCall?.[1]).not.toHaveProperty("name");
+    const defaultCall = runMessageAction.mock.calls.at(0);
+    expect(defaultCall?.[1]).not.toHaveProperty("name");
   });
 });

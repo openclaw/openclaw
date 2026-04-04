@@ -1,19 +1,29 @@
-export async function createConfiguredBindingConversationRuntimeModuleMock(
+type ConfiguredBindingConversationRuntimeModule = {
+  ensureConfiguredBindingRouteReady: (...args: never[]) => unknown;
+  resolveConfiguredBindingRoute: (...args: never[]) => unknown;
+};
+
+export async function createConfiguredBindingConversationRuntimeModuleMock<
+  TModule extends ConfiguredBindingConversationRuntimeModule,
+>(
   params: {
-    ensureConfiguredBindingRouteReadyMock: (...args: unknown[]) => unknown;
-    resolveConfiguredBindingRouteMock: (...args: unknown[]) => unknown;
+    ensureConfiguredBindingRouteReadyMock: (
+      ...args: Parameters<TModule["ensureConfiguredBindingRouteReady"]>
+    ) => ReturnType<TModule["ensureConfiguredBindingRouteReady"]>;
+    resolveConfiguredBindingRouteMock: (
+      ...args: Parameters<TModule["resolveConfiguredBindingRoute"]>
+    ) => ReturnType<TModule["resolveConfiguredBindingRoute"]>;
   },
-  importOriginal: () => Promise<{
-    ensureConfiguredBindingRouteReady: (...args: unknown[]) => unknown;
-    resolveConfiguredBindingRoute: (...args: unknown[]) => unknown;
-  }>,
+  loadActual: () => Promise<TModule>,
 ) {
-  const actual = await importOriginal();
+  const actual = await loadActual();
   return {
     ...actual,
-    ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
-      params.ensureConfiguredBindingRouteReadyMock(...args),
-    resolveConfiguredBindingRoute: (...args: unknown[]) =>
-      params.resolveConfiguredBindingRouteMock(...args),
-  };
+    ensureConfiguredBindingRouteReady: (
+      ...args: Parameters<TModule["ensureConfiguredBindingRouteReady"]>
+    ) => params.ensureConfiguredBindingRouteReadyMock(...args),
+    resolveConfiguredBindingRoute: (
+      ...args: Parameters<TModule["resolveConfiguredBindingRoute"]>
+    ) => params.resolveConfiguredBindingRouteMock(...args),
+  } satisfies TModule;
 }

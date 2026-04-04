@@ -5,7 +5,7 @@ summary: 按智能体的沙箱 + 工具限制、优先级和示例
 title: 多智能体沙箱与工具
 x-i18n:
   generated_at: "2026-02-03T07:50:39Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: f602cb6192b84b404cd7b6336562888a239d0fe79514edd51bd73c5b090131ef
   source_path: tools/multi-agent-sandbox-tools.md
@@ -226,7 +226,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 每个级别可以进一步限制工具，但不能恢复之前级别拒绝的工具。
 如果设置了 `agents.list[].tools.sandbox.tools`，它将替换该智能体的 `tools.sandbox.tools`。
 如果设置了 `agents.list[].tools.profile`，它将覆盖该智能体的 `tools.profile`。
-提供商工具键接受 `provider`（例如 `google-antigravity`）或 `provider/model`（例如 `openai/gpt-5.2`）。
+提供商工具键接受 `provider`（例如 `google-antigravity`）或 `provider/model`（例如 `openai/gpt-5.4`）。
 
 ### 工具组（简写）
 

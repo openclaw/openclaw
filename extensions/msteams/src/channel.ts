@@ -20,16 +20,19 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
+import { msTeamsApprovalAuth } from "./approval-auth.js";
 import {
   buildProbeChannelStatusSummary,
   chunkTextForOutbound,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
-} from "../runtime-api.js";
-import { msTeamsApprovalAuth } from "./approval-auth.js";
+  type ChannelMessageActionName,
+  type ChannelPlugin,
+  type OpenClawConfig,
+} from "./channel-api.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
+import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
@@ -383,6 +386,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }),
       },
       auth: msTeamsApprovalAuth,
+      doctor: {
+        dmAllowFromMode: "topOnly",
+        groupModel: "hybrid",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: true,
+        collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
+      },
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,

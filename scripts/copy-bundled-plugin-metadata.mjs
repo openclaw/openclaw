@@ -44,6 +44,7 @@ function collectTopLevelPublicSurfaceEntries(pluginDir) {
 
       const normalizedName = dirent.name.toLowerCase();
       if (
+        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
         normalizedName.includes(".test.") ||
         normalizedName.includes(".spec.") ||
         normalizedName.includes(".fixture.") ||

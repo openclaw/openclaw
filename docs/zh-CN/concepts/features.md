@@ -5,7 +5,7 @@ summary: OpenClaw 在渠道、路由、媒体和用户体验方面的功能。
 title: 功能
 x-i18n:
   generated_at: "2026-02-04T17:53:22Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 1b6aee0bfda751824cb6b3a99080b4c80c00ffb355a96f9cff1b596d55d15ed4
   source_path: concepts/features.md

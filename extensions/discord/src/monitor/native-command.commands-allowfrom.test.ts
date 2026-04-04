@@ -3,7 +3,7 @@ import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
-import * as dispatcherModule from "openclaw/plugin-sdk/reply-runtime";
+import * as dispatcherModule from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as nativeCommandTesting, createDiscordNativeCommand } from "./native-command.js";
 import {
@@ -39,7 +39,7 @@ function createConfig(): OpenClawConfig {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },
@@ -222,7 +222,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
           "345678901234567890": {
             channels: {
               "234567890123456789": {
-                allow: true,
+                enabled: true,
                 requireMention: false,
               },
             },

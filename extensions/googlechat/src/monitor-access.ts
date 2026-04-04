@@ -63,7 +63,6 @@ export function isSenderAllowed(
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
-  allow?: boolean;
   enabled?: boolean;
   users?: Array<string | number>;
   systemPrompt?: string;
@@ -242,7 +241,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       groupPolicy,
       routeAllowlistConfigured: groupAllowlistConfigured,
       routeMatched: Boolean(groupEntry),
-      routeEnabled: groupEntry?.enabled !== false && groupEntry?.allow !== false,
+      routeEnabled: groupEntry?.enabled !== false,
     });
     if (!routeAccess.allowed) {
       if (routeAccess.reason === "disabled") {

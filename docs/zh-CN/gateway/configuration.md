@@ -119,12 +119,12 @@ OpenClaw 只接受完全符合 schema 的配置。未知键、类型格式错误
       agents: {
         defaults: {
           model: {
-            primary: "anthropic/claude-sonnet-4-5",
-            fallbacks: ["openai/gpt-5.2"],
+            primary: "anthropic/claude-sonnet-4-6",
+            fallbacks: ["openai/gpt-5.4"],
           },
           models: {
-            "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
-            "openai/gpt-5.2": { alias: "GPT" },
+            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            "openai/gpt-5.4": { alias: "GPT" },
           },
         },
       },
