@@ -17,6 +17,7 @@ import {
   renderTopbarThemeModeToggle,
   switchChatSession,
 } from "./app-render.helpers.ts";
+import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
@@ -642,6 +643,7 @@ export function renderApp(state: AppViewState) {
               cronEnabled: state.cronStatus?.enabled ?? null,
               cronNext,
               lastChannelsRefresh: state.channelsLastSuccess,
+              warnQueryToken,
               usageResult: state.usageResult,
               sessionsResult: state.sessionsResult,
               skillsReport: state.skillsReport,
