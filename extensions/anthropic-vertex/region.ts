@@ -79,21 +79,15 @@ function resolveAnthropicVertexDefaultAdcPath(env: NodeJS.ProcessEnv = process.e
 
 function resolveAnthropicVertexAdcCredentialsPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const explicitCredentialsPath = normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS);
-  if (explicitCredentialsPath) {
-    return explicitCredentialsPath;
-  }
-
-  return resolveAnthropicVertexDefaultAdcPath(env);
+): string {
+  return (
+    normalizeOptionalSecretInput(env.GOOGLE_APPLICATION_CREDENTIALS) ??
+    resolveAnthropicVertexDefaultAdcPath(env)
+  );
 }
 
 function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolean {
   const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
-  if (!credentialsPath) {
-    return false;
-  }
-
   try {
     readFileSync(credentialsPath, "utf8");
     return true;
@@ -106,10 +100,6 @@ function resolveAnthropicVertexProjectIdFromAdc(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   const credentialsPath = resolveAnthropicVertexAdcCredentialsPathCandidate(env);
-  if (!credentialsPath) {
-    return undefined;
-  }
-
   try {
     const parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as AdcProjectFile;
     return (
