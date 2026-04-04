@@ -261,6 +261,11 @@ Announce payloads include a stats line at the end (even when wrapped):
 
 `sessions_history` is the safer orchestration path:
 
+- assistant recall is normalized first:
+  - thinking tags are stripped
+  - downgraded tool-call/result scaffolding and historical-context markers are stripped
+  - leaked model control tokens such as `<|assistant|>` are stripped
+  - malformed MiniMax tool-call XML is stripped
 - credential/token-like text is redacted
 - long blocks can be truncated
 - very large histories can drop older rows or replace an oversized row with
@@ -276,7 +281,7 @@ By default, sub-agents get **all tools except session tools** and system tools:
 - `sessions_send`
 - `sessions_spawn`
 
-`sessions_history` remains a bounded, redacted recall view here too; it is not
+`sessions_history` remains a bounded, sanitized recall view here too; it is not
 a raw transcript dump.
 
 When `maxSpawnDepth >= 2`, depth-1 orchestrator sub-agents additionally receive `sessions_spawn`, `subagents`, `sessions_list`, and `sessions_history` so they can manage their children.

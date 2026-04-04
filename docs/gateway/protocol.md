@@ -317,10 +317,8 @@ Gateway exposes today.
 - chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and
   `chat.inject`.
 - `chat.history` is display-normalized for UI clients: inline directive tags are
-  stripped from visible text, leaked reasoning / relevant-memories scaffolding,
-  leaked XML tool-call blocks, and leaked provider control tokens are also
-  stripped from visible assistant text, pure `NO_REPLY` assistant rows are
-  omitted, and oversized rows can be replaced with placeholders.
+  stripped from visible text, pure `NO_REPLY` assistant rows are omitted, and
+  oversized rows can be replaced with placeholders.
 
 #### Device pairing and device tokens
 

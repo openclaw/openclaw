@@ -26,7 +26,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
-- `chat.history` is also display-normalized: inline delivery directive tags such as `[[reply_to_*]]` and `[[audio_as_voice]]`, leaked reasoning / relevant-memories scaffolding, leaked XML tool-call blocks, and leaked provider control tokens such as `<|assistant|>` are stripped from visible assistant text, and assistant entries whose whole visible text is only `NO_REPLY` are omitted.
+- `chat.history` is also display-normalized: inline delivery directive tags such as `[[reply_to_*]]` and `[[audio_as_voice]]` are stripped from visible text, and assistant entries whose whole visible text is only `NO_REPLY` are omitted.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.
