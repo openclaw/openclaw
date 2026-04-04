@@ -1278,6 +1278,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionId,
       messages: bounded.messages,
+      model: resolvedSessionModel.model,
+      provider: resolvedSessionModel.provider,
       thinkingLevel,
       fastMode: entry?.fastMode,
       verboseLevel,
