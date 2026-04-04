@@ -288,12 +288,15 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // oxlint-disable-next-line typescript/no-unsafe-function-type
     handlerFn: Function,
   ): Promise<T> {
-    if (quarantinedHandlers.has(handlerFn)) {
-      throw new Error(`${hookName} handler from ${pluginId} quarantined after previous timeout`);
-    }
-
+    // Check timeout exemption BEFORE quarantine so that exempt hooks (policy
+    // gates, install scanners) are never blocked — even when the same handler
+    // function timed out on a different, non-exempt hook registration.
     if (!hookTimeoutMs || TIMEOUT_EXEMPT_HOOKS.has(hookName)) {
       return fn();
+    }
+
+    if (quarantinedHandlers.has(handlerFn)) {
+      throw new Error(`${hookName} handler from ${pluginId} quarantined after previous timeout`);
     }
     const effectiveTimeout = MEMORY_HOOK_NAMES.has(hookName)
       ? Math.max(MEMORY_HOOK_TIMEOUT_MS, hookTimeoutMs)

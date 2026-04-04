@@ -38,7 +38,7 @@ describe("hook handler timeout", () => {
     });
 
     const runner = createHookRunner(registry, { hookTimeoutMs: 5000, catchErrors: true });
-    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(0);
 
     const result = await promise;
@@ -66,7 +66,7 @@ describe("hook handler timeout", () => {
       },
     });
 
-    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(150);
 
     const result = await promise;
@@ -113,7 +113,7 @@ describe("hook handler timeout", () => {
       },
     });
 
-    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(150);
 
     const result = await promise;
@@ -227,7 +227,7 @@ describe("hook handler timeout", () => {
     });
 
     const runner = createHookRunner(registry, { catchErrors: true });
-    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(5000);
 
     const result = await promise;
@@ -247,7 +247,7 @@ describe("hook handler timeout", () => {
     });
 
     const runner = createHookRunner(registry, { hookTimeoutMs: 0, catchErrors: true });
-    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(30_000);
 
     const result = await promise;
@@ -277,7 +277,7 @@ describe("hook handler timeout", () => {
       },
     });
 
-    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(2500);
 
     const result = await promise;
@@ -300,7 +300,7 @@ describe("hook handler timeout", () => {
     });
 
     const runner = createHookRunner(registry, { hookTimeoutMs: 50, catchErrors: false });
-    const promise = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const promise = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
 
     // Register the rejection handler before advancing timers to avoid
     // unhandled rejection noise.
@@ -542,7 +542,7 @@ describe("hook handler timeout", () => {
     });
 
     // First call: handler executes but times out
-    const p1 = runner.runBeforePromptBuild({ prompt: "hello" }, stubCtx);
+    const p1 = runner.runBeforePromptBuild({ prompt: "hello", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(150);
     await p1;
 
@@ -551,7 +551,7 @@ describe("hook handler timeout", () => {
 
     // Second call: handler should be skipped entirely (quarantined)
     logs.length = 0;
-    const p2 = runner.runBeforePromptBuild({ prompt: "hello again" }, stubCtx);
+    const p2 = runner.runBeforePromptBuild({ prompt: "hello again", messages: [] }, stubCtx);
     await vi.advanceTimersByTimeAsync(0);
     await p2;
 
