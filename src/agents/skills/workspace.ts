@@ -45,6 +45,16 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   }));
 }
 
+function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
+  if (entry.exposure) {
+    return entry.exposure.includeInAvailableSkillsPrompt !== false;
+  }
+  if (entry.invocation) {
+    return entry.invocation.disableModelInvocation !== true;
+  }
+  return entry.skill.disableModelInvocation !== true;
+}
+
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
@@ -469,11 +479,20 @@ function loadSkillEntries(
         filePath: skill.filePath,
         maxBytes: limits.maxSkillFileBytes,
       }) ?? ({} as ParsedSkillFrontmatter);
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
     return {
       skill,
       frontmatter,
       metadata: resolveOpenClawMetadata(frontmatter),
-      invocation: resolveSkillInvocationPolicy(frontmatter),
+      invocation,
+      exposure: {
+        includeInRuntimeRegistry: true,
+        // Freshly loaded entries preserve the documented disable-model-invocation
+        // contract, while legacy entries without exposure metadata still use the
+        // fallback in isSkillVisibleInAvailableSkillsPrompt().
+        includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+        userInvocable: invocation.userInvocable !== false,
+      },
     };
   });
   return skillEntries;
@@ -494,8 +513,7 @@ function escapeXml(str: string): string {
  * preserving awareness of all skills before resorting to dropping.
  */
 export function formatSkillsCompact(skills: Skill[]): string {
-  const visible = skills.filter((s) => !s.disableModelInvocation);
-  if (visible.length === 0) return "";
+  if (skills.length === 0) return "";
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
     "Use the read tool to load a skill's file when the task matches its name.",
@@ -503,7 +521,7 @@ export function formatSkillsCompact(skills: Skill[]): string {
     "",
     "<available_skills>",
   ];
-  for (const skill of visible) {
+  for (const skill of skills) {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
@@ -629,9 +647,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter(
-    (entry) => entry.invocation?.disableModelInvocation !== true,
-  );
+  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
