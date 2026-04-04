@@ -368,8 +368,15 @@ actor PortGuardian {
             if port == GatewayEnvironment.gatewayPort() { return true }
             return false
         case .local:
-            // The gateway daemon may listen as `openclaw` or as its runtime (`node`, `bun`, etc).
+            // The gateway daemon may listen as the shell wrapper (`gateway-daemon`),
+            // the process alias (`openclaw-gateway`), or a runtime-hosted repo build
+            // such as `node .../dist/index.js gateway`.
             if full.contains("gateway-daemon") { return true }
+            if cmd.contains("openclaw-gateway") || full.contains("openclaw-gateway") { return true }
+            if full.contains("openclaw.mjs") && full.contains(" gateway") { return true }
+            if full.contains("dist/index.js") && full.contains("openclaw") && full.contains(" gateway") {
+                return true
+            }
             // If args are unavailable, treat a CLI listener as expected.
             if cmd.contains("openclaw"), full == cmd { return true }
             return false

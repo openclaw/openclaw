@@ -47,6 +47,81 @@ private enum WebChatSwiftUILayout {
     }
 }
 
+private final class PanelGlassChromeView: NSView {
+    private let topSheenLayer = CAGradientLayer()
+    private let diagonalBloomLayer = CAGradientLayer()
+    private let lowerMistLayer = CAGradientLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        self.wantsLayer = true
+        let backingLayer = CALayer()
+        backingLayer.masksToBounds = true
+        backingLayer.cornerCurve = .continuous
+        self.layer = backingLayer
+
+        self.topSheenLayer.startPoint = CGPoint(x: 0.5, y: 1)
+        self.topSheenLayer.endPoint = CGPoint(x: 0.5, y: 0)
+        self.topSheenLayer.locations = [0, 0.34, 1]
+        self.topSheenLayer.colors = [
+            NSColor.white.withAlphaComponent(0.22).cgColor,
+            NSColor.white.withAlphaComponent(0.07).cgColor,
+            NSColor.clear.cgColor,
+        ]
+
+        self.diagonalBloomLayer.startPoint = CGPoint(x: 0, y: 1)
+        self.diagonalBloomLayer.endPoint = CGPoint(x: 1, y: 0)
+        self.diagonalBloomLayer.locations = [0, 0.55, 1]
+        self.diagonalBloomLayer.colors = [
+            NSColor.white.withAlphaComponent(0.12).cgColor,
+            NSColor.white.withAlphaComponent(0.04).cgColor,
+            NSColor.clear.cgColor,
+        ]
+
+        self.lowerMistLayer.startPoint = CGPoint(x: 0.5, y: 0)
+        self.lowerMistLayer.endPoint = CGPoint(x: 0.5, y: 1)
+        self.lowerMistLayer.locations = [0, 1]
+        self.lowerMistLayer.colors = [
+            NSColor.white.withAlphaComponent(0.05).cgColor,
+            NSColor.clear.cgColor,
+        ]
+
+        self.layer?.addSublayer(self.diagonalBloomLayer)
+        self.layer?.addSublayer(self.lowerMistLayer)
+        self.layer?.addSublayer(self.topSheenLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override func layout() {
+        super.layout()
+
+        let bounds = self.bounds
+        let cornerRadius = min(30, min(bounds.width, bounds.height) * 0.08)
+        self.layer?.cornerRadius = cornerRadius
+
+        self.diagonalBloomLayer.frame = bounds.insetBy(dx: 18, dy: 18)
+        self.lowerMistLayer.frame = CGRect(
+            x: 0,
+            y: 0,
+            width: bounds.width,
+            height: min(120, bounds.height * 0.30))
+        self.topSheenLayer.frame = CGRect(
+            x: 0,
+            y: max(0, bounds.height - min(180, bounds.height * 0.42)),
+            width: bounds.width,
+            height: min(180, bounds.height * 0.42))
+    }
+
+    override func hitTest(_: NSPoint) -> NSView? {
+        nil
+    }
+}
+
 struct MacGatewayChatTransport: OpenClawChatTransport {
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
@@ -251,6 +326,8 @@ final class WebChatSwiftUIWindowController {
     private let contentController: NSViewController
     private var window: NSWindow?
     private var dismissMonitor: Any?
+    private var panelVisibilityAnimationID: UInt = 0
+    private var isPanelDismissAnimating = false
     var onClosed: (() -> Void)?
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -310,7 +387,11 @@ final class WebChatSwiftUIWindowController {
     deinit {}
 
     var isVisible: Bool {
-        self.window?.isVisible ?? false
+        guard let window else { return false }
+        if case .panel = self.presentation, self.isPanelDismissAnimating {
+            return false
+        }
+        return window.isVisible
     }
 
     func show(mode: WebChatWorkspaceMode = .control) {
@@ -368,20 +449,27 @@ final class WebChatSwiftUIWindowController {
     func presentAnchored(anchorProvider: () -> NSRect?) {
         guard case .panel = self.presentation, let window else { return }
         self.installDismissMonitor()
+        self.panelVisibilityAnimationID &+= 1
+        let visibilityAnimationID = self.panelVisibilityAnimationID
+        self.isPanelDismissAnimating = false
         let target = self.reposition(using: anchorProvider)
 
-        if !self.isVisible {
-            let start = target.offsetBy(dx: 0, dy: 8)
+        if !window.isVisible || window.alphaValue < 0.99 {
+            let start = target.offsetBy(dx: 0, dy: 10)
             window.setFrame(start, display: true)
             window.alphaValue = 0
             window.makeKeyAndOrderFront(nil)
             DockIconManager.shared.updateDockVisibilityNow()
             NSApp.activate(ignoringOtherApps: true)
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 window.animator().setFrame(target, display: true)
                 window.animator().alphaValue = 1
+            } completionHandler: { [weak self, weak window] in
+                guard let self, let window else { return }
+                guard self.panelVisibilityAnimationID == visibilityAnimationID else { return }
+                window.alphaValue = 1
             }
         } else {
             window.makeKeyAndOrderFront(nil)
@@ -393,7 +481,40 @@ final class WebChatSwiftUIWindowController {
     }
 
     func close() {
-        self.window?.orderOut(nil)
+        guard let window else {
+            DockIconManager.shared.updateDockVisibilityNow()
+            self.onVisibilityChanged?(false)
+            self.onClosed?()
+            self.removeDismissMonitor()
+            return
+        }
+
+        if case .panel = self.presentation, window.isVisible {
+            self.panelVisibilityAnimationID &+= 1
+            let visibilityAnimationID = self.panelVisibilityAnimationID
+            self.isPanelDismissAnimating = true
+            self.removeDismissMonitor()
+            let endFrame = window.frame.offsetBy(dx: 0, dy: 10)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                window.animator().setFrame(endFrame, display: true)
+                window.animator().alphaValue = 0
+            } completionHandler: { [weak self, weak window] in
+                guard let self, let window else { return }
+                guard self.panelVisibilityAnimationID == visibilityAnimationID else { return }
+                window.orderOut(nil)
+                window.alphaValue = 1
+                self.isPanelDismissAnimating = false
+                DockIconManager.shared.updateDockVisibilityNow()
+                self.onVisibilityChanged?(false)
+                self.onClosed?()
+            }
+            return
+        }
+
+        self.isPanelDismissAnimating = false
+        window.orderOut(nil)
         DockIconManager.shared.updateDockVisibilityNow()
         self.onVisibilityChanged?(false)
         self.onClosed?()
@@ -567,6 +688,8 @@ final class WebChatSwiftUIWindowController {
             : NSColor.clear.cgColor
 
         effectView.translatesAutoresizingMaskIntoConstraints = false
+        let chromeView = isPanel ? PanelGlassChromeView(frame: .zero) : nil
+        chromeView?.translatesAutoresizingMaskIntoConstraints = false
 
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.wantsLayer = true
@@ -578,10 +701,13 @@ final class WebChatSwiftUIWindowController {
         controller.addChild(hosting)
         rootView.addSubview(shadowView)
         rootView.addSubview(effectView)
+        if let chromeView {
+            effectView.addSubview(chromeView)
+        }
         effectView.addSubview(hosting.view)
         controller.view = rootView
 
-        NSLayoutConstraint.activate([
+        var constraints: [NSLayoutConstraint] = [
             shadowView.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: chromeInset),
             shadowView.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -chromeInset),
             shadowView.topAnchor.constraint(equalTo: rootView.topAnchor, constant: chromeInset),
@@ -596,7 +722,16 @@ final class WebChatSwiftUIWindowController {
             hosting.view.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
             hosting.view.topAnchor.constraint(equalTo: effectView.topAnchor),
             hosting.view.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
-        ])
+        ]
+        if let chromeView {
+            constraints.append(contentsOf: [
+                chromeView.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
+                chromeView.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
+                chromeView.topAnchor.constraint(equalTo: effectView.topAnchor),
+                chromeView.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
+            ])
+        }
+        NSLayoutConstraint.activate(constraints)
 
         return controller
     }
