@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
 
@@ -15,7 +16,7 @@ const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw sub
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
-let mockConfig: Record<string, unknown> = {
+let mockConfig: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -35,16 +36,6 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({ hasHooks: () => false }),
-}));
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-  resolveAgentIdFromSessionKey: (sessionKey: string) =>
-    resolveAgentIdFromSessionKeyMock(sessionKey),
-  resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
-  resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
-}));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
@@ -64,44 +55,22 @@ vi.mock("./tools/agent-step.js", () => ({
   readLatestAssistantReply: (params?: unknown) => readLatestAssistantReplyMock(params),
 }));
 
-vi.mock("./subagent-announce-delivery.runtime.js", () => ({
-  createBoundDeliveryRouter: () => ({
-    resolveDestination: () => ({ mode: "none" }),
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
+    callGateway: (request: unknown) => callGatewayMock(request),
+    loadConfig: () => mockConfig,
+    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+    resolveAgentIdFromSessionKey: (sessionKey: string) =>
+      resolveAgentIdFromSessionKeyMock(sessionKey),
+    resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
+    resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
+    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+    queueEmbeddedPiMessage: (sessionId: string, text: string) =>
+      queueEmbeddedPiMessageMock(sessionId, text),
   }),
-  resolveConversationIdFromTargets: () => "",
-  resolveExternalBestEffortDeliveryTarget: (params: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string;
-  }) => ({
-    deliver: Boolean(params.channel && params.to),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    threadId: params.threadId,
-  }),
-  resolveQueueSettings: (params: {
-    cfg?: {
-      messages?: {
-        queue?: {
-          byChannel?: Record<string, string>;
-        };
-      };
-    };
-    channel?: string;
-  }) => ({
-    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
-  }),
-}));
-vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-  queueEmbeddedPiMessage: (sessionId: string, text: string) =>
-    queueEmbeddedPiMessageMock(sessionId, text),
-}));
+);
 
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
-import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 describe("subagent announce seam flow", () => {
@@ -142,11 +111,6 @@ describe("subagent announce seam flow", () => {
         scope: "per-sender",
       },
     };
-    subagentAnnounceDeliveryTesting.setDepsForTest({
-      callGateway: (async <T = Record<string, unknown>>(request: unknown) =>
-        (await callGatewayMock(request)) as T) as typeof import("../gateway/call.js").callGateway,
-      loadConfig: () => mockConfig,
-    });
     subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReset();
     subagentRegistryRuntimeMock.shouldIgnorePostCompletionAnnounceForSession.mockReturnValue(false);
     subagentRegistryRuntimeMock.isSubagentSessionRunActive.mockReset();

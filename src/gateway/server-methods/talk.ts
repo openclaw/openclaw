@@ -5,6 +5,7 @@ import type { TalkProviderConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { canonicalizeSpeechProviderId, getSpeechProvider } from "../../tts/provider-registry.js";
 import { synthesizeSpeech, type TtsDirectiveOverrides } from "../../tts/tts.js";
+import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -15,9 +16,6 @@ import {
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-const ADMIN_SCOPE = "operator.admin";
-const TALK_SECRETS_SCOPE = "operator.talk.secrets";
 
 function canReadTalkSecrets(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
