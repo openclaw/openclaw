@@ -59,22 +59,17 @@ API keys for daemon use: `openclaw onboard`.
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.openclaw/.env`, systemd/launchd).
 
-## Anthropic: OAuth/token compatibility
+## Anthropic: legacy token compatibility
 
-Existing Anthropic OAuth/token profiles are still honored at runtime if they
-are already configured, but OpenClaw no longer offers Anthropic setup-token
-auth for new setup via onboarding or `models auth` commands.
+Anthropic setup-token auth is still available in OpenClaw as a
+legacy/manual path. Anthropic's public Claude Code docs still cover direct
+Claude Code terminal use under Claude plans, but Anthropic separately told
+OpenClaw users that the **OpenClaw** Claude-login path counts as third-party
+harness usage and requires **Extra Usage** billed separately from the
+subscription.
 
-For new setup, use an Anthropic API key or migrate to Claude CLI on the gateway
-host.
-
-Other providers can still use the generic token helpers:
-
-- `openclaw models auth setup-token --provider <id>` runs the provider's token
-  auth flow (interactive TTY required).
-- `openclaw models auth paste-token --provider <id>` prompts for a token value
-  and writes it to `auth-profiles.json` (default profile id:
-  `<provider>:manual`).
+For the clearest setup path, use an Anthropic API key or migrate to Claude CLI
+on the gateway host.
 
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
@@ -130,8 +125,8 @@ openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
 This keeps your existing Anthropic auth profiles for rollback, but changes the
-default model selection to a canonical `claude-cli/claude-*` ref and adds
-matching Claude CLI allowlist entries under `agents.defaults.models`.
+default model selection to `claude-cli/...` and adds matching Claude CLI
+allowlist entries under `agents.defaults.models`.
 
 Verify:
 
@@ -145,8 +140,9 @@ Onboarding shortcut:
 openclaw onboard --auth-choice anthropic-cli
 ```
 
-Interactive `openclaw onboard` and `openclaw configure` prefer Claude CLI for
-Anthropic and no longer offer setup-token as a new setup path.
+Interactive `openclaw onboard` and `openclaw configure` still prefer Claude CLI
+for Anthropic, but Anthropic setup-token is available again as a
+legacy/manual path and should be used with the Extra Usage billing expectation.
 
 ## Checking model auth status
 
@@ -211,12 +207,12 @@ openclaw models status
 
 ### Token expiring/expired
 
-Run `openclaw models status` to confirm which profile is expiring. If an
-Anthropic OAuth/token profile is missing or expired, migrate that setup to Claude CLI
+Run `openclaw models status` to confirm which profile is expiring. If a legacy
+Anthropic token profile is missing or expired, migrate that setup to Claude CLI
 or an API key.
 
 ## Claude CLI requirements
 
 Only needed for the Anthropic Claude CLI reuse path:
 
-- Claude CLI installed (`claude` command available)
+- Claude Code CLI installed (`claude` command available)

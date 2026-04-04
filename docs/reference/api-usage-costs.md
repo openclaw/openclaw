@@ -31,11 +31,13 @@ OpenClaw features that can generate provider usage or paid API calls.
   `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
   from `stats.input_tokens - stats.cached` when needed.
 
-Anthropic note: starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
-Anthropic says OpenClaw no longer uses included Claude subscription limits.
-Anthropic subscription-auth traffic in OpenClaw now requires **Extra Usage**
-billed separately from the subscription, but Anthropic does not expose a
-per-message dollar estimate that OpenClaw can show in `/usage full`.
+Anthropic note: Anthropic's public Claude Code docs still include direct Claude
+Code terminal usage in Claude plan limits. Separately, Anthropic told OpenClaw
+users that starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**, the
+**OpenClaw** Claude-login path counts as third-party harness usage and
+requires **Extra Usage** billed separately from the subscription. Anthropic
+does not expose a per-message dollar estimate that OpenClaw can show in
+`/usage full`.
 
 **CLI usage windows (provider quotas)**
 
@@ -74,9 +76,9 @@ Every reply or tool call uses the **current model provider** (OpenAI, Anthropic,
 primary source of usage and cost.
 
 This also includes subscription-style hosted providers that still bill outside
-OpenClaw's local UI, such as **OpenAI Codex**, **Qwen Cloud Coding Plan**,
-**MiniMax Coding Plan**, **Z.AI / GLM Coding Plan**, and
-Anthropic subscription auth with **Extra Usage** enabled.
+OpenClaw's local UI, such as **OpenAI Codex**, **Alibaba Cloud Model Studio
+Coding Plan**, **MiniMax Coding Plan**, **Z.AI / GLM Coding Plan**, and
+Anthropic's OpenClaw Claude-login path with **Extra Usage** enabled.
 
 See [Models](/providers/models) for pricing config and [Token use & costs](/reference/token-use) for display.
 
