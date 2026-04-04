@@ -51,7 +51,7 @@ describe("test-projects args", () => {
       "exec",
       "vitest",
       "--config",
-      "vitest.config.ts",
+      "vitest.unit.config.ts",
       "src/foo.test.ts",
     ]);
   });
@@ -62,8 +62,85 @@ describe("test-projects args", () => {
       "vitest",
       "run",
       "--config",
-      "vitest.config.ts",
+      "vitest.unit.config.ts",
       "src/foo.test.ts",
+    ]);
+  });
+
+  it("routes boundary targets to the boundary config", () => {
+    expect(buildVitestRunPlans(["src/infra/openclaw-root.test.ts"])).toEqual([
+      {
+        config: "vitest.boundary.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/infra/openclaw-root.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes command targets to the commands config", () => {
+    expect(buildVitestRunPlans(["src/commands/status.summary.test.ts"])).toEqual([
+      {
+        config: "vitest.commands.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/commands/status.summary.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes auto-reply targets to the auto-reply config", () => {
+    expect(buildVitestRunPlans(["src/auto-reply/reply/get-reply.message-hooks.test.ts"])).toEqual([
+      {
+        config: "vitest.auto-reply.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/auto-reply/reply/get-reply.message-hooks.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes agents targets to the agents config", () => {
+    expect(buildVitestRunPlans(["src/agents/tools/image-tool.test.ts"])).toEqual([
+      {
+        config: "vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/tools/image-tool.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes gateway targets to the gateway config", () => {
+    expect(buildVitestRunPlans(["src/gateway/call.test.ts"])).toEqual([
+      {
+        config: "vitest.gateway.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/gateway/call.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("widens non-test helper file targets to sibling tests inside the routed suite", () => {
+    expect(buildVitestRunPlans(["src/gateway/gateway-connection.test-mocks.ts"])).toEqual([
+      {
+        config: "vitest.gateway.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/gateway/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes e2e targets straight to the e2e config", () => {
+    expect(buildVitestRunPlans(["src/commands/models.set.e2e.test.ts"])).toEqual([
+      {
+        config: "vitest.e2e.config.ts",
+        forwardedArgs: ["src/commands/models.set.e2e.test.ts"],
+        includePatterns: null,
+        watchMode: false,
+      },
     ]);
   });
 
@@ -101,7 +178,7 @@ describe("test-projects args", () => {
       ]),
     ).toEqual([
       {
-        config: "vitest.config.ts",
+        config: "vitest.unit.config.ts",
         forwardedArgs: ["-t", "mention", "src/config/config-misc.test.ts"],
         includePatterns: null,
         watchMode: false,

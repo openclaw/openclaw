@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createAgentsVitestConfig } from "../vitest.agents.config.ts";
+import { createAutoReplyVitestConfig } from "../vitest.auto-reply.config.ts";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
+import { createCommandsVitestConfig } from "../vitest.commands.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
 import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scoped-config.ts";
@@ -64,6 +67,9 @@ describe("scoped vitest configs", () => {
   const defaultChannelsConfig = createChannelsVitestConfig({});
   const defaultExtensionsConfig = createExtensionsVitestConfig({});
   const defaultGatewayConfig = createGatewayVitestConfig({});
+  const defaultCommandsConfig = createCommandsVitestConfig({});
+  const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
+  const defaultAgentsConfig = createAgentsVitestConfig({});
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);
@@ -127,5 +133,20 @@ describe("scoped vitest configs", () => {
   it("normalizes gateway include patterns relative to the scoped dir", () => {
     expect(defaultGatewayConfig.test?.dir).toBe("src/gateway");
     expect(defaultGatewayConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("normalizes commands include patterns relative to the scoped dir", () => {
+    expect(defaultCommandsConfig.test?.dir).toBe("src/commands");
+    expect(defaultCommandsConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("normalizes auto-reply include patterns relative to the scoped dir", () => {
+    expect(defaultAutoReplyConfig.test?.dir).toBe("src/auto-reply");
+    expect(defaultAutoReplyConfig.test?.include).toEqual(["**/*.test.ts"]);
+  });
+
+  it("normalizes agents include patterns relative to the scoped dir", () => {
+    expect(defaultAgentsConfig.test?.dir).toBe("src/agents");
+    expect(defaultAgentsConfig.test?.include).toEqual(["**/*.test.ts"]);
   });
 });
