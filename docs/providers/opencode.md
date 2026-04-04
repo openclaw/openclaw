@@ -47,7 +47,7 @@ openclaw onboard --opencode-go-api-key "$OPENCODE_API_KEY"
 ### Zen
 
 - Runtime provider: `opencode`
-- Example models: `opencode/claude-opus-4-6`, `opencode/gpt-5.2`, `opencode/gemini-3-pro`
+- Example models: `opencode/claude-opus-4-6`, `opencode/gpt-5.4`, `opencode/gemini-3-pro`
 - Best when you want the curated OpenCode multi-model proxy
 
 ### Go

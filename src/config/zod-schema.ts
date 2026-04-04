@@ -181,11 +181,6 @@ const TalkSchema = z
   .object({
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
-    voiceId: z.string().optional(),
-    voiceAliases: z.record(z.string(), z.string()).optional(),
-    modelId: z.string().optional(),
-    outputFormat: z.string().optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
     interruptOnSpeech: z.boolean().optional(),
     silenceTimeoutMs: z.number().int().positive().optional(),
   })
@@ -375,7 +370,6 @@ export const OpenClawSchema = z
         snapshotDefaults: BrowserSnapshotDefaultsSchema,
         ssrfPolicy: z
           .object({
-            allowPrivateNetwork: z.boolean().optional(),
             dangerouslyAllowPrivateNetwork: z.boolean().optional(),
             allowedHostnames: z.array(z.string()).optional(),
             hostnameAllowlist: z.array(z.string()).optional(),
@@ -449,7 +443,12 @@ export const OpenClawSchema = z
             billingBackoffHours: z.number().positive().optional(),
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
+            authPermanentBackoffMinutes: z.number().positive().optional(),
+            authPermanentMaxMinutes: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
+            overloadedProfileRotations: z.number().int().nonnegative().optional(),
+            overloadedBackoffMs: z.number().int().nonnegative().optional(),
+            rateLimitedProfileRotations: z.number().int().nonnegative().optional(),
           })
           .strict()
           .optional(),
@@ -723,6 +722,12 @@ export const OpenClawSchema = z
           .object({
             deny: z.array(z.string()).optional(),
             allow: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        webchat: z
+          .object({
+            chatHistoryMaxChars: z.number().int().positive().max(500_000).optional(),
           })
           .strict()
           .optional(),

@@ -5,7 +5,6 @@ import {
 } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel, resolveExecTarget } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import { requestLiveSessionModelSwitch } from "../../agents/live-model-switch.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
@@ -32,6 +31,7 @@ import {
   withOptions,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
+import { refreshQueuedFollowupSession } from "./queue.js";
 
 function resolveExecDefaults(params: {
   cfg: OpenClawConfig;
@@ -413,6 +413,7 @@ export async function handleDirectiveOnly(
         entry: sessionEntry,
         selection: modelSelection,
         profileOverride,
+        markLiveSwitchPending: true,
       });
       modelSelectionUpdated = applied.updated;
     }
@@ -442,15 +443,16 @@ export async function handleDirectiveOnly(
         store[sessionKey] = sessionEntry;
       });
     }
-    if (modelSelection && modelSelectionUpdated) {
-      requestLiveSessionModelSwitch({
-        sessionEntry,
-        selection: {
-          provider: modelSelection.provider,
-          model: modelSelection.model,
-          authProfileId: profileOverride,
-          authProfileIdSource: profileOverride ? "user" : undefined,
-        },
+    if (modelSelection && modelSelectionUpdated && sessionKey) {
+      // `/model` should retarget queued/future work without interrupting the
+      // active run. Refresh queued followups so they pick up the persisted
+      // selection once the current turn finishes.
+      refreshQueuedFollowupSession({
+        key: sessionKey,
+        nextProvider: modelSelection.provider,
+        nextModel: modelSelection.model,
+        nextAuthProfileId: profileOverride,
+        nextAuthProfileIdSource: profileOverride ? "user" : undefined,
       });
     }
   }

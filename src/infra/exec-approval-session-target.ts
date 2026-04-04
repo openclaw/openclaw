@@ -1,11 +1,18 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { normalizeOptionalAccountId } from "../routing/account-id.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
+import { doesApprovalRequestMatchChannelAccount } from "./approval-request-account-binding.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+
+export {
+  doesApprovalRequestMatchChannelAccount,
+  resolveApprovalRequestAccountId,
+  resolveApprovalRequestChannelAccountId,
+} from "./approval-request-account-binding.js";
 
 export type ExecApprovalSessionTarget = {
   channel?: string;
@@ -14,12 +21,17 @@ export type ExecApprovalSessionTarget = {
   threadId?: number;
 };
 
-type ApprovalRequestSessionBinding = {
-  channel?: string;
-  accountId?: string;
-};
-
 type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestOriginTargetResolver<TTarget> = {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel: string;
+  accountId?: string | null;
+  resolveTurnSourceTarget: (request: ApprovalRequestLike) => TTarget | null;
+  resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => TTarget | null;
+  targetsMatch: (a: TTarget, b: TTarget) => boolean;
+  resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
+};
 
 function normalizeOptionalString(value?: string | null): string | undefined {
   const normalized = value?.trim();
@@ -105,28 +117,6 @@ export function resolveExecApprovalSessionTarget(params: {
   };
 }
 
-function resolveApprovalRequestSessionBinding(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-}): ApprovalRequestSessionBinding | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
-  if (!sessionKey) {
-    return null;
-  }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) {
-    return null;
-  }
-  return {
-    channel: normalizeOptionalChannel(entry.origin?.provider ?? entry.lastChannel),
-    accountId: normalizeOptionalAccountId(entry.origin?.accountId ?? entry.lastAccountId),
-  };
-}
-
 export function resolveApprovalRequestSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -142,75 +132,48 @@ export function resolveApprovalRequestSessionTarget(params: {
   });
 }
 
-export function resolveApprovalRequestAccountId(params: {
+function resolveApprovalRequestStoredSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-  channel?: string | null;
-}): string | null {
-  const expectedChannel = normalizeOptionalChannel(params.channel);
-  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
-  if (expectedChannel && turnSourceChannel && turnSourceChannel !== expectedChannel) {
-    return null;
-  }
-
-  const turnSourceAccountId = normalizeOptionalAccountId(
-    params.request.request.turnSourceAccountId,
-  );
-  if (turnSourceAccountId) {
-    return turnSourceAccountId;
-  }
-
-  const sessionTarget = resolveApprovalRequestSessionTarget(params);
-  const sessionBinding = resolveApprovalRequestSessionBinding(params);
-  const sessionChannel = normalizeOptionalChannel(
-    sessionTarget?.channel ?? sessionBinding?.channel,
-  );
-  if (expectedChannel && sessionChannel && sessionChannel !== expectedChannel) {
-    return null;
-  }
-
-  const sessionAccountId = normalizeOptionalAccountId(
-    sessionTarget?.accountId ?? sessionBinding?.accountId,
-  );
-  return sessionAccountId ?? null;
+}): ExecApprovalSessionTarget | null {
+  const execLikeRequest = toExecLikeApprovalRequest(params.request);
+  return resolveExecApprovalSessionTarget({
+    cfg: params.cfg,
+    request: execLikeRequest,
+  });
 }
 
-export function doesApprovalRequestMatchChannelAccount(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel: string;
-  accountId?: string | null;
-}): boolean {
+export function resolveApprovalRequestOriginTarget<TTarget>(
+  params: ApprovalRequestOriginTargetResolver<TTarget>,
+): TTarget | null {
+  if (
+    !doesApprovalRequestMatchChannelAccount({
+      cfg: params.cfg,
+      request: params.request,
+      channel: params.channel,
+      accountId: params.accountId,
+    })
+  ) {
+    return null;
+  }
+
+  const turnSourceTarget = params.resolveTurnSourceTarget(params.request);
   const expectedChannel = normalizeOptionalChannel(params.channel);
-  if (!expectedChannel) {
-    return false;
+  const sessionTargetBinding = resolveApprovalRequestStoredSessionTarget({
+    cfg: params.cfg,
+    request: params.request,
+  });
+  const sessionTarget =
+    sessionTargetBinding &&
+    normalizeOptionalChannel(sessionTargetBinding.channel) === expectedChannel
+      ? params.resolveSessionTarget(sessionTargetBinding)
+      : null;
+
+  if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
+    return null;
   }
 
-  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
-  if (turnSourceChannel && turnSourceChannel !== expectedChannel) {
-    return false;
-  }
-
-  const turnSourceAccountId = normalizeOptionalAccountId(
-    params.request.request.turnSourceAccountId,
+  return (
+    turnSourceTarget ?? sessionTarget ?? params.resolveFallbackTarget?.(params.request) ?? null
   );
-  const expectedAccountId = normalizeOptionalAccountId(params.accountId);
-  if (turnSourceAccountId) {
-    return !expectedAccountId || expectedAccountId === turnSourceAccountId;
-  }
-
-  const sessionTarget = resolveApprovalRequestSessionTarget(params);
-  const sessionBinding = resolveApprovalRequestSessionBinding(params);
-  const sessionChannel = normalizeOptionalChannel(
-    sessionTarget?.channel ?? sessionBinding?.channel,
-  );
-  if (sessionChannel && sessionChannel !== expectedChannel) {
-    return false;
-  }
-
-  const sessionAccountId = normalizeOptionalAccountId(
-    sessionTarget?.accountId ?? sessionBinding?.accountId,
-  );
-  const boundAccountId = sessionAccountId;
-  return !expectedAccountId || !boundAccountId || expectedAccountId === boundAccountId;
 }

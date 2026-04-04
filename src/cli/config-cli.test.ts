@@ -42,8 +42,11 @@ const mockLog = defaultRuntime.log;
 const mockError = defaultRuntime.error;
 const mockExit = defaultRuntime.exit;
 
-vi.mock("../runtime.js", async (importOriginal) => {
-  return mockRuntimeModule(importOriginal<typeof import("../runtime.js")>, defaultRuntime);
+vi.mock("../runtime.js", async () => {
+  return mockRuntimeModule(
+    () => vi.importActual<typeof import("../runtime.js")>("../runtime.js"),
+    defaultRuntime,
+  );
 });
 
 function buildSnapshot(params: {

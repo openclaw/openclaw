@@ -8,8 +8,9 @@ import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
@@ -108,6 +109,35 @@ describe("workspace path resolution", () => {
           });
 
           expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("hello");
+        } finally {
+          cwdSpy.mockRestore();
+        }
+      });
+    });
+  });
+
+  it("supports multi-edit edits[] payloads", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (otherDir) => {
+        const testFile = "batch.txt";
+        await fs.writeFile(path.join(workspaceDir, testFile), "alpha beta gamma delta", "utf8");
+
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
+        try {
+          const tools = createOpenClawCodingTools({ workspaceDir });
+          const { editTool } = expectReadWriteEditTools(tools);
+
+          await editTool.execute("ws-edit-batch", {
+            path: testFile,
+            edits: [
+              { oldText: "alpha", newText: "ALPHA" },
+              { oldText: "delta", newText: "DELTA" },
+            ],
+          });
+
+          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe(
+            "ALPHA beta gamma DELTA",
+          );
         } finally {
           cwdSpy.mockRestore();
         }

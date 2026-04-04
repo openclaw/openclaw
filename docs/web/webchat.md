@@ -52,9 +52,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 Full configuration: [Configuration](/gateway/configuration)
 
-Channel options:
+WebChat options:
 
-- No dedicated `webchat.*` block. WebChat uses the gateway endpoint + auth settings below.
+- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. Per-request `maxChars` can also be sent by the client to override this default for a single `chat.history` call.
 
 Related global options:
 

@@ -18,7 +18,6 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    recordInboundSessionMock.mockClear();
   });
 
   beforeAll(async () => {

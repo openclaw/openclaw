@@ -100,7 +100,7 @@ export function parseFeishuConversationId(params: {
     return null;
   }
 
-  const topicSenderMatch = conversationId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/);
+  const topicSenderMatch = conversationId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
   if (topicSenderMatch) {
     const [, chatId, topicId, senderOpenId] = topicSenderMatch;
     return {
@@ -117,7 +117,7 @@ export function parseFeishuConversationId(params: {
     };
   }
 
-  const topicMatch = conversationId.match(/^(.+):topic:([^:]+)$/);
+  const topicMatch = conversationId.match(/^(.+):topic:([^:]+)$/i);
   if (topicMatch) {
     const [, chatId, topicId] = topicMatch;
     return {
@@ -132,7 +132,7 @@ export function parseFeishuConversationId(params: {
     };
   }
 
-  const senderMatch = conversationId.match(/^(.+):sender:([^:]+)$/);
+  const senderMatch = conversationId.match(/^(.+):sender:([^:]+)$/i);
   if (senderMatch) {
     const [, chatId, senderOpenId] = senderMatch;
     return {
@@ -165,4 +165,33 @@ export function parseFeishuConversationId(params: {
     chatId: conversationId,
     scope: "group",
   };
+}
+
+export function buildFeishuModelOverrideParentCandidates(
+  parentConversationId?: string | null,
+): string[] {
+  const rawId = normalizeText(parentConversationId);
+  if (!rawId) {
+    return [];
+  }
+  const topicSenderMatch = rawId.match(/^(.+):topic:([^:]+):sender:([^:]+)$/i);
+  if (topicSenderMatch) {
+    const chatId = topicSenderMatch[1]?.trim().toLowerCase();
+    const topicId = topicSenderMatch[2]?.trim().toLowerCase();
+    if (chatId && topicId) {
+      return [`${chatId}:topic:${topicId}`, chatId];
+    }
+    return [];
+  }
+  const topicMatch = rawId.match(/^(.+):topic:([^:]+)$/i);
+  if (topicMatch) {
+    const chatId = topicMatch[1]?.trim().toLowerCase();
+    return chatId ? [chatId] : [];
+  }
+  const senderMatch = rawId.match(/^(.+):sender:([^:]+)$/i);
+  if (senderMatch) {
+    const chatId = senderMatch[1]?.trim().toLowerCase();
+    return chatId ? [chatId] : [];
+  }
+  return [];
 }

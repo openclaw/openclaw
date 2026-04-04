@@ -68,14 +68,12 @@ describe("isAuthPermanentErrorMessage", () => {
     {
       name: "matches permanent auth failure patterns",
       samples: [
-        "invalid_api_key",
         "api key revoked",
         "api key deactivated",
         "key has been disabled",
         "key has been revoked",
         "account has been deactivated",
-        "could not authenticate api key",
-        "could not validate credentials",
+        "OAuth authentication is currently not allowed for this organization",
         "API_KEY_REVOKED",
         "api_key_deleted",
       ],
@@ -84,6 +82,8 @@ describe("isAuthPermanentErrorMessage", () => {
     {
       name: "does not match transient auth errors",
       samples: [
+        "invalid_api_key",
+        "permission_error",
         "unauthorized",
         "invalid token",
         "authentication failed",
@@ -102,8 +102,12 @@ describe("isAuthErrorMessage", () => {
   it.each([
     'No credentials found for profile "anthropic:default".',
     "No API key found for profile openai.",
+    "invalid_api_key",
+    "permission_error",
     "OAuth token refresh failed for anthropic: Failed to refresh OAuth token for anthropic. Please try again or re-authenticate.",
     "Please re-authenticate to continue.",
+    "could not authenticate api key",
+    "could not validate credentials",
     "Failed to extract accountId from token",
   ])("matches auth errors for %j", (sample) => {
     expect(isAuthErrorMessage(sample)).toBe(true);
@@ -528,8 +532,8 @@ describe("isTransientHttpError", () => {
 });
 
 describe("classifyFailoverReasonFromHttpStatus", () => {
-  it("treats HTTP 401 permanent auth failures as auth_permanent", () => {
-    expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth_permanent");
+  it("treats HTTP 401 invalid_api_key as ambiguous auth", () => {
+    expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
   it("treats HTTP 422 as format error", () => {
@@ -546,6 +550,24 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
 
   it("treats HTTP 400 insufficient-quota payloads as billing instead of format", () => {
     expect(classifyFailoverReasonFromHttpStatus(400, INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
+  });
+
+  it("keeps HTTP 400 provider-specific rate limits out of the generic format bucket", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "ThrottlingException: Too many concurrent requests",
+      ),
+    ).toBe("rate_limit");
+  });
+
+  it("does not force HTTP 400 context-overflow payloads into format", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
   });
 
   it("treats HTTP 499 as transient for structured errors", () => {
@@ -573,7 +595,7 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
   });
 
   it("preserves explicit billing and auth signals on HTTP 410", () => {
-    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReasonFromHttpStatus(410, "invalid_api_key")).toBe("auth");
     expect(classifyFailoverReasonFromHttpStatus(410, "authentication failed")).toBe("auth");
     expect(classifyFailoverReasonFromHttpStatus(410, "insufficient credits")).toBe("billing");
   });
@@ -595,9 +617,20 @@ describe("classifyFailoverReason", () => {
   });
 
   it("keeps explicit billing and auth signals on 410 text", () => {
-    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
+  });
+
+  it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
+    expect(
+      classifyFailoverReason("HTTP 400: ThrottlingException: Too many concurrent requests"),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -624,6 +657,18 @@ describe("isFailoverErrorMessage", () => {
       "stop reason: error",
       "reason: abort",
       "reason: error",
+    ]);
+  });
+
+  it("matches AbortError / stream-abort messages as timeout (#58315)", () => {
+    expectTimeoutFailoverSamples([
+      "The operation was aborted",
+      "This operation was aborted",
+      "the operation was aborted",
+      "stream closed",
+      "stream was closed",
+      "stream aborted",
+      "stream was aborted",
     ]);
   });
 
@@ -894,11 +939,15 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("LLM error: monthly limit reached")).toBe("rate_limit");
     expect(classifyFailoverReason("LLM error: daily limit exceeded")).toBe("rate_limit");
   });
-  it("classifies permanent auth errors as auth_permanent", () => {
-    expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
+  it("keeps only high-confidence auth failures in auth_permanent", () => {
+    expect(classifyFailoverReason("invalid_api_key")).toBe("auth");
+    expect(classifyFailoverReason("permission_error")).toBe("auth");
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+    expect(
+      classifyFailoverReason("OAuth authentication is currently not allowed for this organization"),
+    ).toBe("auth_permanent");
   });
   it("classifies JSON api_error with transient signal as timeout", () => {
     expect(
@@ -971,6 +1020,11 @@ describe("classifyFailoverReason", () => {
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"api_error","message":"permission_error"}}',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"permission_error: OAuth authentication is currently not allowed for this organization"}}',
       ),
     ).toBe("auth_permanent");
   });

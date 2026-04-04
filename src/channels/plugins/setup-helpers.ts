@@ -1,6 +1,7 @@
 import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { getBundledChannelContractSurfaceEntries } from "./contract-surfaces.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -405,74 +406,23 @@ const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
   "defaultTo",
 ]);
 
-const SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL: Record<string, ReadonlySet<string>> = {
-  matrix: new Set([
-    "deviceId",
-    "avatarUrl",
-    "initialSyncLimit",
-    "encryption",
-    "allowlistOnly",
-    "allowBots",
-    "replyToMode",
-    "threadReplies",
-    "textChunkLimit",
-    "chunkMode",
-    "responsePrefix",
-    "ackReaction",
-    "ackReactionScope",
-    "reactionNotifications",
-    "threadBindings",
-    "startupVerification",
-    "startupVerificationCooldownHours",
-    "mediaMaxMb",
-    "autoJoin",
-    "autoJoinAllowlist",
-    "dm",
-    "groups",
-    "rooms",
-    "actions",
-  ]),
-  telegram: new Set(["streaming"]),
+type ChannelSetupPromotionSurface = {
+  singleAccountKeysToMove?: readonly string[];
+  namedAccountPromotionKeys?: readonly string[];
+  resolveSingleAccountPromotionTarget?: (params: {
+    channel: ChannelSectionBase;
+  }) => string | undefined;
 };
 
-const MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS = new Set([
-  "name",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceId",
-  "deviceName",
-  "avatarUrl",
-  "initialSyncLimit",
-  "encryption",
-]);
-
-export const MATRIX_SHARED_MULTI_ACCOUNT_DEFAULT_KEYS = new Set([
-  "dmPolicy",
-  "allowFrom",
-  "groupPolicy",
-  "groupAllowFrom",
-  "allowlistOnly",
-  "replyToMode",
-  "threadReplies",
-  "textChunkLimit",
-  "chunkMode",
-  "responsePrefix",
-  "ackReaction",
-  "ackReactionScope",
-  "reactionNotifications",
-  "threadBindings",
-  "startupVerification",
-  "startupVerificationCooldownHours",
-  "mediaMaxMb",
-  "autoJoin",
-  "autoJoinAllowlist",
-  "dm",
-  "groups",
-  "rooms",
-  "actions",
-]);
+function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
+  const entry = getBundledChannelContractSurfaceEntries().find(
+    (candidate) => candidate.pluginId === channelKey,
+  );
+  if (!entry || !entry.surface || typeof entry.surface !== "object") {
+    return null;
+  }
+  return entry.surface as ChannelSetupPromotionSurface;
+}
 
 export function shouldMoveSingleAccountChannelKey(params: {
   channelKey: string;
@@ -481,7 +431,11 @@ export function shouldMoveSingleAccountChannelKey(params: {
   if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(params.key)) {
     return true;
   }
-  return SINGLE_ACCOUNT_KEYS_TO_MOVE_BY_CHANNEL[params.channelKey]?.has(params.key) ?? false;
+  const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
+  if (contractKeys?.includes(params.key)) {
+    return true;
+  }
+  return false;
 }
 
 export function resolveSingleAccountKeysToMove(params: {
@@ -491,6 +445,9 @@ export function resolveSingleAccountKeysToMove(params: {
   const hasNamedAccounts =
     Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
     0;
+  const namedAccountPromotionKeys = getChannelSetupPromotionSurface(
+    params.channelKey,
+  )?.namedAccountPromotionKeys;
   return Object.entries(params.channel)
     .filter(([key, value]) => {
       if (key === "accounts" || key === "enabled" || value === undefined) {
@@ -500,9 +457,10 @@ export function resolveSingleAccountKeysToMove(params: {
         return false;
       }
       if (
-        params.channelKey === "matrix" &&
         hasNamedAccounts &&
-        !MATRIX_NAMED_ACCOUNT_PROMOTION_KEYS.has(key)
+        namedAccountPromotionKeys &&
+        namedAccountPromotionKeys.length > 0 &&
+        !namedAccountPromotionKeys.includes(key)
       ) {
         return false;
       }
@@ -515,41 +473,12 @@ export function resolveSingleAccountPromotionTarget(params: {
   channelKey: string;
   channel: ChannelSectionBase;
 }): string {
-  if (params.channelKey !== "matrix") {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  const accounts = params.channel.accounts ?? {};
-  const normalizedDefaultAccount =
-    typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
-      ? normalizeAccountId(params.channel.defaultAccount)
-      : undefined;
-  if (normalizedDefaultAccount) {
-    if (normalizedDefaultAccount !== DEFAULT_ACCOUNT_ID) {
-      const matchedAccountId = Object.entries(accounts).find(
-        ([accountId, value]) =>
-          accountId &&
-          value &&
-          typeof value === "object" &&
-          normalizeAccountId(accountId) === normalizedDefaultAccount,
-      )?.[0];
-      if (matchedAccountId) {
-        return matchedAccountId;
-      }
-    }
-    return DEFAULT_ACCOUNT_ID;
-  }
-  const namedAccounts = Object.entries(accounts).filter(
-    ([accountId, value]) => accountId && typeof value === "object" && value,
-  );
-  if (namedAccounts.length === 1) {
-    return namedAccounts[0][0];
-  }
-  if (
-    namedAccounts.length > 1 &&
-    accounts[DEFAULT_ACCOUNT_ID] &&
-    typeof accounts[DEFAULT_ACCOUNT_ID] === "object"
-  ) {
-    return DEFAULT_ACCOUNT_ID;
+  const surface = getChannelSetupPromotionSurface(params.channelKey);
+  const resolved = surface?.resolveSingleAccountPromotionTarget?.({
+    channel: params.channel,
+  });
+  if (typeof resolved === "string" && resolved.trim()) {
+    return normalizeAccountId(resolved);
   }
   return DEFAULT_ACCOUNT_ID;
 }
@@ -610,9 +539,6 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
 
   const accounts = base.accounts ?? {};
   if (Object.keys(accounts).length > 0) {
-    if (params.channelKey !== "matrix") {
-      return params.cfg;
-    }
     const keysToMove = resolveSingleAccountKeysToMove({
       channelKey: params.channelKey,
       channel: base,

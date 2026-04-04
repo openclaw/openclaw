@@ -66,8 +66,10 @@ describe("bundled provider auth env vars", () => {
   it("reads bundled provider auth env vars from plugin manifests", () => {
     expectBundledProviderEnvVars({
       brave: ["BRAVE_API_KEY"],
+      deepgram: ["DEEPGRAM_API_KEY"],
       firecrawl: ["FIRECRAWL_API_KEY"],
       "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+      groq: ["GROQ_API_KEY"],
       perplexity: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
       tavily: ["TAVILY_API_KEY"],
       "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],

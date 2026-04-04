@@ -117,7 +117,7 @@ describe("runClaudeCliAgent", () => {
     expect(spawnInput.argv).toContain("hi");
   });
 
-  it("serializes concurrent claude-cli runs", async () => {
+  it("serializes concurrent claude-cli runs in the same workspace", async () => {
     const firstDeferred = createDeferred<ReturnType<typeof successExit>>();
     const secondDeferred = createDeferred<ReturnType<typeof successExit>>();
 
@@ -152,6 +152,42 @@ describe("runClaudeCliAgent", () => {
     await waitForCalls(supervisorSpawnMock, 2);
 
     secondDeferred.resolve(successExit({ message: "ok", session_id: "sid-2" }));
+
+    await Promise.all([firstRun, secondRun]);
+  });
+
+  it("allows concurrent claude-cli runs across different workspaces", async () => {
+    const firstDeferred = createDeferred<ReturnType<typeof successExit>>();
+    const secondDeferred = createDeferred<ReturnType<typeof successExit>>();
+
+    supervisorSpawnMock
+      .mockResolvedValueOnce(createManagedRun(firstDeferred.promise))
+      .mockResolvedValueOnce(createManagedRun(secondDeferred.promise));
+
+    const firstRun = runClaudeCliAgent({
+      sessionId: "s1",
+      sessionFile: "/tmp/session-1.jsonl",
+      workspaceDir: "/tmp/project-a",
+      prompt: "first",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-a",
+    });
+
+    const secondRun = runClaudeCliAgent({
+      sessionId: "s2",
+      sessionFile: "/tmp/session-2.jsonl",
+      workspaceDir: "/tmp/project-b",
+      prompt: "second",
+      model: "opus",
+      timeoutMs: 1_000,
+      runId: "run-b",
+    });
+
+    await waitForCalls(supervisorSpawnMock, 2);
+
+    firstDeferred.resolve(successExit({ message: "ok", session_id: "sid-a" }));
+    secondDeferred.resolve(successExit({ message: "ok", session_id: "sid-b" }));
 
     await Promise.all([firstRun, secondRun]);
   });

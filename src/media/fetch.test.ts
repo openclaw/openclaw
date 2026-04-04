@@ -173,7 +173,6 @@ describe("fetchRemoteMedia", () => {
   const telegramFileUrl = `https://api.telegram.org/file/bot${telegramToken}/photos/1.jpg`;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ fetchRemoteMedia } = await import("./fetch.js"));
   });
 

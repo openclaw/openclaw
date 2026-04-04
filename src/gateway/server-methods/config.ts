@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -27,6 +28,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { prepareSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
 import { diffConfigPaths } from "../config-reload.js";
 import {
   formatControlPlaneActor,
@@ -47,7 +49,7 @@ import {
 } from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import { parseRestartRequestParams } from "./restart-request.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE = 3;
@@ -220,6 +222,35 @@ function parseValidateConfigFromRawOrRespond(
   return { config: validated.config, schema };
 }
 
+function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
+  const prevAuth = resolveEffectiveSharedGatewayAuth({
+    authConfig: prev.gateway?.auth,
+    env: process.env,
+    tailscaleMode: prev.gateway?.tailscale?.mode,
+  });
+  const nextAuth = resolveEffectiveSharedGatewayAuth({
+    authConfig: next.gateway?.auth,
+    env: process.env,
+    tailscaleMode: next.gateway?.tailscale?.mode,
+  });
+  if (prevAuth === null || nextAuth === null) {
+    return prevAuth !== nextAuth;
+  }
+  return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
+}
+
+function queueSharedGatewayAuthDisconnect(
+  shouldDisconnect: boolean,
+  context?: GatewayRequestContext,
+): void {
+  if (!shouldDisconnect) {
+    return;
+  }
+  queueMicrotask(() => {
+    context?.disconnectClientsUsingSharedGatewayAuth?.();
+  });
+}
+
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
   const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
@@ -267,8 +298,8 @@ function resolveConfigRestartRequest(params: unknown): {
 } {
   const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
 
-  // Extract deliveryContext + threadId for routing after restart
-  // Supports both :thread: (most channels) and :topic: (Telegram)
+  // Extract deliveryContext + threadId for routing after restart.
+  // Uses generic :thread: parsing plus plugin-owned session grammars.
   const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
 
   return {
@@ -476,8 +507,36 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const changedPaths = diffConfigPaths(snapshot.config, validated.config);
     const actor = resolveControlPlaneActor(client);
+
+    // No-op: if the validated config is identical to the current config,
+    // skip the file write and SIGUSR1 restart entirely. This avoids a full
+    // gateway restart (and the resulting connection drop) when a control-plane
+    // client re-sends the same config (e.g. hot-apply with no actual changes).
+    if (changedPaths.length === 0) {
+      context?.logGateway?.info(
+        `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
+      );
+      respond(
+        true,
+        {
+          ok: true,
+          noop: true,
+          path: createConfigIO().configPath,
+          config: redactConfigObject(validated.config, schemaPatch.uiHints),
+        },
+        undefined,
+      );
+      return;
+    }
+
     context?.logGateway?.info(
       `config.patch write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.patch`,
+    );
+    // Compare before the write so we invalidate clients authenticated against the
+    // previous shared secret immediately after the config update succeeds.
+    const disconnectSharedAuthClients = didSharedGatewayAuthChange(
+      snapshot.config,
+      validated.config,
     );
     await writeConfigFile(validated.config, writeOptions);
 
@@ -521,6 +580,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.apply": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
@@ -542,6 +602,9 @@ export const configHandlers: GatewayRequestHandlers = {
     context?.logGateway?.info(
       `config.apply write ${formatControlPlaneActor(actor)} changedPaths=${summarizeChangedPaths(changedPaths)} restartReason=config.apply`,
     );
+    // Compare before the write so we invalidate clients authenticated against the
+    // previous shared secret immediately after the config update succeeds.
+    const disconnectSharedAuthClients = didSharedGatewayAuthChange(snapshot.config, parsed.config);
     await writeConfigFile(parsed.config, writeOptions);
 
     const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
@@ -584,6 +647,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.openFile": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.openFile", respond)) {

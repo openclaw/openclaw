@@ -28,8 +28,11 @@ export type BuildPluginApiParams = {
       | "registerCliBackend"
       | "registerProvider"
       | "registerSpeechProvider"
+      | "registerRealtimeTranscriptionProvider"
+      | "registerRealtimeVoiceProvider"
       | "registerMediaUnderstandingProvider"
       | "registerImageGenerationProvider"
+      | "registerWebFetchProvider"
       | "registerWebSearchProvider"
       | "registerInteractiveHandler"
       | "onConversationBindingResolved"
@@ -39,7 +42,6 @@ export type BuildPluginApiParams = {
       | "registerMemoryFlushPlan"
       | "registerMemoryRuntime"
       | "registerMemoryEmbeddingProvider"
-      | "registerOperationsRuntime"
       | "on"
     >
   >;
@@ -55,10 +57,15 @@ const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
 const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
 const noopRegisterSpeechProvider: OpenClawPluginApi["registerSpeechProvider"] = () => {};
+const noopRegisterRealtimeTranscriptionProvider: OpenClawPluginApi["registerRealtimeTranscriptionProvider"] =
+  () => {};
+const noopRegisterRealtimeVoiceProvider: OpenClawPluginApi["registerRealtimeVoiceProvider"] =
+  () => {};
 const noopRegisterMediaUnderstandingProvider: OpenClawPluginApi["registerMediaUnderstandingProvider"] =
   () => {};
 const noopRegisterImageGenerationProvider: OpenClawPluginApi["registerImageGenerationProvider"] =
   () => {};
+const noopRegisterWebFetchProvider: OpenClawPluginApi["registerWebFetchProvider"] = () => {};
 const noopRegisterWebSearchProvider: OpenClawPluginApi["registerWebSearchProvider"] = () => {};
 const noopRegisterInteractiveHandler: OpenClawPluginApi["registerInteractiveHandler"] = () => {};
 const noopOnConversationBindingResolved: OpenClawPluginApi["onConversationBindingResolved"] =
@@ -70,7 +77,6 @@ const noopRegisterMemoryFlushPlan: OpenClawPluginApi["registerMemoryFlushPlan"] 
 const noopRegisterMemoryRuntime: OpenClawPluginApi["registerMemoryRuntime"] = () => {};
 const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbeddingProvider"] =
   () => {};
-const noopRegisterOperationsRuntime: OpenClawPluginApi["registerOperationsRuntime"] = () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
@@ -97,10 +103,15 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
     registerSpeechProvider: handlers.registerSpeechProvider ?? noopRegisterSpeechProvider,
+    registerRealtimeTranscriptionProvider:
+      handlers.registerRealtimeTranscriptionProvider ?? noopRegisterRealtimeTranscriptionProvider,
+    registerRealtimeVoiceProvider:
+      handlers.registerRealtimeVoiceProvider ?? noopRegisterRealtimeVoiceProvider,
     registerMediaUnderstandingProvider:
       handlers.registerMediaUnderstandingProvider ?? noopRegisterMediaUnderstandingProvider,
     registerImageGenerationProvider:
       handlers.registerImageGenerationProvider ?? noopRegisterImageGenerationProvider,
+    registerWebFetchProvider: handlers.registerWebFetchProvider ?? noopRegisterWebFetchProvider,
     registerWebSearchProvider: handlers.registerWebSearchProvider ?? noopRegisterWebSearchProvider,
     registerInteractiveHandler:
       handlers.registerInteractiveHandler ?? noopRegisterInteractiveHandler,
@@ -114,7 +125,6 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerMemoryRuntime: handlers.registerMemoryRuntime ?? noopRegisterMemoryRuntime,
     registerMemoryEmbeddingProvider:
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
-    registerOperationsRuntime: handlers.registerOperationsRuntime ?? noopRegisterOperationsRuntime,
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };

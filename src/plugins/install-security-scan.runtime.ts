@@ -445,3 +445,66 @@ export async function scanFileInstallSourceRuntime(
   });
   return hookResult?.blocked ? hookResult : builtinBlocked;
 }
+
+export async function scanSkillInstallSourceRuntime(params: {
+  dangerouslyForceUnsafeInstall?: boolean;
+  installId: string;
+  installSpec?: {
+    id?: string;
+    kind: "brew" | "node" | "go" | "uv" | "download";
+    label?: string;
+    bins?: string[];
+    os?: string[];
+    formula?: string;
+    package?: string;
+    module?: string;
+    url?: string;
+    archive?: string;
+    extract?: boolean;
+    stripComponents?: number;
+    targetDir?: string;
+  };
+  logger: InstallScanLogger;
+  origin: string;
+  skillName: string;
+  sourceDir: string;
+}): Promise<InstallSecurityScanResult | undefined> {
+  const builtinScan = await scanDirectoryTarget({
+    logger: params.logger,
+    path: params.sourceDir,
+    suspiciousMessage:
+      'Skill "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.',
+    targetName: params.skillName,
+    warningMessage: `WARNING: Skill "${params.skillName}" contains dangerous code patterns`,
+  });
+  const builtinBlocked = buildBlockedScanResult({
+    builtinScan,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    targetLabel: `Skill "${params.skillName}" installation`,
+  });
+  if (params.dangerouslyForceUnsafeInstall && builtinScan.critical > 0) {
+    logDangerousForceUnsafeInstall({
+      findings: builtinScan.findings,
+      logger: params.logger,
+      targetLabel: `Skill "${params.skillName}" installation`,
+    });
+  }
+
+  const hookResult = await runBeforeInstallHook({
+    logger: params.logger,
+    installLabel: `Skill "${params.skillName}" installation`,
+    origin: params.origin,
+    sourcePath: params.sourceDir,
+    sourcePathKind: "directory",
+    targetName: params.skillName,
+    targetType: "skill",
+    requestKind: "skill-install",
+    requestMode: "install",
+    builtinScan,
+    skill: {
+      installId: params.installId,
+      ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+    },
+  });
+  return hookResult?.blocked ? hookResult : builtinBlocked;
+}

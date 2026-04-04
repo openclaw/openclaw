@@ -126,11 +126,12 @@ function resolveImageGenerationModelCandidates(
     providerDefaults.set(providerId, `${providerId}/${modelId}`);
   }
 
+  const primaryProvider = resolveDefaultModelRef(cfg).provider;
   const orderedProviders = [
-    resolveDefaultModelRef(cfg).provider,
-    "openai",
-    "google",
-    ...providerDefaults.keys(),
+    primaryProvider,
+    ...[...providerDefaults.keys()]
+      .filter((providerId) => providerId !== primaryProvider)
+      .toSorted(),
   ];
   const orderedRefs: string[] = [];
   const seen = new Set<string>();
@@ -263,6 +264,7 @@ function validateImageGenerationCapabilities(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  explicitResolution?: boolean;
 }) {
   const provider = params.provider;
   if (!provider) {
@@ -320,12 +322,13 @@ function validateImageGenerationCapabilities(params: {
   }
 
   if (params.resolution) {
-    if (!modeCaps.supportsResolution) {
+    if (params.explicitResolution !== false && !modeCaps.supportsResolution) {
       throw new ToolInputError(
         `${provider.id} ${isEdit ? "edit" : "generate"} does not support resolution overrides.`,
       );
     }
     if (
+      modeCaps.supportsResolution &&
       (geometry?.resolutions?.length ?? 0) > 0 &&
       !geometry?.resolutions?.includes(params.resolution)
     ) {
@@ -553,6 +556,11 @@ export function createImageGenerateTool(options?: {
       const size = readStringParam(params, "size");
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
+      const selectedProvider = resolveSelectedImageGenerationProvider({
+        config: effectiveCfg,
+        imageGenerationModelConfig,
+        modelOverride: model,
+      });
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
@@ -560,18 +568,17 @@ export function createImageGenerateTool(options?: {
         sandboxConfig,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
+      const modeCaps =
+        inputImages.length > 0
+          ? selectedProvider?.capabilities.edit
+          : selectedProvider?.capabilities.generate;
       const resolution =
         explicitResolution ??
-        (size
+        (size || modeCaps?.supportsResolution === false
           ? undefined
           : inputImages.length > 0
             ? await inferResolutionFromInputImages(inputImages)
             : undefined);
-      const selectedProvider = resolveSelectedImageGenerationProvider({
-        config: effectiveCfg,
-        imageGenerationModelConfig,
-        modelOverride: model,
-      });
       validateImageGenerationCapabilities({
         provider: selectedProvider,
         count,
@@ -579,6 +586,7 @@ export function createImageGenerateTool(options?: {
         size,
         aspectRatio,
         resolution,
+        explicitResolution: Boolean(explicitResolution),
       });
 
       const result = await generateImage({

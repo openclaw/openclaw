@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBundledWebFetchPluginIds } from "../bundled-web-fetch.js";
 import { resolveBundledWebSearchPluginIds } from "../bundled-web-search.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
@@ -7,8 +8,12 @@ import {
   pluginRegistrationContractRegistry,
   providerContractLoadError,
   providerContractPluginIds,
+  realtimeTranscriptionProviderContractRegistry,
+  realtimeVoiceProviderContractRegistry,
+  resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
   speechProviderContractRegistry,
+  webFetchProviderContractRegistry,
 } from "./registry.js";
 import { uniqueSortedStrings } from "./testkit.js";
 
@@ -24,7 +29,11 @@ describe("plugin contract registry", () => {
     predicate: (plugin: {
       origin: string;
       providers: unknown[];
-      contracts?: { speechProviders?: unknown[] };
+      contracts?: {
+        speechProviders?: unknown[];
+        realtimeTranscriptionProviders?: unknown[];
+        realtimeVoiceProviders?: unknown[];
+      };
     }) => boolean;
   }) {
     expect(uniqueSortedStrings(params.actualPluginIds)).toEqual(
@@ -36,7 +45,11 @@ describe("plugin contract registry", () => {
     predicate: (plugin: {
       origin: string;
       providers: unknown[];
-      contracts?: { speechProviders?: unknown[] };
+      contracts?: {
+        speechProviders?: unknown[];
+        realtimeTranscriptionProviders?: unknown[];
+        realtimeVoiceProviders?: unknown[];
+      };
     }) => boolean,
   ) {
     return loadPluginManifestRegistry({})
@@ -56,12 +69,24 @@ describe("plugin contract registry", () => {
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.providerIds),
     },
     {
+      name: "does not duplicate bundled web fetch provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webFetchProviderIds),
+    },
+    {
       name: "does not duplicate bundled web search provider ids",
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds),
     },
     {
       name: "does not duplicate bundled media provider ids",
       ids: () => mediaUnderstandingProviderContractRegistry.map((entry) => entry.provider.id),
+    },
+    {
+      name: "does not duplicate bundled realtime transcription provider ids",
+      ids: () => realtimeTranscriptionProviderContractRegistry.map((entry) => entry.provider.id),
+    },
+    {
+      name: "does not duplicate bundled realtime voice provider ids",
+      ids: () => realtimeVoiceProviderContractRegistry.map((entry) => entry.provider.id),
     },
     {
       name: "does not duplicate bundled image-generation provider ids",
@@ -93,6 +118,48 @@ describe("plugin contract registry", () => {
         plugin.origin === "bundled" && (plugin.contracts?.speechProviders?.length ?? 0) > 0,
     });
   });
+
+  it("covers every bundled realtime voice plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: realtimeVoiceProviderContractRegistry.map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.realtimeVoiceProviders?.length ?? 0) > 0,
+    });
+  });
+
+  it("covers every bundled realtime transcription plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: realtimeTranscriptionProviderContractRegistry.map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0,
+    });
+  });
+
+  it("covers every bundled web fetch plugin from the shared resolver", () => {
+    const bundledWebFetchPluginIds = resolveBundledWebFetchPluginIds({});
+
+    expect(
+      uniqueSortedStrings(
+        pluginRegistrationContractRegistry
+          .filter((entry) => entry.webFetchProviderIds.length > 0)
+          .map((entry) => entry.pluginId),
+      ),
+    ).toEqual(bundledWebFetchPluginIds);
+  });
+
+  it(
+    "loads bundled web fetch providers for each shared-resolver plugin",
+    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
+    () => {
+      for (const pluginId of resolveBundledWebFetchPluginIds({})) {
+        expect(resolveWebFetchProviderContractEntriesForPluginId(pluginId).length).toBeGreaterThan(
+          0,
+        );
+      }
+      expect(webFetchProviderContractRegistry.length).toBeGreaterThan(0);
+    },
+  );
 
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveBundledWebSearchPluginIds({});

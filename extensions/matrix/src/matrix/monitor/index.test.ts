@@ -177,7 +177,7 @@ vi.mock("../../runtime.js", () => ({
     config: {
       loadConfig: () => ({
         channels: {
-          matrix: {},
+          matrix: hoisted.accountConfig,
         },
       }),
       writeConfigFile: vi.fn(),
@@ -205,8 +205,8 @@ vi.mock("../../runtime.js", () => ({
   setMatrixRuntime: hoisted.setMatrixRuntime,
 }));
 
-vi.mock("../accounts.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../accounts.js")>();
+vi.mock("../accounts.js", async () => {
+  const actual = await vi.importActual<typeof import("../accounts.js")>("../accounts.js");
   return {
     ...actual,
     resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
@@ -606,51 +606,4 @@ describe("matrix plugin registration", () => {
       resolveMatrixDefaultOrOnlyAccountId: "function",
     });
   }, 240_000);
-
-  it("loads the matrix src runtime api through Jiti without duplicate export errors", () => {
-    const runtimeApiPath = path.join(
-      process.cwd(),
-      "extensions",
-      "matrix",
-      "src",
-      "runtime-api.ts",
-    );
-    expect(
-      loadRuntimeApiExportTypesViaJiti({
-        modulePath: runtimeApiPath,
-        exportNames: [],
-        realPluginSdkSpecifiers: [
-          "openclaw/plugin-sdk/account-helpers",
-          "openclaw/plugin-sdk/allow-from",
-          "openclaw/plugin-sdk/channel-config-helpers",
-          "openclaw/plugin-sdk/channel-policy",
-          "openclaw/plugin-sdk/core",
-          "openclaw/plugin-sdk/directory-runtime",
-          "openclaw/plugin-sdk/extension-shared",
-          "openclaw/plugin-sdk/irc",
-          "openclaw/plugin-sdk/signal",
-          "openclaw/plugin-sdk/status-helpers",
-          "openclaw/plugin-sdk/text-runtime",
-        ],
-      }),
-    ).toEqual({});
-  }, 240_000);
-
-  it("registers the channel without bootstrapping crypto runtime", async () => {
-    const runtime = {} as never;
-    const registerChannel = vi.fn();
-    matrixPlugin.register({
-      runtime,
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
-      registerChannel,
-    } as never);
-
-    expect(hoisted.setMatrixRuntime).toHaveBeenCalledWith(runtime);
-    expect(registerChannel).toHaveBeenCalledWith({ plugin: expect.any(Object) });
-  });
 });

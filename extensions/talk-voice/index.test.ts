@@ -1,11 +1,11 @@
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../test/helpers/plugins/plugin-runtime-mock.js";
+import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
 
 function createHarness(config: Record<string, unknown>) {
   let command: OpenClawPluginCommandDefinition | undefined;
-  const runtime = createPluginRuntimeMock({
+  const runtime = {
     config: {
       loadConfig: vi.fn(() => config),
       writeConfigFile: vi.fn().mockResolvedValue(undefined),
@@ -13,7 +13,7 @@ function createHarness(config: Record<string, unknown>) {
     tts: {
       listVoices: vi.fn(),
     },
-  });
+  } as unknown as PluginRuntime;
   const api = {
     runtime,
     registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {

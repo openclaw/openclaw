@@ -1,17 +1,5 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
-import type {
-  PluginOperationAuditFinding,
-  PluginOperationAuditQuery,
-  PluginOperationDispatchEvent,
-  PluginOperationDispatchResult,
-  PluginOperationListQuery,
-  PluginOperationMaintenanceQuery,
-  PluginOperationMaintenanceSummary,
-  PluginOperationRecord,
-  PluginOperationSummary,
-  PluginOperationsCancelResult,
-} from "../operations-state.js";
 
 export type { HeartbeatRunResult };
 
@@ -115,6 +103,14 @@ export type PluginRuntimeCore = {
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
   };
+  tasks: {
+    runs: import("./runtime-tasks.js").PluginRuntimeTaskRuns;
+    flows: import("./runtime-tasks.js").PluginRuntimeTaskFlows;
+    /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+    flow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
+  };
+  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
+  taskFlow: import("./runtime-taskflow.js").PluginRuntimeTaskFlow;
   modelAuth: {
     /** Resolve auth for a model. Only provider/model and optional cfg are used. */
     getApiKeyForModel: (params: {
@@ -126,20 +122,5 @@ export type PluginRuntimeCore = {
       provider: string;
       cfg?: import("../../config/config.js").OpenClawConfig;
     }) => Promise<import("../../agents/model-auth.js").ResolvedProviderAuth>;
-  };
-  operations: {
-    dispatch: (event: PluginOperationDispatchEvent) => Promise<PluginOperationDispatchResult>;
-    getById: (operationId: string) => Promise<PluginOperationRecord | null>;
-    findByRunId: (runId: string) => Promise<PluginOperationRecord | null>;
-    list: (query?: PluginOperationListQuery) => Promise<PluginOperationRecord[]>;
-    summarize: (query?: PluginOperationListQuery) => Promise<PluginOperationSummary>;
-    audit: (query?: PluginOperationAuditQuery) => Promise<PluginOperationAuditFinding[]>;
-    maintenance: (
-      query?: PluginOperationMaintenanceQuery,
-    ) => Promise<PluginOperationMaintenanceSummary>;
-    cancel: (params: {
-      cfg: import("../../config/config.js").OpenClawConfig;
-      operationId: string;
-    }) => Promise<PluginOperationsCancelResult>;
   };
 };

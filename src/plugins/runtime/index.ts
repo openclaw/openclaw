@@ -1,4 +1,3 @@
-import { defaultTaskOperationsRuntime } from "openclaw/plugin-sdk/tasks";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -9,7 +8,6 @@ import {
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
-import { getRegisteredOperationsRuntime } from "../operations-state.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -18,6 +16,8 @@ import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
+import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("./runtime-tts.runtime.js"));
@@ -95,20 +95,6 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
         provider: params.provider,
         cfg: params.cfg,
       }),
-  };
-}
-
-function createRuntimeOperations(): PluginRuntime["operations"] {
-  const resolveRuntime = () => getRegisteredOperationsRuntime() ?? defaultTaskOperationsRuntime;
-  return {
-    dispatch: (event) => resolveRuntime().dispatch(event),
-    getById: (operationId) => resolveRuntime().getById(operationId),
-    findByRunId: (runId) => resolveRuntime().findByRunId(runId),
-    list: (query) => resolveRuntime().list(query),
-    summarize: (query) => resolveRuntime().summarize(query),
-    audit: (query) => resolveRuntime().audit(query),
-    maintenance: (query) => resolveRuntime().maintenance(query),
-    cancel: (params) => resolveRuntime().cancel(params),
   };
 }
 
@@ -199,6 +185,10 @@ export type CreatePluginRuntimeOptions = {
 
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
+  const taskFlow = createRuntimeTaskFlow();
+  const tasks = createRuntimeTasks({
+    legacyTaskFlow: taskFlow,
+  });
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
@@ -219,7 +209,8 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
-    operations: createRuntimeOperations(),
+    tasks,
+    taskFlow,
   } satisfies Omit<
     PluginRuntime,
     "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"

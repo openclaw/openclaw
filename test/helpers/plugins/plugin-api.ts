@@ -20,8 +20,11 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerCliBackend() {},
     registerProvider() {},
     registerSpeechProvider() {},
+    registerRealtimeTranscriptionProvider() {},
+    registerRealtimeVoiceProvider() {},
     registerMediaUnderstandingProvider() {},
     registerImageGenerationProvider() {},
+    registerWebFetchProvider() {},
     registerWebSearchProvider() {},
     registerInteractiveHandler() {},
     onConversationBindingResolved() {},
@@ -31,7 +34,6 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerMemoryFlushPlan() {},
     registerMemoryRuntime() {},
     registerMemoryEmbeddingProvider() {},
-    registerOperationsRuntime() {},
     resolvePath(input: string) {
       return input;
     },

@@ -130,8 +130,21 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (authChoice === "setup-token") {
     runtime.error(
       [
-        'Auth choice "setup-token" requires interactive mode.',
-        'Use "--auth-choice token" with --token and --token-provider anthropic.',
+        'Auth choice "setup-token" is no longer supported for Anthropic onboarding.',
+        "Existing Anthropic token profiles still run if they are already configured.",
+        'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
+  if (authChoice === "token") {
+    runtime.error(
+      [
+        'Auth choice "token" is no longer supported for Anthropic onboarding.',
+        "Existing Anthropic token profiles still run if they are already configured.",
+        'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
       ].join("\n"),
     );
     runtime.exit(1);
@@ -246,7 +259,15 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error("OAuth requires interactive mode.");
+    runtime.error(
+      authChoice === "oauth"
+        ? [
+            'Auth choice "oauth" is no longer supported for Anthropic onboarding.',
+            "Existing Anthropic token profiles still run if they are already configured.",
+            'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
+          ].join("\n")
+        : "OAuth requires interactive mode.",
+    );
     runtime.exit(1);
     return null;
   }

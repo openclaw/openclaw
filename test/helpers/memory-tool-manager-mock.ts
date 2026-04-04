@@ -6,6 +6,7 @@ export type MemoryReadResult = { text: string; path: string };
 type MemoryBackend = "builtin" | "qmd";
 
 let backend: MemoryBackend = "builtin";
+let workspaceDir = "/workspace";
 let searchImpl: SearchImpl = async () => [];
 let readFileImpl: (params: MemoryReadParams) => Promise<MemoryReadResult> = async (params) => ({
   text: "",
@@ -20,7 +21,7 @@ const stubManager = {
     files: 1,
     chunks: 1,
     dirty: false,
-    workspaceDir: "/workspace",
+    workspaceDir,
     dbPath: "/workspace/.memory/index.sqlite",
     provider: "builtin",
     model: "builtin",
@@ -68,6 +69,10 @@ export function setMemoryBackend(next: MemoryBackend): void {
   backend = next;
 }
 
+export function setMemoryWorkspaceDir(next: string): void {
+  workspaceDir = next;
+}
+
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
@@ -84,6 +89,7 @@ export function resetMemoryToolMockState(overrides?: {
   readFileImpl?: (params: MemoryReadParams) => Promise<MemoryReadResult>;
 }): void {
   backend = overrides?.backend ?? "builtin";
+  workspaceDir = "/workspace";
   searchImpl = overrides?.searchImpl ?? (async () => []);
   readFileImpl =
     overrides?.readFileImpl ??

@@ -1,8 +1,14 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import { matchesSkillFilter } from "../../agents/skills/filter.js";
+import {
+  ensureSkillsWatcher,
+  getSkillsSnapshotVersion,
+  shouldRefreshSnapshotForVersion,
+} from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionFilePath,
@@ -10,8 +16,12 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
+import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
 async function persistSessionEntryUpdate(params: {
@@ -33,6 +43,52 @@ async function persistSessionEntryUpdate(params: {
   await updateSessionStore(params.storePath, (store) => {
     store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
   });
+}
+
+function emitCompactionSessionLifecycleHooks(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  storePath?: string;
+  previousEntry: SessionEntry;
+  nextEntry: SessionEntry;
+}) {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner) {
+    return;
+  }
+
+  if (hookRunner.hasHooks("session_end")) {
+    const transcript = resolveStableSessionEndTranscript({
+      sessionId: params.previousEntry.sessionId,
+      storePath: params.storePath,
+      sessionFile: params.previousEntry.sessionFile,
+      agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+    });
+    const payload = buildSessionEndHookPayload({
+      sessionId: params.previousEntry.sessionId,
+      sessionKey: params.sessionKey,
+      cfg: params.cfg,
+      reason: "compaction",
+      sessionFile: transcript.sessionFile,
+      transcriptArchived: transcript.transcriptArchived,
+      nextSessionId: params.nextEntry.sessionId,
+    });
+    void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
+      logVerbose(`session_end hook failed: ${String(err)}`);
+    });
+  }
+
+  if (hookRunner.hasHooks("session_start")) {
+    const payload = buildSessionStartHookPayload({
+      sessionId: params.nextEntry.sessionId,
+      sessionKey: params.sessionKey,
+      cfg: params.cfg,
+      resumedFrom: params.previousEntry.sessionId,
+    });
+    void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
+      logVerbose(`session_start hook failed: ${String(err)}`);
+    });
+  }
 }
 
 export async function ensureSkillSnapshot(params: {
@@ -77,9 +133,20 @@ export async function ensureSkillSnapshot(params: {
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+  const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
-    snapshotVersion > 0 && (nextEntry?.skillsSnapshot?.version ?? 0) < snapshotVersion;
+    shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
+    !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
+  const buildSnapshot = () =>
+    buildWorkspaceSkillSnapshot(workspaceDir, {
+      config: cfg,
+      agentId: sessionAgentId,
+      skillFilter,
+      eligibility: { remote: remoteEligibility },
+      snapshotVersion,
+    });
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -88,14 +155,7 @@ export async function ensureSkillSnapshot(params: {
         updatedAt: Date.now(),
       };
     const skillSnapshot =
-      isFirstTurnInSession || !current.skillsSnapshot || shouldRefreshSnapshot
-        ? buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })
-        : current.skillsSnapshot;
+      !current.skillsSnapshot || shouldRefreshSnapshot ? buildSnapshot() : current.skillsSnapshot;
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -107,22 +167,14 @@ export async function ensureSkillSnapshot(params: {
     systemSent = true;
   }
 
-  const skillsSnapshot = shouldRefreshSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, {
-        config: cfg,
-        skillFilter,
-        eligibility: { remote: remoteEligibility },
-        snapshotVersion,
-      })
-    : (nextEntry?.skillsSnapshot ??
-      (isFirstTurnInSession
-        ? undefined
-        : buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            skillFilter,
-            eligibility: { remote: remoteEligibility },
-            snapshotVersion,
-          })));
+  const hasFreshSnapshotInEntry =
+    Boolean(nextEntry?.skillsSnapshot) &&
+    (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
+  const skillsSnapshot = hasFreshSnapshotInEntry
+    ? nextEntry?.skillsSnapshot
+    : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
+      ? buildSnapshot()
+      : nextEntry.skillsSnapshot;
   if (
     skillsSnapshot &&
     sessionStore &&
@@ -151,6 +203,7 @@ export async function incrementCompactionCount(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  cfg?: OpenClawConfig;
   now?: number;
   amount?: number;
   /** Token count after compaction - if provided, updates session token counts */
@@ -163,6 +216,7 @@ export async function incrementCompactionCount(params: {
     sessionStore,
     sessionKey,
     storePath,
+    cfg,
     now = Date.now(),
     amount = 1,
     tokensAfter,
@@ -211,6 +265,15 @@ export async function incrementCompactionCount(params: {
         ...store[sessionKey],
         ...updates,
       };
+    });
+  }
+  if (newSessionId && newSessionId !== entry.sessionId && cfg) {
+    emitCompactionSessionLifecycleHooks({
+      cfg,
+      sessionKey,
+      storePath,
+      previousEntry: entry,
+      nextEntry: sessionStore[sessionKey],
     });
   }
   return nextCount;

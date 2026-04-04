@@ -36,7 +36,7 @@ describe("config discord", () => {
                 requireMention: false,
                 users: ["steipete"],
                 channels: {
-                  general: { allow: true, autoThread: true },
+                  general: { enabled: true, autoThread: true },
                 },
               },
             },
@@ -53,13 +53,13 @@ describe("config discord", () => {
         expect(cfg.channels?.discord?.actions?.stickerUploads).toBe(false);
         expect(cfg.channels?.discord?.actions?.channels).toBe(true);
         expect(cfg.channels?.discord?.guilds?.["123"]?.slug).toBe("friends-of-openclaw");
-        expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
+        expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.enabled).toBe(true);
         expect(cfg.channels?.discord?.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
       },
     );
   });
 
-  it("rejects numeric discord allowlist entries", () => {
+  it("coerces safe-integer numeric discord allowlist entries to strings", () => {
     const res = validateConfigObject({
       channels: {
         discord: {
@@ -79,11 +79,42 @@ describe("config discord", () => {
       },
     });
 
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(
-        res.issues.some((issue) => issue.message.includes("Discord IDs must be strings")),
-      ).toBe(true);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.discord?.allowFrom).toEqual(["123"]);
+      expect(res.config.channels?.discord?.dm?.allowFrom).toEqual(["456"]);
+      expect(res.config.channels?.discord?.dm?.groupChannels).toEqual(["789"]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.users).toEqual(["111"]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.roles).toEqual(["222"]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.channels?.general?.users).toEqual([
+        "333",
+      ]);
+      expect(res.config.channels?.discord?.guilds?.["123"]?.channels?.general?.roles).toEqual([
+        "444",
+      ]);
+      expect(res.config.channels?.discord?.execApprovals?.approvers).toEqual(["555"]);
+    }
+  });
+
+  it("rejects numeric discord IDs that are not valid non-negative safe integers", () => {
+    const cases = [106232522769186816, -1, 123.45];
+    for (const id of cases) {
+      const res = validateConfigObject({
+        channels: {
+          discord: {
+            allowFrom: [id],
+          },
+        },
+      });
+
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(
+          res.issues.some((issue) =>
+            issue.message.includes("not a valid non-negative safe integer"),
+          ),
+        ).toBe(true);
+      }
     }
   });
 });

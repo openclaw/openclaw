@@ -1,5 +1,5 @@
 ---
-summary: "Model authentication: OAuth, API keys, and setup-token"
+summary: "Model authentication: OAuth, API keys, and Claude CLI reuse"
 read_when:
   - Debugging model auth or OAuth expiry
   - Documenting authentication or credential storage
@@ -9,7 +9,7 @@ title: "Authentication"
 # Authentication (Model Providers)
 
 <Note>
-This page covers **model provider** authentication (API keys, OAuth, setup tokens). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+This page covers **model provider** authentication (API keys, OAuth, Claude CLI reuse). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 </Note>
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
@@ -26,8 +26,8 @@ For credential eligibility/reason-code rules used by `models status --probe`, se
 
 If you’re running a long-lived gateway, start with an API key for your chosen
 provider.
-For Anthropic specifically, API key auth is the safe path and is recommended
-over subscription setup-token auth.
+For Anthropic specifically, API key auth is the safe path. Claude CLI reuse is
+the other supported subscription-style setup path.
 
 1. Create an API key in your provider console.
 2. Put it on the **gateway host** (the machine running `openclaw gateway`).
@@ -59,45 +59,18 @@ API keys for daemon use: `openclaw onboard`.
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.openclaw/.env`, systemd/launchd).
 
-## Anthropic: setup-token (subscription auth)
+## Anthropic: legacy token compatibility
 
-If you’re using a Claude subscription, the setup-token flow is supported. Run
-it on the **gateway host**:
+Existing Anthropic token profiles are still honored at runtime if they are
+already configured, but OpenClaw no longer offers Anthropic setup-token auth
+for new setup via onboarding or `models auth` commands.
 
-```bash
-claude setup-token
-```
-
-Then paste it into OpenClaw:
-
-```bash
-openclaw models auth setup-token --provider anthropic
-```
-
-If the token was created on another machine, paste it manually:
-
-```bash
-openclaw models auth paste-token --provider anthropic
-```
-
-If you see an Anthropic error like:
-
-```
-This credential is only authorized for use with Claude Code and cannot be used for other API requests.
-```
-
-…use an Anthropic API key instead.
-
-<Warning>
-Anthropic setup-token support is technical compatibility only. Anthropic has blocked
-some subscription usage outside Claude Code in the past. Use it only if you decide
-the policy risk is acceptable, and verify Anthropic's current terms yourself.
-</Warning>
+For new setup, use an Anthropic API key or migrate to Claude CLI on the gateway
+host.
 
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
 ```bash
-openclaw models auth paste-token --provider anthropic
 openclaw models auth paste-token --provider openrouter
 ```
 
@@ -114,15 +87,19 @@ openclaw models status --check
 ```
 
 Optional ops scripts (systemd/Termux) are documented here:
-[/automation/auth-monitoring](/automation/auth-monitoring)
-
-> `claude setup-token` requires an interactive TTY.
+[Auth monitoring scripts](/help/scripts#auth-monitoring-scripts)
 
 ## Anthropic: Claude CLI migration
 
 If Claude CLI is already installed and signed in on the gateway host, you can
-switch an existing Anthropic setup over to the CLI backend instead of pasting a
-setup-token:
+switch an existing Anthropic setup over to the CLI backend. This is a
+supported OpenClaw migration path for reusing a local Claude CLI login on that
+host.
+
+Prerequisites:
+
+- `claude` installed on the gateway host
+- Claude CLI already signed in there with `claude auth login`
 
 ```bash
 openclaw models auth login --provider anthropic --method cli --set-default
@@ -132,11 +109,20 @@ This keeps your existing Anthropic auth profiles for rollback, but changes the
 default model selection to `claude-cli/...` and adds matching Claude CLI
 allowlist entries under `agents.defaults.models`.
 
+Verify:
+
+```bash
+openclaw models status
+```
+
 Onboarding shortcut:
 
 ```bash
 openclaw onboard --auth-choice anthropic-cli
 ```
+
+Interactive `openclaw onboard` and `openclaw configure` prefer Claude CLI for
+Anthropic and no longer offer setup-token as a new setup path.
 
 ## Checking model auth status
 
@@ -186,8 +172,8 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 
 ### "No credentials found"
 
-If the Anthropic token profile is missing, run `claude setup-token` on the
-**gateway host**, then re-check:
+If the Anthropic profile is missing, migrate that setup to Claude CLI or an API
+key on the **gateway host**, then re-check:
 
 ```bash
 openclaw models status
@@ -195,10 +181,12 @@ openclaw models status
 
 ### Token expiring/expired
 
-Run `openclaw models status` to confirm which profile is expiring. If the profile
-is missing, rerun `claude setup-token` and paste the token again.
+Run `openclaw models status` to confirm which profile is expiring. If a legacy
+Anthropic token profile is missing or expired, migrate that setup to Claude CLI
+or an API key.
 
-## Requirements
+## Claude CLI requirements
 
-- Anthropic subscription account (for `claude setup-token`)
+Only needed for the Anthropic Claude CLI reuse path:
+
 - Claude Code CLI installed (`claude` command available)

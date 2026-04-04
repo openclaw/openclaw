@@ -50,7 +50,9 @@ Then connect:
 ssh <vm-name>.exe.xyz
 ```
 
-Tip: keep this VM **stateful**. OpenClaw stores state under `~/.openclaw/` and `~/.openclaw/workspace/`.
+Tip: keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent
+`auth-profiles.json`, sessions, and channel/provider state under
+`~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
 
 ## 2) Install prerequisites (on the VM)
 

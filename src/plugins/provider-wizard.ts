@@ -45,6 +45,8 @@ export type ProviderWizardOption = {
   groupLabel: string;
   groupHint?: string;
   onboardingScopes?: Array<"text-inference" | "image-generation">;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
 };
 
 export type ProviderModelPickerEntry = {
@@ -114,6 +116,13 @@ function buildSetupOptionForMethod(params: {
     groupLabel: params.wizard.groupLabel?.trim() || params.provider.label,
     groupHint: params.wizard.groupHint?.trim(),
     ...(params.wizard.onboardingScopes ? { onboardingScopes: params.wizard.onboardingScopes } : {}),
+    ...(typeof params.wizard.assistantPriority === "number" &&
+    Number.isFinite(params.wizard.assistantPriority)
+      ? { assistantPriority: params.wizard.assistantPriority }
+      : {}),
+    ...(params.wizard.assistantVisibility
+      ? { assistantVisibility: params.wizard.assistantVisibility }
+      : {}),
   };
 }
 

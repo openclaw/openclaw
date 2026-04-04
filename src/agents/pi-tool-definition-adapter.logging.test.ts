@@ -64,4 +64,45 @@ describe("pi tool definition adapter logging", () => {
       ),
     );
   });
+
+  it("accepts nested edits arrays for the current edit schema", async () => {
+    const execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
+      content: [{ type: "text" as const, text: JSON.stringify(params) }],
+      details: { ok: true },
+    }));
+    const baseTool = {
+      name: "edit",
+      label: "Edit",
+      description: "edits files",
+      parameters: Type.Object({
+        path: Type.String(),
+        edits: Type.Array(
+          Type.Object({
+            oldText: Type.String(),
+            newText: Type.String(),
+          }),
+        ),
+      }),
+      execute,
+    } satisfies AgentTool;
+
+    const tool = wrapToolParamNormalization(baseTool, CLAUDE_PARAM_GROUPS.edit);
+    const [def] = toToolDefinitions([tool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const payload = {
+      path: "notes.txt",
+      edits: [
+        { oldText: "alpha", newText: "beta" },
+        { oldText: "gamma", newText: "" },
+      ],
+    };
+
+    await def.execute("call-edit-batch", payload, undefined, undefined, extensionContext);
+
+    expect(execute).toHaveBeenCalledWith("call-edit-batch", payload, undefined, undefined);
+    expect(logError).not.toHaveBeenCalled();
+  });
 });

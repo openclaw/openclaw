@@ -105,8 +105,10 @@ The YAML frontmatter supports these fields:
 | Location                        | Precedence | Scope                 |
 | ------------------------------- | ---------- | --------------------- |
 | `\<workspace\>/skills/`         | Highest    | Per-agent             |
+| `\<workspace\>/.agents/skills/` | High       | Per-workspace agent   |
+| `~/.agents/skills/`             | Medium     | Shared agent profile  |
 | `~/.openclaw/skills/`           | Medium     | Shared (all agents)   |
-| Bundled (shipped with OpenClaw) | Lowest     | Global                |
+| Bundled (shipped with OpenClaw) | Low        | Global                |
 | `skills.load.extraDirs`         | Lowest     | Custom shared folders |
 
 ## Related

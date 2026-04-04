@@ -16,6 +16,7 @@ describe("matrix credentials storage", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -113,6 +114,134 @@ describe("matrix credentials storage", () => {
     expect(fs.existsSync(currentPath)).toBe(true);
   });
 
+  it("returns migrated credentials when another process moves the legacy file mid-read", () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {},
+          },
+        },
+      },
+    });
+    const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
+    const currentPath = resolveMatrixCredentialsPath({}, "ops");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "legacy-token",
+        createdAt: "2026-03-01T10:00:00.000Z",
+      }),
+    );
+
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    let moved = false;
+    const readFileSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      filePath: fs.PathOrFileDescriptor,
+      options?: fs.ObjectEncodingOptions | BufferEncoding | null,
+    ) => {
+      if (!moved && filePath === legacyPath) {
+        fs.renameSync(legacyPath, currentPath);
+        moved = true;
+      }
+      return originalReadFileSync(filePath, options as never);
+    }) as typeof fs.readFileSync);
+    try {
+      const loaded = loadMatrixCredentials({}, "ops");
+
+      expect(loaded?.accessToken).toBe("legacy-token");
+      expect(moved).toBe(true);
+      expect(fs.existsSync(legacyPath)).toBe(false);
+      expect(fs.existsSync(currentPath)).toBe(true);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("does not rename the legacy path after falling back to already-migrated current credentials", () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          accounts: {
+            ops: {},
+          },
+        },
+      },
+    });
+    const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
+    const currentPath = resolveMatrixCredentialsPath({}, "ops");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "legacy-token",
+        createdAt: "2026-03-01T10:00:00.000Z",
+      }),
+    );
+
+    const originalReadFileSync = fs.readFileSync.bind(fs);
+    const originalRenameSync = fs.renameSync.bind(fs);
+    const renameSpy = vi.spyOn(fs, "renameSync");
+    let migrated = false;
+    const readFileSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      filePath: fs.PathOrFileDescriptor,
+      options?: fs.ObjectEncodingOptions | BufferEncoding | null,
+    ) => {
+      if (!migrated && filePath === legacyPath && fs.existsSync(legacyPath)) {
+        originalRenameSync(legacyPath, currentPath);
+        fs.writeFileSync(
+          currentPath,
+          JSON.stringify({
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "current-token",
+            createdAt: "2026-03-01T10:00:00.000Z",
+          }),
+        );
+        migrated = true;
+        try {
+          return originalReadFileSync(filePath, options as never);
+        } finally {
+          fs.writeFileSync(
+            legacyPath,
+            JSON.stringify({
+              homeserver: "https://matrix.example.org",
+              userId: "@bot:example.org",
+              accessToken: "recreated-stale-legacy-token",
+              createdAt: "2026-03-01T10:00:00.000Z",
+            }),
+          );
+        }
+      }
+      return originalReadFileSync(filePath, options as never);
+    }) as typeof fs.readFileSync);
+
+    try {
+      const loaded = loadMatrixCredentials({}, "ops");
+
+      expect(loaded?.accessToken).toBe("current-token");
+      expect(renameSpy).not.toHaveBeenCalled();
+      expect(
+        JSON.parse(fs.readFileSync(currentPath, "utf8")) as { accessToken: string },
+      ).toMatchObject({
+        accessToken: "current-token",
+      });
+      expect(
+        JSON.parse(fs.readFileSync(legacyPath, "utf8")) as { accessToken: string },
+      ).toMatchObject({
+        accessToken: "recreated-stale-legacy-token",
+      });
+    } finally {
+      readFileSpy.mockRestore();
+      renameSpy.mockRestore();
+    }
+  });
+
   it("does not migrate legacy default credentials during a non-selected account read", () => {
     const stateDir = setupStateDir({
       channels: {
@@ -146,6 +275,40 @@ describe("matrix credentials storage", () => {
     expect(loaded).toBeNull();
     expect(fs.existsSync(legacyPath)).toBe(true);
     expect(fs.existsSync(currentPath)).toBe(false);
+  });
+
+  it("migrates legacy credentials to the named account when top-level auth is only a shared default", () => {
+    const stateDir = setupStateDir({
+      channels: {
+        matrix: {
+          accessToken: "shared-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              accessToken: "ops-token",
+            },
+          },
+        },
+      },
+    });
+    const legacyPath = path.join(stateDir, "credentials", "matrix", "credentials.json");
+    const currentPath = resolveMatrixCredentialsPath({}, "ops");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@ops:example.org",
+        accessToken: "legacy-token",
+        createdAt: "2026-03-01T10:00:00.000Z",
+      }),
+    );
+
+    const loaded = loadMatrixCredentials({}, "ops");
+
+    expect(loaded?.accessToken).toBe("legacy-token");
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(fs.existsSync(currentPath)).toBe(true);
   });
 
   it("clears both current and legacy credential paths", () => {

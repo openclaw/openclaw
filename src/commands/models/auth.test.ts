@@ -216,6 +216,9 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
     );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    );
   });
 
   it("applies openai-codex default model when --set-default is used", async () => {
@@ -378,6 +381,16 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("rejects pasted Anthropic token setup", async () => {
+    const runtime = createRuntime();
+
+    await expect(modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime)).rejects.toThrow(
+      "Anthropic setup-token auth is no longer available for new setup in OpenClaw.",
+    );
+
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+  });
+
   it("runs token auth for any token-capable provider plugin", async () => {
     const runtime = createRuntime();
     const runTokenAuth = vi.fn().mockResolvedValue({
@@ -419,5 +432,33 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/main",
     });
+  });
+
+  it("rejects setup-token for Anthropic even when explicitly requested", async () => {
+    const runtime = createRuntime();
+    const runTokenAuth = vi.fn();
+    mocks.resolvePluginProviders.mockReturnValue([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            run: runTokenAuth,
+          },
+        ],
+      },
+    ]);
+
+    await expect(
+      modelsAuthSetupTokenCommand({ provider: "anthropic", yes: true }, runtime),
+    ).rejects.toThrow(
+      "Anthropic setup-token auth is no longer available for new setup in OpenClaw.",
+    );
+
+    expect(runTokenAuth).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
   });
 });

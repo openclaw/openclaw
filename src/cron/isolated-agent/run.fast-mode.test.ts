@@ -7,6 +7,7 @@ import {
 import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
@@ -49,6 +50,15 @@ async function runFastModeCase(params: {
         }),
   );
   mockSuccessfulModelFallback();
+  resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
+    const sessionFastMode = sessionEntry?.fastMode;
+    if (typeof sessionFastMode === "boolean") {
+      return { enabled: sessionFastMode };
+    }
+    return {
+      enabled: Boolean(cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode),
+    };
+  });
 
   const result = await runCronIsolatedAgentTurn(
     makeIsolatedAgentTurnParams({

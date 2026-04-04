@@ -26,7 +26,31 @@ export type {
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 
-export const __testing = {
-  ...managerTesting,
-  ...registryTesting,
-};
+// Keep test helpers off the hot init path. Eagerly merging them here can
+// create a back-edge through the bundled ACP runtime chunk before the imported
+// testing bindings finish initialization.
+export const __testing = new Proxy({} as typeof managerTesting & typeof registryTesting, {
+  get(_target, prop, receiver) {
+    if (Reflect.has(managerTesting, prop)) {
+      return Reflect.get(managerTesting, prop, receiver);
+    }
+    return Reflect.get(registryTesting, prop, receiver);
+  },
+  has(_target, prop) {
+    return Reflect.has(managerTesting, prop) || Reflect.has(registryTesting, prop);
+  },
+  ownKeys() {
+    return Array.from(
+      new Set([...Reflect.ownKeys(managerTesting), ...Reflect.ownKeys(registryTesting)]),
+    );
+  },
+  getOwnPropertyDescriptor(_target, prop) {
+    if (Reflect.has(managerTesting, prop) || Reflect.has(registryTesting, prop)) {
+      return {
+        configurable: true,
+        enumerable: true,
+      };
+    }
+    return undefined;
+  },
+});

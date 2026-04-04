@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { deriveSessionChatType } from "../sessions/session-chat-type.js";
 import {
-  deriveSessionChatType,
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,
@@ -78,6 +78,7 @@ describe("deriveSessionChatType", () => {
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
     { key: "discord:acc-1:guild-123:channel-456", expected: "channel" },
+    { key: "12345-678@g.us", expected: "group" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
@@ -104,26 +105,20 @@ describe("thread session suffix parsing", () => {
     ).toBeNull();
   });
 
-  it("still parses telegram topic session suffixes", () => {
+  it("does not treat telegram :topic: as a generic thread suffix", () => {
     expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:topic:77")).toEqual({
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      threadId: "77",
+      baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
+      threadId: undefined,
     });
-    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBe(
-      "agent:main:telegram:group:-100123",
-    );
+    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBeNull();
   });
 
-  it("parses mixed-case suffix markers without lowercasing the stored key", () => {
+  it("parses mixed-case :thread: markers without lowercasing the stored key", () => {
     expect(
       parseThreadSessionSuffix("agent:main:slack:channel:General:Thread:1699999999.0001"),
     ).toEqual({
       baseSessionKey: "agent:main:slack:channel:General",
       threadId: "1699999999.0001",
-    });
-    expect(parseThreadSessionSuffix("agent:main:telegram:group:-100123:Topic:77")).toEqual({
-      baseSessionKey: "agent:main:telegram:group:-100123",
-      threadId: "77",
     });
   });
 });
