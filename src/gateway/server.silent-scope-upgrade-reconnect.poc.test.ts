@@ -1,20 +1,10 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import * as devicePairingModule from "../infra/device-pairing.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import {
-  issueOperatorToken,
-  loadDeviceIdentity,
-  openTrackedWs,
-} from "./device-authz.test-helpers.js";
-import {
-  connectOk,
-  connectReq,
-  installGatewayTestHooks,
-  onceMessage,
-  startServerWithClient,
-} from "./test-helpers.js";
+import { issueOperatorToken, openTrackedWs } from "./device-authz.test-helpers.js";
+import { connectReq, installGatewayTestHooks, startServerWithClient } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -28,17 +18,10 @@ describe("gateway silent scope-upgrade reconnect", () => {
       clientMode: GATEWAY_CLIENT_MODES.TEST,
     });
 
-    let watcherWs: WebSocket | undefined;
     let sharedAuthReconnectWs: WebSocket | undefined;
     let postAttemptDeviceTokenWs: WebSocket | undefined;
 
     try {
-      watcherWs = await openTrackedWs(started.port);
-      await connectOk(watcherWs, { scopes: ["operator.admin"] });
-      const requestedEvent = onceMessage(
-        watcherWs,
-        (obj) => obj.type === "event" && obj.event === "device.pair.requested",
-      );
       sharedAuthReconnectWs = await openTrackedWs(started.port);
       const sharedAuthUpgradeAttempt = await connectReq(sharedAuthReconnectWs, {
         token: "secret",
@@ -54,12 +37,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
         (sharedAuthUpgradeAttempt.error?.details as { requestId?: unknown; code?: string })
           ?.requestId,
       ).toBe(pending.pending[0]?.requestId);
-      const requested = (await requestedEvent) as {
-        payload?: { requestId?: string; deviceId?: string; scopes?: string[] };
-      };
-      expect(requested.payload?.requestId).toBe(pending.pending[0]?.requestId);
-      expect(requested.payload?.deviceId).toBe(paired.deviceId);
-      expect(requested.payload?.scopes).toEqual(["operator.admin"]);
 
       const afterUpgradeAttempt = await getPairedDevice(paired.deviceId);
       expect(afterUpgradeAttempt?.approvedScopes).toEqual(["operator.read"]);
@@ -75,7 +52,6 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
       expect(afterUpgrade.ok).toBe(false);
     } finally {
-      watcherWs?.close();
       sharedAuthReconnectWs?.close();
       postAttemptDeviceTokenWs?.close();
       started.ws.close();
@@ -93,17 +69,9 @@ describe("gateway silent scope-upgrade reconnect", () => {
       clientMode: GATEWAY_CLIENT_MODES.BACKEND,
     });
 
-    let watcherWs: WebSocket | undefined;
     let backendReconnectWs: WebSocket | undefined;
 
     try {
-      watcherWs = await openTrackedWs(started.port);
-      await connectOk(watcherWs, { scopes: ["operator.admin"] });
-      const requestedEvent = onceMessage(
-        watcherWs,
-        (obj) => obj.type === "event" && obj.event === "device.pair.requested",
-      );
-
       backendReconnectWs = await openTrackedWs(started.port);
       const reconnectAttempt = await connectReq(backendReconnectWs, {
         token: "secret",
@@ -126,158 +94,12 @@ describe("gateway silent scope-upgrade reconnect", () => {
         (reconnectAttempt.error?.details as { requestId?: unknown; code?: string })?.requestId,
       ).toBe(pending.pending[0]?.requestId);
 
-      const requested = (await requestedEvent) as {
-        payload?: { requestId?: string; deviceId?: string; scopes?: string[] };
-      };
-      expect(requested.payload?.requestId).toBe(pending.pending[0]?.requestId);
-      expect(requested.payload?.deviceId).toBe(paired.deviceId);
-      expect(requested.payload?.scopes).toEqual(["operator.admin"]);
-
       const afterAttempt = await getPairedDevice(paired.deviceId);
       expect(afterAttempt?.approvedScopes).toEqual(["operator.read"]);
       expect(afterAttempt?.tokens?.operator?.scopes).toEqual(["operator.read"]);
       expect(afterAttempt?.tokens?.operator?.token).toBe(paired.token);
     } finally {
-      watcherWs?.close();
       backendReconnectWs?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
-  });
-
-  test("accepts local silent reconnect when pairing was concurrently approved", async () => {
-    const started = await startServerWithClient("secret");
-    const loaded = loadDeviceIdentity("silent-reconnect-race");
-    let ws: WebSocket | undefined;
-
-    const approveOriginal = devicePairingModule.approveDevicePairing;
-    let simulatedRace = false;
-    const forwardApprove = async (requestId: string, optionsOrBaseDir?: unknown) => {
-      if (optionsOrBaseDir && typeof optionsOrBaseDir === "object") {
-        return await approveOriginal(
-          requestId,
-          optionsOrBaseDir as { callerScopes?: readonly string[] },
-        );
-      }
-      return await approveOriginal(requestId);
-    };
-    const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
-      .mockImplementation(async (requestId: string, optionsOrBaseDir?: unknown) => {
-        if (simulatedRace) {
-          return await forwardApprove(requestId, optionsOrBaseDir);
-        }
-        simulatedRace = true;
-        await forwardApprove(requestId, optionsOrBaseDir);
-        return null;
-      });
-
-    try {
-      ws = await openTrackedWs(started.port);
-      const res = await connectReq(ws, {
-        token: "secret",
-        deviceIdentityPath: loaded.identityPath,
-      });
-      expect(res.ok).toBe(true);
-
-      const paired = await getPairedDevice(loaded.identity.deviceId);
-      expect(paired?.publicKey).toBe(loaded.publicKey);
-      expect(paired?.tokens?.operator?.token).toBeTruthy();
-    } finally {
-      approveSpy.mockRestore();
-      ws?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
-  });
-
-  test("does not rebroadcast a deleted silent pairing request after a concurrent rejection", async () => {
-    const started = await startServerWithClient("secret");
-    const loaded = loadDeviceIdentity("silent-reconnect-reject-race");
-    let ws: WebSocket | undefined;
-
-    const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
-      .mockImplementation(async (requestId: string) => {
-        await devicePairingModule.rejectDevicePairing(requestId);
-        return null;
-      });
-
-    try {
-      await connectOk(started.ws, { scopes: ["operator.pairing"], device: null });
-      const requestedEvent = onceMessage(
-        started.ws,
-        (obj) => obj.type === "event" && obj.event === "device.pair.requested",
-        300,
-      );
-
-      ws = await openTrackedWs(started.port);
-      const res = await connectReq(ws, {
-        token: "secret",
-        deviceIdentityPath: loaded.identityPath,
-      });
-
-      expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("pairing required");
-      expect(
-        (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
-      ).toBeUndefined();
-      await expect(requestedEvent).rejects.toThrow("timeout");
-
-      const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toEqual([]);
-    } finally {
-      approveSpy.mockRestore();
-      ws?.close();
-      started.ws.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
-  });
-
-  test("returns the replacement pending request id when a silent request is superseded", async () => {
-    const started = await startServerWithClient("secret");
-    const loaded = loadDeviceIdentity("silent-reconnect-supersede-race");
-    let ws: WebSocket | undefined;
-    let replacementRequestId = "";
-
-    const approveSpy = vi
-      .spyOn(devicePairingModule, "approveDevicePairing")
-      .mockImplementation(async (_requestId: string) => {
-        const replacement = await devicePairingModule.requestDevicePairing({
-          deviceId: loaded.identity.deviceId,
-          publicKey: loaded.publicKey,
-          role: "operator",
-          scopes: ["operator.read"],
-          clientId: GATEWAY_CLIENT_NAMES.TEST,
-          clientMode: GATEWAY_CLIENT_MODES.TEST,
-          silent: false,
-        });
-        replacementRequestId = replacement.request.requestId;
-        return null;
-      });
-
-    try {
-      ws = await openTrackedWs(started.port);
-      const res = await connectReq(ws, {
-        token: "secret",
-        deviceIdentityPath: loaded.identityPath,
-      });
-
-      expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("pairing required");
-      expect(replacementRequestId).toBeTruthy();
-      expect(
-        (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
-      ).toBe(replacementRequestId);
-
-      const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending.map((entry) => entry.requestId)).toContain(replacementRequestId);
-    } finally {
-      approveSpy.mockRestore();
-      ws?.close();
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
