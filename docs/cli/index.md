@@ -426,6 +426,21 @@ Vector search over `MEMORY.md` + `memory/*.md`:
 - `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
 - `openclaw memory promote` — rank short-term recalls and optionally append top entries into `MEMORY.md`.
 
+## Sandbox
+
+Manage sandbox runtimes for isolated agent execution. See [/cli/sandbox](/cli/sandbox).
+
+Subcommands:
+
+- `sandbox list [--browser] [--json]`
+- `sandbox recreate [--all] [--session <key>] [--agent <id>] [--browser] [--force]`
+- `sandbox explain [--session <key>] [--agent <id>] [--json]`
+
+Notes:
+
+- `sandbox recreate` removes existing runtimes so the next use seeds them again with current config.
+- For `ssh` and OpenShell `remote` backends, recreate deletes the canonical remote workspace for the selected scope.
+
 ## Chat slash commands
 
 Chat messages support `/...` commands (text and native). See [/tools/slash-commands](/tools/slash-commands).
@@ -1263,6 +1278,25 @@ Notes:
 - `gateway install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
 - `gateway install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
 - `gateway install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
+
+### `daemon`
+
+Legacy alias for the Gateway service-management commands. See [/cli/daemon](/cli/daemon).
+
+Subcommands:
+
+- `daemon status`
+- `daemon install`
+- `daemon uninstall`
+- `daemon start`
+- `daemon stop`
+- `daemon restart`
+
+Common options:
+
+- `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
+- `install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
+- `uninstall|start|stop|restart`: `--json`
 
 ### `logs`
 
