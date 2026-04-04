@@ -3,7 +3,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
-import { createMessageToolButtonsSchema } from "../../plugin-sdk/message-tool-schema.js";
+import {
+  createMessageToolButtonsSchema,
+  createMessageToolCardSchema,
+} from "../../plugin-sdk/channel-actions.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
@@ -34,6 +37,24 @@ function createTelegramPollExtraToolSchemas() {
   };
 }
 
+function createCardSchemaPlugin(params: {
+  id: string;
+  label: string;
+  docsPath: string;
+  blurb: string;
+}) {
+  return createChannelPlugin({
+    ...params,
+    actions: ["send"],
+    capabilities: ["cards"],
+    toolSchema: () => ({
+      properties: {
+        card: createMessageToolCardSchema(),
+      },
+    }),
+  });
+}
+
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
   loadConfig: vi.fn(() => ({})),
@@ -53,8 +74,9 @@ vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   };
 });
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
@@ -151,6 +173,7 @@ async function executeSend(params: {
 }) {
   const tool = createMessageTool({
     config: {} as never,
+    runMessageAction: mocks.runMessageAction as never,
     ...params.toolOptions,
   });
   await tool.execute("1", {
@@ -187,6 +210,9 @@ describe("message tool secret scoping", () => {
     const tool = createMessageTool({
       currentChannelProvider: "discord",
       agentAccountId: "ops",
+      loadConfig: mocks.loadConfig as never,
+      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {
@@ -216,6 +242,7 @@ describe("message tool agent routing", () => {
     const tool = createMessageTool({
       agentSessionKey: "agent:alpha:main",
       config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
     });
 
     await tool.execute("1", {
@@ -227,6 +254,55 @@ describe("message tool agent routing", () => {
     const call = mocks.runMessageAction.mock.calls[0]?.[0];
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
+  });
+});
+
+describe("message tool explicit target guard", () => {
+  it("requires an explicit target for upload-file when configured", async () => {
+    const tool = createMessageTool({
+      config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await expect(
+      tool.execute("1", {
+        action: "upload-file",
+        filePath: "/tmp/report.png",
+      }),
+    ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it("allows upload-file when an explicit target is provided", async () => {
+    mocks.runMessageAction.mockResolvedValueOnce({
+      kind: "action",
+      channel: "slack",
+      action: "upload-file",
+      handledBy: "dry-run",
+      payload: { ok: true, dryRun: true, channel: "slack", action: "upload-file" },
+      dryRun: true,
+    });
+
+    const tool = createMessageTool({
+      config: {} as never,
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await tool.execute("1", {
+      action: "upload-file",
+      target: "channel:C999",
+      filePath: "/tmp/report.png",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.params?.target).toBe("channel:C999");
   });
 });
 
@@ -411,6 +487,64 @@ describe("message tool schema scoping", () => {
     const actionEnum = getActionEnum(getToolProperties(tool));
 
     expect(actionEnum).toContain("poll");
+  });
+
+  it.each([
+    {
+      provider: "feishu",
+      plugin: createCardSchemaPlugin({
+        id: "feishu",
+        label: "Feishu",
+        docsPath: "/channels/feishu",
+        blurb: "Feishu test plugin.",
+      }),
+    },
+    {
+      provider: "msteams",
+      plugin: createCardSchemaPlugin({
+        id: "msteams",
+        label: "MSTeams",
+        docsPath: "/channels/msteams",
+        blurb: "MSTeams test plugin.",
+      }),
+    },
+  ])(
+    "keeps $provider card schema optional after merging into the message tool schema",
+    ({ plugin }) => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]),
+      );
+
+      const tool = createMessageTool({
+        config: {} as never,
+        currentChannelProvider: plugin.id,
+      });
+      const schema = tool.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+
+      expect(schema.properties?.card).toBeDefined();
+      expect(schema.required ?? []).not.toContain("card");
+    },
+  );
+
+  it("keeps buttons schema optional so plain sends do not require buttons", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+
+    expect(schema.properties?.buttons).toBeDefined();
+    expect(schema.required ?? []).not.toContain("buttons");
   });
 
   it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {

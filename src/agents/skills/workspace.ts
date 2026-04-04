@@ -1,37 +1,29 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  formatSkillsForPrompt,
-  loadSkillsFromDir,
-  type Skill,
-} from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
+import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
-import {
-  parseFrontmatter,
-  resolveOpenClawMetadata,
-  resolveSkillInvocationPolicy,
-} from "./frontmatter.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
+import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
-  SkillCommandSpec,
   SkillEntry,
   SkillSnapshot,
 } from "./types.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
-const skillCommandDebugOnce = new Set<string>();
 
 /**
  * Replace the user's home directory prefix with `~` in skill file paths
@@ -51,18 +43,6 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
     ...s,
     filePath: s.filePath.startsWith(prefix) ? "~/" + s.filePath.slice(prefix.length) : s.filePath,
   }));
-}
-
-function debugSkillCommandOnce(
-  messageKey: string,
-  message: string,
-  meta?: Record<string, unknown>,
-) {
-  if (skillCommandDebugOnce.has(messageKey)) {
-    return;
-  }
-  skillCommandDebugOnce.add(messageKey);
-  skillsLogger.debug(message, meta);
 }
 
 function filterSkillEntries(
@@ -88,45 +68,11 @@ function filterSkillEntries(
   return filtered;
 }
 
-const SKILL_COMMAND_MAX_LENGTH = 32;
-const SKILL_COMMAND_FALLBACK = "skill";
-// Discord command descriptions must be ≤100 characters
-const SKILL_COMMAND_DESCRIPTION_MAX_LENGTH = 100;
-
 const DEFAULT_MAX_CANDIDATES_PER_ROOT = 300;
 const DEFAULT_MAX_SKILLS_LOADED_PER_SOURCE = 200;
 const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 30_000;
 const DEFAULT_MAX_SKILL_FILE_BYTES = 256_000;
-
-function sanitizeSkillCommandName(raw: string): string {
-  const normalized = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  const trimmed = normalized.slice(0, SKILL_COMMAND_MAX_LENGTH);
-  return trimmed || SKILL_COMMAND_FALLBACK;
-}
-
-function resolveUniqueSkillCommandName(base: string, used: Set<string>): string {
-  const normalizedBase = base.toLowerCase();
-  if (!used.has(normalizedBase)) {
-    return base;
-  }
-  for (let index = 2; index < 1000; index += 1) {
-    const suffix = `_${index}`;
-    const maxBaseLength = Math.max(1, SKILL_COMMAND_MAX_LENGTH - suffix.length);
-    const trimmedBase = base.slice(0, maxBaseLength);
-    const candidate = `${trimmedBase}${suffix}`;
-    const candidateKey = candidate.toLowerCase();
-    if (!used.has(candidateKey)) {
-      return candidate;
-    }
-  }
-  const fallback = `${base.slice(0, Math.max(1, SKILL_COMMAND_MAX_LENGTH - 2))}_x`;
-  return fallback;
-}
 
 type ResolvedSkillsLimits = {
   maxCandidatesPerRoot: number;
@@ -343,7 +289,11 @@ function loadSkillEntries(
         return [];
       }
 
-      const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
+      const loaded = loadSkillsFromDirSafe({
+        dir: baseDir,
+        source: params.source,
+        maxBytes: limits.maxSkillFileBytes,
+      });
       return filterLoadedSkillsInsideRoot({
         skills: unwrapLoadedSkills(loaded),
         source: params.source,
@@ -417,7 +367,11 @@ function loadSkillEntries(
         continue;
       }
 
-      const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
+      const loaded = loadSkillsFromDirSafe({
+        dir: skillDir,
+        source: params.source,
+        maxBytes: limits.maxSkillFileBytes,
+      });
       loadedSkills.push(
         ...filterLoadedSkillsInsideRoot({
           skills: unwrapLoadedSkills(loaded),
@@ -509,13 +463,12 @@ function loadSkillEntries(
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {
-    let frontmatter: ParsedSkillFrontmatter = {};
-    try {
-      const raw = fs.readFileSync(skill.filePath, "utf-8");
-      frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed skills
-    }
+    const frontmatter =
+      readSkillFrontmatterSafe({
+        rootDir: skill.baseDir,
+        filePath: skill.filePath,
+        maxBytes: limits.maxSkillFileBytes,
+      }) ?? ({} as ParsedSkillFrontmatter);
     return {
       skill,
       frontmatter,
@@ -616,7 +569,7 @@ export function buildWorkspaceSkillSnapshot(
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
-  const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+  const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -642,10 +595,23 @@ type WorkspaceSkillBuildOptions = {
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
   entries?: SkillEntry[];
+  agentId?: string;
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
 };
+
+function resolveEffectiveWorkspaceSkillFilter(
+  opts?: WorkspaceSkillBuildOptions,
+): string[] | undefined {
+  if (opts?.skillFilter !== undefined) {
+    return normalizeSkillFilter(opts.skillFilter);
+  }
+  if (!opts?.config || !opts.agentId) {
+    return undefined;
+  }
+  return resolveEffectiveAgentSkillFilter(opts.config, opts.agentId);
+}
 
 function resolveWorkspaceSkillPromptState(
   workspaceDir: string,
@@ -656,10 +622,11 @@ function resolveWorkspaceSkillPromptState(
   resolvedSkills: Skill[];
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
-    opts?.skillFilter,
+    effectiveSkillFilter,
     opts?.eligibility,
   );
   const promptEntries = eligible.filter(
@@ -696,6 +663,7 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  agentId?: string;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
@@ -705,6 +673,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      agentId: params.agentId,
     });
     return prompt.trim() ? prompt : "";
   }
@@ -717,9 +686,33 @@ export function loadWorkspaceSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    skillFilter?: string[];
+    agentId?: string;
+    eligibility?: SkillEligibilityContext;
   },
 ): SkillEntry[] {
-  return loadSkillEntries(workspaceDir, opts);
+  const entries = loadSkillEntries(workspaceDir, opts);
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  if (effectiveSkillFilter === undefined) {
+    return entries;
+  }
+  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
+}
+
+export function loadVisibleWorkspaceSkillEntries(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+    skillFilter?: string[];
+    agentId?: string;
+    eligibility?: SkillEligibilityContext;
+  },
+): SkillEntry[] {
+  const entries = loadSkillEntries(workspaceDir, opts);
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
 }
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
@@ -765,6 +758,9 @@ export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
   config?: OpenClawConfig;
+  skillFilter?: string[];
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
 }) {
@@ -777,8 +773,11 @@ export async function syncSkillsToWorkspace(params: {
   await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
 
-    const entries = loadSkillEntries(sourceDir, {
+    const entries = loadWorkspaceSkillEntries(sourceDir, {
       config: params.config,
+      skillFilter: params.skillFilter,
+      agentId: params.agentId,
+      eligibility: params.eligibility,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
     });
@@ -826,110 +825,13 @@ export function filterWorkspaceSkillEntries(
   return filterSkillEntries(entries, config);
 }
 
-export function buildWorkspaceSkillCommandSpecs(
-  workspaceDir: string,
+export function filterWorkspaceSkillEntriesWithOptions(
+  entries: SkillEntry[],
   opts?: {
     config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
     skillFilter?: string[];
     eligibility?: SkillEligibilityContext;
-    reservedNames?: Set<string>;
   },
-): SkillCommandSpec[] {
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(
-    skillEntries,
-    opts?.config,
-    opts?.skillFilter,
-    opts?.eligibility,
-  );
-  const userInvocable = eligible.filter((entry) => entry.invocation?.userInvocable !== false);
-  const used = new Set<string>();
-  for (const reserved of opts?.reservedNames ?? []) {
-    used.add(reserved.toLowerCase());
-  }
-
-  const specs: SkillCommandSpec[] = [];
-  for (const entry of userInvocable) {
-    const rawName = entry.skill.name;
-    const base = sanitizeSkillCommandName(rawName);
-    if (base !== rawName) {
-      debugSkillCommandOnce(
-        `sanitize:${rawName}:${base}`,
-        `Sanitized skill command name "${rawName}" to "/${base}".`,
-        { rawName, sanitized: `/${base}` },
-      );
-    }
-    const unique = resolveUniqueSkillCommandName(base, used);
-    if (unique !== base) {
-      debugSkillCommandOnce(
-        `dedupe:${rawName}:${unique}`,
-        `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
-        { rawName, deduped: `/${unique}` },
-      );
-    }
-    used.add(unique.toLowerCase());
-    const rawDescription = entry.skill.description?.trim() || rawName;
-    const description =
-      rawDescription.length > SKILL_COMMAND_DESCRIPTION_MAX_LENGTH
-        ? rawDescription.slice(0, SKILL_COMMAND_DESCRIPTION_MAX_LENGTH - 1) + "…"
-        : rawDescription;
-    const dispatch = (() => {
-      const kindRaw = (
-        entry.frontmatter?.["command-dispatch"] ??
-        entry.frontmatter?.["command_dispatch"] ??
-        ""
-      )
-        .trim()
-        .toLowerCase();
-      if (!kindRaw) {
-        return undefined;
-      }
-      if (kindRaw !== "tool") {
-        return undefined;
-      }
-
-      const toolName = (
-        entry.frontmatter?.["command-tool"] ??
-        entry.frontmatter?.["command_tool"] ??
-        ""
-      ).trim();
-      if (!toolName) {
-        debugSkillCommandOnce(
-          `dispatch:missingTool:${rawName}`,
-          `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
-          { skillName: rawName, command: unique },
-        );
-        return undefined;
-      }
-
-      const argModeRaw = (
-        entry.frontmatter?.["command-arg-mode"] ??
-        entry.frontmatter?.["command_arg_mode"] ??
-        ""
-      )
-        .trim()
-        .toLowerCase();
-      const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
-      if (!argMode) {
-        debugSkillCommandOnce(
-          `dispatch:badArgMode:${rawName}:${argModeRaw}`,
-          `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
-          { skillName: rawName, command: unique, argMode: argModeRaw },
-        );
-      }
-
-      return { kind: "tool", toolName, argMode: "raw" } as const;
-    })();
-
-    specs.push({
-      name: unique,
-      skillName: rawName,
-      description,
-      ...(dispatch ? { dispatch } : {}),
-    });
-  }
-  return specs;
+): SkillEntry[] {
+  return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
 }

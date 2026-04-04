@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { performMatrixRequest } from "./transport.js";
 
 describe("performMatrixRequest", () => {
@@ -31,7 +32,7 @@ describe("performMatrixRequest", () => {
         maxBytes: 1024,
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
-    ).rejects.toThrow("Matrix media exceeds configured size limit");
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
   });
 
   it("applies streaming byte limits when raw responses omit content-length", async () => {
@@ -64,6 +65,46 @@ describe("performMatrixRequest", () => {
         maxBytes: 1024,
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
-    ).rejects.toThrow("Matrix media exceeds configured size limit");
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
   });
+
+  it("uses the matrix-specific idle-timeout error for stalled raw downloads", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        },
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(stream, {
+              status: 200,
+            }),
+        ),
+      );
+
+      const requestPromise = performMatrixRequest({
+        homeserver: "http://127.0.0.1:8008",
+        accessToken: "token",
+        method: "GET",
+        endpoint: "/_matrix/media/v3/download/example/id",
+        timeoutMs: 5000,
+        raw: true,
+        maxBytes: 1024,
+        readIdleTimeoutMs: 50,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+
+      const rejection = expect(requestPromise).rejects.toThrow(
+        "Matrix media download stalled: no data received for 50ms",
+      );
+      await vi.advanceTimersByTimeAsync(60);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 5_000);
 });

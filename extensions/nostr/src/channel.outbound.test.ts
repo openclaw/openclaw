@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { PluginRuntime } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { setNostrRuntime } from "./runtime.js";
+import {
+  TEST_RELAY_URL,
+  TEST_RESOLVED_PRIVATE_KEY,
+  buildResolvedNostrAccount,
+} from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   normalizePubkey: vi.fn((value: string) => `normalized-${value.toLowerCase()}`),
@@ -15,6 +20,16 @@ vi.mock("./nostr-bus.js", () => ({
   normalizePubkey: mocks.normalizePubkey,
   startNostrBus: mocks.startNostrBus,
 }));
+
+function createCfg() {
+  return {
+    channels: {
+      nostr: {
+        privateKey: TEST_RESOLVED_PRIVATE_KEY, // pragma: allowlist secret
+      },
+    },
+  };
+}
 
 describe("nostr outbound cfg threading", () => {
   afterEach(() => {
@@ -47,26 +62,11 @@ describe("nostr outbound cfg threading", () => {
 
     const cleanup = (await nostrPlugin.gateway!.startAccount!(
       createStartAccountContext({
-        account: {
-          accountId: "default",
-          enabled: true,
-          configured: true,
-          privateKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // pragma: allowlist secret
-          publicKey: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // pragma: allowlist secret
-          relays: ["wss://relay.example.com"],
-          config: {},
-        },
-        abortSignal: new AbortController().signal,
+        account: buildResolvedNostrAccount(),
       }),
     )) as { stop: () => void };
 
-    const cfg = {
-      channels: {
-        nostr: {
-          privateKey: "resolved-nostr-private-key", // pragma: allowlist secret
-        },
-      },
-    };
+    const cfg = createCfg();
     await nostrPlugin.outbound!.sendText!({
       cfg: cfg as any,
       to: "NPUB123",
@@ -82,6 +82,60 @@ describe("nostr outbound cfg threading", () => {
     expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(mocks.normalizePubkey).toHaveBeenCalledWith("NPUB123");
     expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "converted:|a|b|");
+
+    cleanup.stop();
+  });
+
+  it("uses the configured defaultAccount when accountId is omitted", async () => {
+    const resolveMarkdownTableMode = vi.fn(() => "off");
+    const convertMarkdownTables = vi.fn((text: string) => text);
+    setNostrRuntime({
+      channel: {
+        text: {
+          resolveMarkdownTableMode,
+          convertMarkdownTables,
+        },
+      },
+      reply: {},
+    } as unknown as PluginRuntime);
+
+    const sendDm = vi.fn(async () => {});
+    const bus = {
+      sendDm,
+      close: vi.fn(),
+      getMetrics: vi.fn(() => ({ counters: {} })),
+      publishProfile: vi.fn(),
+      getProfileState: vi.fn(async () => null),
+    };
+    mocks.startNostrBus.mockResolvedValueOnce(bus as any);
+
+    const cleanup = (await nostrPlugin.gateway!.startAccount!(
+      createStartAccountContext({
+        account: buildResolvedNostrAccount({ accountId: "work" }),
+      }),
+    )) as { stop: () => void };
+
+    const cfg = {
+      channels: {
+        nostr: {
+          privateKey: TEST_RESOLVED_PRIVATE_KEY, // pragma: allowlist secret
+          defaultAccount: "work",
+        },
+      },
+    };
+
+    await nostrPlugin.outbound!.sendText!({
+      cfg: cfg as any,
+      to: "NPUB123",
+      text: "hello",
+    });
+
+    expect(resolveMarkdownTableMode).toHaveBeenCalledWith({
+      cfg,
+      channel: "nostr",
+      accountId: "work",
+    });
+    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "hello");
 
     cleanup.stop();
   });

@@ -2,7 +2,7 @@ import {
   parseBrowserMajorVersion,
   readBrowserVersion,
   resolveGoogleChromeExecutableForPlatform,
-} from "../browser/chrome.executables.js";
+} from "../../extensions/browser/runtime-api.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 

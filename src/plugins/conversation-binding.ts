@@ -7,6 +7,7 @@ import {
   resolveConversationBindingRecord,
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
@@ -118,13 +119,17 @@ type PluginBindingGlobalState = {
 };
 
 const pluginBindingGlobalStateKey = Symbol.for("openclaw.plugins.binding.global-state");
-
-function getPluginBindingGlobalState(): PluginBindingGlobalState {
-  return resolveGlobalSingleton<PluginBindingGlobalState>(pluginBindingGlobalStateKey, () => ({
+const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState>(
+  pluginBindingGlobalStateKey,
+  () => ({
     fallbackNoticeBindingIds: new Set<string>(),
     approvalsCache: null,
     approvalsLoaded: false,
-  }));
+  }),
+);
+
+function getPluginBindingGlobalState(): PluginBindingGlobalState {
+  return pluginBindingGlobalState;
 }
 
 function resolveApprovalsPath(): string {
@@ -150,19 +155,24 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
 
 function toConversationRef(params: PluginBindingConversation): ConversationRef {
   const normalized = normalizeConversation(params);
-  if (normalized.channel === "telegram") {
-    const threadId =
-      typeof normalized.threadId === "number" || typeof normalized.threadId === "string"
-        ? String(normalized.threadId).trim()
-        : "";
-    if (threadId) {
-      const parent = normalized.parentConversationId?.trim() || normalized.conversationId;
-      return {
-        channel: "telegram",
+  const channelId = normalizeChannelId(normalized.channel);
+  const resolvedConversationRef = channelId
+    ? getChannelPlugin(channelId)?.conversationBindings?.resolveConversationRef?.({
         accountId: normalized.accountId,
-        conversationId: `${parent}:topic:${threadId}`,
-      };
-    }
+        conversationId: normalized.conversationId,
+        parentConversationId: normalized.parentConversationId,
+        threadId: normalized.threadId,
+      })
+    : null;
+  if (resolvedConversationRef?.conversationId?.trim()) {
+    return {
+      channel: normalized.channel,
+      accountId: normalized.accountId,
+      conversationId: resolvedConversationRef.conversationId.trim(),
+      ...(resolvedConversationRef.parentConversationId?.trim()
+        ? { parentConversationId: resolvedConversationRef.parentConversationId.trim() }
+        : {}),
+    };
   }
   return {
     channel: normalized.channel,

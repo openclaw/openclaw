@@ -1,74 +1,69 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
 
-describe("media-understanding runtime helpers", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+const hoisted = vi.hoisted(() => ({
+  describeImageFile: vi.fn(),
+  runMediaUnderstandingFile: vi.fn(),
+}));
+
+vi.mock("../plugin-sdk/media-understanding-runtime.js", () => ({
+  describeImageFile: hoisted.describeImageFile,
+  describeImageFileWithModel: vi.fn(),
+  describeVideoFile: vi.fn(),
+  runMediaUnderstandingFile: hoisted.runMediaUnderstandingFile,
+  transcribeAudioFile: vi.fn(),
+}));
+
+let describeImageFile: typeof import("./runtime.js").describeImageFile;
+let runMediaUnderstandingFile: typeof import("./runtime.js").runMediaUnderstandingFile;
+
+describe("media-understanding runtime facade", () => {
+  beforeAll(async () => {
+    ({ describeImageFile, runMediaUnderstandingFile } = await import("./runtime.js"));
   });
 
-  it("describes images through the active media-understanding registry", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-runtime-"));
-    const imagePath = path.join(tempDir, "sample.jpg");
-    await fs.writeFile(imagePath, Buffer.from("image-bytes"));
+  afterEach(() => {
+    hoisted.describeImageFile.mockReset();
+    hoisted.runMediaUnderstandingFile.mockReset();
+  });
 
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.mediaUnderstandingProviders.push({
-      pluginId: "vision-plugin",
-      pluginName: "Vision Plugin",
-      source: "test",
-      provider: {
-        id: "vision-plugin",
-        capabilities: ["image"],
-        describeImage: async () => ({ text: "image ok", model: "vision-v1" }),
-      },
-    });
-    setActivePluginRegistry(pluginRegistry);
-
-    const cfg = {
-      tools: {
-        media: {
-          image: {
-            models: [{ provider: "vision-plugin", model: "vision-v1" }],
+  it("delegates describeImageFile to the plugin-sdk runtime", async () => {
+    const params = {
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      cfg: {
+        tools: {
+          media: {
+            image: {
+              models: [{ provider: "vision-plugin", model: "vision-v1" }],
+            },
           },
         },
-      },
-    } as OpenClawConfig;
-
-    const result = await describeImageFile({
-      filePath: imagePath,
-      mime: "image/jpeg",
-      cfg,
+      } as OpenClawConfig,
       agentDir: "/tmp/agent",
-    });
-
-    expect(result).toEqual({
+    };
+    const result = {
       text: "image ok",
       provider: "vision-plugin",
       model: "vision-v1",
       output: {
-        kind: "image.description",
+        kind: "image.description" as const,
         attachmentIndex: 0,
         text: "image ok",
         provider: "vision-plugin",
         model: "vision-v1",
       },
-    });
+    };
+    hoisted.describeImageFile.mockResolvedValue(result);
+
+    await expect(describeImageFile(params)).resolves.toEqual(result);
+    expect(hoisted.describeImageFile).toHaveBeenCalledWith(params);
   });
 
-  it("returns undefined when no media output is produced", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-runtime-"));
-    const imagePath = path.join(tempDir, "sample.jpg");
-    await fs.writeFile(imagePath, Buffer.from("image-bytes"));
-
-    const result = await runMediaUnderstandingFile({
-      capability: "image",
-      filePath: imagePath,
+  it("delegates runMediaUnderstandingFile to the plugin-sdk runtime", async () => {
+    const params = {
+      capability: "image" as const,
+      filePath: "/tmp/sample.jpg",
       mime: "image/jpeg",
       cfg: {
         tools: {
@@ -80,13 +75,16 @@ describe("media-understanding runtime helpers", () => {
         },
       } as OpenClawConfig,
       agentDir: "/tmp/agent",
-    });
-
-    expect(result).toEqual({
+    };
+    const result = {
       text: undefined,
       provider: undefined,
       model: undefined,
       output: undefined,
-    });
+    };
+    hoisted.runMediaUnderstandingFile.mockResolvedValue(result);
+
+    await expect(runMediaUnderstandingFile(params)).resolves.toEqual(result);
+    expect(hoisted.runMediaUnderstandingFile).toHaveBeenCalledWith(params);
   });
 });

@@ -1,5 +1,6 @@
 import {
   createAllowFromSection,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
   mergeAllowFromEntries,
@@ -176,20 +177,23 @@ export const synologyChatSetupAdapter: ChannelSetupAdapter = {
 
 export const synologyChatSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Synology Chat",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token + incoming webhook",
     configuredHint: "configured",
     unconfiguredHint: "needs token + incoming webhook",
     configuredScore: 1,
     unconfiguredScore: 0,
-    resolveConfigured: ({ cfg }) =>
-      listAccountIds(cfg).some((accountId) => isSynologyChatConfigured(cfg, accountId)),
-    resolveStatusLines: ({ cfg, configured }) => [
-      `Synology Chat: ${configured ? "configured" : "needs token + incoming webhook"}`,
-      `Accounts: ${listAccountIds(cfg).length || 0}`,
-    ],
-  },
+    includeStatusLine: true,
+    resolveConfigured: ({ cfg, accountId }) =>
+      accountId
+        ? isSynologyChatConfigured(cfg, accountId)
+        : listAccountIds(cfg).some((candidateAccountId) =>
+            isSynologyChatConfigured(cfg, candidateAccountId),
+          ),
+    resolveExtraStatusLines: ({ cfg }) => [`Accounts: ${listAccountIds(cfg).length || 0}`],
+  }),
   introNote: {
     title: "Synology Chat webhook setup",
     lines: SYNOLOGY_SETUP_HELP_LINES,

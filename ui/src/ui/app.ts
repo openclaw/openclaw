@@ -1,5 +1,6 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
+import { resolveAgentIdFromSessionKey } from "../../../src/routing/session-key.js";
 import { i18n, I18nController, isSupportedLocale } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -54,11 +55,20 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
+import {
+  loadToolsEffective as loadToolsEffectiveInternal,
+  refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
+} from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
+import type { DreamingStatus } from "./controllers/dreaming.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type { SkillMessage } from "./controllers/skills.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
@@ -84,6 +94,7 @@ import type {
   StatusSummary,
   NostrProfile,
   ToolsCatalogResult,
+  ToolsEffectiveResult,
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -210,6 +221,10 @@ export class OpenClawApp extends LitElement {
   @state() configUiHints: ConfigUiHints = {};
   @state() configForm: Record<string, unknown> | null = null;
   @state() configFormOriginal: Record<string, unknown> | null = null;
+  @state() dreamingStatusLoading = false;
+  @state() dreamingStatusError: string | null = null;
+  @state() dreamingStatus: DreamingStatus | null = null;
+  @state() dreamingModeSaving = false;
   @state() configFormDirty = false;
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";
@@ -259,8 +274,12 @@ export class OpenClawApp extends LitElement {
   @state() toolsCatalogLoading = false;
   @state() toolsCatalogError: string | null = null;
   @state() toolsCatalogResult: ToolsCatalogResult | null = null;
-  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
-    "overview";
+  @state() toolsEffectiveLoading = false;
+  @state() toolsEffectiveLoadingKey: string | null = null;
+  @state() toolsEffectiveResultKey: string | null = null;
+  @state() toolsEffectiveError: string | null = null;
+  @state() toolsEffectiveResult: ToolsEffectiveResult | null = null;
+  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" = "files";
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -288,8 +307,8 @@ export class OpenClawApp extends LitElement {
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() sessionsSortDir: "asc" | "desc" = "desc";
   @state() sessionsPage = 0;
-  @state() sessionsPageSize = 10;
-  @state() sessionsActionsOpenKey: string | null = null;
+  @state() sessionsPageSize = 25;
+  @state() sessionsSelectedKeys: Set<string> = new Set();
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -398,9 +417,21 @@ export class OpenClawApp extends LitElement {
   @state() skillsReport: SkillStatusReport | null = null;
   @state() skillsError: string | null = null;
   @state() skillsFilter = "";
+  @state() skillsStatusFilter: "all" | "ready" | "needs-setup" | "disabled" = "all";
   @state() skillEdits: Record<string, string> = {};
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
+  @state() skillsDetailKey: string | null = null;
+  @state() clawhubSearchQuery = "";
+  @state() clawhubSearchResults: ClawHubSearchResult[] | null = null;
+  @state() clawhubSearchLoading = false;
+  @state() clawhubSearchError: string | null = null;
+  @state() clawhubDetail: ClawHubSkillDetail | null = null;
+  @state() clawhubDetailSlug: string | null = null;
+  @state() clawhubDetailLoading = false;
+  @state() clawhubDetailError: string | null = null;
+  @state() clawhubInstallSlug: string | null = null;
+  @state() clawhubInstallMessage: { kind: "success" | "error"; text: string } | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -477,6 +508,10 @@ export class OpenClawApp extends LitElement {
         case "export":
           exportChatMarkdown(this.chatMessages, this.assistantName);
           break;
+        case "refresh-tools-effective": {
+          void refreshVisibleToolsEffectiveForCurrentSessionInternal(this);
+          break;
+        }
       }
     };
     document.addEventListener("keydown", this.globalKeydownHandler);
@@ -495,6 +530,22 @@ export class OpenClawApp extends LitElement {
 
   protected updated(changed: Map<PropertyKey, unknown>) {
     handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
+      return;
+    }
+    const activeSessionAgentId = resolveAgentIdFromSessionKey(this.sessionKey);
+    if (this.agentsSelectedId && this.agentsSelectedId === activeSessionAgentId) {
+      void loadToolsEffectiveInternal(this, {
+        agentId: this.agentsSelectedId,
+        sessionKey: this.sessionKey,
+      });
+      return;
+    }
+    this.toolsEffectiveResult = null;
+    this.toolsEffectiveResultKey = null;
+    this.toolsEffectiveError = null;
+    this.toolsEffectiveLoading = false;
+    this.toolsEffectiveLoadingKey = null;
   }
 
   connect() {
@@ -658,13 +709,14 @@ export class OpenClawApp extends LitElement {
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
-      await this.client.request("exec.approval.resolve", {
+      const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
+      await this.client.request(method, {
         id: active.id,
         decision,
       });
       this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
     } catch (err) {
-      this.execApprovalError = `Exec approval failed: ${String(err)}`;
+      this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;
     }

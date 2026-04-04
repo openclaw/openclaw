@@ -14,4 +14,6 @@ export * from "./src/monitor/timeouts.js";
 export * from "./src/probe.js";
 export * from "./src/resolve-channels.js";
 export * from "./src/resolve-users.js";
+export * from "./src/outbound-session-route.js";
 export * from "./src/send.js";
+export * from "./src/send.components.js";

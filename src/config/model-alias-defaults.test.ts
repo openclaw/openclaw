@@ -14,13 +14,42 @@ describe("applyModelDefaults", () => {
             api: "openai-completions",
             models: [
               {
-                id: "gpt-5.2",
+                id: "gpt-5.4",
                 name: "GPT-5.2",
                 reasoning: false,
                 input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: overrides?.contextWindow ?? 200_000,
                 maxTokens: overrides?.maxTokens ?? 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+  }
+
+  function buildMistralProviderConfig(overrides?: {
+    modelId?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+  }) {
+    return {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            apiKey: "sk-mistral", // pragma: allowlist secret
+            api: "openai-completions",
+            models: [
+              {
+                id: overrides?.modelId ?? "mistral-large-latest",
+                name: "Mistral",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: overrides?.contextWindow ?? 262_144,
+                maxTokens: overrides?.maxTokens ?? 262_144,
               },
             ],
           },
@@ -51,7 +80,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": { alias: "Opus" },
+            "anthropic/claude-opus-4-6": { alias: "Opus" },
           },
         },
       },
@@ -59,7 +88,7 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {
@@ -107,6 +136,16 @@ describe("applyModelDefaults", () => {
 
     expect(model?.contextWindow).toBe(32768);
     expect(model?.maxTokens).toBe(32768);
+  });
+
+  it("normalizes stale mistral maxTokens that matched the full context window", () => {
+    const cfg = buildMistralProviderConfig();
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.mistral?.models?.[0];
+
+    expect(model?.contextWindow).toBe(262144);
+    expect(model?.maxTokens).toBe(16384);
   });
 
   it("defaults anthropic provider and model api to anthropic-messages", () => {

@@ -21,7 +21,7 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessages } from "../gateway/session-utils.fs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { replaceSubagentRunAfterSteer } from "./subagent-registry.js";
+import { replaceSubagentRunAfterSteer } from "./subagent-registry-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("subagent-orphan-recovery");
@@ -108,9 +108,9 @@ async function resumeOrphanedSession(params: {
     });
     if (!remapped) {
       log.warn(
-        `resumed orphaned session ${params.sessionKey} but remap failed (old run already removed); treating as failure`,
+        `resumed orphaned session ${params.sessionKey} but remap failed (old run already removed); treating resume as accepted to avoid duplicate restarts`,
       );
-      return false;
+      return true;
     }
     log.info(`resumed orphaned session: ${params.sessionKey}`);
     return true;

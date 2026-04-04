@@ -1,122 +1,114 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderResolveDynamicModelContext,
-  type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
-import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-models";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
-import { fetchCopilotUsage } from "./usage.js";
+import { definePluginEntry, type ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 
-const PROVIDER_ID = "github-copilot";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
-const CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
-function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
-  githubToken: string;
-  hasProfile: boolean;
-} {
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const hasProfile = listProfilesForProvider(authStore, PROVIDER_ID).length > 0;
-  const envToken =
-    params.env.COPILOT_GITHUB_TOKEN ?? params.env.GH_TOKEN ?? params.env.GITHUB_TOKEN ?? "";
-  const githubToken = envToken.trim();
-  if (githubToken || !hasProfile) {
-    return { githubToken, hasProfile };
-  }
-
-  const profileId = listProfilesForProvider(authStore, PROVIDER_ID)[0];
-  const profile = profileId ? authStore.profiles[profileId] : undefined;
-  if (profile?.type !== "token") {
-    return { githubToken: "", hasProfile };
-  }
-  const directToken = profile.token?.trim() ?? "";
-  if (directToken) {
-    return { githubToken: directToken, hasProfile };
-  }
-  const tokenRef = coerceSecretRef(profile.tokenRef);
-  if (tokenRef?.source === "env" && tokenRef.id.trim()) {
-    return {
-      githubToken: (params.env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim(),
-      hasProfile,
-    };
-  }
-  return { githubToken: "", hasProfile };
-}
-
-function resolveCopilotForwardCompatModel(
-  ctx: ProviderResolveDynamicModelContext,
-): ProviderRuntimeModel | undefined {
-  const trimmedModelId = ctx.modelId.trim();
-  if (trimmedModelId.toLowerCase() !== CODEX_GPT_53_MODEL_ID) {
-    return undefined;
-  }
-  for (const templateId of CODEX_TEMPLATE_MODEL_IDS) {
-    const template = ctx.modelRegistry.find(PROVIDER_ID, templateId) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
-}
-
-async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-  await ctx.prompter.note(
-    [
-      "This will open a GitHub device login to authorize Copilot.",
-      "Requires an active GitHub Copilot subscription.",
-    ].join("\n"),
-    "GitHub Copilot",
-  );
-
-  if (!process.stdin.isTTY) {
-    await ctx.prompter.note("GitHub Copilot login requires an interactive TTY.", "GitHub Copilot");
-    return { profiles: [] };
-  }
-
-  try {
-    await githubCopilotLoginCommand({ yes: true, profileId: "github-copilot:github" }, ctx.runtime);
-  } catch (err) {
-    await ctx.prompter.note(`GitHub Copilot login failed: ${String(err)}`, "GitHub Copilot");
-    return { profiles: [] };
-  }
-
-  const authStore = ensureAuthProfileStore(undefined, {
-    allowKeychainPrompt: false,
-  });
-  const credential = authStore.profiles["github-copilot:github"];
-  if (!credential || credential.type !== "token") {
-    return { profiles: [] };
-  }
-
-  return {
-    profiles: [
-      {
-        profileId: "github-copilot:github",
-        credential,
-      },
-    ],
-    defaultModel: "github-copilot/gpt-4o",
-  };
+function buildGithubCopilotReplayPolicy(modelId?: string) {
+  return (modelId?.toLowerCase() ?? "").includes("claude")
+    ? {
+        dropThinkingBlocks: true,
+      }
+    : {};
 }
 
 export default definePluginEntry({
   id: "github-copilot",
   name: "GitHub Copilot Provider",
   description: "Bundled GitHub Copilot provider plugin",
-  register(api) {
+  async register(api) {
+    const {
+      coerceSecretRef,
+      DEFAULT_COPILOT_API_BASE_URL,
+      ensureAuthProfileStore,
+      fetchCopilotUsage,
+      githubCopilotLoginCommand,
+      listProfilesForProvider,
+      PROVIDER_ID,
+      resolveCopilotApiToken,
+      resolveCopilotForwardCompatModel,
+      wrapCopilotProviderStream,
+    } = await import("./register.runtime.js");
+
+    function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
+      githubToken: string;
+      hasProfile: boolean;
+    } {
+      const authStore = ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: false,
+      });
+      const hasProfile = listProfilesForProvider(authStore, PROVIDER_ID).length > 0;
+      const envToken =
+        params.env.COPILOT_GITHUB_TOKEN ?? params.env.GH_TOKEN ?? params.env.GITHUB_TOKEN ?? "";
+      const githubToken = envToken.trim();
+      if (githubToken || !hasProfile) {
+        return { githubToken, hasProfile };
+      }
+
+      const profileId = listProfilesForProvider(authStore, PROVIDER_ID)[0];
+      const profile = profileId ? authStore.profiles[profileId] : undefined;
+      if (profile?.type !== "token") {
+        return { githubToken: "", hasProfile };
+      }
+      const directToken = profile.token?.trim() ?? "";
+      if (directToken) {
+        return { githubToken: directToken, hasProfile };
+      }
+      const tokenRef = coerceSecretRef(profile.tokenRef);
+      if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+        return {
+          githubToken: (params.env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim(),
+          hasProfile,
+        };
+      }
+      return { githubToken: "", hasProfile };
+    }
+
+    async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
+      await ctx.prompter.note(
+        [
+          "This will open a GitHub device login to authorize Copilot.",
+          "Requires an active GitHub Copilot subscription.",
+        ].join("\n"),
+        "GitHub Copilot",
+      );
+
+      if (!process.stdin.isTTY) {
+        await ctx.prompter.note(
+          "GitHub Copilot login requires an interactive TTY.",
+          "GitHub Copilot",
+        );
+        return { profiles: [] };
+      }
+
+      try {
+        await githubCopilotLoginCommand(
+          { yes: true, profileId: "github-copilot:github" },
+          ctx.runtime,
+        );
+      } catch (err) {
+        await ctx.prompter.note(`GitHub Copilot login failed: ${String(err)}`, "GitHub Copilot");
+        return { profiles: [] };
+      }
+
+      const authStore = ensureAuthProfileStore(undefined, {
+        allowKeychainPrompt: false,
+      });
+      const credential = authStore.profiles["github-copilot:github"];
+      if (!credential || credential.type !== "token") {
+        return { profiles: [] };
+      }
+
+      return {
+        profiles: [
+          {
+            profileId: "github-copilot:github",
+            credential,
+          },
+        ],
+        defaultModel: "github-copilot/gpt-4o",
+      };
+    }
+
     api.registerProvider({
       id: PROVIDER_ID,
       label: "GitHub Copilot",
@@ -170,9 +162,8 @@ export default definePluginEntry({
         },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
-      capabilities: {
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      wrapStreamFn: wrapCopilotProviderStream,
+      buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       supportsXHighThinking: ({ modelId }) =>
         COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
       prepareRuntimeAuth: async (ctx) => {

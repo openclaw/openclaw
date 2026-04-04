@@ -19,7 +19,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 1. Start the gateway.
 2. Open the WebChat UI (macOS/iOS app) or the Control UI chat tab.
-3. Ensure gateway auth is configured (required by default, even on loopback).
+3. Ensure a valid gateway auth path is configured (shared-secret by default,
+   even on loopback).
 
 ## How it works (behavior)
 
@@ -33,10 +34,14 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 ## Control UI agents tools panel
 
-- The Control UI `/agents` Tools panel fetches a runtime catalog via `tools.catalog` and labels each
-  tool as `core` or `plugin:<id>` (plus `optional` for optional plugin tools).
-- If `tools.catalog` is unavailable, the panel falls back to a built-in static list.
-- The panel edits profile and override config, but effective runtime access still follows policy
+- The Control UI `/agents` Tools panel has two separate views:
+  - **Available Right Now** uses `tools.effective(sessionKey=...)` and shows what the current
+    session can actually use at runtime, including core, plugin, and channel-owned tools.
+  - **Tool Configuration** uses `tools.catalog` and stays focused on profiles, overrides, and
+    catalog semantics.
+- Runtime availability is session-scoped. Switching sessions on the same agent can change the
+  **Available Right Now** list.
+- The config editor does not imply runtime availability; effective access still follows policy
   precedence (`allow`/`deny`, per-agent and provider/channel overrides).
 
 ## Remote use
@@ -48,14 +53,17 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 Full configuration: [Configuration](/gateway/configuration)
 
-Channel options:
+WebChat options:
 
-- No dedicated `webchat.*` block. WebChat uses the gateway endpoint + auth settings below.
+- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. Per-request `maxChars` can also be sent by the client to override this default for a single `chat.history` call.
 
 Related global options:
 
 - `gateway.port`, `gateway.bind`: WebSocket host/port.
-- `gateway.auth.mode`, `gateway.auth.token`, `gateway.auth.password`: WebSocket auth (token/password).
-- `gateway.auth.mode: "trusted-proxy"`: reverse-proxy auth for browser clients (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
+- `gateway.auth.mode`, `gateway.auth.token`, `gateway.auth.password`:
+  shared-secret WebSocket auth.
+- `gateway.auth.allowTailscale`: browser Control UI chat tab can use Tailscale
+  Serve identity headers when enabled.
+- `gateway.auth.mode: "trusted-proxy"`: reverse-proxy auth for browser clients behind an identity-aware **non-loopback** proxy source (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `gateway.remote.url`, `gateway.remote.token`, `gateway.remote.password`: remote gateway target.
 - `session.*`: session storage and main key defaults.

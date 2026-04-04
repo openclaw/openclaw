@@ -1,4 +1,4 @@
-import { resolveBrowserConfig } from "../browser/config.js";
+import { resolveBrowserConfig } from "../../extensions/browser/runtime-api.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
@@ -17,9 +17,9 @@ import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import {
   coerceNodeInvokePayload,
-  handleInvoke,
   type SkillBinsProvider,
   buildNodeInvokeResultParams,
+  handleInvoke,
 } from "./invoke.js";
 
 export { buildNodeInvokeResultParams };
@@ -34,6 +34,10 @@ type NodeHostRunOptions = {
 };
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -119,7 +123,6 @@ export async function resolveNodeHostGatewayCredentials(params: {
   return await resolveGatewayConnectionAuth({
     config: configForResolution,
     env: params.env,
-    includeLegacyEnv: false,
     localTokenPrecedence: "env-first",
     localPasswordPrecedence: "env-first", // pragma: allowlist secret
     remoteTokenPrecedence: "env-first",
@@ -209,12 +212,10 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway connect failed: ${err.message}`);
+      writeStderrLine(`node host gateway connect failed: ${err.message}`);
     },
     onClose: (code, reason) => {
-      // eslint-disable-next-line no-console
-      console.error(`node host gateway closed (${code}): ${reason}`);
+      writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
 

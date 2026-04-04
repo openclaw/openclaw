@@ -1,8 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
+import { withFileLock } from "openclaw/plugin-sdk/infra-runtime";
+import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
+// Advisory lock options for IDB snapshot file access. Without locking, the
+// gateway's periodic 60-second persist cycle and CLI crypto commands (e.g.
+// `openclaw matrix verify bootstrap`) can corrupt each other's state.
+// Use a longer stale window than the generic 30s default because snapshot
+// restore and large crypto-store dumps can legitimately hold the lock for
+// longer, and reclaiming a live lock would reintroduce concurrent corruption.
 type IdbStoreSnapshot = {
   name: string;
   keyPath: IDBObjectStoreParameters["keyPath"];
@@ -190,9 +198,7 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
 
 function resolveDefaultIdbSnapshotPath(): string {
   const stateDir =
-    process.env.OPENCLAW_STATE_DIR ||
-    process.env.MOLTBOT_STATE_DIR ||
-    path.join(process.env.HOME || "/tmp", ".openclaw");
+    process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || "/tmp", ".openclaw");
   return path.join(stateDir, "matrix", "crypto-idb-snapshot.json");
 }
 
@@ -200,17 +206,26 @@ export async function restoreIdbFromDisk(snapshotPath?: string): Promise<boolean
   const candidatePaths = snapshotPath ? [snapshotPath] : [resolveDefaultIdbSnapshotPath()];
   for (const resolvedPath of candidatePaths) {
     try {
-      const data = fs.readFileSync(resolvedPath, "utf8");
-      const snapshot = parseSnapshotPayload(data);
-      if (!snapshot) {
-        continue;
-      }
-      await restoreIndexedDatabases(snapshot);
-      LogService.info(
-        "IdbPersistence",
-        `Restored ${snapshot.length} IndexedDB database(s) from ${resolvedPath}`,
+      const restored = await withFileLock(
+        resolvedPath,
+        MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS,
+        async () => {
+          const data = fs.readFileSync(resolvedPath, "utf8");
+          const snapshot = parseSnapshotPayload(data);
+          if (!snapshot) {
+            return false;
+          }
+          await restoreIndexedDatabases(snapshot);
+          LogService.info(
+            "IdbPersistence",
+            `Restored ${snapshot.length} IndexedDB database(s) from ${resolvedPath}`,
+          );
+          return true;
+        },
       );
-      return true;
+      if (restored) {
+        return true;
+      }
     } catch (err) {
       LogService.warn(
         "IdbPersistence",
@@ -229,14 +244,24 @@ export async function persistIdbToDisk(params?: {
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
   try {
-    const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
-    if (snapshot.length === 0) return;
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
-    fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
-    fs.chmodSync(snapshotPath, 0o600);
+    const persistedCount = await withFileLock(
+      snapshotPath,
+      MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS,
+      async () => {
+        const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
+        if (snapshot.length === 0) {
+          return 0;
+        }
+        fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
+        fs.chmodSync(snapshotPath, 0o600);
+        return snapshot.length;
+      },
+    );
+    if (persistedCount === 0) return;
     LogService.debug(
       "IdbPersistence",
-      `Persisted ${snapshot.length} IndexedDB database(s) to ${snapshotPath}`,
+      `Persisted ${persistedCount} IndexedDB database(s) to ${snapshotPath}`,
     );
   } catch (err) {
     LogService.warn("IdbPersistence", "Failed to persist IndexedDB snapshot:", err);

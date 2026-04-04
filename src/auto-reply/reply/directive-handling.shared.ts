@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
@@ -12,6 +13,33 @@ export const withOptions = (line: string, options: string) =>
 
 export const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
+
+export const formatInternalExecPersistenceDeniedText = () =>
+  "Exec defaults require operator.admin for internal gateway callers; skipped persistence.";
+
+export const formatInternalVerbosePersistenceDeniedText = () =>
+  "Verbose defaults require operator.admin for internal gateway callers; skipped persistence.";
+
+export const formatInternalVerboseCurrentReplyOnlyText = () =>
+  "Verbose logging set for the current reply only.";
+
+function canPersistInternalDirective(params: {
+  messageProvider?: string;
+  surface?: string;
+  gatewayClientScopes?: string[];
+}): boolean {
+  const authoritativeChannel = isInternalMessageChannel(params.messageProvider)
+    ? params.messageProvider
+    : params.surface;
+  if (!isInternalMessageChannel(authoritativeChannel)) {
+    return true;
+  }
+  const scopes = params.gatewayClientScopes ?? [];
+  return scopes.includes("operator.admin");
+}
+
+export const canPersistInternalExecDirective = canPersistInternalDirective;
+export const canPersistInternalVerboseDirective = canPersistInternalDirective;
 
 export const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {

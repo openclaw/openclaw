@@ -1,44 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as translate from "../lib/translate.ts";
 import { pt_BR } from "../locales/pt-BR.ts";
 import { zh_CN } from "../locales/zh-CN.ts";
 import { zh_TW } from "../locales/zh-TW.ts";
 
-type TranslateModule = typeof import("../lib/translate.ts");
-
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.get(key) ?? null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
-}
-
 describe("i18n", () => {
-  let translate: TranslateModule;
-
   beforeEach(async () => {
-    vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    translate = await import("../lib/translate.ts");
     localStorage.clear();
-    // Reset to English
     await translate.i18n.setLocale("en");
   });
 
@@ -96,7 +67,7 @@ describe("i18n", () => {
     vi.resetModules();
     vi.unstubAllGlobals();
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    const warningSpy = vi.spyOn(process, "emitWarning");
+    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
 
     const fresh = await import("../lib/translate.ts");
 

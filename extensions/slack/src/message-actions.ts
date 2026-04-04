@@ -1,15 +1,16 @@
 import { createActionGate } from "openclaw/plugin-sdk/agent-runtime";
-import type {
-  ChannelMessageActionName,
-  ChannelToolSend,
-} from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { listEnabledSlackAccounts } from "./accounts.js";
+import type { ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
+import { listEnabledSlackAccounts, resolveSlackAccount } from "./accounts.js";
 
-export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
-  const accounts = listEnabledSlackAccounts(cfg).filter(
-    (account) => account.botTokenSource !== "none",
-  );
+export function listSlackMessageActions(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): ChannelMessageActionName[] {
+  const accounts = (
+    accountId ? [resolveSlackAccount({ cfg, accountId })] : listEnabledSlackAccounts(cfg)
+  ).filter((account) => account.enabled && account.botTokenSource !== "none");
   if (accounts.length === 0) {
     return [];
   }
@@ -36,6 +37,7 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
     actions.add("edit");
     actions.add("delete");
     actions.add("download-file");
+    actions.add("upload-file");
   }
   if (isActionEnabled("pins")) {
     actions.add("pin");

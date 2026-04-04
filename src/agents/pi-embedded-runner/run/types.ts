@@ -6,6 +6,7 @@ import type { SessionSystemPromptReport } from "../../../config/sessions/types.j
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
+import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { RunEmbeddedPiAgentParams } from "./params.js";
 
@@ -19,6 +20,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Resolved API key for this run when runtime auth did not replace it. */
+  resolvedApiKey?: string;
   /** Auth profile resolved for this attempt's provider/model call. */
   authProfileId?: string;
   /** Source for the resolved auth profile (user-locked or automatic). */
@@ -46,13 +49,7 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: {
-    toolName: string;
-    meta?: string;
-    error?: string;
-    mutatingAction?: boolean;
-    actionFingerprint?: string;
-  };
+  lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
@@ -66,4 +63,8 @@ export type EmbeddedRunAttemptResult = {
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  replayMetadata: {
+    hadPotentialSideEffects: boolean;
+    replaySafe: boolean;
+  };
 };

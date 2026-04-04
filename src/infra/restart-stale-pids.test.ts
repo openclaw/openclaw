@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // This entire file tests lsof-based Unix port polling. The feature is a deliberate
 // no-op on Windows (findGatewayPidsOnPortSync returns [] immediately). Running these
@@ -10,10 +10,16 @@ const mockSpawnSync = vi.hoisted(() => vi.fn());
 const mockResolveGatewayPort = vi.hoisted(() => vi.fn(() => 18789));
 const mockRestartWarn = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", () => ({
-  spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
-  execFileSync: vi.fn(),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawnSync: (...args: unknown[]) => mockSpawnSync(...args),
+      execFileSync: vi.fn(),
+    },
+  );
+});
 
 vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: () => mockResolveGatewayPort(),
@@ -86,13 +92,12 @@ function installInitialBusyPoll(
 }
 
 describe.skipIf(isWindows)("restart-stale-pids", () => {
-  beforeEach(() => {
-    vi.resetModules();
-  });
-
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
       await import("./restart-stale-pids.js"));
+  });
+
+  beforeEach(() => {
     mockSpawnSync.mockReset();
     mockResolveGatewayPort.mockReset();
     mockRestartWarn.mockReset();

@@ -1,10 +1,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 
 type RestartHealthSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
   runtime: { status?: string };
   portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
+  waitOutcome?: string;
+  elapsedMs?: number;
 };
 
 type RestartPostCheckContext = {
@@ -31,7 +34,7 @@ const waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
 const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
-const resolveGatewayPort = vi.fn(() => 18789);
+const resolveGatewayPort = vi.hoisted(() => vi.fn((_cfg?: unknown, _env?: unknown) => 18789));
 const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
 const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
@@ -46,12 +49,12 @@ const probeGateway = vi.fn<
   }>
 >();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
-const loadConfig = vi.fn(() => ({}));
+const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
-  resolveGatewayPort,
+  resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
 }));
 
 vi.mock("../../infra/gateway-processes.js", () => ({
@@ -98,6 +101,7 @@ vi.mock("./lifecycle-core.js", () => ({
 describe("runDaemonRestart health checks", () => {
   let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   function mockUnmanagedRestart({
     runPostRestartCheck = false,
@@ -127,6 +131,8 @@ describe("runDaemonRestart health checks", () => {
   });
 
   beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_CONTAINER_HINT", "OPENCLAW_PROFILE"]);
+    delete process.env.OPENCLAW_CONTAINER_HINT;
     service.readCommand.mockReset();
     service.restart.mockReset();
     runServiceRestart.mockReset();
@@ -179,6 +185,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   afterEach(() => {
+    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 
@@ -225,18 +232,48 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
   });
 
-  it("fails restart when gateway remains unhealthy", async () => {
+  it("fails restart when gateway remains unhealthy after the full timeout", async () => {
+    const { formatCliCommand } = await import("../command-format.js");
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
       staleGatewayPids: [],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      waitOutcome: "timeout",
+      elapsedMs: 60_000,
     };
     waitForGatewayHealthyRestart.mockResolvedValue(unhealthy);
 
     await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
       message: "Gateway restart timed out after 60s waiting for health checks.",
-      hints: ["openclaw gateway status --deep", "openclaw doctor"],
+      hints: [
+        formatCliCommand("openclaw gateway status --deep"),
+        formatCliCommand("openclaw doctor"),
+      ],
+    });
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails restart with a stopped-free message when the waiter exits early", async () => {
+    const { formatCliCommand } = await import("../command-format.js");
+    const unhealthy: RestartHealthSnapshot = {
+      healthy: false,
+      staleGatewayPids: [],
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      waitOutcome: "stopped-free",
+      elapsedMs: 12_500,
+    };
+    waitForGatewayHealthyRestart.mockResolvedValue(unhealthy);
+
+    await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
+      message:
+        "Gateway restart failed after 13s: service stayed stopped and health checks never came up.",
+      hints: [
+        formatCliCommand("openclaw gateway status --deep"),
+        formatCliCommand("openclaw doctor"),
+      ],
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);

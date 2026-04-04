@@ -1,13 +1,17 @@
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
-const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
-  await import("./session.js");
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
+
+let createWaSocket: typeof import("./session.js").createWaSocket;
+let formatError: typeof import("./session.js").formatError;
+let logWebSelfId: typeof import("./session.js").logWebSelfId;
+let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
+let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 
 async function flushCredsUpdate() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -55,13 +59,19 @@ function mockCredsJsonSpies(readContents: string) {
 }
 
 describe("web session", () => {
+  beforeAll(async () => {
+    ({ createWaSocket, formatError, logWebSelfId, waitForWaConnection, waitForCredsSaveQueue } =
+      await import("./session.js"));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     resetBaileysMocks();
     resetLoadConfigMock();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForCredsSaveQueue();
     resetLogger();
     setLoggerOverride(null);
     vi.useRealTimers();
@@ -129,6 +139,36 @@ describe("web session", () => {
 
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net)"),
+    );
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
+  it("logWebSelfId prints cached lid details when creds include a lid", () => {
+    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
+      if (typeof p !== "string") {
+        return false;
+      }
+      return p.endsWith("creds.json");
+    });
+    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
+      if (typeof p === "string" && p.endsWith("creds.json")) {
+        return JSON.stringify({
+          me: { id: "12345@s.whatsapp.net", lid: "777@lid" },
+        });
+      }
+      throw new Error(`unexpected readFileSync path: ${String(p)}`);
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    logWebSelfId("/tmp/wa-creds", runtime as never, true);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net, lid 777@lid)"),
     );
     existsSpy.mockRestore();
     readSpy.mockRestore();

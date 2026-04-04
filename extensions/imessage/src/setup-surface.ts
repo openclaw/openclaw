@@ -28,7 +28,8 @@ export const imessageSetupWizard: ChannelSetupWizard = {
     configuredScore: imessageSetupStatusBase.configuredScore,
     unconfiguredScore: imessageSetupStatusBase.unconfiguredScore,
     resolveConfigured: imessageSetupStatusBase.resolveConfigured,
-    resolveBinaryPath: ({ cfg }) => cfg.channels?.imessage?.cliPath ?? "imsg",
+    resolveBinaryPath: ({ cfg, accountId }) =>
+      resolveIMessageAccount({ cfg, accountId }).config.cliPath ?? "imsg",
     detectBinary,
   }),
   credentials: [],

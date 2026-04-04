@@ -1,11 +1,11 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { buildMicrosoftSpeechProvider } from "openclaw/plugin-sdk/speech";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 export default definePluginEntry({
   id: "microsoft",
   name: "Microsoft Speech",
   description: "Bundled Microsoft speech provider",
-  register(api) {
+  async register(api) {
+    const { buildMicrosoftSpeechProvider } = await import("./speech-provider.js");
     api.registerSpeechProvider(buildMicrosoftSpeechProvider());
   },
 });

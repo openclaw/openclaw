@@ -5,7 +5,7 @@ summary: 通过 grammY 集成 Telegram Bot API，附设置说明
 title: grammY
 x-i18n:
   generated_at: "2026-02-03T10:03:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ea7ef23e6d77801f4ef5fc56685ef4470f79f5aecab448d644a72cbab53521b7
   source_path: channels/grammy.md

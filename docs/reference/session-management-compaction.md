@@ -23,6 +23,8 @@ If you want a higher-level overview first, start with:
 
 - [/concepts/session](/concepts/session)
 - [/concepts/compaction](/concepts/compaction)
+- [/concepts/memory](/concepts/memory)
+- [/concepts/memory-search](/concepts/memory-search)
 - [/concepts/session-pruning](/concepts/session-pruning)
 - [/reference/transcript-hygiene](/reference/transcript-hygiene)
 
@@ -214,7 +216,10 @@ Compaction is **persistent** (unlike session pruning). See [/concepts/session-pr
 
 In the embedded Pi agent, auto-compaction triggers in two cases:
 
-1. **Overflow recovery**: the model returns a context overflow error → compact → retry.
+1. **Overflow recovery**: the model returns a context overflow error
+   (`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, `input is too long for the model`, and similar
+   provider-shaped variants) → compact → retry.
 2. **Threshold maintenance**: after a successful turn, when:
 
 `contextTokens > contextWindow - reserveTokens`

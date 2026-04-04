@@ -1,6 +1,11 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  providerSupportsNativePdfDocument,
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
+} from "../../media-understanding/defaults.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
@@ -43,8 +48,6 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
-const ANTHROPIC_PDF_PRIMARY = "anthropic/claude-opus-4-6";
-const ANTHROPIC_PDF_FALLBACK = "anthropic/claude-opus-4-5";
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
@@ -75,9 +78,7 @@ export function resolvePdfModelConfigForTool(params: {
 
   // Auto-detect from available providers
   const primary = resolveDefaultModelRef(params.cfg);
-  const anthropicOk = hasAuthForProvider({ provider: "anthropic", agentDir: params.agentDir });
   const googleOk = hasAuthForProvider({ provider: "google", agentDir: params.agentDir });
-  const openaiOk = hasAuthForProvider({ provider: "openai", agentDir: params.agentDir });
 
   const fallbacks: string[] = [];
   const addFallback = (ref: string) => {
@@ -95,30 +96,54 @@ export function resolvePdfModelConfigForTool(params: {
     cfg: params.cfg,
     provider: primary.provider,
   });
+  const providerDefault = resolveDefaultMediaModel({
+    cfg: params.cfg,
+    providerId: primary.provider,
+    capability: "image",
+  });
+  const nativePdfCandidates = resolveAutoMediaKeyProviders({
+    cfg: params.cfg,
+    capability: "image",
+  })
+    .filter((providerId) => providerSupportsNativePdfDocument({ cfg: params.cfg, providerId }))
+    .filter((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }))
+    .map((providerId) => {
+      const modelId = resolveDefaultMediaModel({
+        cfg: params.cfg,
+        providerId,
+        capability: "image",
+      });
+      return modelId ? `${providerId}/${modelId}` : null;
+    })
+    .filter((value): value is string => Boolean(value));
+  const genericImageCandidates = resolveAutoMediaKeyProviders({
+    cfg: params.cfg,
+    capability: "image",
+  })
+    .filter((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }))
+    .map((providerId) => {
+      const modelId = resolveDefaultMediaModel({
+        cfg: params.cfg,
+        providerId,
+        capability: "image",
+      });
+      return modelId ? `${providerId}/${modelId}` : null;
+    })
+    .filter((value): value is string => Boolean(value));
 
-  if (primary.provider === "anthropic" && anthropicOk) {
-    preferred = ANTHROPIC_PDF_PRIMARY;
-  } else if (primary.provider === "google" && googleOk && providerVision) {
+  if (primary.provider === "google" && googleOk && providerVision) {
     preferred = providerVision;
-  } else if (providerOk && providerVision) {
-    preferred = providerVision;
-  } else if (anthropicOk) {
-    preferred = ANTHROPIC_PDF_PRIMARY;
-  } else if (googleOk) {
-    preferred = "google/gemini-2.5-pro";
-  } else if (openaiOk) {
-    preferred = "openai/gpt-5-mini";
+  } else if (providerOk && (providerVision || providerDefault)) {
+    preferred = providerVision ?? `${primary.provider}/${providerDefault}`;
+  } else {
+    preferred = nativePdfCandidates[0] ?? genericImageCandidates[0] ?? null;
   }
 
   if (preferred?.trim()) {
-    if (anthropicOk && preferred !== ANTHROPIC_PDF_PRIMARY) {
-      addFallback(ANTHROPIC_PDF_PRIMARY);
-    }
-    if (anthropicOk) {
-      addFallback(ANTHROPIC_PDF_FALLBACK);
-    }
-    if (openaiOk) {
-      addFallback("openai/gpt-5-mini");
+    for (const candidate of [...nativePdfCandidates, ...genericImageCandidates]) {
+      if (candidate !== preferred) {
+        addFallback(candidate);
+      }
     }
     const pruned = fallbacks.filter((ref) => ref !== preferred);
     return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
@@ -327,10 +352,6 @@ export function createPdfTool(options?: {
       ? Math.floor(maxPagesDefault)
       : DEFAULT_MAX_PAGES;
 
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-  });
-
   const description =
     "Analyze one or more PDF documents with a model. Supports native PDF analysis for Anthropic and Google models, with text/image extraction fallback for other providers. Use pdf for a single path/URL, or pdfs for multiple (up to 10). Provide a prompt describing what to analyze.";
 
@@ -471,6 +492,13 @@ export function createPdfTool(options?: {
                 ? resolvedPdf.slice("file://".length)
                 : resolvedPdf,
             };
+        const localRoots = resolveMediaToolLocalRoots(
+          options?.workspaceDir,
+          {
+            workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
+          },
+          [resolvedPathInfo.resolved],
+        );
 
         const media = sandboxConfig
           ? await loadWebMediaRaw(resolvedPathInfo.resolved, {

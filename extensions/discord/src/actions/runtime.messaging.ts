@@ -1,4 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { createDiscordRuntimeAccountContext } from "../client.js";
 import { readDiscordComponentSpec } from "../components.js";
 import {
   assertMediaNotDataUrl,
@@ -14,6 +16,7 @@ import {
   withNormalizedTimestamp,
   readBooleanParam,
 } from "../runtime-api.js";
+import { sendDiscordComponentMessage } from "../send.components.js";
 import {
   createThreadDiscord,
   deleteMessageDiscord,
@@ -29,7 +32,6 @@ import {
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   searchMessagesDiscord,
-  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
@@ -64,6 +66,15 @@ export const discordMessagingActionRuntime = {
   unpinMessageDiscord,
 };
 
+function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, unknown> {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value as Record<string, unknown>).length > 0,
+  );
+}
+
 function parseDiscordMessageLink(link: string) {
   const normalized = link.trim();
   const match = normalized.match(
@@ -87,6 +98,7 @@ export async function handleDiscordMessagingAction(
   isActionEnabled: ActionGate<DiscordActionConfig>,
   options?: {
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
   cfg?: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
@@ -98,6 +110,18 @@ export async function handleDiscordMessagingAction(
     );
   const accountId = readStringParam(params, "accountId");
   const cfgOptions = cfg ? { cfg } : {};
+  const reactionRuntimeOptions = cfg
+    ? createDiscordRuntimeAccountContext({
+        cfg,
+        accountId: accountId ?? resolveDefaultDiscordAccountId(cfg),
+      })
+    : accountId
+      ? { accountId }
+      : undefined;
+  const withReactionRuntimeOptions = <T extends Record<string, unknown>>(extra?: T) => ({
+    ...(reactionRuntimeOptions ?? cfgOptions),
+    ...(extra ?? {}),
+  });
   const normalizeMessage = (message: unknown) => {
     if (!message || typeof message !== "object") {
       return message;
@@ -120,47 +144,28 @@ export async function handleDiscordMessagingAction(
         removeErrorMessage: "Emoji is required to remove a Discord reaction.",
       });
       if (remove) {
-        if (accountId) {
-          await discordMessagingActionRuntime.removeReactionDiscord(channelId, messageId, emoji, {
-            ...cfgOptions,
-            accountId,
-          });
-        } else {
-          await discordMessagingActionRuntime.removeReactionDiscord(
-            channelId,
-            messageId,
-            emoji,
-            cfgOptions,
-          );
-        }
-        return jsonResult({ ok: true, removed: emoji });
-      }
-      if (isEmpty) {
-        const removed = accountId
-          ? await discordMessagingActionRuntime.removeOwnReactionsDiscord(channelId, messageId, {
-              ...cfgOptions,
-              accountId,
-            })
-          : await discordMessagingActionRuntime.removeOwnReactionsDiscord(
-              channelId,
-              messageId,
-              cfgOptions,
-            );
-        return jsonResult({ ok: true, removed: removed.removed });
-      }
-      if (accountId) {
-        await discordMessagingActionRuntime.reactMessageDiscord(channelId, messageId, emoji, {
-          ...cfgOptions,
-          accountId,
-        });
-      } else {
-        await discordMessagingActionRuntime.reactMessageDiscord(
+        await discordMessagingActionRuntime.removeReactionDiscord(
           channelId,
           messageId,
           emoji,
-          cfgOptions,
+          withReactionRuntimeOptions(),
         );
+        return jsonResult({ ok: true, removed: emoji });
       }
+      if (isEmpty) {
+        const removed = await discordMessagingActionRuntime.removeOwnReactionsDiscord(
+          channelId,
+          messageId,
+          withReactionRuntimeOptions(),
+        );
+        return jsonResult({ ok: true, removed: removed.removed });
+      }
+      await discordMessagingActionRuntime.reactMessageDiscord(
+        channelId,
+        messageId,
+        emoji,
+        withReactionRuntimeOptions(),
+      );
       return jsonResult({ ok: true, added: emoji });
     }
     case "reactions": {
@@ -175,11 +180,7 @@ export async function handleDiscordMessagingAction(
       const reactions = await discordMessagingActionRuntime.fetchReactionsDiscord(
         channelId,
         messageId,
-        {
-          ...cfgOptions,
-          ...(accountId ? { accountId } : {}),
-          limit,
-        },
+        withReactionRuntimeOptions({ limit }),
       );
       return jsonResult({ ok: true, reactions });
     }
@@ -299,10 +300,9 @@ export async function handleDiscordMessagingAction(
       const asVoice = params.asVoice === true;
       const silent = params.silent === true;
       const rawComponents = params.components;
-      const componentSpec =
-        rawComponents && typeof rawComponents === "object" && !Array.isArray(rawComponents)
-          ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
-          : null;
+      const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
+        ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
+        : null;
       const components: DiscordSendComponents | undefined =
         Array.isArray(rawComponents) || typeof rawComponents === "function"
           ? (rawComponents as DiscordSendComponents)
@@ -378,7 +378,9 @@ export async function handleDiscordMessagingAction(
         ...cfgOptions,
         ...(accountId ? { accountId } : {}),
         mediaUrl,
+        filename: filename ?? undefined,
         mediaLocalRoots: options?.mediaLocalRoots,
+        mediaReadFile: options?.mediaReadFile,
         replyTo,
         components,
         embeds,
@@ -507,6 +509,7 @@ export async function handleDiscordMessagingAction(
           ...(accountId ? { accountId } : {}),
           mediaUrl,
           mediaLocalRoots: options?.mediaLocalRoots,
+          mediaReadFile: options?.mediaReadFile,
           replyTo,
         },
       );

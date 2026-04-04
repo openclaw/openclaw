@@ -1,4 +1,5 @@
 import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { hasExplicitPluginConfig } from "./config-policy.js";
 import type { PluginLoadOptions } from "./loader.js";
 
 export function withBundledPluginAllowlistCompat(params: {
@@ -59,6 +60,43 @@ export function withBundledPluginEnablementCompat(params: {
       entries: {
         ...existingEntries,
         ...nextEntries,
+      },
+    },
+  };
+}
+
+export function withBundledPluginVitestCompat(params: {
+  config: PluginLoadOptions["config"];
+  pluginIds: readonly string[];
+  env?: PluginLoadOptions["env"];
+}): PluginLoadOptions["config"] {
+  const env = params.env ?? process.env;
+  const isVitest = Boolean(env.VITEST);
+  if (
+    !isVitest ||
+    hasExplicitPluginConfig(params.config?.plugins) ||
+    params.pluginIds.length === 0
+  ) {
+    return params.config;
+  }
+
+  const entries = Object.fromEntries(
+    params.pluginIds.map((pluginId) => [pluginId, { enabled: true } satisfies PluginEntryConfig]),
+  );
+
+  return {
+    ...params.config,
+    plugins: {
+      ...params.config?.plugins,
+      enabled: true,
+      allow: [...params.pluginIds],
+      entries: {
+        ...entries,
+        ...params.config?.plugins?.entries,
+      },
+      slots: {
+        ...params.config?.plugins?.slots,
+        memory: "none",
       },
     },
   };

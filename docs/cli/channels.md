@@ -1,7 +1,7 @@
 ---
 summary: "CLI reference for `openclaw channels` (accounts, status, login/logout, logs)"
 read_when:
-  - You want to add/remove channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
+  - You want to add/remove channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Matrix)
   - You want to check channel status or tail channel logs
 title: "channels"
 ---
@@ -26,6 +26,13 @@ openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
 ```
 
+## Status / capabilities / resolve / logs
+
+- `channels status`: `--probe`, `--timeout <ms>`, `--json`
+- `channels capabilities`: `--channel <name>`, `--account <id>` (only with `--channel`), `--target <dest>`, `--timeout <ms>`, `--json`
+- `channels resolve`: `<entries...>`, `--channel <name>`, `--account <id>`, `--kind <auto|user|group>`, `--json`
+- `channels logs`: `--channel <name|all>`, `--lines <n>`, `--json`
+
 ## Add / remove accounts
 
 ```bash
@@ -35,6 +42,16 @@ openclaw channels remove --channel telegram --delete
 ```
 
 Tip: `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
+
+Common non-interactive add surfaces include:
+
+- bot-token channels: `--token`, `--bot-token`, `--app-token`, `--token-file`
+- Signal/iMessage transport fields: `--signal-number`, `--cli-path`, `--http-url`, `--http-host`, `--http-port`, `--db-path`, `--service`, `--region`
+- Google Chat fields: `--webhook-path`, `--webhook-url`, `--audience-type`, `--audience`
+- Matrix fields: `--homeserver`, `--user-id`, `--access-token`, `--password`, `--device-name`, `--initial-sync-limit`
+- Nostr fields: `--private-key`, `--relay-urls`
+- Tlon fields: `--ship`, `--url`, `--code`, `--group-channels`, `--dm-allowlist`, `--auto-discover-channels`
+- `--use-env` for default-account env-backed auth where supported
 
 When you run `openclaw channels add` without flags, the interactive wizard can prompt:
 
@@ -63,6 +80,11 @@ openclaw channels login --channel whatsapp
 openclaw channels logout --channel whatsapp
 ```
 
+Notes:
+
+- `channels login` supports `--verbose`.
+- `channels login` / `logout` can infer the channel when only one supported login target is configured.
+
 ## Troubleshooting
 
 - Run `openclaw status --deep` for a broad probe.
@@ -82,6 +104,7 @@ openclaw channels capabilities --channel discord --target channel:123
 Notes:
 
 - `--channel` is optional; omit it to list every channel (including extensions).
+- `--account` is only valid with `--channel`.
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord.
 - Probes are provider-specific: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 

@@ -1,10 +1,11 @@
-import type { PluginRuntime } from "../../runtime-api.js";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 import { extractMatrixReactionAnnotation } from "../reaction-common.js";
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixInboundRoute } from "./route.js";
-import { resolveMatrixThreadRootId } from "./threads.js";
+import type { PluginRuntime } from "./runtime-api.js";
+import { resolveMatrixThreadRootId, resolveMatrixThreadRouting } from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 
 export type MatrixReactionNotificationMode = "off" | "own";
@@ -72,17 +73,30 @@ export async function handleInboundMatrixReaction(params: {
         content: targetContent,
       })
     : undefined;
-  const { route } = resolveMatrixInboundRoute({
+  const accountConfig = resolveMatrixAccountConfig({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const thread = resolveMatrixThreadRouting({
+    isDirectMessage: params.isDirectMessage,
+    threadReplies: accountConfig.threadReplies ?? "inbound",
+    dmThreadReplies: accountConfig.dm?.threadReplies,
+    messageId: reaction.eventId,
+    threadRootId,
+  });
+  const { route, runtimeBindingId } = resolveMatrixInboundRoute({
     cfg: params.cfg,
     accountId: params.accountId,
     roomId: params.roomId,
     senderId: params.senderId,
     isDirectMessage: params.isDirectMessage,
-    messageId: reaction.eventId,
-    threadRootId,
+    threadId: thread.threadId,
     eventTs: params.event.origin_server_ts,
     resolveAgentRoute: params.core.channel.routing.resolveAgentRoute,
   });
+  if (runtimeBindingId) {
+    getSessionBindingService().touch(runtimeBindingId, params.event.origin_server_ts);
+  }
   const text = `Matrix reaction added: ${reaction.key} by ${params.senderLabel} on msg ${reaction.eventId}`;
   params.core.system.enqueueSystemEvent(text, {
     sessionKey: route.sessionKey,

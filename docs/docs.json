@@ -1,7 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
-  "description": "Self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI coding agents. Run a single Gateway process on your own machine and message your AI assistant from anywhere.",
+  "description": "Self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI coding agents. Run one Gateway process on your own machine and message your AI assistant from anywhere.",
   "theme": "mint",
   "icons": {
     "library": "lucide"
@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/providers/modelstudio",
+      "destination": "/providers/qwen_modelstudio"
+    },
+    {
       "source": "/platforms/oracle",
       "destination": "/install/oracle"
     },
@@ -65,12 +69,48 @@
       "destination": "/install/raspberry-pi"
     },
     {
+      "source": "/plugins/building-extensions",
+      "destination": "/plugins/building-plugins"
+    },
+    {
+      "source": "/plugins/agent-tools",
+      "destination": "/plugins/building-plugins#registering-agent-tools"
+    },
+    {
+      "source": "/tools/capability-cookbook",
+      "destination": "/plugins/architecture"
+    },
+    {
       "source": "/brave-search",
       "destination": "/tools/brave-search"
     },
     {
       "source": "/perplexity",
       "destination": "/tools/perplexity-search"
+    },
+    {
+      "source": "/web-fetch",
+      "destination": "/tools/web-fetch"
+    },
+    {
+      "source": "/duckduckgo-search",
+      "destination": "/tools/duckduckgo-search"
+    },
+    {
+      "source": "/exa-search",
+      "destination": "/tools/exa-search"
+    },
+    {
+      "source": "/gemini-search",
+      "destination": "/tools/gemini-search"
+    },
+    {
+      "source": "/grok-search",
+      "destination": "/tools/grok-search"
+    },
+    {
+      "source": "/kimi-search",
+      "destination": "/tools/kimi-search"
     },
     {
       "source": "/tts",
@@ -294,7 +334,7 @@
     },
     {
       "source": "/auth-monitoring",
-      "destination": "/automation/auth-monitoring"
+      "destination": "/gateway/authentication"
     },
     {
       "source": "/camera",
@@ -342,7 +382,7 @@
     },
     {
       "source": "/cron-vs-heartbeat",
-      "destination": "/automation/cron-vs-heartbeat"
+      "destination": "/automation"
     },
     {
       "source": "/dashboard",
@@ -398,7 +438,7 @@
     },
     {
       "source": "/gmail-pubsub",
-      "destination": "/automation/gmail-pubsub"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/grammy",
@@ -578,7 +618,7 @@
     },
     {
       "source": "/poll",
-      "destination": "/automation/poll"
+      "destination": "/cli/message"
     },
     {
       "source": "/presence",
@@ -738,7 +778,7 @@
     },
     {
       "source": "/webhook",
-      "destination": "/automation/webhook"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/whatsapp",
@@ -839,6 +879,34 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/automation/clawflow",
+      "destination": "/automation/taskflow"
+    },
+    {
+      "source": "/automation/poll",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/automation/auth-monitoring",
+      "destination": "/gateway/authentication"
+    },
+    {
+      "source": "/automation/troubleshooting",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/automation/cron-vs-heartbeat",
+      "destination": "/automation"
+    },
+    {
+      "source": "/automation/webhook",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/automation/gmail-pubsub",
+      "destination": "/automation/cron-jobs"
     }
   ],
   "navigation": {
@@ -884,6 +952,7 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
+                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -914,6 +983,7 @@
                 "pages": [
                   "install/updating",
                   "install/migrating",
+                  "install/migrating-matrix",
                   "install/uninstall",
                   "install/development-channels"
                 ]
@@ -942,9 +1012,10 @@
                   "channels/msteams",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/qqbot",
                   "channels/signal",
-                  "channels/synology-chat",
                   "channels/slack",
+                  "channels/synology-chat",
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
@@ -980,6 +1051,7 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
+                  "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping"
                 ]
@@ -990,7 +1062,17 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
+                  {
+                    "group": "Memory",
+                    "pages": [
+                      "concepts/memory",
+                      "concepts/memory-builtin",
+                      "concepts/memory-qmd",
+                      "concepts/memory-honcho",
+                      "concepts/memory-search",
+                      "concepts/memory-dreaming"
+                    ]
+                  },
                   "concepts/compaction"
                 ]
               },
@@ -1014,41 +1096,108 @@
             ]
           },
           {
-            "tab": "Tools",
+            "tab": "Tools & Plugins",
             "groups": [
               {
                 "group": "Overview",
                 "pages": ["tools/index"]
               },
               {
-                "group": "Built-in tools",
+                "group": "Plugins",
+                "pages": [
+                  "tools/plugin",
+                  "plugins/community",
+                  "plugins/bundles",
+                  "plugins/voice-call",
+                  {
+                    "group": "Building Plugins",
+                    "pages": [
+                      "plugins/building-plugins",
+                      "plugins/sdk-channel-plugins",
+                      "plugins/sdk-provider-plugins",
+                      "plugins/sdk-migration"
+                    ]
+                  },
+                  {
+                    "group": "SDK Reference",
+                    "pages": [
+                      "plugins/sdk-overview",
+                      "plugins/sdk-entrypoints",
+                      "plugins/sdk-runtime",
+                      "plugins/sdk-setup",
+                      "plugins/sdk-testing",
+                      "plugins/manifest",
+                      "plugins/architecture"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "Skills",
+                "pages": [
+                  "tools/skills",
+                  "tools/creating-skills",
+                  "tools/skills-config",
+                  "tools/slash-commands",
+                  "tools/clawhub",
+                  "prose"
+                ]
+              },
+              {
+                "group": "Automation & Tasks",
+                "pages": [
+                  "automation/index",
+                  "automation/cron-jobs",
+                  "automation/tasks",
+                  "automation/taskflow",
+                  "automation/standing-orders",
+                  "automation/hooks"
+                ]
+              },
+              {
+                "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
-                  "tools/brave-search",
+                  {
+                    "group": "Web Browser",
+                    "pages": [
+                      "tools/browser",
+                      "tools/browser-login",
+                      "tools/browser-linux-troubleshooting",
+                      "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "Web Tools",
+                    "pages": [
+                      "tools/web-fetch",
+                      "tools/web",
+                      "tools/brave-search",
+                      "tools/duckduckgo-search",
+                      "tools/exa-search",
+                      "tools/firecrawl",
+                      "tools/gemini-search",
+                      "tools/grok-search",
+                      "tools/kimi-search",
+                      "tools/ollama-search",
+                      "tools/perplexity-search",
+                      "tools/searxng-search",
+                      "tools/tavily"
+                    ]
+                  },
                   "tools/btw",
+                  "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
-                  "tools/firecrawl",
-                  "tools/tavily",
+                  "tools/image-generation",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
                   "tools/pdf",
-                  "tools/perplexity-search",
                   "tools/reactions",
-                  "tools/thinking",
-                  "tools/web"
-                ]
-              },
-              {
-                "group": "Browser",
-                "pages": [
-                  "tools/browser",
-                  "tools/browser-login",
-                  "tools/browser-linux-troubleshooting",
-                  "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
+                  "tools/thinking"
                 ]
               },
               {
@@ -1058,62 +1207,6 @@
                   "tools/subagents",
                   "tools/acp-agents",
                   "tools/multi-agent-sandbox-tools"
-                ]
-              },
-              {
-                "group": "Skills",
-                "pages": [
-                  "tools/creating-skills",
-                  "tools/slash-commands",
-                  "tools/skills",
-                  "tools/skills-config",
-                  "tools/clawhub",
-                  "tools/plugin",
-                  "prose"
-                ]
-              },
-              {
-                "group": "Extensions",
-                "pages": [
-                  "plugins/building-extensions",
-                  "plugins/sdk-migration",
-                  "plugins/architecture",
-                  "plugins/community",
-                  "plugins/bundles",
-                  "plugins/voice-call",
-                  "plugins/zalouser",
-                  "plugins/manifest",
-                  "plugins/agent-tools",
-                  "tools/capability-cookbook"
-                ]
-              },
-              {
-                "group": "Automation",
-                "pages": [
-                  "automation/hooks",
-                  "automation/standing-orders",
-                  "automation/cron-jobs",
-                  "automation/cron-vs-heartbeat",
-                  "automation/troubleshooting",
-                  "automation/webhook",
-                  "automation/gmail-pubsub",
-                  "automation/poll",
-                  "automation/auth-monitoring"
-                ]
-              },
-              {
-                "group": "Media and devices",
-                "pages": [
-                  "nodes/index",
-                  "nodes/troubleshooting",
-                  "nodes/media-understanding",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command",
-                  "tools/tts"
                 ]
               }
             ]
@@ -1134,34 +1227,37 @@
                 "pages": [
                   "providers/anthropic",
                   "providers/bedrock",
-                  "providers/cloudflare-ai-gateway",
+                  "providers/chutes",
                   "providers/claude-max-api-proxy",
+                  "providers/cloudflare-ai-gateway",
                   "providers/deepgram",
+                  "providers/deepseek",
                   "providers/github-copilot",
+                  "providers/glm",
                   "providers/google",
                   "providers/groq",
                   "providers/huggingface",
                   "providers/kilocode",
                   "providers/litellm",
-                  "providers/glm",
                   "providers/minimax",
-                  "providers/modelstudio",
-                  "providers/moonshot",
                   "providers/mistral",
+                  "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",
                   "providers/openai",
-                  "providers/opencode-go",
                   "providers/opencode",
+                  "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
                   "providers/qianfan",
+                  "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
+                  "providers/stepfun",
                   "providers/synthetic",
                   "providers/together",
-                  "providers/vercel-ai-gateway",
                   "providers/venice",
+                  "providers/vercel-ai-gateway",
                   "providers/vllm",
                   "providers/volcengine",
                   "providers/xai",
@@ -1284,6 +1380,27 @@
                 ]
               },
               {
+                "group": "Nodes and media",
+                "pages": [
+                  "nodes/index",
+                  "nodes/troubleshooting",
+                  {
+                    "group": "Media capabilities",
+                    "pages": [
+                      "nodes/media-understanding",
+                      "nodes/images",
+                      "nodes/audio",
+                      "nodes/camera",
+                      "tools/tts"
+                    ]
+                  },
+                  {
+                    "group": "Node features",
+                    "pages": ["nodes/talk", "nodes/voicewake", "nodes/location-command"]
+                  }
+                ]
+              },
+              {
                 "group": "Web interfaces",
                 "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "web/tui"]
               }
@@ -1345,6 +1462,7 @@
                       "cli/approvals",
                       "cli/browser",
                       "cli/cron",
+                      "cli/flows",
                       "cli/node",
                       "cli/nodes",
                       "cli/sandbox"
@@ -1364,7 +1482,14 @@
                   },
                   {
                     "group": "Utility",
-                    "pages": ["cli/acp", "cli/clawbot", "cli/completion", "cli/dns", "cli/docs"]
+                    "pages": [
+                      "cli/acp",
+                      "cli/clawbot",
+                      "cli/completion",
+                      "cli/dns",
+                      "cli/docs",
+                      "cli/mcp"
+                    ]
                   }
                 ]
               },
@@ -1683,7 +1808,6 @@
               {
                 "group": "扩展",
                 "pages": [
-                  "zh-CN/plugins/architecture",
                   "zh-CN/plugins/voice-call",
                   "zh-CN/plugins/zalouser",
                   "zh-CN/plugins/manifest",
@@ -1692,17 +1816,8 @@
                 ]
               },
               {
-                "group": "自动化",
-                "pages": [
-                  "zh-CN/automation/hooks",
-                  "zh-CN/automation/cron-jobs",
-                  "zh-CN/automation/cron-vs-heartbeat",
-                  "zh-CN/automation/troubleshooting",
-                  "zh-CN/automation/webhook",
-                  "zh-CN/automation/gmail-pubsub",
-                  "zh-CN/automation/poll",
-                  "zh-CN/automation/auth-monitoring"
-                ]
+                "group": "自动化与任务",
+                "pages": ["zh-CN/automation/hooks", "zh-CN/automation/cron-jobs"]
               },
               {
                 "group": "媒体与设备",

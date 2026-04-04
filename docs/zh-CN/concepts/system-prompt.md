@@ -6,7 +6,7 @@ summary: OpenClaw 系统提示词包含的内容及其组装方式
 title: 系统提示词
 x-i18n:
   generated_at: "2026-02-03T07:46:58Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: bef4b2674ba0414ce28fd08a4c3ead0e0ebe989e7df3c88ca8a0b2abfec2a50b
   source_path: concepts/system-prompt.md

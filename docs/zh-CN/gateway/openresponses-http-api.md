@@ -6,7 +6,7 @@ summary: 从 Gateway 网关暴露兼容 OpenResponses 的 /v1/responses HTTP 端
 title: OpenResponses API
 x-i18n:
   generated_at: "2026-02-03T07:48:43Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0597714837f8b210c38eeef53561894220c1473e54c56a5c69984847685d518c
   source_path: gateway/openresponses-http-api.md

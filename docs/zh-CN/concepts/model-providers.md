@@ -109,7 +109,6 @@ x-i18n:
 - `byteplus`、`cloudflare-ai-gateway`、`huggingface`、`kimi-coding`、
   `modelstudio`、`nvidia`、`qianfan`、`synthetic`、`together`、`venice`、
   `vercel-ai-gateway` 和 `volcengine`：仅插件接管的目录
-- `qwen-portal`：插件接管的目录、OAuth 登录和 OAuth 刷新
 - `minimax` 和 `xiaomi`：插件接管的目录，以及使用量身份验证/快照逻辑
 
 内置的 `openai` 插件现在接管两个提供商 ID：`openai` 和
@@ -255,7 +254,7 @@ OpenClaw 附带 pi‑ai 目录。这些提供商**不需要**
 ### 其他内置提供商插件
 
 - OpenRouter：`openrouter`（`OPENROUTER_API_KEY`）
-- 示例模型：`openrouter/anthropic/claude-sonnet-4-5`
+- 示例模型：`openrouter/anthropic/claude-sonnet-4-6`
 - Kilo Gateway：`kilocode`（`KILOCODE_API_KEY`）
 - 示例模型：`kilocode/anthropic/claude-opus-4.6`
 - MiniMax：`minimax`（`MINIMAX_API_KEY`）
@@ -335,34 +334,18 @@ Kimi K2 模型 ID：
 
 Kimi Coding 使用 Moonshot AI 的 Anthropic 兼容端点：
 
-- 提供商：`kimi-coding`
+- 提供商：`kimi`
 - 身份验证：`KIMI_API_KEY`
-- 示例模型：`kimi-coding/k2p5`
+- 示例模型：`kimi/kimi-code`
 
 ```json5
 {
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi-coding/k2p5" } },
+    defaults: { model: { primary: "kimi/kimi-code" } },
   },
 }
 ```
-
-### Qwen OAuth（免费层）
-
-Qwen 通过设备代码流程提供对 Qwen Coder + Vision 的 OAuth 访问。
-内置提供商插件默认启用，因此只需登录：
-
-```bash
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-模型引用：
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-设置详情和说明请参见 [/providers/qwen](/providers/qwen)。
 
 ### Volcano Engine（Doubao）
 

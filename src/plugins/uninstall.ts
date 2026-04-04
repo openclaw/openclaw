@@ -11,6 +11,7 @@ export type UninstallActions = {
   allowlist: boolean;
   loadPath: boolean;
   memorySlot: boolean;
+  channelConfig: boolean;
   directory: boolean;
 };
 
@@ -58,13 +59,39 @@ export function resolveUninstallDirectoryTarget(params: {
   return defaultPath;
 }
 
+const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
+/**
+ * Resolve the channel config keys owned by a plugin during uninstall.
+ * - `channelIds === undefined`: fall back to the plugin id for backward compatibility.
+ * - `channelIds === []`: explicit "owns no channels" signal; remove nothing.
+ */
+export function resolveUninstallChannelConfigKeys(
+  pluginId: string,
+  opts?: { channelIds?: string[] },
+): string[] {
+  const rawKeys = opts?.channelIds ?? [pluginId];
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const key of rawKeys) {
+    if (SHARED_CHANNEL_CONFIG_KEYS.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
 /**
  * Remove plugin references from config (pure config mutation).
- * Returns a new config with the plugin removed from entries, installs, allow, load.paths, and slots.
+ * Returns a new config with the plugin removed from entries, installs, allow, load.paths, slots,
+ * and owned channel config.
  */
 export function removePluginFromConfig(
   cfg: OpenClawConfig,
   pluginId: string,
+  opts?: { channelIds?: string[] },
 ): { config: OpenClawConfig; actions: Omit<UninstallActions, "directory"> } {
   const actions: Omit<UninstallActions, "directory"> = {
     entry: false,
@@ -72,6 +99,7 @@ export function removePluginFromConfig(
     allowlist: false,
     loadPath: false,
     memorySlot: false,
+    channelConfig: false,
   };
 
   const pluginsConfig = cfg.plugins ?? {};
@@ -155,9 +183,28 @@ export function removePluginFromConfig(
     delete cleanedPlugins.slots;
   }
 
+  // Remove channel config owned by this installed plugin.
+  // Built-in channels have no install record, so keep their config untouched.
+  const hasInstallRecord = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
+  let channels = cfg.channels as Record<string, unknown> | undefined;
+  if (hasInstallRecord && channels) {
+    for (const key of resolveUninstallChannelConfigKeys(pluginId, opts)) {
+      if (!Object.hasOwn(channels, key)) {
+        continue;
+      }
+      const { [key]: _removed, ...rest } = channels;
+      channels = Object.keys(rest).length > 0 ? rest : undefined;
+      actions.channelConfig = true;
+      if (!channels) {
+        break;
+      }
+    }
+  }
+
   const config: OpenClawConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    channels: channels as OpenClawConfig["channels"],
   };
 
   return { config, actions };
@@ -166,6 +213,7 @@ export function removePluginFromConfig(
 export type UninstallPluginParams = {
   config: OpenClawConfig;
   pluginId: string;
+  channelIds?: string[];
   deleteFiles?: boolean;
   extensionsDir?: string;
 };
@@ -177,7 +225,7 @@ export type UninstallPluginParams = {
 export async function uninstallPlugin(
   params: UninstallPluginParams,
 ): Promise<UninstallPluginResult> {
-  const { config, pluginId, deleteFiles = true, extensionsDir } = params;
+  const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
 
   // Validate plugin exists
   const hasEntry = pluginId in (config.plugins?.entries ?? {});
@@ -191,7 +239,9 @@ export async function uninstallPlugin(
   const isLinked = installRecord?.source === "path";
 
   // Remove from config
-  const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId);
+  const { config: newConfig, actions: configActions } = removePluginFromConfig(config, pluginId, {
+    channelIds,
+  });
 
   const actions: UninstallActions = {
     ...configActions,

@@ -82,6 +82,11 @@ vi.mock("@buape/carbon/gateway", () => ({
   GatewayPlugin,
 }));
 
+vi.mock("@buape/carbon/dist/src/plugins/gateway/index.js", () => ({
+  GatewayIntents,
+  GatewayPlugin,
+}));
+
 vi.mock("https-proxy-agent", () => ({
   HttpsProxyAgent,
 }));
@@ -123,13 +128,43 @@ describe("createDiscordGatewayPlugin", () => {
     };
   }
 
+  function createProxyTestingOverrides() {
+    return {
+      HttpsProxyAgentCtor:
+        HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
+      ProxyAgentCtor: class {
+        proxyUrl: string;
+        constructor(proxyUrl: string) {
+          this.proxyUrl = proxyUrl;
+          undiciProxyAgentSpy(proxyUrl);
+          restProxyAgentSpy(proxyUrl);
+        }
+      } as unknown as typeof import("undici").ProxyAgent,
+      undiciFetch: undiciFetchMock,
+      webSocketCtor: class {
+        constructor(url: string, options?: { agent?: unknown }) {
+          webSocketSpy(url, options);
+        }
+      } as unknown as new (url: string, options?: { agent?: unknown }) => import("ws").WebSocket,
+      registerClient: async (_plugin: unknown, client: unknown) => {
+        baseRegisterClientSpy(client);
+      },
+    };
+  }
+
   async function registerGatewayClient(plugin: unknown) {
     await (
       plugin as {
-        registerClient: (client: { options: { token: string } }) => Promise<void>;
+        registerClient: (client: {
+          options: { token: string };
+          registerListener: typeof baseRegisterClientSpy;
+          unregisterListener: ReturnType<typeof vi.fn>;
+        }) => Promise<void>;
       }
     ).registerClient({
       options: { token: "token-123" },
+      registerListener: baseRegisterClientSpy,
+      unregisterListener: vi.fn(),
     });
   }
 
@@ -230,8 +265,9 @@ describe("createDiscordGatewayPlugin", () => {
     const runtime = createRuntime();
 
     const plugin = createDiscordGatewayPlugin({
-      discordConfig: { proxy: "http://proxy.test:8080" },
+      discordConfig: { proxy: "http://127.0.0.1:8080" },
       runtime,
+      __testing: createProxyTestingOverrides(),
     });
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
@@ -240,7 +276,7 @@ describe("createDiscordGatewayPlugin", () => {
       .createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
-    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
     expect(webSocketSpy).toHaveBeenCalledWith(
       "wss://gateway.discord.gg",
       expect.objectContaining({ agent: getLastAgent() }),
@@ -265,21 +301,53 @@ describe("createDiscordGatewayPlugin", () => {
   it("uses proxy fetch for gateway metadata lookup before registering", async () => {
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
-      discordConfig: { proxy: "http://proxy.test:8080" },
+      discordConfig: { proxy: "http://127.0.0.1:8080" },
       runtime,
+      __testing: createProxyTestingOverrides(),
     });
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });
 
-    expect(restProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(restProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
     expect(undiciFetchMock).toHaveBeenCalledWith(
       "https://discord.com/api/v10/gateway/bot",
       expect.objectContaining({
         headers: { Authorization: "Bot token-123" },
-        dispatcher: expect.objectContaining({ proxyUrl: "http://proxy.test:8080" }),
+        dispatcher: expect.objectContaining({ proxyUrl: "http://127.0.0.1:8080" }),
       }),
     );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts IPv6 loopback proxy URLs for gateway metadata and websocket setup", async () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://[::1]:8080" },
+      runtime,
+      __testing: createProxyTestingOverrides(),
+    });
+
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("wss://gateway.discord.gg");
+    await registerGatewayClientWithMetadata({ plugin, fetchMock: undiciFetchMock });
+
+    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(restProxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the default gateway plugin when proxy is remote", async () => {
+    const runtime = createRuntime();
+
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+    });
+
+    expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("loopback host"));
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("maps body read failures to fetch failed", async () => {

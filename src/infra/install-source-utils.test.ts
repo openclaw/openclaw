@@ -84,6 +84,16 @@ async function expectPackFallsBackToDetectedArchive(params: {
   });
 }
 
+function expectPackError(result: { ok: boolean; error?: string }, expected: string[]): void {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    return;
+  }
+  for (const part of expected) {
+    expect(result.error ?? "").toContain(part);
+  }
+}
+
 beforeEach(() => {
   runCommandWithTimeoutMock.mockClear();
 });
@@ -116,25 +126,25 @@ describe("withTempDir", () => {
 });
 
 describe("resolveArchiveSourcePath", () => {
-  it("returns not found error for missing archive paths", async () => {
-    const result = await resolveArchiveSourcePath("/tmp/does-not-exist-openclaw-archive.tgz");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("archive not found");
-    }
-  });
-
-  it("rejects unsupported archive extensions", async () => {
-    const { filePath } = await createFixtureFile({
-      fileName: "plugin.txt",
-      contents: "not-an-archive",
-    });
-
-    const result = await resolveArchiveSourcePath(filePath);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("unsupported archive");
-    }
+  it.each([
+    {
+      name: "returns not found error for missing archive paths",
+      path: async () => "/tmp/does-not-exist-openclaw-archive.tgz",
+      expected: "archive not found",
+    },
+    {
+      name: "rejects unsupported archive extensions",
+      path: async () =>
+        (
+          await createFixtureFile({
+            fileName: "plugin.txt",
+            contents: "not-an-archive",
+          })
+        ).filePath,
+      expected: "unsupported archive",
+    },
+  ])("$name", async ({ path: resolvePath, expected }) => {
+    expectPackError(await resolveArchiveSourcePath(await resolvePath()), [expected]);
   });
 
   it.each(["plugin.zip", "plugin.tgz", "plugin.tar.gz"])(
@@ -217,12 +227,7 @@ describe("packNpmSpecToArchive", () => {
     });
 
     const result = await runPack("bad-spec", cwd, 5000);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("npm pack failed");
-      expect(result.error).toContain("registry timeout");
-    }
+    expectPackError(result, ["npm pack failed", "registry timeout"]);
   });
 
   it.each([
@@ -259,13 +264,11 @@ describe("packNpmSpecToArchive", () => {
     });
 
     const result = await runPack("@openclaw/whatsapp", cwd);
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("Package not found on npm");
-      expect(result.error).toContain("@openclaw/whatsapp");
-      expect(result.error).toContain("docs.openclaw.ai/tools/plugin");
-    }
+    expectPackError(result, [
+      "Package not found on npm",
+      "@openclaw/whatsapp",
+      "docs.openclaw.ai/tools/plugin",
+    ]);
   });
 
   it("returns explicit error when npm pack produces no archive name", async () => {

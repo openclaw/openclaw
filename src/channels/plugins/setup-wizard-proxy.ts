@@ -16,8 +16,8 @@ type ResolveGroupAllowlistParams = Parameters<
 >[0];
 
 export function createDelegatedResolveConfigured(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return async ({ cfg }: ResolveConfiguredParams) =>
-    await (await loadWizard()).status.resolveConfigured({ cfg });
+  return async ({ cfg, accountId }: ResolveConfiguredParams) =>
+    await (await loadWizard()).status.resolveConfigured({ cfg, accountId });
 }
 
 export function createDelegatedPrepare(loadWizard: () => Promise<ChannelSetupWizard>) {
