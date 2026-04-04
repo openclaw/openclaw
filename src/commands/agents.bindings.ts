@@ -258,6 +258,15 @@ function resolveBindingAccountId(params: {
     return resolveDefaultAccountId(params.config, params.channel);
   }
 
+  // When a channel has multiple accounts configured, default to "*" so the
+  // binding matches all accounts instead of silently matching only "default".
+  if (plugin) {
+    const accountIds = plugin.config.listAccountIds(params.config);
+    if (accountIds.length > 1) {
+      return "*";
+    }
+  }
+
   return undefined;
 }
 

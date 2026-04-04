@@ -231,10 +231,25 @@ Bindings are **deterministic** and **most-specific wins**:
 If multiple bindings match in the same tier, the first one in config order wins.
 If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
 
-Important account-scope detail:
+> [!WARNING]
+> **Account-scope pitfall (common source of silent routing failures)**
+>
+> A binding that **omits `accountId`** does **not** match all accounts — it
+> matches only the channel's **default account** (the one named `"default"`,
+> or the value of `channels.<ch>.defaultAccount`).
+>
+> If you have **multiple accounts** configured for a channel (e.g. WhatsApp
+> `personal` + `biz`, Telegram `default` + `alerts`), you **must** set
+> `accountId` explicitly in each binding:
+>
+> - `"accountId": "*"` — match **all** accounts (channel-wide).
+> - `"accountId": "<name>"` — match one specific account.
+>
+> Without this, messages from non-default accounts will silently fall
+> through to the default agent instead of matching the intended binding.
 
-- A binding that omits `accountId` matches the default account only.
-- Use `accountId: "*"` for a channel-wide fallback across all accounts.
+Additional account-scope notes:
+
 - If you later add the same binding for the same agent with an explicit account id, OpenClaw upgrades the existing channel-only binding to account-scoped instead of duplicating it.
 
 ## Multiple accounts / phone numbers
@@ -445,15 +460,20 @@ Split by channel: route WhatsApp to a fast everyday agent and Telegram to an Opu
     ],
   },
   bindings: [
-    { agentId: "chat", match: { channel: "whatsapp" } },
-    { agentId: "opus", match: { channel: "telegram" } },
+    { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
+    { agentId: "opus", match: { channel: "telegram", accountId: "*" } },
   ],
 }
 ```
 
+> [!TIP]
+> These examples use `accountId: "*"` so the bindings work regardless of
+> which account receives the message. If you only have a single account
+> per channel you can safely omit it, but adding `"*"` is a good default
+> to avoid silent routing failures when accounts are added later.
+
 Notes:
 
-- If you have multiple accounts for a channel, add `accountId` to the binding (for example `{ channel: "whatsapp", accountId: "personal" }`).
 - To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over channel-wide rules.
 
 ## Example: same channel, one peer to Opus
@@ -481,9 +501,9 @@ Keep WhatsApp on the fast agent, but route one DM to Opus:
   bindings: [
     {
       agentId: "opus",
-      match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+      match: { channel: "whatsapp", accountId: "*", peer: { kind: "direct", id: "+15551234567" } },
     },
-    { agentId: "chat", match: { channel: "whatsapp" } },
+    { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
   ],
 }
 ```

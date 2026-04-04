@@ -20,6 +20,7 @@ Related:
 ```bash
 openclaw agents list
 openclaw agents add work --workspace ~/.openclaw/workspace-work
+openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:*
 openclaw agents bindings
 openclaw agents bind --agent work --bind telegram:ops
 openclaw agents unbind --agent work --bind telegram:ops
@@ -51,25 +52,51 @@ Add bindings:
 openclaw agents bind --agent work --bind telegram:ops --bind discord:guild-a
 ```
 
+You can also add bindings at agent creation time with `--bind`:
+
+```bash
+openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:* --bind discord:*
+```
+
 If you omit `accountId` (`--bind <channel>`), OpenClaw resolves it from channel defaults and plugin setup hooks when available.
+
+### `--bind` format reference
+
+| Format | Meaning |
+|---|---|
+| `--bind <channel>:*` | Match **all** accounts on the channel |
+| `--bind <channel>:<account>` | Match a **specific** account only |
+| `--bind <channel>` | Match the **default** account only (see warning below) |
 
 ### Binding scope behavior
 
-- A binding without `accountId` matches the channel default account only.
+> [!WARNING]
+> A binding **without `accountId`** matches the channel **default account
+> only** — it does **not** match all accounts. If you configure multiple
+> accounts for a channel (e.g. WhatsApp `personal` + `biz`), use
+> `--bind <channel>:*` or add `accountId: "*"` in JSON to match all of
+> them, or specify each account explicitly.
+
 - `accountId: "*"` is the channel-wide fallback (all accounts) and is less specific than an explicit account binding.
 - If the same agent already has a matching channel binding without `accountId`, and you later bind with an explicit or resolved `accountId`, OpenClaw upgrades that existing binding in place instead of adding a duplicate.
 
-Example:
+Examples:
 
 ```bash
-# initial channel-only binding
+# match all accounts on the channel (recommended for multi-account setups)
+openclaw agents bind --agent work --bind telegram:*
+
+# match a specific account
+openclaw agents bind --agent work --bind telegram:ops
+
+# initial channel-only binding (matches default account only)
 openclaw agents bind --agent work --bind telegram
 
 # later upgrade to account-scoped binding
-openclaw agents bind --agent work --bind telegram:ops
+openclaw agents bind --agent work --bind telegram:alerts
 ```
 
-After the upgrade, routing for that binding is scoped to `telegram:ops`. If you also want default-account routing, add it explicitly (for example `--bind telegram:default`).
+After an upgrade, routing for that binding is scoped to `telegram:alerts`. If you also want default-account routing, add it explicitly (for example `--bind telegram:default`).
 
 Remove bindings:
 
