@@ -24,7 +24,7 @@ const OPENAI_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
 const OPENAI_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_GPT_54_NANO_MODEL_ID = "gpt-5.4-nano";
-const OPENAI_GPT_54_CONTEXT_TOKENS = 272_000;
+const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
@@ -248,7 +248,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
       return {
         ...ctx.extraParams,
         ...(hasSupportedTransport ? {} : { transport: "auto" }),
-        ...(hasExplicitWarmup ? {} : { openaiWsWarmup: false }),
+        ...(hasExplicitWarmup ? {} : { openaiWsWarmup: true }),
       };
     },
     wrapStreamFn: (ctx) =>

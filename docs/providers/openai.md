@@ -239,6 +239,20 @@ Example:
 Session overrides win over config. Clearing the session override in the Sessions UI
 returns the session to the configured default.
 
+### Native OpenAI versus OpenAI-compatible routes
+
+OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints differently
+from generic OpenAI-compatible `/v1` proxies:
+
+- native `openai/*`, `openai-codex/*`, and Azure OpenAI routes keep
+  `reasoning: { effort: "none" }` intact when you explicitly disable reasoning
+- native OpenAI-family routes default tool schemas to strict mode
+- proxy-style OpenAI-compatible routes keep the looser compat behavior and do
+  not force strict tool schemas or native-only request shaping
+
+This preserves current native OpenAI Responses behavior without forcing older
+OpenAI-compatible shims onto third-party `/v1` backends.
+
 ### OpenAI Responses server-side compaction
 
 For direct OpenAI Responses models (`openai/*` using `api: "openai-responses"` with

@@ -268,7 +268,7 @@ describe("modelsListCommand forward-compat", () => {
           id: "gpt-5.4",
           name: "GPT-5.3 Codex",
           input: ["text"],
-          contextWindow: 272000,
+          contextWindow: 400000,
         },
       ]);
       mocks.listProfilesForProvider.mockImplementation((_: unknown, provider: string) =>

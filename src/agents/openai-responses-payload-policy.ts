@@ -119,7 +119,8 @@ export function resolveOpenAIResponsesPayloadPolicy(
       parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
-    shouldStripDisabledReasoningPayload: capabilities.supportsOpenAIReasoningCompatPayload,
+    shouldStripDisabledReasoningPayload:
+      capabilities.supportsOpenAIReasoningCompatPayload && !capabilities.usesKnownNativeOpenAIRoute,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:

@@ -328,7 +328,15 @@ function convertResponsesTools(
   tools: NonNullable<Context["tools"]>,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = options?.strict === undefined ? false : options.strict;
+  const strict = options?.strict;
+  if (strict === undefined) {
+    return tools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    })) as unknown as FunctionTool[];
+  }
   return tools.map((tool) => ({
     type: "function",
     name: tool.name,
@@ -698,7 +706,9 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    params.tools = convertResponsesTools(context.tools);
+    params.tools = convertResponsesTools(context.tools, {
+      strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel),
+    });
   }
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoningSummary) {
@@ -1156,14 +1166,56 @@ function mapReasoningEffort(effort: string, reasoningEffortMap: Record<string, s
   return reasoningEffortMap[effort] ?? effort;
 }
 
-function convertTools(tools: NonNullable<Context["tools"]>, compat: ReturnType<typeof getCompat>) {
+function resolvesToNativeOpenAIStrictTools(model: OpenAIModeModel): boolean {
+  const capabilities = resolveProviderRequestCapabilities({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    capability: "llm",
+    transport: "stream",
+    modelId: model.id,
+    compat:
+      model.compat && typeof model.compat === "object"
+        ? (model.compat as { supportsStore?: boolean })
+        : undefined,
+  });
+  if (!capabilities.usesKnownNativeOpenAIRoute) {
+    return false;
+  }
+  return (
+    capabilities.provider === "openai" ||
+    capabilities.provider === "openai-codex" ||
+    capabilities.provider === "azure-openai" ||
+    capabilities.provider === "azure-openai-responses"
+  );
+}
+
+function resolveOpenAIStrictToolSetting(
+  model: OpenAIModeModel,
+  compat?: ReturnType<typeof getCompat>,
+): boolean | undefined {
+  if (resolvesToNativeOpenAIStrictTools(model)) {
+    return true;
+  }
+  if (compat?.supportsStrictMode) {
+    return false;
+  }
+  return undefined;
+}
+
+function convertTools(
+  tools: NonNullable<Context["tools"]>,
+  compat: ReturnType<typeof getCompat>,
+  model: OpenAIModeModel,
+) {
+  const strict = resolveOpenAIStrictToolSetting(model, compat);
   return tools.map((tool) => ({
     type: "function",
     function: {
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,
-      ...(compat.supportsStrictMode ? { strict: false } : {}),
+      ...(strict === undefined ? {} : { strict }),
     },
   }));
 }
@@ -1196,7 +1248,7 @@ export function buildOpenAICompletionsParams(
     params.temperature = options.temperature;
   }
   if (context.tools) {
-    params.tools = convertTools(context.tools, compat);
+    params.tools = convertTools(context.tools, compat, model);
   } else if (hasToolHistory(context.messages)) {
     params.tools = [];
   }

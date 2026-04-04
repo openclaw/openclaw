@@ -439,6 +439,68 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
+  it("defaults responses tool schemas to strict on native OpenAI routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean }> };
+
+    expect(params.tools?.[0]?.strict).toBe(true);
+  });
+
+  it("omits responses strict tool shaping for proxy-like OpenAI routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean }> };
+
+    expect(params.tools?.[0]).not.toHaveProperty("strict");
+  });
+
   it("gates responses service_tier to native OpenAI endpoints", () => {
     const nativeParams = buildOpenAIResponsesParams(
       {
@@ -693,6 +755,37 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+  });
+
+  it("defaults completions tool schemas to strict on native OpenAI routes", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
+
+    expect(params.tools?.[0]?.function?.strict).toBe(true);
   });
 
   it("uses Mistral compat defaults for direct Mistral completions providers", () => {

@@ -58,7 +58,7 @@ describe("openai responses payload policy", () => {
     expect(payload).not.toHaveProperty("prompt_cache_retention");
   });
 
-  it("strips disabled reasoning payloads through the shared helper", () => {
+  it("keeps disabled reasoning payloads on native OpenAI responses routes", () => {
     const payload = {
       reasoning: {
         effort: "none",
@@ -72,6 +72,32 @@ describe("openai responses payload policy", () => {
           api: "openai-responses",
           provider: "openai",
           baseUrl: "https://api.openai.com/v1",
+        },
+        { storeMode: "disable" },
+      ),
+    );
+
+    expect(payload).toEqual({
+      reasoning: {
+        effort: "none",
+      },
+    });
+  });
+
+  it("strips disabled reasoning payloads for proxy-like OpenAI responses routes", () => {
+    const payload = {
+      reasoning: {
+        effort: "none",
+      },
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://proxy.example.com/v1",
         },
         { storeMode: "disable" },
       ),
