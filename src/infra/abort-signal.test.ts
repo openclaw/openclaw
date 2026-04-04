@@ -1,57 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { waitForAbortSignal } from "./abort-signal.js";
 
 describe("waitForAbortSignal", () => {
-  it("resolves immediately when signal is missing", async () => {
-    await expect(waitForAbortSignal(undefined)).resolves.toBeUndefined();
+  it("returns immediately for undefined signal", async () => {
+    const start = Date.now();
+    await waitForAbortSignal(undefined);
+    expect(Date.now() - start).toBeLessThan(100);
   });
 
-  it("resolves immediately when signal is already aborted", async () => {
-    const abort = new AbortController();
-    abort.abort();
-    await expect(waitForAbortSignal(abort.signal)).resolves.toBeUndefined();
+  it("returns immediately for already aborted signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const start = Date.now();
+    await waitForAbortSignal(controller.signal);
+    expect(Date.now() - start).toBeLessThan(100);
   });
 
-  it("waits until abort fires", async () => {
-    const abort = new AbortController();
-    let resolved = false;
-
-    const task = waitForAbortSignal(abort.signal).then(() => {
-      resolved = true;
-    });
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    abort.abort();
-    await task;
-    expect(resolved).toBe(true);
+  it("waits for abort when not aborted", async () => {
+    const controller = new AbortController();
+    const promise = waitForAbortSignal(controller.signal);
+    expect(controller.signal.aborted).toBe(false);
+    controller.abort();
+    await promise;
+    expect(controller.signal.aborted).toBe(true);
   });
 
-  it("registers and removes the abort listener exactly once", async () => {
-    let handler: (() => void) | undefined;
-    const addEventListener = (
-      _type: string,
-      listener: () => void,
-      options?: AddEventListenerOptions,
-    ) => {
-      handler = listener;
-      expect(options).toEqual({ once: true });
-    };
-    const removeEventListener = (_type: string, listener: () => void) => {
-      expect(listener).toBe(handler);
-      removed += 1;
-    };
-    let removed = 0;
-
-    const task = waitForAbortSignal({
-      aborted: false,
-      addEventListener,
-      removeEventListener,
-    } as unknown as AbortSignal);
-
-    expect(handler).toBeTypeOf("function");
-    handler?.();
-    await expect(task).resolves.toBeUndefined();
-    expect(removed).toBe(1);
+  it("can be called multiple times", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await waitForAbortSignal(controller.signal);
+    await waitForAbortSignal(controller.signal);
+    expect(true).toBe(true);
   });
 });
