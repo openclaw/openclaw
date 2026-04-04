@@ -89,7 +89,9 @@ export function resolveExtensionTestPlan(params = {}) {
   }
 
   const usesChannelConfig = roots.some((root) => channelTestRoots.includes(root));
-  const config = usesChannelConfig ? "vitest.channels.config.ts" : "vitest.extensions.config.ts";
+  const config = usesChannelConfig
+    ? "vitest.extension-channels.config.ts"
+    : "vitest.extensions.config.ts";
   const testFileCount = roots.reduce(
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,

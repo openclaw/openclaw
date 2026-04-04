@@ -33,12 +33,12 @@ function findExtensionWithoutTests() {
 }
 
 describe("scripts/test-extension.mjs", () => {
-  it("resolves channel-root extensions onto the channel vitest config", () => {
+  it("resolves channel-root extensions onto the extension-channel vitest config", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
 
     expect(plan.extensionId).toBe("slack");
     expect(plan.extensionDir).toBe(bundledPluginRoot("slack"));
-    expect(plan.config).toBe("vitest.channels.config.ts");
+    expect(plan.config).toBe("vitest.extension-channels.config.ts");
     expect(plan.roots).toContain(bundledPluginRoot("slack"));
     expect(plan.hasTests).toBe(true);
   });
@@ -57,7 +57,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(plan.roots).toContain(bundledPluginRoot("line"));
     expect(plan.roots).not.toContain("src/line");
-    expect(plan.config).toBe("vitest.extensions.config.ts");
+    expect(plan.config).toBe("vitest.extension-channels.config.ts");
     expect(plan.hasTests).toBe(true);
   });
 
@@ -117,15 +117,15 @@ describe("scripts/test-extension.mjs", () => {
     expect(batch.extensionIds).toEqual(["firecrawl", "line", "slack"]);
     expect(batch.planGroups).toEqual([
       {
-        config: "vitest.channels.config.ts",
-        extensionIds: ["slack"],
-        roots: [bundledPluginRoot("slack")],
+        config: "vitest.extension-channels.config.ts",
+        extensionIds: ["line", "slack"],
+        roots: [bundledPluginRoot("slack"), bundledPluginRoot("line")],
         testFileCount: expect.any(Number),
       },
       {
         config: "vitest.extensions.config.ts",
-        extensionIds: ["firecrawl", "line"],
-        roots: [bundledPluginRoot("firecrawl"), bundledPluginRoot("line")],
+        extensionIds: ["firecrawl"],
+        roots: [bundledPluginRoot("firecrawl")],
         testFileCount: expect.any(Number),
       },
     ]);
@@ -146,7 +146,7 @@ describe("scripts/test-extension.mjs", () => {
         resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
     );
 
-    expect(uniqueAssigned).toEqual(expected);
+    expect(uniqueAssigned.toSorted((left, right) => left.localeCompare(right))).toEqual(expected);
     expect(assigned).toHaveLength(expected.length);
 
     const totals = shards.map((shard) => shard.testFileCount);

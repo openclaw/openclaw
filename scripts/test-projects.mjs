@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import { acquireLocalHeavyCheckLockSync } from "./lib/local-heavy-check-runtime.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
-import { createVitestRunSpecs, writeVitestIncludeFile } from "./test-projects.test-support.mjs";
+import {
+  createVitestRunSpecs,
+  parseTestProjectsArgs,
+  writeVitestIncludeFile,
+} from "./test-projects.test-support.mjs";
 
 // Keep this shim so `pnpm test -- src/foo.test.ts` still forwards filters
 // cleanly instead of leaking pnpm's passthrough sentinel to Vitest.
@@ -53,11 +57,35 @@ function runVitestSpec(spec) {
   });
 }
 
+function createRootVitestRunSpec(args) {
+  const { forwardedArgs, watchMode } = parseTestProjectsArgs(args, process.cwd());
+  return {
+    config: "vitest.config.ts",
+    env: process.env,
+    includeFilePath: null,
+    includePatterns: null,
+    pnpmArgs: [
+      "exec",
+      "vitest",
+      ...(watchMode ? [] : ["run"]),
+      "--config",
+      "vitest.config.ts",
+      ...forwardedArgs,
+    ],
+    watchMode,
+  };
+}
+
 async function main() {
-  const runSpecs = createVitestRunSpecs(process.argv.slice(2), {
-    baseEnv: process.env,
-    cwd: process.cwd(),
-  });
+  const args = process.argv.slice(2);
+  const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
+  const runSpecs =
+    targetArgs.length === 0
+      ? [createRootVitestRunSpec(args)]
+      : createVitestRunSpecs(args, {
+          baseEnv: process.env,
+          cwd: process.cwd(),
+        });
 
   for (const spec of runSpecs) {
     const result = await runVitestSpec(spec);

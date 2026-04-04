@@ -298,7 +298,7 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
-        config: "vitest.channels.config.ts",
+        config: "vitest.extension-channels.config.ts",
         forwardedArgs: ["-t", "mention"],
         includePatterns: ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
         watchMode: false,
@@ -316,7 +316,7 @@ describe("test-projects args", () => {
       "vitest",
       "run",
       "--config",
-      "vitest.channels.config.ts",
+      "vitest.extension-channels.config.ts",
     ]);
     expect(spec?.includePatterns).toEqual([
       "extensions/discord/src/monitor/message-handler.preflight.test.ts",
