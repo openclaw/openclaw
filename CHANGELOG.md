@@ -22,7 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep OpenAI-compatible proxies on the older compat shim path, and enable OpenAI WebSocket warm-up by default for native Responses routes.
+- Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep OpenAI-compatible proxies on the older compat shim path, fix Responses WebSocket warm-up payloads, and retry one early retryable WebSocket failure before HTTP fallback while keeping forced WebSocket errors explicit.
 - Providers/OpenAI Codex: split native `contextWindow` from runtime `contextTokens` for `openai-codex/gpt-5.4`, keep the default effective cap at `272000`, and expose a per-model config override via `models.providers.*.models[].contextTokens`.
 - Skills/uv install: block workspace `.env` from overriding `UV_PYTHON` and strip related interpreter override keys from uv skill-install subprocesses so repository-controlled env files cannot steer the selected Python runtime. (#59178) Thanks @pgondhi987.
 - Telegram/reactions: preserve `reactionNotifications: "own"` across gateway restarts by persisting sent-message ownership state instead of treating cold cache as a permissive fallback. (#59207) Thanks @samzong.
