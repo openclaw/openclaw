@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { createAnthropicToolPayloadCompatibilityWrapper } from "openclaw/plugin-sdk/provider-stream";
 
 const TOOL_CALLS_SECTION_BEGIN = "<|tool_calls_section_begin|>";
 const TOOL_CALLS_SECTION_END = "<|tool_calls_section_end|>";
@@ -119,14 +120,63 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
     changed = true;
   }
 
-  if (!changed) {
+  if (changed) {
+    (message as { content: unknown[] }).content = nextContent;
+  }
+
+  // Ensure stopReason is "toolUse" whenever the message contains toolCall blocks,
+  // whether they came from native provider output or from tagged text rewrite.
+  const finalContent = changed ? nextContent : content;
+  const hasToolCall = finalContent.some(
+    (block) =>
+      block && typeof block === "object" && (block as { type?: unknown }).type === "toolCall",
+  );
+  const typedMessage = message as { stopReason?: unknown };
+  if (hasToolCall && typedMessage.stopReason === "stop") {
+    typedMessage.stopReason = "toolUse";
+  }
+}
+
+function stripKimiTaggedToolCalls(text: string, truncateIncomplete = false): string {
+  const begin = TOOL_CALLS_SECTION_BEGIN;
+  const end = TOOL_CALLS_SECTION_END;
+  let result = text;
+  let index = result.indexOf(begin);
+  while (index >= 0) {
+    const endIndex = result.indexOf(end, index);
+    if (endIndex < 0) {
+      // In-flight stream only: truncate at the incomplete begin tag to avoid UI flicker.
+      // Final messages leave the token untouched so legitimate explanations are not lost.
+      return truncateIncomplete ? result.slice(0, index) : result;
+    }
+    result = result.slice(0, index) + result.slice(endIndex + end.length);
+    index = result.indexOf(begin);
+  }
+  return result;
+}
+
+function stripKimiTaggedToolCallsInMessage(message: unknown, truncateIncomplete = false): void {
+  if (!message || typeof message !== "object") {
     return;
   }
 
-  (message as { content: unknown[] }).content = nextContent;
-  const typedMessage = message as { stopReason?: unknown };
-  if (typedMessage.stopReason === "stop") {
-    typedMessage.stopReason = "toolUse";
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    (message as { content: string }).content = stripKimiTaggedToolCalls(content, truncateIncomplete);
+    return;
+  }
+  if (!Array.isArray(content)) {
+    return;
+  }
+
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown };
+    if (typedBlock.type === "text" && typeof typedBlock.text === "string") {
+      typedBlock.text = stripKimiTaggedToolCalls(typedBlock.text, truncateIncomplete);
+    }
   }
 }
 
@@ -137,6 +187,9 @@ function wrapKimiTaggedToolCalls(
   stream.result = async () => {
     const message = await originalResult();
     rewriteKimiTaggedToolCallsInMessage(message);
+    // Final assistant message: strip only complete tag pairs; do not truncate
+    // incomplete sequences so legitimate explanations of the markup are preserved.
+    stripKimiTaggedToolCallsInMessage(message, false);
     return message;
   };
 
@@ -149,11 +202,24 @@ function wrapKimiTaggedToolCalls(
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             const event = result.value as {
+              type?: unknown;
               partial?: unknown;
               message?: unknown;
+              reason?: unknown;
             };
             rewriteKimiTaggedToolCallsInMessage(event.partial);
             rewriteKimiTaggedToolCallsInMessage(event.message);
+            // Streaming partials may contain incomplete tag sections; truncate to avoid UI flicker.
+            // For the done event, treat the accumulated message as final and do not truncate.
+            const isDone = event.type === "done";
+            stripKimiTaggedToolCallsInMessage(event.partial, !isDone);
+            stripKimiTaggedToolCallsInMessage(event.message, !isDone);
+            if (isDone && typeof event.reason === "string") {
+              const msg = event.message as { stopReason?: unknown } | undefined;
+              if (msg?.stopReason === "toolUse") {
+                event.reason = "toolUse";
+              }
+            }
           }
           return result;
         },
@@ -178,4 +244,13 @@ export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefin
     }
     return wrapKimiTaggedToolCalls(maybeStream);
   };
+}
+
+export function wrapKimiProviderStream(baseStreamFn: StreamFn | undefined): StreamFn {
+  return createKimiToolCallMarkupWrapper(
+    createAnthropicToolPayloadCompatibilityWrapper(baseStreamFn, {
+      toolSchemaMode: "openai-functions",
+      toolChoiceMode: "openai-string-modes",
+    }),
+  );
 }
