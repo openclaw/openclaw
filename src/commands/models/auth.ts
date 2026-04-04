@@ -5,6 +5,14 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type {
+  ProviderAuthMethod,
+  ProviderAuthResult,
+  ProviderPlugin,
+} from "../../plugins/types.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -16,21 +24,13 @@ import {
   loadAuthProfileStoreForRuntime,
   upsertAuthProfile,
 } from "../../agents/auth-profiles.js";
-import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
-import type {
-  ProviderAuthMethod,
-  ProviderAuthResult,
-  ProviderPlugin,
-} from "../../plugins/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
@@ -79,6 +79,19 @@ const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
 
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
+}
+
+function throwIfAnthropicTokenSetupDisabled(provider: string): void {
+  if (normalizeProviderId(provider) !== "anthropic") {
+    return;
+  }
+  throw new Error(
+    [
+      "Anthropic setup-token auth is no longer available for new setup in OpenClaw.",
+      "Existing Anthropic token profiles still run if they are already configured.",
+      `Use ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")} or an Anthropic API key instead.`,
+    ].join("\n"),
+  );
 }
 
 type ResolvedModelsAuthContext = {
@@ -317,13 +330,11 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   const provider =
-    resolveRequestedProviderOrThrow(tokenProviders, opts.provider ?? "anthropic") ??
-    tokenProviders.find((candidate) => normalizeProviderId(candidate.id) === "anthropic") ??
-    tokenProviders[0] ??
-    null;
+    resolveRequestedProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0] ?? null;
   if (!provider) {
     throw new Error("No token-capable provider is available.");
   }
+  throwIfAnthropicTokenSetupDisabled(provider.id);
 
   if (!opts.yes) {
     const proceed = await confirm({
@@ -366,6 +377,7 @@ export async function modelsAuthPasteTokenCommand(
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
+  throwIfAnthropicTokenSetupDisabled(provider);
   const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
 
   const tokenInput = await text({

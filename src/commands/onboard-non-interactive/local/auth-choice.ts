@@ -1,8 +1,9 @@
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
-import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
+import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import {
   formatDeprecatedNonInteractiveAuthChoiceError,
@@ -16,7 +17,6 @@ import {
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
 } from "../../onboard-custom.js";
-import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
@@ -130,8 +130,21 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (authChoice === "setup-token") {
     runtime.error(
       [
-        'Auth choice "setup-token" requires interactive mode.',
-        'Use "--auth-choice token" with --token and --token-provider anthropic.',
+        'Auth choice "setup-token" is no longer supported for Anthropic onboarding.',
+        "Existing Anthropic token profiles still run if they are already configured.",
+        'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
+      ].join("\n"),
+    );
+    runtime.exit(1);
+    return null;
+  }
+
+  if (authChoice === "token") {
+    runtime.error(
+      [
+        'Auth choice "token" is no longer supported for Anthropic onboarding.',
+        "Existing Anthropic token profiles still run if they are already configured.",
+        'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
       ].join("\n"),
     );
     runtime.exit(1);
@@ -246,7 +259,15 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "minimax-global-oauth" ||
     authChoice === "minimax-cn-oauth"
   ) {
-    runtime.error("OAuth requires interactive mode.");
+    runtime.error(
+      authChoice === "oauth"
+        ? [
+            'Auth choice "oauth" is no longer supported for Anthropic onboarding.',
+            "Existing Anthropic token profiles still run if they are already configured.",
+            'Use "--auth-choice anthropic-cli" or "--auth-choice apiKey" instead.',
+          ].join("\n")
+        : "OAuth requires interactive mode.",
+    );
     runtime.exit(1);
     return null;
   }

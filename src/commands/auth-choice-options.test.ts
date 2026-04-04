@@ -58,15 +58,6 @@ describe("buildAuthChoiceOptions", () => {
         groupLabel: "Copilot",
       },
       {
-        pluginId: "anthropic",
-        providerId: "anthropic",
-        methodId: "setup-token",
-        choiceId: "token",
-        choiceLabel: "Anthropic token (paste setup-token)",
-        groupId: "anthropic",
-        groupLabel: "Anthropic",
-      },
-      {
         pluginId: "openai",
         providerId: "openai",
         methodId: "api-key",
@@ -202,7 +193,6 @@ describe("buildAuthChoiceOptions", () => {
 
     for (const value of [
       "github-copilot",
-      "token",
       "zai-api-key",
       "xiaomi-api-key",
       "minimax-global-api",
@@ -295,8 +285,6 @@ describe("buildAuthChoiceOptions", () => {
       includeSkip: true,
     }).split("|");
 
-    expect(cliChoices).toContain("setup-token");
-    expect(cliChoices).toContain("oauth");
     expect(cliChoices).toContain("claude-cli");
     expect(cliChoices).toContain("codex-cli");
   });
@@ -378,7 +366,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(litellmGroup?.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
   });
 
-  it("prefers Anthropic Claude CLI over API key and hides manual-only setup-token in grouped selection", () => {
+  it("prefers Anthropic Claude CLI over API key in grouped selection", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {
         pluginId: "anthropic",
@@ -396,16 +384,6 @@ describe("buildAuthChoiceOptions", () => {
         choiceId: "anthropic-cli",
         choiceLabel: "Anthropic Claude CLI",
         assistantPriority: -20,
-        groupId: "anthropic",
-        groupLabel: "Anthropic",
-      },
-      {
-        pluginId: "anthropic",
-        providerId: "anthropic",
-        methodId: "setup-token",
-        choiceId: "token",
-        choiceLabel: "Anthropic token (paste setup-token)",
-        assistantVisibility: "manual-only",
         groupId: "anthropic",
         groupLabel: "Anthropic",
       },

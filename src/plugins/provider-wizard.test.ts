@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProviderPlugin } from "./types.js";
 import {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
@@ -6,7 +7,6 @@ import {
   resolveProviderWizardOptions,
   runProviderModelSelectedHook,
 } from "./provider-wizard.js";
-import type { ProviderPlugin } from "./types.js";
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 vi.mock("./providers.runtime.js", () => ({
@@ -291,24 +291,24 @@ describe("provider wizard boundaries", () => {
         label: "Anthropic",
         auth: [
           {
-            id: "setup-token",
-            label: "setup-token",
-            kind: "token",
+            id: "cli",
+            label: "Claude CLI",
+            kind: "custom",
             wizard: {
-              choiceId: "token",
+              choiceId: "anthropic-cli",
               modelAllowlist: {
-                allowedKeys: ["anthropic/claude-sonnet-4-6"],
-                initialSelections: ["anthropic/claude-sonnet-4-6"],
-                message: "Anthropic OAuth models",
+                allowedKeys: ["claude-cli/claude-sonnet-4-6"],
+                initialSelections: ["claude-cli/claude-sonnet-4-6"],
+                message: "Claude CLI models",
               },
             },
             run: vi.fn(),
           },
         ],
       }),
-      choice: "token",
+      choice: "anthropic-cli",
       expectedOption: {
-        value: "token",
+        value: "anthropic-cli",
         label: "Anthropic",
         groupId: "anthropic",
         groupLabel: "Anthropic",

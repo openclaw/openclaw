@@ -20,18 +20,7 @@
       "assistantPriority": -20,
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + setup-token + API key"
-    },
-    {
-      "provider": "anthropic",
-      "method": "setup-token",
-      "choiceId": "token",
-      "choiceLabel": "Anthropic token (paste setup-token)",
-      "choiceHint": "Run `claude setup-token` elsewhere, then paste the token here",
-      "assistantVisibility": "manual-only",
-      "groupId": "anthropic",
-      "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + setup-token + API key"
+      "groupHint": "Claude CLI + API key"
     },
     {
       "provider": "anthropic",
@@ -40,7 +29,7 @@
       "choiceLabel": "Anthropic API key",
       "groupId": "anthropic",
       "groupLabel": "Anthropic",
-      "groupHint": "Claude CLI + setup-token + API key",
+      "groupHint": "Claude CLI + API key",
       "optionKey": "anthropicApiKey",
       "cliFlag": "--anthropic-api-key",
       "cliOption": "--anthropic-api-key <key>",

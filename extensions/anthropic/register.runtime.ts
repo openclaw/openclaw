@@ -1,27 +1,19 @@
-import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { parseDurationMs } from "openclaw/plugin-sdk/cli-runtime";
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import {
   CLAUDE_CLI_PROFILE_ID,
   applyAuthProfileConfig,
-  buildTokenProfileId,
   ensureApiKeyFromOptionEnvOrPrompt,
   listProfilesForProvider,
   normalizeApiKeyInput,
-  normalizeSecretInput,
-  normalizeSecretInputModeInput,
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
   suggestOAuthProfileIdForLegacyDefault,
   type AuthProfileStore,
   type ProviderAuthResult,
-  upsertAuthProfile,
-  validateAnthropicSetupToken,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
@@ -167,144 +159,6 @@ function buildAnthropicAuthDoctorHint(params: {
   ].join("\n");
 }
 
-async function runAnthropicSetupToken(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
-  await ctx.prompter.note(
-    ["Run `claude setup-token` in your terminal.", "Then paste the generated token below."].join(
-      "\n",
-    ),
-    "Anthropic setup-token",
-  );
-
-  const requestedSecretInputMode = normalizeSecretInputModeInput(ctx.secretInputMode);
-  const selectedMode = ctx.allowSecretRefPrompt
-    ? await resolveSecretInputModeForEnvSelection({
-        prompter: ctx.prompter,
-        explicitMode: requestedSecretInputMode,
-        copy: {
-          modeMessage: "How do you want to provide this setup token?",
-          plaintextLabel: "Paste setup token now",
-          plaintextHint: "Stores the token directly in the auth profile",
-        },
-      })
-    : "plaintext";
-
-  let token = "";
-  let tokenRef: { source: "env" | "file" | "exec"; provider: string; id: string } | undefined;
-  if (selectedMode === "ref") {
-    const resolved = await promptSecretRefForSetup({
-      provider: "anthropic-setup-token",
-      config: ctx.config,
-      prompter: ctx.prompter,
-      preferredEnvVar: "ANTHROPIC_SETUP_TOKEN",
-      copy: {
-        sourceMessage: "Where is this Anthropic setup token stored?",
-        envVarPlaceholder: "ANTHROPIC_SETUP_TOKEN",
-      },
-    });
-    token = resolved.resolvedValue.trim();
-    tokenRef = resolved.ref;
-  } else {
-    const tokenRaw = await ctx.prompter.text({
-      message: "Paste Anthropic setup-token",
-      validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
-    });
-    token = String(tokenRaw ?? "").trim();
-  }
-  const tokenError = validateAnthropicSetupToken(token);
-  if (tokenError) {
-    throw new Error(tokenError);
-  }
-
-  const profileNameRaw = await ctx.prompter.text({
-    message: "Token name (blank = default)",
-    placeholder: "default",
-  });
-
-  return {
-    profiles: [
-      {
-        profileId: buildTokenProfileId({
-          provider: PROVIDER_ID,
-          name: String(profileNameRaw ?? ""),
-        }),
-        credential: {
-          type: "token",
-          provider: PROVIDER_ID,
-          token,
-          ...(tokenRef ? { tokenRef } : {}),
-        },
-      },
-    ],
-  };
-}
-
-async function runAnthropicSetupTokenNonInteractive(ctx: {
-  config: ProviderAuthContext["config"];
-  opts: {
-    tokenProvider?: string;
-    token?: string;
-    tokenExpiresIn?: string;
-    tokenProfileId?: string;
-  };
-  runtime: ProviderAuthContext["runtime"];
-  agentDir?: string;
-}): Promise<ProviderAuthContext["config"] | null> {
-  const provider = ctx.opts.tokenProvider?.trim().toLowerCase();
-  if (!provider) {
-    ctx.runtime.error("Missing --token-provider for --auth-choice token.");
-    ctx.runtime.exit(1);
-    return null;
-  }
-  if (provider !== PROVIDER_ID) {
-    ctx.runtime.error("Only --token-provider anthropic is supported for --auth-choice token.");
-    ctx.runtime.exit(1);
-    return null;
-  }
-
-  const token = normalizeSecretInput(ctx.opts.token);
-  if (!token) {
-    ctx.runtime.error("Missing --token for --auth-choice token.");
-    ctx.runtime.exit(1);
-    return null;
-  }
-  const tokenError = validateAnthropicSetupToken(token);
-  if (tokenError) {
-    ctx.runtime.error(tokenError);
-    ctx.runtime.exit(1);
-    return null;
-  }
-
-  let expires: number | undefined;
-  const expiresInRaw = ctx.opts.tokenExpiresIn?.trim();
-  if (expiresInRaw) {
-    try {
-      expires = Date.now() + parseDurationMs(expiresInRaw, { defaultUnit: "d" });
-    } catch (err) {
-      ctx.runtime.error(`Invalid --token-expires-in: ${String(err)}`);
-      ctx.runtime.exit(1);
-      return null;
-    }
-  }
-
-  const profileId =
-    ctx.opts.tokenProfileId?.trim() || buildTokenProfileId({ provider: PROVIDER_ID, name: "" });
-  upsertAuthProfile({
-    profileId,
-    agentDir: ctx.agentDir,
-    credential: {
-      type: "token",
-      provider: PROVIDER_ID,
-      token,
-      ...(expires ? { expires } : {}),
-    },
-  });
-  return applyAuthProfileConfig(ctx.config, {
-    profileId,
-    provider: PROVIDER_ID,
-    mode: "token",
-  });
-}
-
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   if (!hasClaudeCliAuth()) {
     throw new Error(
@@ -385,7 +239,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
           assistantPriority: -20,
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + setup-token + API key",
+          groupHint: "Claude CLI + API key",
           modelAllowlist: {
             allowedKeys: [...ANTHROPIC_OAUTH_ALLOWLIST].map((model) =>
               model.replace(/^anthropic\//, "claude-cli/"),
@@ -399,34 +253,6 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
           await runAnthropicCliMigrationNonInteractive({
             config: ctx.config,
             runtime: ctx.runtime,
-          }),
-      },
-      {
-        id: "setup-token",
-        label: "setup-token (claude)",
-        hint: "Paste a setup-token from `claude setup-token`",
-        kind: "token",
-        wizard: {
-          choiceId: "token",
-          choiceLabel: "Anthropic token (paste setup-token)",
-          choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
-          assistantVisibility: "manual-only",
-          groupId: "anthropic",
-          groupLabel: "Anthropic",
-          groupHint: "Claude CLI + setup-token + API key",
-          modelAllowlist: {
-            allowedKeys: [...ANTHROPIC_OAUTH_ALLOWLIST],
-            initialSelections: ["anthropic/claude-sonnet-4-6"],
-            message: "Anthropic OAuth models",
-          },
-        },
-        run: async (ctx: ProviderAuthContext) => await runAnthropicSetupToken(ctx),
-        runNonInteractive: async (ctx) =>
-          await runAnthropicSetupTokenNonInteractive({
-            config: ctx.config,
-            opts: ctx.opts,
-            runtime: ctx.runtime,
-            agentDir: ctx.agentDir,
           }),
       },
       createProviderApiKeyAuthMethod({
@@ -445,7 +271,7 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
           choiceLabel: "Anthropic API key",
           groupId: "anthropic",
           groupLabel: "Anthropic",
-          groupHint: "Claude CLI + setup-token + API key",
+          groupHint: "Claude CLI + API key",
         },
       }),
     ],
@@ -481,7 +307,8 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
         ? "adaptive"
         : undefined,
     resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
-    fetchUsageSnapshot: async (ctx) => await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+    fetchUsageSnapshot: async (ctx) =>
+      await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     isCacheTtlEligible: () => true,
     buildAuthDoctorHint: (ctx) =>
       buildAnthropicAuthDoctorHint({
