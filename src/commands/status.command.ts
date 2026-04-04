@@ -1,7 +1,7 @@
 import { withProgress } from "../cli/progress.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { normalizeUpdateChannel, resolveUpdateChannelDisplay } from "../infra/update-channels.js";
-import type { Tone } from "../plugin-sdk/memory-core-host-status.js";
+import type { Tone } from "../memory-host-sdk/status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";

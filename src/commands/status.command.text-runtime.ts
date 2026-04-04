@@ -8,7 +8,7 @@ export {
   resolveMemoryCacheSummary,
   resolveMemoryFtsState,
   resolveMemoryVectorState,
-} from "../plugin-sdk/memory-core-host-status.js";
+} from "../memory-host-sdk/status.js";
 export {
   formatPluginCompatibilityNotice,
   summarizePluginCompatibility,

@@ -1,5 +1,12 @@
 import fsSync from "node:fs";
 import {
+  auditShortTermPromotionArtifacts,
+  getBuiltinMemoryEmbeddingProviderDoctorMetadata,
+  listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
+  repairShortTermPromotionArtifacts,
+  type ShortTermAuditSummary,
+} from "../../extensions/memory-core/runtime-api.js";
+import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -8,16 +15,9 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  auditShortTermPromotionArtifacts,
-  getBuiltinMemoryEmbeddingProviderDoctorMetadata,
-  listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
-  repairShortTermPromotionArtifacts,
-  type ShortTermAuditSummary,
-} from "../plugin-sdk/memory-core-engine-runtime.js";
-import { DEFAULT_LOCAL_MODEL } from "../plugin-sdk/memory-core-host-engine-embeddings.js";
-import { checkQmdBinaryAvailability } from "../plugin-sdk/memory-core-host-engine-qmd.js";
-import { hasConfiguredMemorySecretInput } from "../plugin-sdk/memory-core-host-secret.js";
+import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/engine-embeddings.js";
+import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
+import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,

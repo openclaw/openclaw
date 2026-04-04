@@ -7,7 +7,7 @@ import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
-} from "../plugin-sdk/memory-core-host-multimodal.js";
+} from "../memory-host-sdk/multimodal.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";

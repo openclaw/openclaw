@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
 import {
   parseBrowserMajorVersion,
   readBrowserVersion,
   resolveGoogleChromeExecutableForPlatform,
-} from "../plugin-sdk/browser-host-inspection.js";
+} from "../../extensions/browser/runtime-api.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { note } from "../terminal/note.js";
 
 const CHROME_MCP_MIN_MAJOR = 144;

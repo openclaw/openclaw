@@ -17,7 +17,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { resolveMemoryBackendConfig } from "../plugin-sdk/memory-core-host-engine-storage.js";
+import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
