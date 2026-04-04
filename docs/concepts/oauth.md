@@ -81,8 +81,8 @@ and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
 OpenClaw no longer offers Anthropic setup-token onboarding or auth commands for
-new setup. Existing legacy Anthropic token profiles are still honored at
-runtime if they are already configured.
+new setup. Existing Anthropic OAuth/token profiles are still honored at runtime
+if they are already configured.
 
 The generic token helpers still exist for other providers:
 `openclaw models auth setup-token --provider <id>` and

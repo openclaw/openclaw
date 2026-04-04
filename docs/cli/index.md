@@ -1495,7 +1495,7 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 Onboarding shortcut: `openclaw onboard --auth-choice anthropic-cli`
 
-Existing legacy Anthropic token profiles still run if already configured, but
+Existing Anthropic OAuth/token profiles still run if already configured, but
 OpenClaw no longer offers Anthropic setup-token as a new auth path.
 
 Legacy alias note: `claude-cli` is the deprecated onboarding auth-choice alias.

@@ -61,9 +61,9 @@ See [Help](/help) for details on env inheritance (`env.shellEnv`,
 
 ## Anthropic: legacy token compatibility
 
-Existing Anthropic token profiles are still honored at runtime if they are
-already configured, but OpenClaw no longer offers Anthropic setup-token auth
-for new setup via onboarding or `models auth` commands.
+Existing Anthropic OAuth/token profiles are still honored at runtime if they
+are already configured, but OpenClaw no longer offers Anthropic setup-token
+auth for new setup via onboarding or `models auth` commands.
 
 For new setup, use an Anthropic API key or migrate to Claude CLI on the gateway
 host.

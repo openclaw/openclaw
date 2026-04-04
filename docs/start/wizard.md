@@ -72,7 +72,7 @@ Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
    For non-interactive runs, `--secret-input-mode ref` stores env-backed refs in auth profiles instead of plaintext API key values.
    In non-interactive `ref` mode, the provider env var must be set; passing inline key flags without that env var fails fast.
    In interactive runs, choosing secret reference mode lets you point at either an environment variable or a configured provider ref (`file` or `exec`), with a fast preflight validation before saving.
-   For Anthropic, interactive onboarding/configure prefers **Anthropic Claude CLI** first, then **Anthropic API key**. Existing legacy Anthropic token profiles still run if already configured, but new setup is no longer offered through onboarding or auth commands.
+   For Anthropic, interactive onboarding/configure prefers **Anthropic Claude CLI** first, then **Anthropic API key**. Existing Anthropic OAuth/token profiles still run if already configured, but new setup is no longer offered through onboarding or auth commands.
 2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
    In interactive token mode, choose default plaintext token storage or opt into SecretRef.
