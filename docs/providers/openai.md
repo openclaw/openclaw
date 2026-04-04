@@ -184,6 +184,10 @@ OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
 `openai-codex/*`, default transport is `"auto"` (WebSocket-first, then SSE
 fallback).
 
+In `"auto"` mode, OpenClaw also retries one early, retryable WebSocket failure
+before it falls back to SSE. Forced `"websocket"` mode still surfaces transport
+errors directly instead of hiding them behind fallback.
+
 You can set `agents.defaults.models.<provider/model>.params.transport`:
 
 - `"sse"`: force SSE
