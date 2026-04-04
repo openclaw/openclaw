@@ -5,7 +5,7 @@ read_when:
 title: "Microsoft Teams"
 ---
 
-# Microsoft Teams (plugin)
+# Microsoft Teams
 
 > "Abandon all hope, ye who enter here."
 
@@ -35,7 +35,9 @@ Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Ensure the Microsoft Teams bundled plugin is available.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + client secret + tenant ID).
 3. Configure OpenClaw with those credentials.
 4. Expose `/api/messages` (port 3978 by default) via a public URL or tunnel.
@@ -136,7 +138,9 @@ Example:
 
 ## How it works
 
-1. Install the Microsoft Teams plugin.
+1. Ensure the Microsoft Teams plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create an **Azure Bot** (App ID + secret + tenant ID).
 3. Build a **Teams app package** that references the bot and includes the RSC permissions below.
 4. Upload/install the Teams app into a team (or personal scope for DMs).
@@ -235,9 +239,11 @@ This is often easier than hand-editing JSON manifests.
 
 ## Setup (minimal text-only)
 
-1. **Install the Microsoft Teams plugin**
-   - From npm: `openclaw plugins install @openclaw/msteams`
-   - From a local checkout: `openclaw plugins install ./path/to/local/msteams-plugin`
+1. **Ensure the Microsoft Teams plugin is available**
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually:
+     - From npm: `openclaw plugins install @openclaw/msteams`
+     - From a local checkout: `openclaw plugins install ./path/to/local/msteams-plugin`
 
 2. **Bot registration**
    - Create an Azure Bot (see above) and note:
@@ -279,7 +285,7 @@ This is often easier than hand-editing JSON manifests.
      - `https://<host>:3978/api/messages` (or your chosen path/port).
 
 6. **Run the gateway**
-   - The Teams channel starts automatically when the plugin is installed and `msteams` config exists with credentials.
+   - The Teams channel starts automatically when the bundled or manually installed plugin is available and `msteams` config exists with credentials.
 
 ## Member info action
 

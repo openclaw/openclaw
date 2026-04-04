@@ -60,6 +60,10 @@
     "target": "Feishu"
   },
   {
+    "source": "Mattermost",
+    "target": "Mattermost"
+  },
+  {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
   },
@@ -174,6 +178,10 @@
   {
     "source": "Polls",
     "target": "投票"
+  },
+  {
+    "source": "QQ Bot",
+    "target": "QQ Bot"
   },
   {
     "source": "Release Policy",

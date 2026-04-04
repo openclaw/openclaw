@@ -6,9 +6,9 @@ read_when:
 title: "Matrix"
 ---
 
-# Matrix (plugin)
+# Matrix
 
-Matrix is the Matrix channel plugin for OpenClaw.
+Matrix is the Matrix bundled channel plugin for OpenClaw.
 It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, reactions, polls, location, and E2EE.
 
 ## Bundled plugin
@@ -35,7 +35,9 @@ See [Plugins](/tools/plugin) for plugin behavior and install rules.
 
 ## Setup
 
-1. Ensure the Matrix bundled plugin is available.
+1. Ensure the Matrix plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Matrix account on your homeserver.
 3. Configure `channels.matrix` with either:
    - `homeserver` + `accessToken`, or

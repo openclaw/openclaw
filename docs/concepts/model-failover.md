@@ -155,12 +155,15 @@ State is stored in `auth-profiles.json` under `usageStats`:
 
 Billing/credit failures (for example “insufficient credits” / “credit balance too low”) are treated as failover‑worthy, but they’re usually not transient. Instead of a short cooldown, OpenClaw marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.
 
-Not every HTTP `402` lands here. OpenClaw classifies temporary `402` usage-window
-and organization/workspace spend-limit errors as `rate_limit` when the message
-looks retryable (for example `weekly usage limit exhausted`, `daily limit
-reached, resets tomorrow`, or `organization spending limit exceeded`). Those
-stay on the short cooldown/failover path instead of the long billing-disable
-path.
+Not every billing-shaped response is `402`, and not every HTTP `402` lands
+here. OpenClaw keeps explicit billing text in the billing lane even when a
+provider returns `401` or `403` instead (for example OpenRouter `403 Key limit
+exceeded`). Meanwhile temporary `402` usage-window and
+organization/workspace spend-limit errors are classified as `rate_limit` when
+the message looks retryable (for example `weekly usage limit exhausted`, `daily
+limit reached, resets tomorrow`, or `organization spending limit exceeded`).
+Those stay on the short cooldown/failover path instead of the long
+billing-disable path.
 
 State is stored in `auth-profiles.json`:
 

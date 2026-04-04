@@ -28,7 +28,9 @@ No external `zca`/`openzca` CLI binary is required.
 
 ## Quick setup (beginner)
 
-1. Ensure the bundled plugin is available (see above).
+1. Ensure the Zalo Personal plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Login (QR, on the Gateway machine):
    - `openclaw channels login --channel zalouser`
    - Scan the QR code with the Zalo mobile app.

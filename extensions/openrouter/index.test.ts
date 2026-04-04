@@ -17,11 +17,10 @@ describe("openrouter provider hooks", () => {
 
   it("injects provider routing into compat before applying stream wrappers", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
-    let capturedModel: Record<string, unknown> | undefined;
-    const baseStreamFn = vi.fn((model) => {
-      capturedModel = model as Record<string, unknown>;
-      return { async *[Symbol.asyncIterator]() {} } as never;
-    });
+    const baseStreamFn = vi.fn(
+      (..._args: Parameters<import("@mariozechner/pi-agent-core").StreamFn>) =>
+        ({ async *[Symbol.asyncIterator]() {} }) as never,
+    );
 
     const wrapped = provider.wrapStreamFn?.({
       provider: "openrouter",
@@ -47,7 +46,7 @@ describe("openrouter provider hooks", () => {
     );
 
     expect(baseStreamFn).toHaveBeenCalledOnce();
-    expect(capturedModel).toMatchObject({
+    expect(baseStreamFn.mock.calls[0]?.[0]).toMatchObject({
       compat: {
         openRouterRouting: {
           order: ["moonshot"],

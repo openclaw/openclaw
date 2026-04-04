@@ -5,9 +5,9 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-# Nextcloud Talk (plugin)
+# Nextcloud Talk
 
-Status: supported via plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
+Status: bundled plugin (webhook bot). Direct messages, rooms, reactions, and markdown messages are supported.
 
 ## Bundled plugin
 
@@ -33,7 +33,9 @@ Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Ensure the Nextcloud Talk bundled plugin is available.
+1. Ensure the Nextcloud Talk plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. On your Nextcloud server, create a bot:
 
    ```bash
