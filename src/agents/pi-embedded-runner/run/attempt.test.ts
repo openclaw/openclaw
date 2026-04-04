@@ -277,7 +277,6 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
-
   it("routes supported default streamSimple fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
