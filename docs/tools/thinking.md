@@ -94,5 +94,9 @@ title: "Thinking Levels"
 ## Web chat UI
 
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
-- Picking another level applies only to the next message (`thinkingOnce`); after sending, the selector snaps back to the stored session level.
-- To change the session default, send a `/think:<level>` directive (as before); the selector will reflect it after the next reload.
+- Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
+- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model: `adaptive` for Claude 4.6 on Anthropic/Bedrock, `low` for other reasoning-capable models, `off` otherwise.
+- The picker stays provider-aware:
+  - most providers show `off | minimal | low | medium | high | adaptive`
+  - Z.AI shows binary `off | on`
+- `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
