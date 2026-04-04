@@ -4,7 +4,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
-import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
+import {
+  callGateway,
+  isGatewayAcceptedOwnershipError,
+  randomIdempotencyKey,
+} from "../gateway/call.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
@@ -143,7 +147,6 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
           replyChannel: opts.replyChannel,
           replyAccountId: opts.replyAccount,
           bestEffortDeliver: opts.bestEffortDeliver,
-          timeout: timeoutSeconds,
           lane: opts.lane,
           extraSystemPrompt: opts.extraSystemPrompt,
           idempotencyKey,
@@ -192,6 +195,21 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
+    if (isGatewayAcceptedOwnershipError(err)) {
+      const accepted = err.accepted as GatewayAgentResponse;
+      if (opts.json) {
+        writeRuntimeJson(runtime, accepted);
+      } else {
+        const runId =
+          typeof accepted?.runId === "string" && accepted.runId.trim().length > 0
+            ? accepted.runId.trim()
+            : "unknown";
+        runtime.error?.(
+          `Gateway accepted run ${runId}; not falling back to embedded after gateway transport failure.`,
+        );
+      }
+      return accepted;
+    }
     runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
     return await agentCommand(localOpts, runtime, deps);
   }
