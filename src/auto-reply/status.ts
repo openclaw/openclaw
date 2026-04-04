@@ -16,6 +16,7 @@ import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -240,6 +241,8 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
+      cacheRead: number;
+      cacheWrite: number;
       promptTokens: number;
       total: number;
       model?: string;
@@ -320,7 +323,15 @@ const readUsageFromSessionLog = (
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
-    return { input, output, promptTokens, total, model };
+    return {
+      input,
+      output,
+      cacheRead: lastUsage.cacheRead ?? 0,
+      cacheWrite: lastUsage.cacheWrite ?? 0,
+      promptTokens,
+      total,
+      model,
+    };
   } catch {
     return undefined;
   }
@@ -552,6 +563,12 @@ export function buildStatusMessage(args: StatusArgs): string {
       }
       if (!outputTokens || outputTokens === 0) {
         outputTokens = logUsage.output;
+      }
+      if (typeof cacheRead !== "number" || cacheRead <= 0) {
+        cacheRead = logUsage.cacheRead;
+      }
+      if (typeof cacheWrite !== "number" || cacheWrite <= 0) {
+        cacheWrite = logUsage.cacheWrite;
       }
     }
   }
@@ -1089,7 +1106,9 @@ export function buildCommandsMessagePaginated(
 ): CommandsMessageResult {
   const page = Math.max(1, options?.page ?? 1);
   const surface = options?.surface?.toLowerCase();
-  const isTelegram = surface === "telegram";
+  const prefersPaginatedList = Boolean(
+    surface && getChannelPlugin(surface)?.commands?.buildCommandsListChannelData,
+  );
 
   const commands = cfg
     ? listChatCommandsForConfig(cfg, { skillCommands })
@@ -1097,7 +1116,7 @@ export function buildCommandsMessagePaginated(
   const pluginCommands = listPluginCommands();
   const items = buildCommandItems(commands, pluginCommands);
 
-  if (!isTelegram) {
+  if (!prefersPaginatedList) {
     const lines = ["ℹ️ Slash commands", ""];
     lines.push(formatCommandList(items));
     lines.push("", "More: /tools for available capabilities");

@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
@@ -9,37 +11,33 @@ let setDiscordRuntime: typeof import("./runtime.js").setDiscordRuntime;
 const probeDiscordMock = vi.hoisted(() => vi.fn());
 const monitorDiscordProviderMock = vi.hoisted(() => vi.fn());
 const auditDiscordChannelPermissionsMock = vi.hoisted(() => vi.fn());
+const collectDiscordAuditChannelIdsMock = vi.hoisted(() =>
+  vi.fn(() => ({ channelIds: [], unresolvedChannels: 0 })),
+);
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", () => {
   return {
-    ...actual,
     sleepWithAbort: sleepWithAbortMock,
   };
 });
 
-vi.mock("./probe.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./probe.js")>();
+vi.mock("./probe.js", () => {
   return {
-    ...actual,
     probeDiscord: probeDiscordMock,
   };
 });
 
-vi.mock("./monitor/provider.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./monitor/provider.runtime.js")>();
+vi.mock("./monitor/provider.runtime.js", () => {
   return {
-    ...actual,
     monitorDiscordProvider: monitorDiscordProviderMock,
   };
 });
 
-vi.mock("./audit.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./audit.js")>();
+vi.mock("./audit.js", () => {
   return {
-    ...actual,
     auditDiscordChannelPermissions: auditDiscordChannelPermissionsMock,
+    collectDiscordAuditChannelIds: collectDiscordAuditChannelIdsMock,
   };
 });
 
@@ -82,6 +80,11 @@ afterEach(() => {
   probeDiscordMock.mockReset();
   monitorDiscordProviderMock.mockReset();
   auditDiscordChannelPermissionsMock.mockReset();
+  collectDiscordAuditChannelIdsMock.mockReset();
+  collectDiscordAuditChannelIdsMock.mockReturnValue({
+    channelIds: [],
+    unresolvedChannels: 0,
+  });
   sleepWithAbortMock.mockReset();
   sleepWithAbortMock.mockResolvedValue(undefined);
 });
@@ -97,6 +100,15 @@ beforeAll(async () => {
 });
 
 describe("discordPlugin outbound", () => {
+  it("avoids local require calls for bundled-only sibling modules", async () => {
+    const source = await readFile(
+      resolve(process.cwd(), "extensions/discord/src/channel.ts"),
+      "utf8",
+    );
+    expect(source).not.toContain('require("./ui.js")');
+    expect(source).not.toContain('require("./channel-actions.js")');
+  });
+
   it("honors per-account replyToMode overrides", () => {
     const resolveReplyToMode = discordPlugin.threading?.resolveReplyToMode;
     if (!resolveReplyToMode) {

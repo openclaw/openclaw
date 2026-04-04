@@ -6,14 +6,18 @@ read_when:
 title: "Matrix"
 ---
 
-# Matrix (plugin)
+# Matrix
 
-Matrix is the Matrix channel plugin for OpenClaw.
+Matrix is the Matrix bundled channel plugin for OpenClaw.
 It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, reactions, polls, location, and E2EE.
 
-## Plugin required
+## Bundled plugin
 
-Matrix is a plugin and is not bundled with core OpenClaw.
+Matrix ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Matrix, install
+it manually:
 
 Install from npm:
 
@@ -31,7 +35,9 @@ See [Plugins](/tools/plugin) for plugin behavior and install rules.
 
 ## Setup
 
-1. Install the plugin.
+1. Ensure the Matrix plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Create a Matrix account on your homeserver.
 3. Configure `channels.matrix` with either:
    - `homeserver` + `accessToken`, or
@@ -319,7 +325,9 @@ Verbose restore diagnostics:
 openclaw matrix verify backup restore --verbose
 ```
 
-Delete the current server backup and create a fresh backup baseline:
+Delete the current server backup and create a fresh backup baseline. If the stored
+backup key cannot be loaded cleanly, this reset can also recreate secret storage so
+future cold starts can load the new backup key:
 
 ```bash
 openclaw matrix verify backup reset --yes
@@ -366,8 +374,11 @@ If the homeserver requires interactive auth to upload cross-signing keys, OpenCl
 
 Use `--force-reset-cross-signing` only when you intentionally want to discard the current cross-signing identity and create a new one.
 
-If you intentionally want to discard the current room-key backup and start a new backup baseline for future messages, use `openclaw matrix verify backup reset --yes`.
-Do this only when you accept that unrecoverable old encrypted history will stay unavailable.
+If you intentionally want to discard the current room-key backup and start a new
+backup baseline for future messages, use `openclaw matrix verify backup reset --yes`.
+Do this only when you accept that unrecoverable old encrypted history will stay
+unavailable and that OpenClaw may recreate secret storage if the current backup
+secret cannot be loaded safely.
 
 ### Fresh backup baseline
 
@@ -654,7 +665,7 @@ Matrix can act as an exec approval client for a Matrix account.
 - `channels.matrix.execApprovals.agentFilter`
 - `channels.matrix.execApprovals.sessionFilter`
 
-Matrix becomes an exec approval client when `enabled` is true and at least one approver can be resolved. Approvers must be Matrix user IDs such as `@owner:example.org`.
+Approvers must be Matrix user IDs such as `@owner:example.org`. Matrix auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `channels.matrix.dm.allowFrom`. Set `enabled: false` to disable Matrix as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
 Delivery rules:
 
@@ -708,6 +719,7 @@ Top-level `channels.matrix` values act as defaults for named accounts unless an 
 You can scope inherited room entries to one Matrix account with `groups.<room>.account` (or legacy `rooms.<room>.account`).
 Entries without `account` stay shared across all Matrix accounts, and entries with `account: "default"` still work when the default account is configured directly on top-level `channels.matrix.*`.
 Partial shared auth defaults do not create a separate implicit default account by themselves. OpenClaw only synthesizes the top-level `default` account when that default has fresh auth (`homeserver` plus `accessToken`, or `homeserver` plus `userId` and `password`); named accounts can still stay discoverable from `homeserver` plus `userId` when cached credentials satisfy auth later.
+If Matrix already has exactly one named account, or `defaultAccount` points at an existing named account key, single-account-to-multi-account repair/setup promotion preserves that account instead of creating a fresh `accounts.default` entry. Only Matrix auth/bootstrap keys move into that promoted account; shared delivery-policy keys stay at the top level.
 Set `defaultAccount` when you want OpenClaw to prefer one named Matrix account for implicit routing, probing, and CLI operations.
 If you configure multiple named accounts, set `defaultAccount` or pass `--account <id>` for CLI commands that rely on implicit account selection.
 Pass `--account <id>` to `openclaw matrix verify ...` and `openclaw matrix devices ...` when you want to override that implicit selection for one command.

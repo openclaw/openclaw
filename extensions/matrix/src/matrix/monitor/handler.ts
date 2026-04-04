@@ -4,7 +4,9 @@ import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runti
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
 import { createMatrixDraftStream } from "../draft-stream.js";
+import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import {
+  formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
   formatMatrixMessageText,
   resolveMatrixMessageAttachment,
@@ -139,12 +141,20 @@ function resolveMatrixInboundBodyText(params: {
   msgtype?: string;
   hadMediaUrl: boolean;
   mediaDownloadFailed: boolean;
+  mediaSizeLimitExceeded?: boolean;
 }): string {
   if (params.mediaPlaceholder) {
     return params.rawBody || params.mediaPlaceholder;
   }
   if (!params.mediaDownloadFailed || !params.hadMediaUrl) {
     return params.rawBody;
+  }
+  if (params.mediaSizeLimitExceeded) {
+    return formatMatrixMediaTooLargeText({
+      body: params.rawBody,
+      filename: params.filename,
+      msgtype: params.msgtype,
+    });
   }
   return formatMatrixMediaUnavailableText({
     body: params.rawBody,
@@ -766,6 +776,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           placeholder: string;
         } | null = null;
         let mediaDownloadFailed = false;
+        let mediaSizeLimitExceeded = false;
         const finalContentUrl =
           "url" in content && typeof content.url === "string" ? content.url : undefined;
         const finalContentFile =
@@ -795,6 +806,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             });
           } catch (err) {
             mediaDownloadFailed = true;
+            if (isMatrixMediaSizeLimitError(err)) {
+              mediaSizeLimitExceeded = true;
+            }
             const errorText = err instanceof Error ? err.message : String(err);
             logVerboseMessage(
               `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
@@ -817,6 +831,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           msgtype: content.msgtype,
           hadMediaUrl: Boolean(finalMediaUrl),
           mediaDownloadFailed,
+          mediaSizeLimitExceeded,
         });
         if (!bodyText) {
           await commitInboundEventIfClaimed();

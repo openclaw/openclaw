@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => ({
   ensureExtensionRelayForProfiles: vi.fn(async () => {}),
 }));
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   const browserConfig = {
     enabled: true,
   };
@@ -24,8 +24,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config.js")>();
+vi.mock("./config.js", async () => {
+  const actual = await vi.importActual<typeof import("./config.js")>("./config.js");
   return {
     ...actual,
     resolveBrowserConfig: vi.fn(() => ({

@@ -1,6 +1,5 @@
-import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAccountId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
@@ -20,20 +19,25 @@ import {
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
-  runSubagentAnnounceDispatch,
-  type SubagentAnnounceDeliveryResult,
-} from "./subagent-announce-dispatch.js";
-import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
-import {
   callGateway,
+  createBoundDeliveryRouter,
+  getGlobalHookRunner,
   isEmbeddedPiRunActive,
   loadConfig,
   loadSessionStore,
   queueEmbeddedPiMessage,
   resolveAgentIdFromSessionKey,
+  resolveConversationIdFromTargets,
+  resolveExternalBestEffortDeliveryTarget,
   resolveMainSessionKey,
+  resolveQueueSettings,
   resolveStorePath,
-} from "./subagent-announce.runtime.js";
+} from "./subagent-announce-delivery.runtime.js";
+import {
+  runSubagentAnnounceDispatch,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
+import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 
@@ -52,15 +56,6 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
   defaultSubagentAnnounceDeliveryDeps;
-
-let subagentAnnounceDeliveryRuntimePromise: Promise<
-  typeof import("./subagent-announce-delivery.runtime.js")
-> | null = null;
-
-function loadSubagentAnnounceDeliveryRuntime() {
-  subagentAnnounceDeliveryRuntimePromise ??= import("./subagent-announce-delivery.runtime.js");
-  return subagentAnnounceDeliveryRuntimePromise;
-}
 
 function resolveDirectAnnounceTransientRetryDelaysMs() {
   return process.env.OPENCLAW_TEST_FAST === "1"
@@ -99,17 +94,6 @@ function summarizeDeliveryError(error: unknown): string {
   }
 }
 
-function parseTelegramAnnounceTarget(to: string): {
-  chatId: string;
-  chatType: "direct" | "group" | "unknown";
-} {
-  const parsed = parseExplicitTargetForChannel("telegram", to);
-  const chatId = parsed?.to?.trim() ?? to.trim();
-  const chatType =
-    parsed?.chatType === "direct" || parsed?.chatType === "group" ? parsed.chatType : "unknown";
-  return { chatId, chatType };
-}
-
 function shouldStripThreadFromAnnounceEntry(
   normalizedRequester?: DeliveryContext,
   normalizedEntry?: DeliveryContext,
@@ -122,27 +106,13 @@ function shouldStripThreadFromAnnounceEntry(
     return false;
   }
   const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
-  if (requesterChannel && requesterChannel !== "telegram") {
-    return true;
-  }
-  if (!requesterChannel && !normalizedRequester.to.startsWith("telegram:")) {
-    return true;
-  }
-  try {
-    const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
-    if (requesterTarget.chatType !== "group") {
-      return true;
-    }
-    const entryTarget = normalizedEntry.to
-      ? parseTelegramAnnounceTarget(normalizedEntry.to)
-      : undefined;
-    if (entryTarget && entryTarget.chatId !== requesterTarget.chatId) {
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
+  return Boolean(
+    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
+      requester: normalizedRequester,
+      entry: normalizedEntry,
+    }),
+  );
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -266,7 +236,6 @@ export async function resolveSubagentCompletionOrigin(params: {
   spawnMode?: SpawnSubagentMode;
   expectsCompletionMessage: boolean;
 }): Promise<DeliveryContext | undefined> {
-  const deliveryRuntime = await loadSubagentAnnounceDeliveryRuntime();
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const channel = requesterOrigin?.channel?.trim().toLowerCase();
   const to = requesterOrigin?.to?.trim();
@@ -277,14 +246,14 @@ export async function resolveSubagentCompletionOrigin(params: {
       : undefined;
   const conversationId =
     threadId ||
-    deliveryRuntime.resolveConversationIdFromTargets({
+    resolveConversationIdFromTargets({
       targets: [to],
     }) ||
     "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
-  const route = deliveryRuntime.createBoundDeliveryRouter().resolveDestination({
+  const route = createBoundDeliveryRouter().resolveDestination({
     eventKind: "task_completion",
     targetSessionKey: params.childSessionKey,
     requester: requesterConversation,
@@ -445,7 +414,6 @@ async function maybeQueueSubagentAnnounce(params: {
   if (params.signal?.aborted) {
     return "none";
   }
-  const deliveryRuntime = await loadSubagentAnnounceDeliveryRuntime();
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
   const sessionId = entry?.sessionId;
@@ -453,7 +421,7 @@ async function maybeQueueSubagentAnnounce(params: {
     return "none";
   }
 
-  const queueSettings = deliveryRuntime.resolveQueueSettings({
+  const queueSettings = resolveQueueSettings({
     cfg,
     channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
     sessionEntry: entry,
@@ -520,7 +488,6 @@ async function sendSubagentAnnounceDirectly(params: {
       path: "none",
     };
   }
-  const deliveryRuntime = await loadSubagentAnnounceDeliveryRuntime();
   const cfg = subagentAnnounceDeliveryDeps.loadConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
@@ -531,15 +498,19 @@ async function sendSubagentAnnounceDirectly(params: {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
+    // Merge completionDirectOrigin with directOrigin so that missing fields
+    // (channel, to, accountId) fall back to the originating session's
+    // lastChannel / lastTo. Without this, a completion origin that carries a
+    // channel but not a `to` would prevent external delivery.
     const effectiveDirectOrigin =
       params.expectsCompletionMessage && completionDirectOrigin
-        ? completionDirectOrigin
+        ? mergeDeliveryContext(completionDirectOrigin, directOrigin)
         : directOrigin;
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
     const deliveryTarget = !params.requesterIsSubagent
-      ? deliveryRuntime.resolveExternalBestEffortDeliveryTarget({
+      ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
           to: effectiveDirectOrigin?.to,
           accountId: effectiveDirectOrigin?.accountId,

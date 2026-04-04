@@ -121,9 +121,11 @@ async function loadTelegramNativeCommandRuntime() {
 }
 
 function resolveTelegramProgressPlaceholder(command: {
-  telegramNativeProgressMessage?: string;
+  nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
 }): string | null {
-  const text = command.telegramNativeProgressMessage?.trim();
+  const text =
+    command.nativeProgressMessages?.telegram?.trim() ??
+    command.nativeProgressMessages?.default?.trim();
   return text ? text : null;
 }
 

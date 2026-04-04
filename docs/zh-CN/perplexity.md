@@ -6,7 +6,7 @@ summary: Perplexity Sonar 的 web_search 设置
 title: Perplexity Sonar
 x-i18n:
   generated_at: "2026-02-01T21:19:10Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 264d08e62e3bec854e378dad345ca209d139cd19b0469f3b25f88bb63b73ba00
   source_path: perplexity.md

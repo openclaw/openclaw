@@ -6,7 +6,7 @@
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.60.0",
     "@sinclair/typebox": "0.34.49",
-    "https-proxy-agent": "^8.0.0"
+    "https-proxy-agent": "^9.0.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

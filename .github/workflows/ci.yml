@@ -36,7 +36,8 @@ jobs:
       changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
-      checks_fast_matrix: ${{ steps.manifest.outputs.checks_fast_matrix }}
+      checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
+      checks_fast_extensions_matrix: ${{ steps.manifest.outputs.checks_fast_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
       run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
@@ -132,6 +133,10 @@ jobs:
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
+          import {
+            createExtensionTestShards,
+            DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+          } from "./scripts/lib/extension-test-plan.mjs";
 
           const parseBoolean = (value, fallback = false) => {
             if (value === undefined) return fallback;
@@ -165,6 +170,18 @@ jobs:
           const changedExtensionsMatrix = hasChangedExtensions
             ? parseJson(process.env.OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX, { include: [] })
             : { include: [] };
+          const extensionShardMatrix = createMatrix(
+            runNode
+              ? createExtensionTestShards({
+                  shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+                }).map((shard) => ({
+                  check_name: shard.checkName,
+                  extensions_csv: shard.extensionIds.join(","),
+                  shard_index: shard.index + 1,
+                  task: "extensions-batch",
+                }))
+              : [],
+          );
 
           const manifest = {
             docs_only: docsOnly,
@@ -178,11 +195,10 @@ jobs:
             changed_extensions_matrix: changedExtensionsMatrix,
             run_build_artifacts: runNode,
             run_checks_fast: runNode,
-            checks_fast_matrix: createMatrix(
+            checks_fast_core_matrix: createMatrix(
               runNode
                 ? [
                     { check_name: "checks-fast-bundled", runtime: "node", task: "bundled" },
-                    { check_name: "checks-fast-extensions", runtime: "node", task: "extensions" },
                     {
                       check_name: "checks-fast-contracts-protocol",
                       runtime: "node",
@@ -191,6 +207,7 @@ jobs:
                   ]
                 : [],
             ),
+            checks_fast_extensions_matrix: extensionShardMatrix,
             run_checks: runNode,
             checks_matrix: createMatrix(
               runNode
@@ -404,7 +421,7 @@ jobs:
           include-hidden-files: true
           retention-days: 1
 
-  checks-fast:
+  checks-fast-core:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
@@ -412,7 +429,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -436,9 +453,6 @@ jobs:
             bundled)
               pnpm test:bundled
               ;;
-            extensions)
-              pnpm test:extensions
-              ;;
             contracts|contracts-protocol)
               pnpm build
               pnpm test:contracts
@@ -449,6 +463,49 @@ jobs:
               exit 1
               ;;
           esac
+
+  checks-fast-extensions-shard:
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_fast == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_extensions_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Run extension shard
+        env:
+          OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
+        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
+
+  checks-fast-extensions:
+    name: checks-fast-extensions
+    needs: [preflight, checks-fast-extensions-shard]
+    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 5
+    steps:
+      - name: Verify extension shards
+        env:
+          SHARD_RESULT: ${{ needs.checks-fast-extensions-shard.result }}
+        run: |
+          if [ "$SHARD_RESULT" != "success" ]; then
+            echo "Extension shard checks failed: $SHARD_RESULT" >&2
+            exit 1
+          fi
 
   checks:
     name: ${{ matrix.check_name }}
@@ -488,7 +545,6 @@ jobs:
           echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
           if [ "$TASK" = "channels" ]; then
             echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
@@ -893,7 +949,7 @@ jobs:
       - name: Setup pnpm + cache store
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "10.23.0"
+          pnpm-version: "10.32.1"
           cache-key-suffix: "node24"
           # Sticky disk mount currently retries/fails on every shard and adds ~50s
           # before install while still yielding zero pnpm store reuse.

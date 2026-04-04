@@ -389,16 +389,15 @@ describe("applyJobPatch", () => {
     expect(job.delivery?.failureDestination?.to).toBe("https://example.invalid/failure");
   });
 
-  it("rejects Telegram delivery with invalid target (chatId/topicId format)", () => {
+  it("preserves raw channel delivery targets for plugin-owned validation", () => {
     const job = createIsolatedAgentTurnJob("job-telegram-invalid", {
       mode: "announce",
       channel: "telegram",
       to: "-10012345/6789",
     });
 
-    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
-      'Invalid Telegram delivery target "-10012345/6789". Use colon (:) as delimiter for topics, not slash. Valid formats: -1001234567890, -1001234567890:123, -1001234567890:topic:123, @username, https://t.me/username',
-    );
+    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
+    expect(job.delivery?.to).toBe("-10012345/6789");
   });
 
   it.each([
@@ -476,6 +475,20 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     ).not.toThrow();
   });
 
+  it("rejects custom session targets with path separators", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "bad-custom-session",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:../../outside",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+  });
+
   it("rejects failureDestination on main jobs without webhook delivery mode", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     expect(() =>
@@ -526,6 +539,20 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
       return;
     }
     expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).not.toThrow();
+  });
+
+  it("rejects patching to a custom session target with path separators", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(
+        job,
+        {
+          sessionTarget: "session:..\\outside",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { defaultAgentId: "main" },
+      ),
+    ).toThrow("invalid cron sessionTarget session id");
   });
 });
 

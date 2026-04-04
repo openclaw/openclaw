@@ -30,12 +30,15 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  messageProvider?: string;
+  agentAccountId?: string;
 };
 
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  env?: Record<string, string>;
 };
 
 export type CliReusableSession = {

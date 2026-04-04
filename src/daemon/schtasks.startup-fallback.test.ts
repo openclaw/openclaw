@@ -39,8 +39,8 @@ vi.mock("../utils.js", async () => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn,
@@ -123,6 +123,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push(
         { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
         { code: 5, stdout: "", stderr: "ERROR: Access is denied." },
       );
 
@@ -158,6 +159,7 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push(
         { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
         { code: 124, stdout: "", stderr: "schtasks timed out after 15000ms" },
       );
 

@@ -63,6 +63,7 @@ cat ~/.openclaw/openclaw.json
 - Health check + restart prompt.
 - Skills status summary (eligible/missing/blocked) and plugin status.
 - Config normalization for legacy values.
+- Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
 - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
 - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
 - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
@@ -104,6 +105,11 @@ If the config contains legacy value shapes (for example `messages.ackReaction`
 without a channel-specific override), doctor normalizes them into the current
 schema.
 
+That includes legacy Talk flat fields. Current public Talk config is
+`talk.provider` + `talk.providers.<provider>`. Doctor rewrites old
+`talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` /
+`talk.apiKey` shapes into the provider map.
+
 ### 2) Legacy config key migrations
 
 When the config contains deprecated keys, other commands refuse to run and ask
@@ -128,14 +134,20 @@ Current migrations:
 - `routing.queue` → `messages.queue`
 - `routing.bindings` → top-level `bindings`
 - `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`
+- legacy `talk.voiceId`/`talk.voiceAliases`/`talk.modelId`/`talk.outputFormat`/`talk.apiKey` → `talk.provider` + `talk.providers.<provider>`
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.media.audio.models`
 - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
 - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
 - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
 - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
+- `plugins.entries.voice-call.config.provider: "log"` → `"mock"`
+- `plugins.entries.voice-call.config.twilio.from` → `plugins.entries.voice-call.config.fromNumber`
+- `plugins.entries.voice-call.config.streaming.sttProvider` → `plugins.entries.voice-call.config.streaming.provider`
+- `plugins.entries.voice-call.config.streaming.openaiApiKey|sttModel|silenceDurationMs|vadThreshold`
+  → `plugins.entries.voice-call.config.streaming.providers.openai.*`
 - `bindings[].match.accountID` → `bindings[].match.accountId`
-- For channels with named `accounts` but missing `accounts.default`, move account-scoped top-level single-account channel values into `channels.<channel>.accounts.default` when present
+- For channels with named `accounts` but lingering single-account top-level channel values, move those account-scoped values into the promoted account chosen for that channel (`accounts.default` for most channels; Matrix can preserve an existing matching named/default target)
 - `identity` → `agents.list[].identity`
 - `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
 - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
@@ -211,7 +223,9 @@ These migrations are best-effort and idempotent; doctor will emit warnings when
 it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrates
 the legacy sessions + agent dir on startup so history/auth/models land in the
 per-agent path without a manual doctor run. WhatsApp auth is intentionally only
-migrated via `openclaw doctor`.
+migrated via `openclaw doctor`. Talk provider/provider-map normalization now
+compares by structural equality, so key-order-only diffs no longer trigger
+repeat no-op `doctor --fix` changes.
 
 ### 3a) Legacy plugin manifest migrations
 
@@ -285,7 +299,7 @@ Doctor checks:
 
 Doctor inspects OAuth profiles in the auth store, warns when tokens are
 expiring/expired, and can refresh them when safe. If the Anthropic Claude Code
-profile is stale, it suggests running `claude setup-token` (or pasting a setup-token).
+profile is stale, it suggests migrating to Claude CLI or an Anthropic API key.
 Refresh prompts only appear when running interactively (TTY); `--non-interactive`
 skips refresh attempts.
 

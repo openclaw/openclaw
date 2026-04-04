@@ -3,8 +3,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import { vi } from "vitest";
-import { resolveDmGroupAccessWithLists } from "../../../src/security/dm-policy-shared.js";
+import { vi, type Mock } from "vitest";
 
 export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = {
   (...args: TArgs): Promise<TResult>;
@@ -12,8 +11,9 @@ export type AsyncMock<TArgs extends unknown[] = unknown[], TResult = unknown> = 
   mockResolvedValue: (value: TResult) => AsyncMock<TArgs, TResult>;
   mockResolvedValueOnce: (value: TResult) => AsyncMock<TArgs, TResult>;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
-export const loadConfigMock = vi.fn();
+export const loadConfigMock: UnknownMock = vi.fn();
 export const readAllowFromStoreMock = vi.fn() as AsyncMock;
 export const upsertPairingRequestMock = vi.fn() as AsyncMock;
 
@@ -38,8 +38,12 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/security-runtime", () => {
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+    "openclaw/plugin-sdk/security-runtime",
+  );
   return {
+    ...actual,
     readStoreAllowFromForDmPolicy: async (params: {
       provider: string;
       accountId: string;
@@ -55,6 +59,5 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => {
         return [];
       }
     },
-    resolveDmGroupAccessWithLists,
   };
 });

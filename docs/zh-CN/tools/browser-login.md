@@ -6,7 +6,7 @@ summary: 用于浏览器自动化 + X/Twitter 发帖的手动登录
 title: 浏览器登录
 x-i18n:
   generated_at: "2026-02-03T07:55:03Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8ceea2d5258836e3db10f858ee122b5832a40f83a72ba18de140671091eef5a8
   source_path: tools/browser-login.md

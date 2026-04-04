@@ -12,6 +12,7 @@ import {
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
 } from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -54,6 +55,7 @@ type ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
+  clearProviderRuntimeHookCache: () => void;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
@@ -70,6 +72,7 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
+  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
@@ -80,6 +83,7 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
@@ -291,12 +295,12 @@ function resolveConfiguredProviderConfig(
 
 function applyConfiguredProviderOverrides(params: {
   provider: string;
-  discoveredModel: Model<Api>;
+  discoveredModel: ProviderRuntimeModel;
   providerConfig?: InlineProviderConfig;
   modelId: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
-}): Model<Api> {
+}): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
   if (!providerConfig) {
     return {
@@ -365,6 +369,7 @@ function applyConfiguredProviderOverrides(params: {
       input: normalizedInput,
       cost: configuredModel?.cost ?? discoveredModel.cost,
       contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
+      contextTokens: configuredModel?.contextTokens ?? discoveredModel.contextTokens,
       maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
       headers: requestConfig.headers,
       compat: configuredModel?.compat ?? discoveredModel.compat,
@@ -592,6 +597,7 @@ function resolveConfiguredFallbackModel(params: {
           configuredModel?.contextWindow ??
           providerConfig?.models?.[0]?.contextWindow ??
           DEFAULT_CONTEXT_TOKENS,
+        contextTokens: configuredModel?.contextTokens ?? providerConfig?.models?.[0]?.contextTokens,
         maxTokens:
           configuredModel?.maxTokens ??
           providerConfig?.models?.[0]?.maxTokens ??
@@ -720,7 +726,7 @@ export async function resolveModelAsync(
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
-      clearProviderRuntimeHookCache();
+      runtimeHooks.clearProviderRuntimeHookCache();
     }
     await runtimeHooks.prepareProviderDynamicModel({
       provider,

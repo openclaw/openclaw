@@ -52,6 +52,9 @@ API key auth, and dynamic model resolution.
       "name": "Acme AI",
       "description": "Acme AI model provider",
       "providers": ["acme-ai"],
+      "modelSupport": {
+        "modelPrefixes": ["acme-"]
+      },
       "providerAuthEnvVars": {
         "acme-ai": ["ACME_AI_API_KEY"]
       },
@@ -77,7 +80,9 @@ API key auth, and dynamic model resolution.
     </CodeGroup>
 
     The manifest declares `providerAuthEnvVars` so OpenClaw can detect
-    credentials without loading your plugin runtime. If you publish the
+    credentials without loading your plugin runtime. `modelSupport` is optional
+    and lets OpenClaw auto-load your provider plugin from shorthand model ids
+    like `acme-large` before runtime hooks exist. If you publish the
     provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
     are required in `package.json`.
 
@@ -203,6 +208,14 @@ API key auth, and dynamic model resolution.
     `createDefaultModelsPresetAppliers(...)`, and
     `createModelCatalogPresetAppliers(...)`.
 
+    When a provider's native endpoint supports streamed usage blocks on the
+    normal `openai-completions` transport, prefer the shared catalog helpers in
+    `openclaw/plugin-sdk/provider-catalog-shared` instead of hardcoding
+    provider-id checks. `supportsNativeStreamingUsageCompat(...)` and
+    `applyProviderNativeStreamingUsageCompat(...)` detect support from the
+    endpoint capability map, so native Moonshot/DashScope-style endpoints still
+    opt in even when a plugin is using a custom provider id.
+
   </Step>
 
   <Step title="Add dynamic model resolution">
@@ -237,6 +250,139 @@ API key auth, and dynamic model resolution.
     Most providers only need `catalog` + `resolveDynamicModel`. Add hooks
     incrementally as your provider requires them.
 
+    Shared helper builders now cover the most common replay/tool-compat
+    families, so plugins usually do not need to hand-wire each hook one by one:
+
+    ```typescript
+    import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+    import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream";
+    import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+
+    const GOOGLE_FAMILY_HOOKS = {
+      ...buildProviderReplayFamilyHooks({ family: "google-gemini" }),
+      ...buildProviderStreamFamilyHooks("google-thinking"),
+      ...buildProviderToolCompatFamilyHooks("gemini"),
+    };
+
+    api.registerProvider({
+      id: "acme-gemini-compatible",
+      // ...
+      ...GOOGLE_FAMILY_HOOKS,
+    });
+    ```
+
+    Available replay families today:
+
+    | Family | What it wires in |
+    | --- | --- |
+    | `openai-compatible` | Shared OpenAI-style replay policy for OpenAI-compatible transports, including tool-call-id sanitation, assistant-first ordering fixes, and generic Gemini-turn validation where the transport needs it |
+    | `anthropic-by-model` | Claude-aware replay policy chosen by `modelId`, so Anthropic-message transports only get Claude-specific thinking-block cleanup when the resolved model is actually a Claude id |
+    | `google-gemini` | Native Gemini replay policy plus bootstrap replay sanitation and tagged reasoning-output mode |
+    | `passthrough-gemini` | Gemini thought-signature sanitation for Gemini models running through OpenAI-compatible proxy transports; does not enable native Gemini replay validation or bootstrap rewrites |
+    | `hybrid-anthropic-openai` | Hybrid policy for providers that mix Anthropic-message and OpenAI-compatible model surfaces in one plugin; optional Claude-only thinking-block dropping stays scoped to the Anthropic side |
+
+    Real bundled examples:
+
+    - `google` and `google-gemini-cli`: `google-gemini`
+    - `openrouter`, `kilocode`, `opencode`, and `opencode-go`: `passthrough-gemini`
+    - `amazon-bedrock` and `anthropic-vertex`: `anthropic-by-model`
+    - `minimax`: `hybrid-anthropic-openai`
+    - `moonshot`, `ollama`, `xai`, and `zai`: `openai-compatible`
+
+    Available stream families today:
+
+    | Family | What it wires in |
+    | --- | --- |
+    | `google-thinking` | Gemini thinking payload normalization on the shared stream path |
+    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo/auto` and unsupported proxy reasoning ids skipping injected thinking |
+    | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level |
+    | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path |
+    | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management |
+    | `openrouter-thinking` | OpenRouter reasoning wrapper for proxy routes, with unsupported-model/`auto` skips handled centrally |
+    | `tool-stream-default-on` | Default-on `tool_stream` wrapper for providers like Z.AI that want tool streaming unless explicitly disabled |
+
+    Real bundled examples:
+
+    - `google` and `google-gemini-cli`: `google-thinking`
+    - `kilocode`: `kilocode-thinking`
+    - `moonshot`: `moonshot-thinking`
+    - `minimax` and `minimax-portal`: `minimax-fast-mode`
+    - `openai` and `openai-codex`: `openai-responses-defaults`
+    - `openrouter`: `openrouter-thinking`
+    - `zai`: `tool-stream-default-on`
+
+    `openclaw/plugin-sdk/provider-model-shared` also exports the replay-family
+    enum plus the shared helpers those families are built from. Common public
+    exports include:
+
+    - `ProviderReplayFamily`
+    - `buildProviderReplayFamilyHooks(...)`
+    - shared replay builders such as `buildOpenAICompatibleReplayPolicy(...)`,
+      `buildAnthropicReplayPolicyForModel(...)`,
+      `buildGoogleGeminiReplayPolicy(...)`, and
+      `buildHybridAnthropicOrOpenAIReplayPolicy(...)`
+    - Gemini replay helpers such as `sanitizeGoogleGeminiReplayHistory(...)`
+      and `resolveTaggedReasoningOutputMode()`
+    - endpoint/model helpers such as `resolveProviderEndpoint(...)`,
+      `normalizeProviderId(...)`, `normalizeGooglePreviewModelId(...)`, and
+      `normalizeNativeXaiModelId(...)`
+
+    `openclaw/plugin-sdk/provider-stream` exposes both the family builder and
+    the public wrapper helpers those families reuse. Common public exports
+    include:
+
+    - `ProviderStreamFamily`
+    - `buildProviderStreamFamilyHooks(...)`
+    - `composeProviderStreamWrappers(...)`
+    - shared OpenAI/Codex wrappers such as
+      `createOpenAIAttributionHeadersWrapper(...)`,
+      `createOpenAIFastModeWrapper(...)`,
+      `createOpenAIServiceTierWrapper(...)`,
+      `createOpenAIResponsesContextManagementWrapper(...)`, and
+      `createCodexNativeWebSearchWrapper(...)`
+    - shared proxy/provider wrappers such as `createOpenRouterWrapper(...)`,
+      `createToolStreamWrapper(...)`, and `createMinimaxFastModeWrapper(...)`
+
+    Some stream helpers stay provider-local on purpose. Current bundled
+    example: `@openclaw/anthropic-provider` exports
+    `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
+    `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the
+    lower-level Anthropic wrapper builders from its public `api.ts` /
+    `contract-api.ts` seam. Those helpers remain Anthropic-specific because
+    they also encode Claude OAuth beta handling and `context1m` gating.
+
+    Other bundled providers also keep transport-specific wrappers local when
+    the behavior is not shared cleanly across families. Current example: the
+    bundled xAI plugin keeps native xAI Responses shaping in its own
+    `wrapStreamFn`, including `/fast` alias rewrites, default `tool_stream`,
+    unsupported strict-tool cleanup, and xAI-specific reasoning-payload
+    removal.
+
+    `openclaw/plugin-sdk/provider-tools` currently exposes one shared
+    tool-schema family plus shared schema/compat helpers:
+
+    - `ProviderToolCompatFamily` documents the shared family inventory today.
+    - `buildProviderToolCompatFamilyHooks("gemini")` wires Gemini schema
+      cleanup + diagnostics for providers that need Gemini-safe tool schemas.
+    - `normalizeGeminiToolSchemas(...)` and `inspectGeminiToolSchemas(...)`
+      are the underlying public Gemini schema helpers.
+    - `resolveXaiModelCompatPatch()` returns the bundled xAI compat patch:
+      `toolSchemaProfile: "xai"`, unsupported schema keywords, native
+      `web_search` support, and HTML-entity tool-call argument decoding.
+    - `applyXaiModelCompat(model)` applies that same xAI compat patch to a
+      resolved model before it reaches the runner.
+
+    Real bundled example: the xAI plugin uses `normalizeResolvedModel` plus
+    `contributeResolvedModelCompat` to keep that compat metadata owned by the
+    provider instead of hardcoding xAI rules in core.
+
+    The same package-root pattern also backs other bundled providers:
+
+    - `@openclaw/openai-provider`: `api.ts` exports provider builders,
+      default-model helpers, and realtime provider builders
+    - `@openclaw/openrouter-provider`: `api.ts` exports the provider builder
+      plus onboarding/config helpers
+
     <Tabs>
       <Tab title="Token exchange">
         For providers that need a token exchange before each inference call:
@@ -270,6 +416,28 @@ API key auth, and dynamic model resolution.
         },
         ```
       </Tab>
+      <Tab title="Native transport identity">
+        For providers that need native request/session headers or metadata on
+        generic HTTP or WebSocket transports:
+
+        ```typescript
+        resolveTransportTurnState: (ctx) => ({
+          headers: {
+            "x-request-id": ctx.turnId,
+          },
+          metadata: {
+            session_id: ctx.sessionId ?? "",
+            turn_id: ctx.turnId,
+          },
+        }),
+        resolveWebSocketSessionPolicy: (ctx) => ({
+          headers: {
+            "x-session-id": ctx.sessionId ?? "",
+          },
+          degradeCooldownMs: 60_000,
+        }),
+        ```
+      </Tab>
       <Tab title="Usage and billing">
         For providers that expose usage/billing data:
 
@@ -291,30 +459,42 @@ API key auth, and dynamic model resolution.
       | # | Hook | When to use |
       | --- | --- | --- |
       | 1 | `catalog` | Model catalog or base URL defaults |
-      | 2 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | 3 | `prepareDynamicModel` | Async metadata fetch before resolving |
-      | 4 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 5 | `capabilities` | Transcript/tooling metadata (data, not callable) |
-      | 6 | `prepareExtraParams` | Default request params |
-      | 7 | `wrapStreamFn` | Custom headers/body wrappers |
-      | 8 | `formatApiKey` | Custom runtime token shape |
-      | 9 | `refreshOAuth` | Custom OAuth refresh |
-      | 10 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 11 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 12 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 13 | `suppressBuiltInModel` | Hide stale upstream rows |
-      | 14 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 15 | `isBinaryThinking` | Binary thinking on/off |
-      | 16 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 17 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 18 | `isModernModelRef` | Live/smoke model matching |
-      | 19 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 20 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 21 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 22 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
-      | 23 | `buildReplayPolicy` | Custom transcript policy (e.g. thinking-block stripping) |
-      | 24 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 25 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 2 | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
+      | 3 | `normalizeConfig` | Normalize `models.providers.<id>` config |
+      | 4 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
+      | 5 | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
+      | 6 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
+      | 7 | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | 8 | `normalizeResolvedModel` | Transport rewrites before the runner |
+      | 9 | `capabilities` | Legacy static capability bag; compatibility only |
+      | 10 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 11 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 12 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 13 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
+      | 14 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
+      | 15 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
+      | 16 | `prepareExtraParams` | Default request params |
+      | 17 | `createStreamFn` | Fully custom StreamFn transport |
+      | 18 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | 19 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 20 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 21 | `formatApiKey` | Custom runtime token shape |
+      | 22 | `refreshOAuth` | Custom OAuth refresh |
+      | 23 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 24 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 25 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 26 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 27 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 28 | `suppressBuiltInModel` | Hide stale upstream rows |
+      | 29 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 30 | `isBinaryThinking` | Binary thinking on/off |
+      | 31 | `supportsXHighThinking` | `xhigh` reasoning support |
+      | 32 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 33 | `isModernModelRef` | Live/smoke model matching |
+      | 34 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 35 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 36 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 37 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).
@@ -324,8 +504,8 @@ API key auth, and dynamic model resolution.
 
   <Step title="Add extra capabilities (optional)">
     <a id="step-5-add-extra-capabilities"></a>
-    A provider plugin can register speech, media understanding, image
-    generation, and web search alongside text inference:
+    A provider plugin can register speech, realtime transcription, realtime voice, media
+    understanding, image generation, and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -340,6 +520,33 @@ API key auth, and dynamic model resolution.
           outputFormat: "mp3",
           fileExtension: ".mp3",
           voiceCompatible: false,
+        }),
+      });
+
+      api.registerRealtimeTranscriptionProvider({
+        id: "acme-ai",
+        label: "Acme Realtime Transcription",
+        isConfigured: () => true,
+        createSession: (req) => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          close: () => {},
+          isConnected: () => true,
+        }),
+      });
+
+      api.registerRealtimeVoiceProvider({
+        id: "acme-ai",
+        label: "Acme Realtime Voice",
+        isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
+        createBridge: (req) => ({
+          connect: async () => {},
+          sendAudio: () => {},
+          setMediaTimestamp: () => {},
+          submitToolResult: () => {},
+          acknowledgeMark: () => {},
+          close: () => {},
+          isConnected: () => true,
         }),
       });
 

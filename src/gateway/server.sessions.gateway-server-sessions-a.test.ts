@@ -104,8 +104,10 @@ vi.mock("../auto-reply/reply/abort.js", async () => {
   };
 });
 
-vi.mock("../agents/bootstrap-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/bootstrap-cache.js")>();
+vi.mock("../agents/bootstrap-cache.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/bootstrap-cache.js")>(
+    "../agents/bootstrap-cache.js",
+  );
   return {
     ...actual,
     clearBootstrapSnapshot: bootstrapCacheMocks.clearBootstrapSnapshot,
@@ -123,8 +125,10 @@ vi.mock("../hooks/internal-hooks.js", async () => {
   };
 });
 
-vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/hook-runner-global.js")>();
+vi.mock("../plugins/hook-runner-global.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
+    "../plugins/hook-runner-global.js",
+  );
   return {
     ...actual,
     getGlobalHookRunner: vi.fn(() => ({
@@ -141,9 +145,10 @@ vi.mock("../plugins/hook-runner-global.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../infra/outbound/session-binding-service.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../infra/outbound/session-binding-service.js")>();
+vi.mock("../infra/outbound/session-binding-service.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../infra/outbound/session-binding-service.js")
+  >("../infra/outbound/session-binding-service.js");
   return {
     ...actual,
     getSessionBindingService: () => ({
@@ -154,8 +159,10 @@ vi.mock("../infra/outbound/session-binding-service.js", async (importOriginal) =
   };
 });
 
-vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../acp/runtime/registry.js")>();
+vi.mock("../acp/runtime/registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../acp/runtime/registry.js")>(
+    "../acp/runtime/registry.js",
+  );
   return {
     ...actual,
     getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
@@ -581,7 +588,7 @@ describe("gateway server sessions", () => {
           sessionId: "sess-child",
           updatedAt: Date.now() - 1_000,
           modelProvider: "anthropic",
-          model: "claude-sonnet-4-5",
+          model: "claude-sonnet-4-6",
           parentSessionKey: "agent:main:main",
           totalTokens: 0,
           totalTokensFresh: false,

@@ -169,6 +169,20 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
+      "prefers built dist/extensions in a git checkout outside vitest",
+      {
+        prefix: "openclaw-bundled-dir-git-built-",
+        hasExtensions: true,
+        hasSrc: true,
+        hasDistRuntimeExtensions: true,
+        hasDistExtensions: true,
+        hasGitCheckout: true,
+      },
+      {
+        expectedRelativeDir: path.join("dist-runtime", "extensions"),
+      },
+    ],
+    [
       "prefers source extensions under vitest to avoid stale staged plugins",
       {
         prefix: "openclaw-bundled-dir-vitest-",
@@ -182,13 +196,11 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers source extensions in a git checkout even without vitest env",
+      "falls back to source extensions in a git checkout when built trees are missing",
       {
         prefix: "openclaw-bundled-dir-git-",
         hasExtensions: true,
         hasSrc: true,
-        hasDistRuntimeExtensions: true,
-        hasDistExtensions: true,
         hasGitCheckout: true,
       },
       {

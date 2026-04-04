@@ -27,10 +27,7 @@ export {
   formatPairingApproveHint,
   getChatChannelMeta,
 } from "openclaw/plugin-sdk/core";
-export {
-  buildChannelConfigSchema,
-  TelegramConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-schema";
+export { buildChannelConfigSchema, TelegramConfigSchema } from "./config-api.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 export {
   PAIRING_APPROVED_MESSAGE,

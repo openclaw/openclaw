@@ -55,11 +55,14 @@ guidance for how _you_ want them used.
 
 ## Skills
 
-OpenClaw loads skills from three locations (workspace wins on name conflict):
+OpenClaw loads skills from these locations (highest precedence first):
 
-- Bundled (shipped with the install)
-- Managed/local: `~/.openclaw/skills`
 - Workspace: `<workspace>/skills`
+- Project agent skills: `<workspace>/.agents/skills`
+- Personal agent skills: `~/.agents/skills`
+- Managed/local: `~/.openclaw/skills`
+- Bundled (shipped with the install)
+- Extra skill folders: `skills.load.extraDirs`
 
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
@@ -108,7 +111,9 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 
 - Use `provider/model` when configuring models.
 - If the model ID itself contains `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
-- If you omit the provider, OpenClaw treats the input as an alias or a model for the **default provider** (only works when there is no `/` in the model ID).
+- If you omit the provider, OpenClaw tries an alias first, then a unique
+  configured-provider match for that exact model id, and only then falls back
+  to the configured default provider.
 
 ## Configuration (minimal)
 

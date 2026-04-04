@@ -467,6 +467,22 @@ vi.mock("qrcode-terminal", () => ({
 
 export const baileys = await import("./session.runtime.js");
 
+function resetMockExport<T extends (...args: never[]) => unknown>(params: {
+  current: T;
+  implementation: T;
+}) {
+  if (!("mockReset" in params.current) || typeof params.current.mockReset !== "function") {
+    return;
+  }
+  params.current.mockReset();
+  if (
+    "mockImplementation" in params.current &&
+    typeof params.current.mockImplementation === "function"
+  ) {
+    params.current.mockImplementation(params.implementation);
+  }
+}
+
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
@@ -475,24 +491,30 @@ export function resetBaileysMocks() {
   const makeWASocket = vi.mocked(baileys.makeWASocket);
   const makeWASocketImpl: typeof baileys.makeWASocket = (...args) =>
     (recreated.mod.makeWASocket as unknown as typeof baileys.makeWASocket)(...args);
-  makeWASocket.mockReset();
-  makeWASocket.mockImplementation(makeWASocketImpl);
+  resetMockExport({
+    current: makeWASocket,
+    implementation: makeWASocketImpl,
+  });
 
   const useMultiFileAuthState = vi.mocked(baileys.useMultiFileAuthState);
   const useMultiFileAuthStateImpl: typeof baileys.useMultiFileAuthState = (...args) =>
     (recreated.mod.useMultiFileAuthState as unknown as typeof baileys.useMultiFileAuthState)(
       ...args,
     );
-  useMultiFileAuthState.mockReset();
-  useMultiFileAuthState.mockImplementation(useMultiFileAuthStateImpl);
+  resetMockExport({
+    current: useMultiFileAuthState,
+    implementation: useMultiFileAuthStateImpl,
+  });
 
   const fetchLatestBaileysVersion = vi.mocked(baileys.fetchLatestBaileysVersion);
   const fetchLatestBaileysVersionImpl: typeof baileys.fetchLatestBaileysVersion = (...args) =>
     (
       recreated.mod.fetchLatestBaileysVersion as unknown as typeof baileys.fetchLatestBaileysVersion
     )(...args);
-  fetchLatestBaileysVersion.mockReset();
-  fetchLatestBaileysVersion.mockImplementation(fetchLatestBaileysVersionImpl);
+  resetMockExport({
+    current: fetchLatestBaileysVersion,
+    implementation: fetchLatestBaileysVersionImpl,
+  });
 
   const makeCacheableSignalKeyStore = vi.mocked(baileys.makeCacheableSignalKeyStore);
   const makeCacheableSignalKeyStoreImpl: typeof baileys.makeCacheableSignalKeyStore = (...args) =>
@@ -500,8 +522,10 @@ export function resetBaileysMocks() {
       recreated.mod
         .makeCacheableSignalKeyStore as unknown as typeof baileys.makeCacheableSignalKeyStore
     )(...args);
-  makeCacheableSignalKeyStore.mockReset();
-  makeCacheableSignalKeyStore.mockImplementation(makeCacheableSignalKeyStoreImpl);
+  resetMockExport({
+    current: makeCacheableSignalKeyStore,
+    implementation: makeCacheableSignalKeyStoreImpl,
+  });
 }
 
 export function getLastSocket(): MockBaileysSocket {

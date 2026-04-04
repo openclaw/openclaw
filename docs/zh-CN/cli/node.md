@@ -6,7 +6,7 @@ summary: "`openclaw node` 的 CLI 参考（无头节点主机）"
 title: node
 x-i18n:
   generated_at: "2026-02-03T07:45:07Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: a8b1a57712663e2285c9ecd306fe57d067eb3e6820d7d8aec650b41b022d995a
   source_path: cli/node.md

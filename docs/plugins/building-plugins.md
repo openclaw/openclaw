@@ -38,6 +38,12 @@ falls back to npm automatically.
   </Card>
 </CardGroup>
 
+If a channel plugin is optional and may not be installed when onboarding/setup
+runs, use `createOptionalChannelSetupSurface(...)` from
+`openclaw/plugin-sdk/channel-setup`. It produces a setup adapter + wizard pair
+that advertises the install requirement and fails closed on real config writes
+until the plugin is installed.
+
 ## Quick start: tool plugin
 
 This walkthrough creates a minimal plugin that registers an agent tool. Channel
@@ -146,6 +152,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | CLI inference backend | `api.registerCliBackend(...)`                 | [CLI Backends](/gateway/cli-backends)                                           |
 | Channel / messaging   | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
 | Speech (TTS/STT)      | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Media understanding   | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Image generation      | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search            | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
@@ -156,6 +163,11 @@ A single plugin can register any number of capabilities via the `api` object:
 | CLI subcommands       | `api.registerCli(...)`                        | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
+
+If your plugin registers custom gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
+`operator.admin`, even if a plugin asks for a narrower scope.
 
 Hook guard semantics to keep in mind:
 
@@ -231,6 +243,21 @@ For the full subpath reference, see [SDK Overview](/plugins/sdk-overview).
 
 Within your plugin, use local barrel files (`api.ts`, `runtime-api.ts`) for
 internal imports — never import your own plugin through its SDK path.
+
+For provider plugins, keep provider-specific helpers in those package-root
+barrels unless the seam is truly generic. Current bundled examples:
+
+- Anthropic: Claude stream wrappers and `service_tier` / beta helpers
+- OpenAI: provider builders, default-model helpers, realtime providers
+- OpenRouter: provider builder plus onboarding/config helpers
+
+If a helper is only useful inside one bundled provider package, keep it on that
+package-root seam instead of promoting it into `openclaw/plugin-sdk/*`.
+
+Some generated `openclaw/plugin-sdk/<bundled-id>` helper seams still exist for
+bundled-plugin maintenance and compatibility, for example
+`plugin-sdk/feishu-setup` or `plugin-sdk/zalo-setup`. Treat those as reserved
+surfaces, not as the default pattern for new third-party plugins.
 
 ## Pre-submission checklist
 

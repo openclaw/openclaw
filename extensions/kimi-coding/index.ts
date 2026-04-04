@@ -87,7 +87,7 @@ export default definePluginEntry({
         },
       },
       buildReplayPolicy: () => buildKimiReplayPolicy(),
-      wrapStreamFn: (ctx) => wrapKimiProviderStream(ctx.streamFn),
+      wrapStreamFn: wrapKimiProviderStream,
     });
   },
 });

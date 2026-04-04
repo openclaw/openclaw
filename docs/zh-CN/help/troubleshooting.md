@@ -6,7 +6,7 @@ summary: 故障排除中心：症状 → 检查 → 修复
 title: 故障排除
 x-i18n:
   generated_at: "2026-02-03T07:49:14Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 00ba2a20732fa22ccf9bcba264ab06ea940e9d6e96b31290811ff21a670eaad2
   source_path: help/troubleshooting.md

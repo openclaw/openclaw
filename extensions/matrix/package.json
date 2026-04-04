@@ -40,7 +40,8 @@
     "install": {
       "npmSpec": "@openclaw/matrix",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.1"
+      "minHostVersion": ">=2026.4.1",
+      "allowInvalidConfigRecovery": true
     },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [

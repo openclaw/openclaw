@@ -43,8 +43,15 @@ pending request is superseded and a new `requestId` is created. Re-run
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject`) is a separate gateway-owned
+- The device pairing record is the durable approved-role contract. Token
+  rotation stays inside that contract; it cannot upgrade a paired node into a
+  different role that pairing approval never granted.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
+- Approval scope follows the pending request's declared commands:
+  - commandless request: `operator.pairing`
+  - non-exec node commands: `operator.pairing` + `operator.write`
+  - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
 ## Remote node host (system.run)
 
@@ -327,6 +334,9 @@ Notes:
 - `system.run` returns stdout/stderr/exit code in the payload.
 - Shell execution now goes through the `exec` tool with `host=node`; `nodes` remains the direct-RPC surface for explicit node commands.
 - `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
+- The exec path prepares a canonical `systemRunPlan` before approval. Once an
+  approval is granted, the gateway forwards that stored plan, not any later
+  caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.allowCommands`.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.

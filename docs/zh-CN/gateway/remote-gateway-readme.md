@@ -4,7 +4,7 @@ summary: OpenClaw.app 连接远程 Gateway 网关的 SSH 隧道设置
 title: 远程 Gateway 网关设置
 x-i18n:
   generated_at: "2026-02-03T07:48:37Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b1ae266a7cb4911b82ae3ec6cb98b1b57aca592aeb1dc8b74bbce9b0ea9dd1d1
   source_path: gateway/remote-gateway-readme.md

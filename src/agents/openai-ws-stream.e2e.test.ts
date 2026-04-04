@@ -38,8 +38,8 @@ let openAIWsConnectionModule: OpenAIWsConnectionModule;
 const model = {
   api: "openai-responses" as const,
   provider: "openai",
-  id: "gpt-5.2",
-  name: "gpt-5.2",
+  id: "gpt-5.4",
+  name: "gpt-5.4",
   contextWindow: 128_000,
   maxTokens: 4_096,
   reasoning: true,
@@ -181,8 +181,9 @@ function freshSession(name: string): string {
 describe("OpenAI WebSocket e2e", () => {
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+    vi.doMock("@mariozechner/pi-ai", async () => {
+      const actual =
+        await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
       return {
         ...actual,
         createAssistantMessageEventStream: actual.createAssistantMessageEventStream,
