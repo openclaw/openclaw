@@ -299,8 +299,11 @@ Common signatures:
 - browser tool missing / unavailable while `browser.enabled=true` → `plugins.allow` excludes `browser`, so the plugin never loaded.
 - `Failed to start Chrome CDP on port` → browser process failed to launch.
 - `browser.executablePath not found` → configured path is invalid.
+- `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
+- `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
 - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
-- `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
+- `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from the gateway host.
+- `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no reachable target, or the HTTP endpoint answered but the CDP WebSocket still could not be opened.
 
 Related:
 

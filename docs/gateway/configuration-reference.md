@@ -2577,9 +2577,14 @@ See [Plugins](/tools/plugin).
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 - In strict mode, use `ssrfPolicy.hostnameAllowlist` and `ssrfPolicy.allowedHostnames` for explicit exceptions.
 - Remote profiles are attach-only (start/stop/reset disabled).
+- `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
+  Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
+  when your provider gives you a direct DevTools WebSocket URL.
 - `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
+  set `cdpUrl` explicitly for remote CDP.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
