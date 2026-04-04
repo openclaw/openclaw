@@ -75,7 +75,7 @@ explicitly promotes one as public.
     | `plugin-sdk/config-schema` | Root `openclaw.json` Zod schema export (`OpenClawSchema`) |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
-    | `plugin-sdk/setup-runtime` | Account-scoped setup runtime helpers, delegated setup proxies, setup status builders |
+    | `plugin-sdk/setup-runtime` | `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
     | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
     | `plugin-sdk/setup-tools` | Setup CLI/archive/docs helpers |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |

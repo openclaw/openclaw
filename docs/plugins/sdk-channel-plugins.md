@@ -86,6 +86,17 @@ Likewise, prefer `openclaw/plugin-sdk/setup-runtime`,
 `openclaw/plugin-sdk/reply-chunking` when you do not need the broader umbrella
 surface.
 
+For setup specifically:
+
+- `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
+  lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, and the
+  delegated setup-proxy builders
+- `openclaw/plugin-sdk/setup-adapter-runtime` is the narrow env-aware adapter
+  seam for `createEnvPatchedAccountSetupAdapter`
+- use the broader `openclaw/plugin-sdk/setup` seam only when you also need the
+  heavier shared setup/config helpers such as
+  `moveSingleAccountChannelSectionToDefaultAccount(...)`
+
 For other hot channel paths, prefer the narrow helpers over broader legacy
 surfaces:
 

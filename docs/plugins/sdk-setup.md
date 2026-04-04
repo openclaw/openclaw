@@ -287,6 +287,43 @@ namespaces such as `config.*` or `update.*`.
 - Heavy runtime imports (crypto, SDKs)
 - Gateway methods only needed after startup
 
+### Narrow setup helper imports
+
+For hot setup-only paths, prefer the narrow setup helper seams over the broader
+`plugin-sdk/setup` umbrella when you only need part of the setup surface:
+
+| Import path                        | Use it for                                                                                | Key exports                                                                                                                                                                  |
+| ---------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/setup-runtime`         | setup-time runtime helpers that stay available in `setupEntry` / deferred channel startup | `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
+| `plugin-sdk/setup-adapter-runtime` | environment-aware account setup adapters                                                  | `createEnvPatchedAccountSetupAdapter`                                                                                                                                        |
+| `plugin-sdk/setup-tools`           | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `formatDocsLink`                                                                                                       |
+
+Use the broader `plugin-sdk/setup` seam when you want the full shared setup
+toolbox, including config-patch helpers such as
+`moveSingleAccountChannelSectionToDefaultAccount(...)`.
+
+### Channel-owned single-account promotion
+
+When a channel upgrades from a single-account top-level config to
+`channels.<id>.accounts.*`, the default shared behavior is to move promoted
+account-scoped values into `accounts.default`.
+
+Bundled channels can narrow or override that promotion through their setup
+contract surface:
+
+- `singleAccountKeysToMove`: extra top-level keys that should move into the
+  promoted account
+- `namedAccountPromotionKeys`: when named accounts already exist, only these
+  keys move into the promoted account; shared policy/delivery keys stay at the
+  channel root
+- `resolveSingleAccountPromotionTarget(...)`: choose which existing account
+  receives promoted values
+
+Matrix is the current bundled example. If exactly one named Matrix account
+already exists, or if `defaultAccount` points at an existing non-canonical key
+such as `Ops`, promotion preserves that account instead of creating a new
+`accounts.default` entry.
+
 ## Config schema
 
 Plugin config is validated against the JSON Schema in your manifest. Users

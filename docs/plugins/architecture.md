@@ -1308,6 +1308,21 @@ If your full entry still owns any required startup capability, do not enable
 this flag. Keep the plugin on the default behavior and let OpenClaw load the
 full entry during startup.
 
+Bundled channels can also publish setup-only contract-surface helpers that core
+can consult before the full channel runtime is loaded. The current setup
+promotion surface is:
+
+- `singleAccountKeysToMove`
+- `namedAccountPromotionKeys`
+- `resolveSingleAccountPromotionTarget(...)`
+
+Core uses that surface when it needs to promote a legacy single-account channel
+config into `channels.<id>.accounts.*` without loading the full plugin entry.
+Matrix is the current bundled example: it moves only auth/bootstrap keys into a
+named promoted account when named accounts already exist, and it can preserve a
+configured non-canonical default-account key instead of always creating
+`accounts.default`.
+
 When those startup surfaces include gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,
 `exec.approvals.*`, `wizard.*`, `update.*`) remain reserved and always resolve
