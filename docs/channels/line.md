@@ -17,9 +17,13 @@ Status: supported via plugin. Direct messages, group chats, media, locations, Fl
 messages, template messages, and quick replies are supported. Reactions and threads
 are not supported.
 
-## Plugin required
+## Bundled plugin
 
-Install the LINE plugin:
+LINE ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes LINE, install it
+manually:
 
 ```bash
 openclaw plugins install @openclaw/line

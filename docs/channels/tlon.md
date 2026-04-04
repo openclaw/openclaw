@@ -14,9 +14,13 @@ be further restricted via allowlists.
 Status: supported via plugin. DMs, group mentions, thread replies, rich text formatting, and
 image uploads are supported. Reactions and polls are not yet supported.
 
-## Plugin required
+## Bundled plugin
 
-Tlon ships as a plugin and is not bundled with the core install.
+Tlon ships as a bundled plugin in current OpenClaw releases, so normal packaged
+builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Tlon, install it
+manually:
 
 Install via CLI (npm registry):
 
@@ -34,7 +38,7 @@ Details: [Plugins](/tools/plugin)
 
 ## Setup
 
-1. Install the Tlon plugin.
+1. Ensure the Tlon bundled plugin is available.
 2. Gather your ship URL and login code.
 3. Configure `channels.tlon`.
 4. Restart the gateway.

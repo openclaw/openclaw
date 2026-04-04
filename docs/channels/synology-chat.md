@@ -12,9 +12,13 @@ Status: supported via plugin as a direct-message channel using Synology Chat web
 The plugin accepts inbound messages from Synology Chat outgoing webhooks and sends replies
 through a Synology Chat incoming webhook.
 
-## Plugin required
+## Bundled plugin
 
-Synology Chat is plugin-based and not part of the default core channel install.
+Synology Chat ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Synology Chat,
+install it manually:
 
 Install from a local checkout:
 
@@ -26,7 +30,7 @@ Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
-1. Install and enable the Synology Chat plugin.
+1. Ensure the Synology Chat bundled plugin is available.
    - `openclaw onboard` now shows Synology Chat in the same channel setup list as `openclaw channels add`.
    - Non-interactive setup: `openclaw channels add --channel synology-chat --token <token> --url <incoming-webhook-url>`
 2. In Synology Chat integrations:

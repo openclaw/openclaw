@@ -9,9 +9,13 @@ title: "Twitch"
 
 Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot account) to receive and send messages in channels.
 
-## Plugin required
+## Bundled plugin
 
-Twitch ships as a plugin and is not bundled with the core install.
+Twitch ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Twitch, install
+it manually:
 
 Install via CLI (npm registry):
 
