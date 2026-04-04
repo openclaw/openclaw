@@ -251,7 +251,7 @@ export function enableConsoleCapture(): void {
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
       try {
-        if (isFileLogLevelEnabled(level as LogLevel)) {
+        if (isFileLogLevelEnabled(level)) {
           const resolvedLogger = getLoggerLazy();
           // Map console levels to file logger
           if (level === "trace") {
