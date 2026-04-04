@@ -91,6 +91,7 @@ Docs: https://docs.openclaw.ai
 - Agents/cache: preserve the full 3-turn prompt-cache image window across tool loops, keep colliding bundled MCP tool definitions deterministic, and reapply Anthropic Vertex cache shaping after payload hook replacements so KV/cache reuse stays stable. Thanks @vincentkoc.
 - Device pairing: reject rotating device tokens into roles that were never approved during pairing, and keep reconnect role checks bounded to the paired device's approved role set. (#60462) Thanks @eleqtrizit.
 - Mobile pairing/security: fail closed for internal `/pair` setup-code issuance, cleanup, and approval paths when gateway pairing scopes are missing, and keep approval-time requested-scope enforcement on the internal command path. (#55996) Thanks @coygeek.
+- Exec approvals/node host: forward prepared `system.run` approval plans on the async node invoke path so mutable script operands keep their approval-time binding and drift revalidation instead of dropping back to unbound execution.
 
 ## 2026.4.2
 
