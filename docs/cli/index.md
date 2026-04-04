@@ -579,7 +579,7 @@ Subcommands:
 - `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
-- `config schema`: print the generated JSON schema for `openclaw.json`, including field docs and best-effort live plugin/channel schema metadata.
+- `config schema`: print the generated JSON schema for `openclaw.json`, including field `title` / `description` metadata and best-effort live plugin/channel schema metadata.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -1462,7 +1462,7 @@ Notes:
 
 Common RPCs:
 
-- `config.schema.lookup` (inspect one config subtree with shallow schema fields, docs, and immediate child summaries)
+- `config.schema.lookup` (inspect one config subtree with a shallow schema node, matched hint metadata, and immediate child summaries)
 - `config.get` (read current config snapshot + hash)
 - `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
 - `config.apply` (validate + write config + restart + wake)

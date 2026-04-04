@@ -54,7 +54,7 @@ What it includes:
 
 - The current root config schema, plus a root `$schema` string field for editor tooling
 - Field `title` and `description` metadata derived from the same labels/help used by the Control UI
-- Nested object, wildcard (`*`), and array-item (`[]`) nodes inherit the same field docs when labels/help exist
+- Nested object, wildcard (`*`), and array-item (`[]`) nodes inherit the same `title` / `description` metadata when labels/help exist
 - Best-effort live plugin + channel schema metadata when runtime manifests can be loaded
 - A clean fallback schema even when the current config is invalid
 

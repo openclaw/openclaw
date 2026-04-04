@@ -532,7 +532,8 @@ Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate
 
 Safe/default flow:
 
-- `config.schema.lookup`: inspect one path-scoped config subtree with field docs
+- `config.schema.lookup`: inspect one path-scoped config subtree with a shallow
+  schema node, matched hint metadata, and immediate child summaries
 - `config.get`: fetch the current snapshot + hash
 - `config.patch`: preferred partial update path
 - `config.apply`: full-config replacement only

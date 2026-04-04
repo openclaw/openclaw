@@ -1775,7 +1775,7 @@ for usage/billing and raise limits as needed.
   <Accordion title="Is there an API / RPC way to apply config?">
     Yes.
 
-    - `config.schema.lookup`: inspect one config subtree with its shallow schema fields, matched UI hint, and immediate child summaries before writing
+    - `config.schema.lookup`: inspect one config subtree with its shallow schema node, matched UI hint, and immediate child summaries before writing
     - `config.get`: fetch the current snapshot + hash
     - `config.patch`: safe partial update (preferred for most RPC edits)
     - `config.apply`: validate + replace the full config, then restart
