@@ -161,12 +161,23 @@ function describeAssistantContentKind(content: unknown): string {
   return typeof content;
 }
 
+const TOOL_CALL_STUB_PLACEHOLDER_RE = /\[\s*tool call stub\s*\]/gi;
+const TOOL_CALL_STUB_PLACEHOLDER_SINGLE_RE = /\[\s*tool call stub\s*\]/i;
+
+function stripToolCallStubPlaceholder(content: string): string {
+  if (!TOOL_CALL_STUB_PLACEHOLDER_SINGLE_RE.test(content)) {
+    return content;
+  }
+  return content.replaceAll(TOOL_CALL_STUB_PLACEHOLDER_RE, " ").replace(/\s{2,}/g, " ").trim();
+}
+
 function canonicalizeAssistantHistoryMessages(params: {
   messages: AgentMessage[];
   sessionId: string;
 }): AgentMessage[] {
   let touched = false;
   let repairedCount = 0;
+  let droppedStubOnlyCount = 0;
   const repairedKinds = new Set<string>();
   const out: AgentMessage[] = [];
 
@@ -185,7 +196,20 @@ function canonicalizeAssistantHistoryMessages(params: {
     // Session transcripts and custom stream boundaries have historically leaked
     // malformed assistant payloads. Repair them here so Pi replay only sees the
     // canonical array-based assistant content contract.
-    const repairedText = typeof assistant.content === "string" ? assistant.content : "";
+    const repairedText =
+      typeof assistant.content === "string"
+        ? stripToolCallStubPlaceholder(assistant.content)
+        : "";
+    if (
+      typeof assistant.content === "string" &&
+      repairedText.length === 0 &&
+      TOOL_CALL_STUB_PLACEHOLDER_SINGLE_RE.test(assistant.content)
+    ) {
+      touched = true;
+      droppedStubOnlyCount += 1;
+      repairedKinds.add("tool-call-stub");
+      continue;
+    }
     out.push({
       ...(assistant as unknown as Record<string, unknown>),
       content: [{ type: "text", text: repairedText }],
@@ -201,7 +225,8 @@ function canonicalizeAssistantHistoryMessages(params: {
 
   log.warn(
     `sanitizeSessionHistory: canonicalized ${repairedCount} malformed assistant message(s) before replay ` +
-      `session=${params.sessionId} contentKinds=${Array.from(repairedKinds).join(",")}`,
+      `droppedStubOnly=${droppedStubOnlyCount} session=${params.sessionId} ` +
+      `contentKinds=${Array.from(repairedKinds).join(",")}`,
   );
   return out;
 }

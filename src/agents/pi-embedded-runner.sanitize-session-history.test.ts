@@ -427,6 +427,31 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
+  it("drops stub-only malformed assistant history content before replay sanitization", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      { role: "user", content: "Question" },
+      { role: "assistant", content: "[TOOL CALL STUB]" },
+      { role: "assistant", content: "Before [TOOL CALL STUB] after" },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(messages[0]);
+    expect(result[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Before after" }],
+    });
+  });
+
   it("annotates inter-session user messages before context sanitization", async () => {
     setNonGoogleModelApi();
 
