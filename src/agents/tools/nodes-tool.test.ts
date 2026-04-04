@@ -240,7 +240,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       "node.pair.list",
       {},
       {},
-      { scopes: ["operator.pairing", "operator.write"] },
+      { scopes: ["operator.pairing"] },
     );
     expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
       2,
@@ -280,7 +280,7 @@ describe("createNodesTool screen_record duration guardrails", () => {
       "node.pair.list",
       {},
       {},
-      { scopes: ["operator.pairing", "operator.write"] },
+      { scopes: ["operator.pairing"] },
     );
     expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
       2,
@@ -314,6 +314,13 @@ describe("createNodesTool screen_record duration guardrails", () => {
       requestId: "req-1",
     });
 
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "node.pair.list",
+      {},
+      {},
+      { scopes: ["operator.pairing"] },
+    );
     expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
       2,
       "node.pair.approve",

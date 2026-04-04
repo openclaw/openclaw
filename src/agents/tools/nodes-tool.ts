@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { NODE_SYSTEM_RUN_COMMANDS } from "../../infra/node-commands.js";
+import { resolveNodePairApprovalScopes } from "../../infra/node-pairing.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -43,18 +43,7 @@ const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
 function resolveApproveScopes(commands: unknown): OperatorScope[] {
-  const normalized = Array.isArray(commands)
-    ? commands.filter((value): value is string => typeof value === "string")
-    : [];
-  if (
-    normalized.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))
-  ) {
-    return ["operator.pairing", "operator.admin"];
-  }
-  if (normalized.length > 0) {
-    return ["operator.pairing", "operator.write"];
-  }
-  return ["operator.pairing"];
+  return resolveNodePairApprovalScopes(commands) as OperatorScope[];
 }
 
 async function resolveNodePairApproveScopes(
@@ -63,7 +52,7 @@ async function resolveNodePairApproveScopes(
 ): Promise<OperatorScope[]> {
   const pairing = await callGatewayTool<{
     pending?: Array<{ requestId?: string; commands?: unknown }>;
-  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing", "operator.write"] });
+  }>("node.pair.list", gatewayOpts, {}, { scopes: ["operator.pairing"] });
   const pending = Array.isArray(pairing?.pending) ? pairing.pending : [];
   const match = pending.find((entry) => entry?.requestId === requestId);
   return resolveApproveScopes(match?.commands);

@@ -59,6 +59,7 @@ type NodePairingStateFile = {
 
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
+const OPERATOR_PAIRING_SCOPE = "operator.pairing";
 const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 
@@ -118,15 +119,24 @@ function refreshPendingNodePairingRequest(
   };
 }
 
-function resolveNodeApprovalRequiredScope(pending: NodePairingPendingRequest): string | null {
+export function resolveNodePairApprovalScopes(commands: unknown): string[] {
+  const normalized = Array.isArray(commands)
+    ? commands.filter((command): command is string => typeof command === "string")
+    : [];
+  if (
+    normalized.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))
+  ) {
+    return [OPERATOR_PAIRING_SCOPE, OPERATOR_ADMIN_SCOPE];
+  }
+  if (normalized.length > 0) {
+    return [OPERATOR_PAIRING_SCOPE, OPERATOR_WRITE_SCOPE];
+  }
+  return [OPERATOR_PAIRING_SCOPE];
+}
+
+function resolveNodeApprovalRequiredScopes(pending: NodePairingPendingRequest): string[] {
   const commands = Array.isArray(pending.commands) ? pending.commands : [];
-  if (commands.some((command) => NODE_SYSTEM_RUN_COMMANDS.some((allowed) => allowed === command))) {
-    return OPERATOR_ADMIN_SCOPE;
-  }
-  if (commands.length > 0) {
-    return OPERATOR_WRITE_SCOPE;
-  }
-  return null;
+  return resolveNodePairApprovalScopes(commands);
 }
 
 type ApprovedNodePairingResult = { requestId: string; node: NodePairingPairedNode };
@@ -222,39 +232,28 @@ export async function requestNodePairing(
 
 export async function approveNodePairing(
   requestId: string,
-  baseDir?: string,
-): Promise<ApprovedNodePairingResult | null>;
-export async function approveNodePairing(
-  requestId: string,
   options: { callerScopes?: readonly string[] },
   baseDir?: string,
 ): Promise<ApproveNodePairingResult>;
 export async function approveNodePairing(
   requestId: string,
-  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
-  maybeBaseDir?: string,
+  options: { callerScopes?: readonly string[] },
+  baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
-  const options =
-    typeof optionsOrBaseDir === "string" || optionsOrBaseDir === undefined
-      ? undefined
-      : optionsOrBaseDir;
-  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
     if (!pending) {
       return null;
     }
-    const requiredScope = resolveNodeApprovalRequiredScope(pending);
-    if (requiredScope && options !== undefined) {
-      const missingScope = resolveMissingRequestedScope({
-        role: OPERATOR_ROLE,
-        requestedScopes: [requiredScope],
-        allowedScopes: options.callerScopes ?? [],
-      });
-      if (missingScope) {
-        return { status: "forbidden", missingScope };
-      }
+    const requiredScopes = resolveNodeApprovalRequiredScopes(pending);
+    const missingScope = resolveMissingRequestedScope({
+      role: OPERATOR_ROLE,
+      requestedScopes: requiredScopes,
+      allowedScopes: options.callerScopes ?? [],
+    });
+    if (missingScope) {
+      return { status: "forbidden", missingScope };
     }
 
     const now = Date.now();
