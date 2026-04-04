@@ -10,6 +10,7 @@
     "test": "pnpm --filter website test"
   },
   "devDependencies": {
+    "next": "16.1.6",
     "@tailwindcss/postcss": "^4.1.9",
     "@types/node": "^22",
     "autoprefixer": "^10.4.21",
