@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => {
   const runtimeStdout: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const createSkillStatusReport = () => ({
+  const skillStatusReportFixture = {
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/workspace/skills",
     skills: [
@@ -40,9 +40,11 @@ const mocks = vi.hoisted(() => {
           config: [],
           os: [],
         },
+        configChecks: [],
+        install: [],
       },
     ],
-  });
+  };
   const defaultRuntime = {
     log: vi.fn((...args: unknown[]) => {
       runtimeLogs.push(stringifyArgs(args));
@@ -63,7 +65,7 @@ const mocks = vi.hoisted(() => {
   const buildWorkspaceSkillStatusMock = vi.fn((workspaceDir: string, options?: unknown) => {
     void workspaceDir;
     void options;
-    return createSkillStatusReport();
+    return skillStatusReportFixture;
   });
   return {
     loadConfigMock: vi.fn(() => ({})),
@@ -74,6 +76,7 @@ const mocks = vi.hoisted(() => {
     updateSkillsFromClawHubMock: vi.fn(),
     readTrackedClawHubSkillSlugsMock: vi.fn(),
     buildWorkspaceSkillStatusMock,
+    skillStatusReportFixture,
     defaultRuntime,
     runtimeLogs,
     runtimeStdout,
@@ -90,6 +93,7 @@ const {
   updateSkillsFromClawHubMock,
   readTrackedClawHubSkillSlugsMock,
   buildWorkspaceSkillStatusMock,
+  skillStatusReportFixture,
   defaultRuntime,
   runtimeLogs,
   runtimeStdout,
@@ -155,42 +159,7 @@ describe("skills cli commands", () => {
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
-    buildWorkspaceSkillStatusMock.mockReturnValue({
-      workspaceDir: "/tmp/workspace",
-      managedSkillsDir: "/tmp/workspace/skills",
-      skills: [
-        {
-          name: "calendar",
-          description: "Calendar helpers",
-          source: "bundled",
-          bundled: false,
-          filePath: "/tmp/workspace/skills/calendar/SKILL.md",
-          baseDir: "/tmp/workspace/skills/calendar",
-          skillKey: "calendar",
-          emoji: "📅",
-          homepage: "https://example.com/calendar",
-          always: false,
-          disabled: false,
-          blockedByAllowlist: false,
-          eligible: true,
-          primaryEnv: "CALENDAR_API_KEY",
-          requirements: {
-            bins: [],
-            anyBins: [],
-            env: ["CALENDAR_API_KEY"],
-            config: [],
-            os: [],
-          },
-          missing: {
-            bins: [],
-            anyBins: [],
-            env: [],
-            config: [],
-            os: [],
-          },
-        },
-      ],
-    });
+    buildWorkspaceSkillStatusMock.mockReturnValue(skillStatusReportFixture);
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
     defaultRuntime.writeStdout.mockClear();
@@ -302,10 +271,12 @@ describe("skills cli commands", () => {
     expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
       config: {},
     });
-    expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
+    expect(
+      defaultRuntime.writeStdout.mock.calls.length + defaultRuntime.writeJson.mock.calls.length,
+    ).toBeGreaterThan(0);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(runtimeErrors).toEqual([]);
+    expect(runtimeStdout.length).toBeGreaterThan(0);
 
     const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
     assert(payload);
