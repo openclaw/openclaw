@@ -16,6 +16,82 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
+function extractJsonObjectCandidates(raw: string): string[] {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index] ?? "";
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      if (inString) {
+        escaped = true;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) {
+        start = index;
+      }
+      depth += 1;
+      continue;
+    }
+    if (char === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        candidates.push(raw.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return candidates;
+}
+
+function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
+  const parsedRecords: Record<string, unknown>[] = [];
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return parsedRecords;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isRecord(parsed)) {
+      parsedRecords.push(parsed);
+      return parsedRecords;
+    }
+  } catch {
+    // Fall back to scanning for top-level JSON objects embedded in mixed output.
+  }
+
+  for (const candidate of extractJsonObjectCandidates(trimmed)) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (isRecord(parsed)) {
+        parsedRecords.push(parsed);
+      }
+    } catch {
+      // Ignore malformed fragments and keep scanning remaining objects.
+    }
+  }
+
+  return parsedRecords;
+}
+
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
@@ -79,27 +155,40 @@ function pickCliSessionId(
 }
 
 export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
+  const parsedRecords = parseJsonRecordCandidates(raw);
+  if (parsedRecords.length === 0) {
     return null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
+
+  let sessionId: string | undefined;
+  let usage: CliUsage | undefined;
+  let text = "";
+  let sawStructuredOutput = false;
+  for (const parsed of parsedRecords) {
+    sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
+    if (isRecord(parsed.usage)) {
+      usage = toCliUsage(parsed.usage) ?? usage;
+    }
+    const nextText =
+      collectCliText(parsed.message) ||
+      collectCliText(parsed.content) ||
+      collectCliText(parsed.result) ||
+      collectCliText(parsed);
+    const trimmedText = nextText.trim();
+    if (trimmedText) {
+      text = trimmedText;
+      sawStructuredOutput = true;
+      continue;
+    }
+    if (sessionId || usage) {
+      sawStructuredOutput = true;
+    }
+  }
+
+  if (!text && !sawStructuredOutput) {
     return null;
   }
-  if (!isRecord(parsed)) {
-    return null;
-  }
-  const sessionId = pickCliSessionId(parsed, backend);
-  const usage = isRecord(parsed.usage) ? toCliUsage(parsed.usage) : undefined;
-  const text =
-    collectCliText(parsed.message) ||
-    collectCliText(parsed.content) ||
-    collectCliText(parsed.result) ||
-    collectCliText(parsed);
-  return { text: text.trim(), sessionId, usage };
+  return { text, sessionId, usage };
 }
 
 function parseClaudeCliJsonlResult(params: {
@@ -143,40 +232,33 @@ export function parseCliJsonl(
   let usage: CliUsage | undefined;
   const texts: string[] = [];
   for (const line of lines) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (!isRecord(parsed)) {
-      continue;
-    }
-    if (!sessionId) {
-      sessionId = pickCliSessionId(parsed, backend);
-    }
-    if (!sessionId && typeof parsed.thread_id === "string") {
-      sessionId = parsed.thread_id.trim();
-    }
-    if (isRecord(parsed.usage)) {
-      usage = toCliUsage(parsed.usage) ?? usage;
-    }
+    for (const parsed of parseJsonRecordCandidates(line)) {
+      if (!sessionId) {
+        sessionId = pickCliSessionId(parsed, backend);
+      }
+      if (!sessionId && typeof parsed.thread_id === "string") {
+        sessionId = parsed.thread_id.trim();
+      }
+      if (isRecord(parsed.usage)) {
+        usage = toCliUsage(parsed.usage) ?? usage;
+      }
 
-    const claudeResult = parseClaudeCliJsonlResult({
-      providerId,
-      parsed,
-      sessionId,
-      usage,
-    });
-    if (claudeResult) {
-      return claudeResult;
-    }
+      const claudeResult = parseClaudeCliJsonlResult({
+        providerId,
+        parsed,
+        sessionId,
+        usage,
+      });
+      if (claudeResult) {
+        return claudeResult;
+      }
 
-    const item = isRecord(parsed.item) ? parsed.item : null;
-    if (item && typeof item.text === "string") {
-      const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
-      if (!type || type.includes("message")) {
-        texts.push(item.text);
+      const item = isRecord(parsed.item) ? parsed.item : null;
+      if (item && typeof item.text === "string") {
+        const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
+        if (!type || type.includes("message")) {
+          texts.push(item.text);
+        }
       }
     }
   }

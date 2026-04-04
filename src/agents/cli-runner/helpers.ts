@@ -9,6 +9,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
+import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
@@ -26,6 +27,29 @@ export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./relia
 const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
+}
+
+export function resolveCliRunQueueKey(params: {
+  backendId: string;
+  serialize?: boolean;
+  runId: string;
+  workspaceDir: string;
+  cliSessionId?: string;
+}): string {
+  if (params.serialize === false) {
+    return `${params.backendId}:${params.runId}`;
+  }
+  if (isClaudeCliProvider(params.backendId)) {
+    const sessionId = params.cliSessionId?.trim();
+    if (sessionId) {
+      return `${params.backendId}:session:${sessionId}`;
+    }
+    const workspaceDir = params.workspaceDir.trim();
+    if (workspaceDir) {
+      return `${params.backendId}:workspace:${workspaceDir}`;
+    }
+  }
+  return params.backendId;
 }
 
 export function buildSystemPrompt(params: {

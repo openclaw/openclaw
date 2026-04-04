@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { parseCliJsonl } from "./cli-output.js";
+import { parseCliJson, parseCliJsonl } from "./cli-output.js";
+
+describe("parseCliJson", () => {
+  it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
+    const result = parseCliJson(
+      [
+        "Claude Code starting...",
+        '{"type":"init","session_id":"session-789"}',
+        '{"type":"result","result":"Claude says hi","usage":{"input_tokens":9,"output_tokens":4}}',
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "Claude says hi",
+      sessionId: "session-789",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+});
 
 describe("parseCliJsonl", () => {
   it("parses Claude stream-json result events", () => {
@@ -70,6 +99,24 @@ describe("parseCliJsonl", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("parses multiple JSON objects embedded on the same line", () => {
+    const result = parseCliJsonl(
+      '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: "session-999",
+      usage: undefined,
     });
   });
 });

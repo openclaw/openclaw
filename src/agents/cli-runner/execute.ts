@@ -13,6 +13,7 @@ import {
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
   buildCliArgs,
+  resolveCliRunQueueKey,
   enqueueCliRun,
   loadPromptRefImages,
   resolveCliNoOutputTimeoutMs,
@@ -138,10 +139,13 @@ export async function executePreparedCliRun(
     useResume,
   });
 
-  const serialize = backend.serialize ?? true;
-  const queueKey = serialize
-    ? context.backendResolved.id
-    : `${context.backendResolved.id}:${params.runId}`;
+  const queueKey = resolveCliRunQueueKey({
+    backendId: context.backendResolved.id,
+    serialize: backend.serialize,
+    runId: params.runId,
+    workspaceDir: context.workspaceDir,
+    cliSessionId: useResume ? resolvedSessionId : undefined,
+  });
 
   try {
     return await enqueueCliRun(queueKey, async () => {

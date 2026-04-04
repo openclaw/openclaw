@@ -158,6 +158,12 @@ The provider id becomes the left side of your model ref:
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
 
+Serialization notes:
+
+- `serialize: true` keeps same-lane runs ordered.
+- Most CLIs serialize on one provider lane.
+- `claude-cli` is narrower: resumed runs serialize per Claude session id, and fresh runs serialize per workspace path. Independent workspaces can run in parallel.
+
 ## Images (pass-through)
 
 If your CLI accepts image paths, set `imageArg`:
