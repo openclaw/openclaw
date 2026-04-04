@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { buildHybridAnthropicOrOpenAIReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
@@ -34,6 +34,10 @@ const PROVIDER_LABEL = "MiniMax";
 const DEFAULT_MODEL = MINIMAX_DEFAULT_MODEL_ID;
 const DEFAULT_BASE_URL_CN = "https://api.minimaxi.com/anthropic";
 const DEFAULT_BASE_URL_GLOBAL = "https://api.minimax.io/anthropic";
+const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "hybrid-anthropic-openai",
+  anthropicModelDropThinkingBlocks: true,
+});
 
 function resolveMinimaxReasoningOutputMode(): "native" {
   // Keep MiniMax on native reasoning mode. Tagged enforcement previously
@@ -237,10 +241,7 @@ export default definePluginEntry({
         });
         return apiKey ? { token: apiKey } : null;
       },
-      buildReplayPolicy: (ctx) =>
-        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
-          anthropicModelDropThinkingBlocks: true,
-        }),
+      ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
@@ -293,10 +294,7 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
-      buildReplayPolicy: (ctx) =>
-        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
-          anthropicModelDropThinkingBlocks: true,
-        }),
+      ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),

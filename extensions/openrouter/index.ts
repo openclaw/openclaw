@@ -21,7 +21,7 @@ export default definePluginEntry({
   description: "Bundled OpenRouter provider plugin",
   async register(api) {
     const {
-      buildPassthroughGeminiSanitizingReplayPolicy,
+      buildProviderReplayFamilyHooks,
       composeProviderStreamWrappers,
       createOpenRouterWrapper,
       createProviderApiKeyAuthMethod,
@@ -34,6 +34,9 @@ export default definePluginEntry({
       applyOpenrouterConfig,
       buildOpenrouterProvider,
     } = await import("./register.runtime.js");
+    const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+      family: "passthrough-gemini",
+    });
 
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
@@ -128,7 +131,7 @@ export default definePluginEntry({
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);
       },
-      buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {

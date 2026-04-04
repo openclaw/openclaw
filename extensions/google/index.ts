@@ -5,9 +5,13 @@ import {
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderFetchUsageSnapshotContext,
+  type ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { createGoogleThinkingPayloadWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
   applyGoogleGeminiModelDefault,
@@ -18,7 +22,6 @@ import {
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { formatGoogleOauthApiKey } from "./oauth-token-shared.js";
 import { isModernGoogleModel, resolveGoogle31ForwardCompatModel } from "./provider-models.js";
-import { buildGoogleGeminiProviderHooks } from "./replay-policy.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
@@ -42,10 +45,18 @@ type GoogleMediaUnderstandingProvider = MediaUnderstandingProvider & {
   describeVideo: NonNullable<MediaUnderstandingProvider["describeVideo"]>;
 };
 
-const GOOGLE_GEMINI_PROVIDER_HOOKS = buildGoogleGeminiProviderHooks();
-const GOOGLE_GEMINI_PROVIDER_HOOKS_WITH_TOOL_COMPAT = buildGoogleGeminiProviderHooks({
-  includeToolSchemaCompat: true,
+const GOOGLE_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "google-gemini",
 });
+const GOOGLE_GEMINI_PROVIDER_HOOKS = {
+  ...GOOGLE_GEMINI_REPLAY_HOOKS,
+  wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+    createGoogleThinkingPayloadWrapper(ctx.streamFn, ctx.thinkingLevel),
+};
+const GOOGLE_GEMINI_PROVIDER_HOOKS_WITH_TOOL_COMPAT = {
+  ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+  ...buildProviderToolCompatFamilyHooks("gemini"),
+};
 
 async function loadGoogleGeminiCliProvider(): Promise<ProviderPlugin> {
   if (!googleGeminiCliProviderPromise) {
