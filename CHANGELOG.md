@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - Tests/secrets runtime: restore split secrets suite cache and env isolation cleanup so broader runs do not leak stale plugin or provider snapshot state. (#60395) Thanks @shakkernerd.
 - Providers/Ollama: add bundled Ollama Web Search provider for key-free web_search via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
+- Providers/transport: add shared proxy/TLS/auth-aware request transport support across model-provider paths, including Anthropic and Google native transport runtimes, so provider request overrides work beyond OpenAI-family traffic.
 
 ### Fixes
 
@@ -30,6 +31,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/local Bot API: thread `channels.telegram.apiRoot` through buffered reply-media and album downloads so self-hosted Bot API file paths stop falling back to `api.telegram.org` and 404ing. (#59544) Thanks @SARAMALI15792.
 - Telegram/replies: preserve explicit topic targets when `replyTo` is present while still inheriting the current topic for same-chat replies without an explicit topic. (#59634) Thanks @dashhuang.
 - Telegram/native commands: clean up metadata-driven progress placeholders when replies fall back, edits fail, or local exec approval prompts are suppressed. (#59300) Thanks @jalehman.
+- Telegram/models: compare full provider/model refs in the Telegram picker so same-id models from other providers no longer show the wrong current-model checkmark. (#60384) Thanks @sfuminya.
 - Media/request overrides: resolve shared and capability-filtered media request SecretRefs correctly and expose media transport override fields to schema-driven config consumers. (#59848) Thanks @vincentkoc.
 - Providers/request overrides: stop advertising unsupported proxy and TLS transport settings on `models.providers.*.request`, and fail closed if unvalidated config tries to route LLM model-provider traffic through dead transport fields. (#59682) Thanks @vincentkoc.
 - Discord/mentions: treat `@everyone` and `@here` as valid mention-gate triggers in guild preflight so mention-required bots still respond to those broadcasts. (#60343) Thanks @geekhuashan.
@@ -38,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Ollama/auth: prefer real cloud auth over local marker during model auth resolution so cloud-backed Ollama auth does not get shadowed by stale local-only markers.
 - Plugins/Kimi Coding: parse tagged Kimi tool-call text into structured tool calls on the provider stream path so tools execute instead of echoing raw markup. (#60051) Thanks @obviyus.
 - Channels/passive hooks: emit passive message hooks for mention-skipped Telegram and Signal group messages when `ingest` is enabled, including wildcard/default fallback and per-group override handling. (#60018) Thanks @obviyus.
+- Providers/compat: stop forcing OpenAI-only payload defaults on proxy and custom OpenAI-compatible routes, and preserve native vendor-specific reasoning, tool, and streaming behavior for Anthropic-compatible, Moonshot, Mistral, ModelStudio, OpenRouter, xAI, Z.ai, and other routed provider paths.
 - Plugins/manifest registry: stop warning when an explicit manifest `id` intentionally differs from the discovery hint. (#59185) Thanks @samzong.
 - WhatsApp/streaming: honor `channels.whatsapp.blockStreaming` again for inbound auto-replies so progressive block replies can be enabled explicitly instead of being forced to final-only delivery. Thanks @mcaxtr.
 - Auth/failover: shorten `auth_permanent` lockouts, add dedicated config knobs for permanent-auth backoff, and downgrade ambiguous auth-ish upstream incidents to retryable auth failures so providers recover automatically after transient outages. (#60404) Thanks @extrasmall0.
@@ -97,6 +100,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/tool policy: block tool calls when a `before_tool_call` hook crashes so hook failures fail closed instead of silently allowing execution. (#59822) Thanks @pgondhi987.
 - Matrix/media: surface a dedicated `[matrix <kind> attachment too large]` marker for oversized inbound media instead of the generic unavailable marker, and classify size-limit failures with a typed Matrix error. (#60289) Thanks @efe-arv.
 - WhatsApp/watchdog: reset watchdog timeout after reconnect so quiet channels no longer enter a tight reconnect loop from stale message timestamps carried across connection runs. (#60007) Thanks @MonkeyLeeT.
+- Agents/fallback: persist selected fallback overrides before retry attempts start, prefer persisted overrides during live-session reconciliation, and keep provider-scoped auth-profile failover from snapping retries back to stale primary selections.
 
 ## 2026.4.2
 
@@ -129,6 +133,7 @@ Docs: https://docs.openclaw.ai
 - Sandbox/security: block credential-path binds even when sandbox home paths resolve through canonical aliases, so agent containers cannot mount user secret stores through alternate home-directory paths. (#59157) Thanks @eleqtrizit.
 
 ## 2026.4.1-beta.1
+
 - Providers/transport policy: centralize request auth, proxy, TLS, and header shaping across shared HTTP, stream, and websocket paths, block insecure TLS/runtime transport overrides, and keep proxy-hop TLS separate from target mTLS settings. (#59682) Thanks @vincentkoc.
 - Providers/OpenRouter: gate documented OpenRouter attribution to native OpenRouter endpoints or the default route so custom proxy base URLs do not inherit OpenRouter request headers.
 - Providers/Copilot: classify native GitHub Copilot API hosts in the shared provider endpoint resolver and harden token-derived proxy endpoint parsing so Copilot base URL routing stays centralized and fails closed on malformed hints. (#59644) Thanks @vincentkoc.
