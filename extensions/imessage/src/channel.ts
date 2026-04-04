@@ -9,6 +9,7 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import {
   chunkTextForOutbound,
   collectStatusIssuesFromLastError,
@@ -16,8 +17,7 @@ import {
   formatTrimmedAllowFromEntries,
   normalizeIMessageMessagingTarget,
   type ChannelPlugin,
-} from "../runtime-api.js";
-import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+} from "./channel-api.js";
 import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
 import {
   matchIMessageAcpConversation,
