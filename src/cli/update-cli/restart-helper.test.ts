@@ -73,6 +73,7 @@ describe("restart-helper", () => {
   describe("prepareRestartScript", () => {
     it("creates a systemd restart script on Linux", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
+      vi.spyOn(fs, "access").mockRejectedValueOnce(new Error("missing"));
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
       });
@@ -86,11 +87,23 @@ describe("restart-helper", () => {
 
     it("uses OPENCLAW_SYSTEMD_UNIT override for systemd scripts", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
+      vi.spyOn(fs, "access").mockRejectedValueOnce(new Error("missing"));
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "default",
         OPENCLAW_SYSTEMD_UNIT: "custom-gateway",
       });
       expect(content).toContain("systemctl --user restart 'custom-gateway.service'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("uses sudo systemctl restart when the system unit exists on Linux", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+      });
+      expect(content).toContain("sudo -n systemctl restart 'openclaw-gateway.service'");
+      expect(content).not.toContain("systemctl --user restart 'openclaw-gateway.service'");
       await cleanupScript(scriptPath);
     });
 
@@ -172,6 +185,7 @@ describe("restart-helper", () => {
 
     it("uses custom profile in service names", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
+      vi.spyOn(fs, "access").mockRejectedValueOnce(new Error("missing"));
       const { scriptPath, content } = await prepareAndReadScript({
         OPENCLAW_PROFILE: "production",
       });
@@ -209,6 +223,7 @@ describe("restart-helper", () => {
 
     it("returns null when script creation fails", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
+      vi.spyOn(fs, "access").mockRejectedValueOnce(new Error("missing"));
       const writeFileSpy = vi
         .spyOn(fs, "writeFile")
         .mockRejectedValueOnce(new Error("simulated write failure"));
