@@ -27,7 +27,7 @@ function makeEntry(skill: Skill): SkillEntry {
     frontmatter: {},
     exposure: {
       includeInRuntimeRegistry: true,
-      includeInAvailableSkillsPrompt: skill.disableModelInvocation !== true,
+      includeInAvailableSkillsPrompt: true,
       userInvocable: true,
     },
   };
@@ -57,6 +57,13 @@ describe("formatSkillsCompact", () => {
       makeSkill("notes", "Summarize notes", "/tmp/notes/SKILL.md"),
     ];
     expect(formatSkillsForPrompt(skills)).toBe(upstreamFormatSkillsForPrompt(skills));
+  });
+
+  it("renders all passed skills in the full formatter without reapplying visibility policy", () => {
+    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
+    const out = formatSkillsForPrompt([makeSkill("visible"), hidden]);
+    expect(out).toContain("visible");
+    expect(out).toContain("hidden");
   });
 
   it("returns empty string for no skills", () => {
@@ -93,9 +100,25 @@ describe("formatSkillsCompact", () => {
 });
 
 describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
-  it("applies disableModelInvocation filtering before compact formatting", () => {
-    const hidden: Skill = { ...makeSkill("hidden"), disableModelInvocation: true };
-    const prompt = buildPrompt([makeSkill("visible"), hidden], { maxChars: 4_000 });
+  it("respects explicit exposure metadata before compact formatting", () => {
+    const hidden = makeEntry({ ...makeSkill("hidden"), disableModelInvocation: true });
+    hidden.exposure = {
+      includeInRuntimeRegistry: true,
+      includeInAvailableSkillsPrompt: false,
+      userInvocable: true,
+    };
+
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries: [makeEntry(makeSkill("visible")), hidden],
+      config: {
+        skills: {
+          limits: {
+            maxSkillsPromptChars: 4_000,
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
     expect(prompt).toContain("visible");
     expect(prompt).not.toContain("hidden");
   });

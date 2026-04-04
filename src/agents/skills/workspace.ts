@@ -487,7 +487,9 @@ function loadSkillEntries(
       invocation,
       exposure: {
         includeInRuntimeRegistry: true,
-        includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
+        // Prompt visibility now follows runtime inclusion for freshly loaded skills.
+        // Legacy entries without exposure metadata still use the fallback below.
+        includeInAvailableSkillsPrompt: true,
         userInvocable: invocation.userInvocable !== false,
       },
     };
