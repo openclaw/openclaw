@@ -28,6 +28,14 @@ to produce AI-synthesized answers with citations.
   </Step>
 </Steps>
 
+When you choose **Kimi** during `openclaw onboard` or
+`openclaw configure --section web`, OpenClaw can also ask for:
+
+- the Moonshot API region:
+  - `https://api.moonshot.ai/v1`
+  - `https://api.moonshot.cn/v1`
+- the default Kimi web-search model (defaults to `kimi-k2.5`)
+
 ## Config
 
 ```json5
@@ -38,6 +46,8 @@ to produce AI-synthesized answers with citations.
         config: {
           webSearch: {
             apiKey: "sk-...", // optional if KIMI_API_KEY or MOONSHOT_API_KEY is set
+            baseUrl: "https://api.moonshot.ai/v1",
+            model: "kimi-k2.5",
           },
         },
       },
@@ -56,6 +66,9 @@ to produce AI-synthesized answers with citations.
 **Environment alternative:** set `KIMI_API_KEY` or `MOONSHOT_API_KEY` in the
 Gateway environment. For a gateway install, put it in `~/.openclaw/.env`.
 
+If you omit `baseUrl`, OpenClaw defaults to `https://api.moonshot.ai/v1`.
+If you omit `model`, OpenClaw defaults to `kimi-k2.5`.
+
 ## How it works
 
 Kimi uses Moonshot web search to synthesize answers with inline citations,
@@ -69,5 +82,6 @@ Provider-specific filters are not currently supported.
 ## Related
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection
+- [Moonshot AI](/providers/moonshot) -- Moonshot model + Kimi Coding provider docs
 - [Gemini Search](/tools/gemini-search) -- AI-synthesized answers via Google grounding
 - [Grok Search](/tools/grok-search) -- AI-synthesized answers via xAI grounding

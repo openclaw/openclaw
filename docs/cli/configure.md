@@ -16,9 +16,13 @@ Tip: `openclaw config` without a subcommand opens the same wizard. Use
 `openclaw config get|set|unset` for non-interactive edits.
 
 For web search, `openclaw configure --section web` lets you choose a provider
-and configure its credentials. If you choose **Grok**, configure can also show
-a separate follow-up step to enable `x_search` with the same `XAI_API_KEY` and
-pick an `x_search` model. Other web-search providers do not show that step.
+and configure its credentials. Some providers also show provider-specific
+follow-up prompts:
+
+- **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY` and
+  let you pick an `x_search` model.
+- **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs
+  `api.moonshot.cn`) and the default Kimi web-search model.
 
 Related:
 
