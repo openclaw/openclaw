@@ -86,66 +86,51 @@ function intersectAll(
   // allowedPaths is a glob allowlist. Tightening should remain usable even when
   // a stricter list uses different (more specific) patterns.
   //
-  // Conservative intersection:
-  // - If the next list is (heuristically) a subset of the current list, keep next (tighter).
-  // - Else if current is subset of next, keep current.
-  // - Else fall back to exact-token intersection.
-  const isSubsetByPrefixHeuristic = (a: string[], b: string[]) => {
-    const normalize = (p: string) => p.replace(/\\/g, "/").trim();
+  // allowedPaths are glob patterns. We must not widen access when intersecting.
+  // Instead of trying to compute a true glob intersection (hard), we use a safe rule:
+  // - If there are multiple defined allowlists, the effective allowlist is the concatenation
+  //   of all patterns, and a path is allowed only if it matches *every* layer.
+  //
+  // This preserves monotonic tightening even when patterns aren't byte-identical:
+  //   ["src/**/*.ts"] + ["src/private/**"] does NOT widen to allow non-TS files.
+  //
+  // Representation: we keep all patterns (deduped). Enforcement must then check ALL lists.
+  // NOTE: PathGuard currently treats allowedPaths as OR. To preserve strict semantics, we
+  // keep the conservative behavior: if multiple allowlists are present and not identical,
+  // fall back to exact-token intersection; otherwise keep the tighter list.
 
-    // Heuristic: if a broader pattern looks like "<prefix>/**" treat it as a directory allow.
-    const asPrefix = (p: string) => {
-      const n = normalize(p);
-      return n.endsWith("/**") ? n.slice(0, -3) : null;
-    };
+  // Minimal safe approach without changing PathGuard semantics:
+  // - Keep subset shortcut only for pure directory-prefix patterns ("<prefix>/**"),
+  //   because they cannot introduce new filetype allowances.
+  // - Otherwise, fall back to exact-token intersection.
+  const normalize = (p: string) => p.replace(/\\/g, "/").trim();
+  const asPrefix = (p: string) => {
+    const n = normalize(p);
+    return n.endsWith("/**") ? n.slice(0, -3) : null;
+  };
 
-    // Heuristic: consider "src/**/*.ts" as a broader pattern for "src/api/**/*.ts".
-    // This is conservative: we only treat it as a subset if the narrower starts with the
-    // same prefix up to the first globstar segment.
-    const asGlobstarPrefix = (p: string) => {
-      const n = normalize(p);
-      const idx = n.indexOf("**");
-      if (idx === -1) {
-        return null;
-      }
-      // prefix up to the directory boundary before the globstar.
-      const cut = n.lastIndexOf("/", idx);
-      if (cut === -1) {
-        return null;
-      }
-      return n.slice(0, cut);
-    };
-
+  const isSubsetByDirPrefixOnly = (a: string[], b: string[]) => {
     return b.every((bp) => {
       const bNorm = normalize(bp);
       return a.some((ap) => {
-        const aNorm = normalize(ap);
-        if (aNorm === bNorm) {
-          return true;
+        const aPrefix = asPrefix(ap);
+        if (!aPrefix) {
+          return normalize(ap) === bNorm;
         }
-
-        const aPrefix = asPrefix(aNorm);
-        if (aPrefix) {
-          return bNorm === aPrefix || bNorm.startsWith(aPrefix + "/");
-        }
-
-        const aGlobstarPrefix = asGlobstarPrefix(aNorm);
-        if (aGlobstarPrefix) {
-          return bNorm.startsWith(aGlobstarPrefix + "/");
-        }
-
-        return false;
+        return bNorm === aPrefix || bNorm.startsWith(aPrefix + "/");
       });
     });
   };
 
-  let acc = defined[0];
-  for (const next of defined.slice(1)) {
-    if (isSubsetByPrefixHeuristic(acc, next)) {
+  let acc = defined[0].map(normalize);
+  for (const nextRaw of defined.slice(1)) {
+    const next = nextRaw.map(normalize);
+
+    if (isSubsetByDirPrefixOnly(acc, next)) {
       acc = next;
       continue;
     }
-    if (isSubsetByPrefixHeuristic(next, acc)) {
+    if (isSubsetByDirPrefixOnly(next, acc)) {
       continue;
     }
 
