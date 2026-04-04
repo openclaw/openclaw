@@ -809,7 +809,9 @@ api.registerProvider({
   because it owns native xAI Responses transport normalization, Grok fast-mode
   alias rewrites, default `tool_stream`, strict-tool / reasoning-payload
   cleanup, fallback auth reuse for plugin-owned tools, forward-compat Grok
-  model resolution, and provider-owned compat patches.
+  model resolution, and provider-owned compat patches such as xAI tool-schema
+  profile, unsupported schema keywords, native `web_search`, and HTML-entity
+  tool-call argument decoding.
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,

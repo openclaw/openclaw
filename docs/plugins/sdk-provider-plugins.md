@@ -324,6 +324,21 @@ API key auth, and dynamic model resolution.
     unsupported strict-tool cleanup, and xAI-specific reasoning-payload
     removal.
 
+    `openclaw/plugin-sdk/provider-tools` currently exposes one shared
+    tool-schema family plus xAI-specific compat helpers:
+
+    - `buildProviderToolCompatFamilyHooks("gemini")` wires Gemini schema
+      cleanup + diagnostics for providers that need Gemini-safe tool schemas.
+    - `resolveXaiModelCompatPatch()` returns the bundled xAI compat patch:
+      `toolSchemaProfile: "xai"`, unsupported schema keywords, native
+      `web_search` support, and HTML-entity tool-call argument decoding.
+    - `applyXaiModelCompat(model)` applies that same xAI compat patch to a
+      resolved model before it reaches the runner.
+
+    Real bundled example: the xAI plugin uses `normalizeResolvedModel` plus
+    `contributeResolvedModelCompat` to keep that compat metadata owned by the
+    provider instead of hardcoding xAI rules in core.
+
     The same package-root pattern also backs other bundled providers:
 
     - `@openclaw/openai-provider`: `api.ts` exports provider builders,
