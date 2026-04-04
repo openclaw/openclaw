@@ -59,14 +59,22 @@ API keys for daemon use: `openclaw onboard`.
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
 `~/.openclaw/.env`, systemd/launchd).
 
-## Anthropic: legacy token compatibility
+## Anthropic: OAuth/token compatibility
 
-Existing Anthropic token profiles are still honored at runtime if they are
-already configured, but OpenClaw no longer offers Anthropic setup-token auth
-for new setup via onboarding or `models auth` commands.
+Existing Anthropic OAuth/token profiles are still honored at runtime if they
+are already configured, but OpenClaw no longer offers Anthropic setup-token
+auth for new setup via onboarding or `models auth` commands.
 
 For new setup, use an Anthropic API key or migrate to Claude CLI on the gateway
 host.
+
+Other providers can still use the generic token helpers:
+
+- `openclaw models auth setup-token --provider <id>` runs the provider's token
+  auth flow (interactive TTY required).
+- `openclaw models auth paste-token --provider <id>` prompts for a token value
+  and writes it to `auth-profiles.json` (default profile id:
+  `<provider>:manual`).
 
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
@@ -85,6 +93,22 @@ Automation-friendly check (exit `1` when expired/missing, `2` when expiring):
 ```bash
 openclaw models status --check
 ```
+
+Live auth probes:
+
+```bash
+openclaw models status --probe
+```
+
+Notes:
+
+- Probe rows can come from auth profiles, env credentials, or `models.json`.
+- If explicit `auth.order.<provider>` omits a stored profile, probe reports
+  `excluded_by_auth_order` for that profile instead of trying it.
+- If auth exists but OpenClaw cannot resolve a probeable model candidate for
+  that provider, probe reports `status: no_model`.
+- Rate-limit cooldowns can be model-scoped. A profile cooling down for one
+  model can still be usable for a sibling model on the same provider.
 
 Optional ops scripts (systemd/Termux) are documented here:
 [Auth monitoring scripts](/help/scripts#auth-monitoring-scripts)
@@ -106,8 +130,8 @@ openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
 This keeps your existing Anthropic auth profiles for rollback, but changes the
-default model selection to `claude-cli/...` and adds matching Claude CLI
-allowlist entries under `agents.defaults.models`.
+default model selection to a canonical `claude-cli/claude-*` ref and adds
+matching Claude CLI allowlist entries under `agents.defaults.models`.
 
 Verify:
 
@@ -144,7 +168,9 @@ hits a provider rate limit.
 - Google providers also include `GOOGLE_API_KEY` as an additional fallback.
 - The same key list is deduplicated before use.
 - OpenClaw retries with the next key only for rate-limit errors (for example
-  `429`, `rate_limit`, `quota`, `resource exhausted`).
+  `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many concurrent
+requests`, `ThrottlingException`, `concurrency limit reached`, or
+  `workers_ai ... quota limit exceeded`).
 - Non-rate-limit errors are not retried with alternate keys.
 - If all keys fail, the final error from the last attempt is returned.
 
@@ -167,6 +193,10 @@ openclaw models auth order clear --provider anthropic
 ```
 
 Use `--agent <id>` to target a specific agent; omit it to use the configured default agent.
+When you debug order issues, `openclaw models status --probe` shows omitted
+stored profiles as `excluded_by_auth_order` instead of silently skipping them.
+When you debug cooldown issues, remember that rate-limit cooldowns can be tied
+to one model id rather than the whole provider profile.
 
 ## Troubleshooting
 
@@ -181,12 +211,12 @@ openclaw models status
 
 ### Token expiring/expired
 
-Run `openclaw models status` to confirm which profile is expiring. If a legacy
-Anthropic token profile is missing or expired, migrate that setup to Claude CLI
+Run `openclaw models status` to confirm which profile is expiring. If an
+Anthropic OAuth/token profile is missing or expired, migrate that setup to Claude CLI
 or an API key.
 
 ## Claude CLI requirements
 
 Only needed for the Anthropic Claude CLI reuse path:
 
-- Claude Code CLI installed (`claude` command available)
+- Claude CLI installed (`claude` command available)

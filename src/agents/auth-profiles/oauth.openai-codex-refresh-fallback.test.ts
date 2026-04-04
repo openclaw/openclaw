@@ -265,7 +265,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       },
       agentDir,
     );
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce({
+    readCodexCliCredentialsCachedMock.mockReturnValue({
       type: "oauth",
       provider: "openai-codex",
       access: "still-expired-cli-access-token",

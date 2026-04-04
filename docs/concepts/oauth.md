@@ -64,25 +64,29 @@ All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full r
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
 
-## Anthropic legacy token compatibility
+## Anthropic OAuth/token compatibility
 
 <Warning>
 Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
 PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
-OpenClaw or other third-party harnesses. Existing Anthropic token profiles
+OpenClaw or other third-party harnesses. Existing Anthropic OAuth/token profiles
 remain technically usable in OpenClaw, but Anthropic now requires **Extra
 Usage** (pay-as-you-go billed separately from the subscription) for that
 traffic.
 
 If you want other subscription-style options in OpenClaw, see [OpenAI
-Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
-Plan](/providers/qwen_modelstudio), [MiniMax Coding Plan](/providers/minimax),
+Codex](/providers/openai), [Qwen Cloud Coding
+Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
 and [Z.AI / GLM Coding Plan](/providers/glm).
 </Warning>
 
 OpenClaw no longer offers Anthropic setup-token onboarding or auth commands for
-new setup. Existing legacy Anthropic token profiles are still honored at
-runtime if they are already configured.
+new setup. Existing Anthropic OAuth/token profiles are still honored at runtime
+if they are already configured.
+
+The generic token helpers still exist for other providers:
+`openclaw models auth setup-token --provider <id>` and
+`openclaw models auth paste-token --provider <id>`.
 
 ## Anthropic Claude CLI migration
 
@@ -109,9 +113,10 @@ openclaw onboard --auth-choice anthropic-cli
 ```
 
 This keeps existing Anthropic auth profiles for rollback, but rewrites the main
-default-model path from `anthropic/...` to `claude-cli/...`, rewrites matching
-Anthropic Claude fallbacks, and adds matching `claude-cli/...` allowlist
-entries under `agents.defaults.models`.
+default-model path from `anthropic/...` to a canonical
+`claude-cli/claude-*` ref, rewrites matching Anthropic Claude fallbacks, and
+adds matching canonical `claude-cli/claude-*` allowlist entries under
+`agents.defaults.models`.
 
 Verify:
 
@@ -131,7 +136,8 @@ Claude CLI path:
 
 1. sign in with `claude auth login` on the gateway host
 2. run `openclaw models auth login --provider anthropic --method cli --set-default`
-3. store no new auth profile; switch model selection to `claude-cli/...`
+3. store no new auth profile; switch model selection to a canonical
+   `claude-cli/claude-*` ref
 4. keep existing Anthropic auth profiles for rollback
 
 Interactive assistant path:

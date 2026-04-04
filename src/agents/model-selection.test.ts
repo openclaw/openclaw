@@ -419,7 +419,7 @@ describe("model-selection", () => {
             "qwen-dashscope": {
               models: [{ id: "qwen-max" }],
             },
-            modelstudio: {
+            qwen: {
               models: [{ id: "qwen-max" }],
             },
           },

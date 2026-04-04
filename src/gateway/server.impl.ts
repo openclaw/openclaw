@@ -288,15 +288,30 @@ async function prepareGatewayStartupConfig(params: {
       tailscale: params.tailscaleOverride,
     },
   );
-  await params.activateRuntimeSecrets(startupPreflightConfig, {
-    reason: "startup",
-    activate: false,
-  });
+  const preflightConfig = (
+    await params.activateRuntimeSecrets(startupPreflightConfig, {
+      reason: "startup",
+      activate: false,
+    })
+  ).config;
+  const preflightAuthOverride =
+    typeof preflightConfig.gateway?.auth?.token === "string" ||
+    typeof preflightConfig.gateway?.auth?.password === "string"
+      ? {
+          ...params.authOverride,
+          ...(typeof preflightConfig.gateway?.auth?.token === "string"
+            ? { token: preflightConfig.gateway.auth.token }
+            : {}),
+          ...(typeof preflightConfig.gateway?.auth?.password === "string"
+            ? { password: preflightConfig.gateway.auth.password }
+            : {}),
+        }
+      : params.authOverride;
 
   const authBootstrap = await ensureGatewayStartupAuth({
     cfg: params.runtimeConfig,
     env: process.env,
-    authOverride: params.authOverride,
+    authOverride: preflightAuthOverride,
     tailscaleOverride: params.tailscaleOverride,
     persist: true,
     baseHash: params.configSnapshot.hash,
@@ -637,7 +652,8 @@ export async function startGatewayServer(
   } = runtimeConfig;
   const getResolvedAuth = () =>
     resolveGatewayAuth({
-      authConfig: getRuntimeConfig().gateway?.auth,
+      authConfig:
+        getActiveSecretsRuntimeSnapshot()?.config.gateway?.auth ?? getRuntimeConfig().gateway?.auth,
       authOverride: opts.auth,
       env: process.env,
       tailscaleMode,

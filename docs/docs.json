@@ -54,7 +54,7 @@
   "redirects": [
     {
       "source": "/providers/modelstudio",
-      "destination": "/providers/qwen_modelstudio"
+      "destination": "/providers/qwen"
     },
     {
       "source": "/platforms/oracle",
