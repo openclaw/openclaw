@@ -97,7 +97,9 @@ describe("buildProviderReplayFamilyHooks", () => {
 
       expect(hooks.buildReplayPolicy?.(testCase.ctx as never)).toMatchObject(testCase.match);
       expect(Boolean(hooks.sanitizeReplayHistory)).toBe(testCase.hasSanitizeReplayHistory);
-      expect(hooks.resolveReasoningOutputMode?.(testCase.ctx as never)).toBe(testCase.reasoningMode);
+      expect(hooks.resolveReasoningOutputMode?.(testCase.ctx as never)).toBe(
+        testCase.reasoningMode,
+      );
     }
   });
 

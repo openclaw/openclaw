@@ -23,9 +23,7 @@ import {
   normalizeAnthropicProviderConfig,
 } from "./config-defaults.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
-import {
-  wrapAnthropicProviderStream,
-} from "./stream-wrappers.js";
+import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";

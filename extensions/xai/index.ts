@@ -15,9 +15,7 @@ import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
-import {
-  wrapXaiProviderStream,
-} from "./stream.js";
+import { wrapXaiProviderStream } from "./stream.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
