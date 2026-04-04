@@ -114,7 +114,8 @@ Auth-only channels can usually stop at the default path: core handles approvals 
   <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     Create the standard plugin files. The `channel` field in `package.json` is
-    what makes this a channel plugin:
+    what makes this a channel plugin. For the full package-metadata surface,
+    see [Plugin Setup and Config](/plugins/sdk-setup#openclawchannel):
 
     <CodeGroup>
     ```json package.json
