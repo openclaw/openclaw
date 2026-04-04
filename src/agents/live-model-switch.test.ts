@@ -29,6 +29,15 @@ vi.mock("./model-selection.js", () => ({
   resolvePersistedModelRef: (...args: unknown[]) => state.resolvePersistedModelRefMock(...args),
 }));
 
+vi.mock("../config/sessions/store.js", () => ({
+  loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
+  updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
+}));
+
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
   resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
