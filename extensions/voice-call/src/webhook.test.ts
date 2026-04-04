@@ -24,12 +24,16 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
-    getRealtimeTranscriptionProvider: vi.fn(() => realtimeTranscriptionProvider),
+    getRealtimeTranscriptionProvider: vi.fn<
+      (...args: unknown[]) => RealtimeTranscriptionProviderPlugin | undefined
+    >(() => realtimeTranscriptionProvider),
+    listRealtimeTranscriptionProviders: vi.fn(() => [realtimeTranscriptionProvider]),
   };
 });
 
 vi.mock("./realtime-transcription.runtime.js", () => ({
   getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
+  listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
 }));
 
 const provider: VoiceCallProvider = {
@@ -109,6 +113,48 @@ function expectWebhookUrl(url: string, expectedPath: string) {
   expect(parsed.port).not.toBe("");
   expect(parsed.port).not.toBe("0");
 }
+
+describe("VoiceCallWebhookServer realtime transcription provider selection", () => {
+  it("auto-selects the first registered provider when streaming.provider is unset", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "sk-test", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+    const autoSelectedProvider: RealtimeTranscriptionProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      autoSelectOrder: 5,
+      isConfigured: () => true,
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      createSession: () => ({
+        connect: async () => {},
+        sendAudio: () => {},
+        close: () => {},
+        isConnected: () => true,
+      }),
+    };
+    mocks.getRealtimeTranscriptionProvider.mockReturnValueOnce(undefined);
+    mocks.listRealtimeTranscriptionProviders.mockReturnValueOnce([autoSelectedProvider]);
+
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+    try {
+      await server.start();
+      expect(mocks.getRealtimeTranscriptionProvider).toHaveBeenCalledWith(undefined, undefined);
+      expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(undefined);
+      expect(server.getMediaStreamHandler()).toBeTruthy();
+    } finally {
+      await server.stop();
+    }
+  });
+});
 
 async function runStaleCallReaperCase(params: {
   callAgeMs: number;

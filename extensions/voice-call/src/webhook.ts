@@ -158,18 +158,32 @@ export class VoiceCallWebhookServer {
    */
   private async initializeMediaStreaming(): Promise<void> {
     const streaming = this.config.streaming;
-    const selectedProviderId = streaming.provider;
     const pluginConfig = this.coreConfig as unknown as OpenClawConfig | undefined;
-    const { getRealtimeTranscriptionProvider } =
+    const { getRealtimeTranscriptionProvider, listRealtimeTranscriptionProviders } =
       await import("./realtime-transcription.runtime.js");
-    const provider = getRealtimeTranscriptionProvider(selectedProviderId, pluginConfig);
-    if (!provider) {
+    const selectedProviderId = streaming.provider?.trim();
+    const configuredProvider = getRealtimeTranscriptionProvider(selectedProviderId, pluginConfig);
+    if (selectedProviderId && !configuredProvider) {
       console.warn(
         `[voice-call] Streaming enabled but realtime transcription provider "${selectedProviderId}" is not registered`,
       );
       return;
     }
+    const provider =
+      configuredProvider ??
+      [...listRealtimeTranscriptionProviders(pluginConfig)].sort(
+        (left, right) =>
+          (left.autoSelectOrder ?? Number.MAX_SAFE_INTEGER) -
+          (right.autoSelectOrder ?? Number.MAX_SAFE_INTEGER),
+      )[0];
+    if (!provider) {
+      console.warn(
+        "[voice-call] Streaming enabled but no realtime transcription provider is registered",
+      );
+      return;
+    }
     const selectedProviderConfig =
+      selectedProviderId &&
       streaming.providers[selectedProviderId] &&
       typeof streaming.providers[selectedProviderId] === "object"
         ? (streaming.providers[selectedProviderId] as Record<string, unknown>)

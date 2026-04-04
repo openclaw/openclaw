@@ -64,21 +64,6 @@ export const PlivoConfigSchema = z
   .strict();
 export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
 
-// -----------------------------------------------------------------------------
-// STT/TTS Configuration
-// -----------------------------------------------------------------------------
-
-export const SttConfigSchema = z
-  .object({
-    /** One-shot STT provider for non-streaming paths. */
-    provider: z.literal("openai").default("openai"),
-    /** Whisper model to use */
-    model: z.string().min(1).default("whisper-1"),
-  })
-  .strict()
-  .default({ provider: "openai", model: "whisper-1" });
-export type SttConfig = z.infer<typeof SttConfigSchema>;
-
 export { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema };
 export type VoiceCallTtsConfig = z.infer<typeof TtsConfigSchema>;
 
@@ -255,7 +240,7 @@ export const VoiceCallStreamingConfigSchema = z
     /** Enable real-time audio streaming (requires WebSocket support) */
     enabled: z.boolean().default(false),
     /** Provider id from registered realtime transcription providers. */
-    provider: z.string().min(1).default("openai"),
+    provider: z.string().min(1).optional(),
     /** @deprecated Legacy alias for provider. */
     sttProvider: z.string().min(1).optional(),
     /** @deprecated Legacy OpenAI-specific API key field. */
@@ -285,7 +270,6 @@ export const VoiceCallStreamingConfigSchema = z
   .strict()
   .default({
     enabled: false,
-    provider: "openai",
     streamPath: "/voice/stream",
     providers: {},
     preStartTimeoutMs: 5000,
@@ -381,9 +365,6 @@ export const VoiceCallConfigSchema = z
     /** Skip webhook signature verification (development only, NOT for production) */
     skipSignatureVerification: z.boolean().default(false),
 
-    /** STT configuration */
-    stt: SttConfigSchema,
-
     /** TTS override (deep-merges with core messages.tts) */
     tts: TtsConfigSchema,
 
@@ -467,36 +448,73 @@ function sanitizeVoiceCallProviderConfigs(
   );
 }
 
+function mergeLegacyStreamingOpenAICompat(
+  streaming: VoiceCallStreamingConfig,
+): VoiceCallStreamingConfig {
+  const providers = { ...(streaming.providers ?? {}) };
+  const legacyStreamingRaw = streaming as Record<string, unknown>;
+  const openaiRaw =
+    providers.openai && typeof providers.openai === "object"
+      ? { ...(providers.openai as Record<string, unknown>) }
+      : {};
+
+  if (typeof openaiRaw.apiKey !== "string" && typeof legacyStreamingRaw.openaiApiKey === "string") {
+    openaiRaw.apiKey = legacyStreamingRaw.openaiApiKey;
+  }
+  if (typeof openaiRaw.model !== "string" && typeof legacyStreamingRaw.sttModel === "string") {
+    openaiRaw.model = legacyStreamingRaw.sttModel;
+  }
+  if (
+    openaiRaw.silenceDurationMs == null &&
+    typeof legacyStreamingRaw.silenceDurationMs === "number"
+  ) {
+    openaiRaw.silenceDurationMs = legacyStreamingRaw.silenceDurationMs;
+  }
+  if (openaiRaw.vadThreshold == null && typeof legacyStreamingRaw.vadThreshold === "number") {
+    openaiRaw.vadThreshold = legacyStreamingRaw.vadThreshold;
+  }
+  if (Object.keys(openaiRaw).length > 0) {
+    providers.openai = openaiRaw;
+  }
+
+  return {
+    ...streaming,
+    providers,
+  };
+}
+
+function mergeLegacyRealtimeOpenAICompat(
+  realtime: VoiceCallRealtimeConfig,
+): VoiceCallRealtimeConfig {
+  const providers = { ...(realtime.providers ?? {}) };
+  const openaiRaw =
+    providers.openai && typeof providers.openai === "object"
+      ? { ...(providers.openai as Record<string, unknown>) }
+      : {};
+
+  if (Object.keys(openaiRaw).length > 0) {
+    providers.openai = openaiRaw;
+  }
+
+  return {
+    ...realtime,
+    providers,
+  };
+}
+
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   const serve = { ...defaults.serve, ...config.serve };
   const streamingProvider =
     config.streaming?.provider ??
-    (typeof config.streaming?.sttProvider === "string"
-      ? config.streaming.sttProvider
-      : undefined) ??
-    defaults.streaming.provider;
+    (typeof config.streaming?.sttProvider === "string" ? config.streaming.sttProvider : undefined);
   const streamingProviders = sanitizeVoiceCallProviderConfigs(
     config.streaming?.providers ?? defaults.streaming.providers,
   );
-  if (
-    typeof streamingProvider === "string" &&
-    streamingProvider.trim() &&
-    !(streamingProvider in streamingProviders)
-  ) {
-    streamingProviders[streamingProvider] = {};
-  }
   const realtimeProvider = config.realtime?.provider ?? defaults.realtime.provider;
   const realtimeProviders = sanitizeVoiceCallProviderConfigs(
     config.realtime?.providers ?? defaults.realtime.providers,
   );
-  if (
-    typeof realtimeProvider === "string" &&
-    realtimeProvider.trim() &&
-    !(realtimeProvider in realtimeProviders)
-  ) {
-    realtimeProviders[realtimeProvider] = {};
-  }
   return {
     ...defaults,
     ...config,
@@ -529,7 +547,6 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
       providers: realtimeProviders,
     },
-    stt: { ...defaults.stt, ...config.stt },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
 }
@@ -584,131 +601,15 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
   resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
-  resolved.streaming = {
-    ...resolved.streaming,
-    providers: { ...(resolved.streaming.providers ?? {}) },
-  };
-  const legacyStreamingRaw = resolved.streaming as Record<string, unknown>;
-  const openaiStreamingRaw =
-    resolved.streaming.providers.openai && typeof resolved.streaming.providers.openai === "object"
-      ? { ...(resolved.streaming.providers.openai as Record<string, unknown>) }
-      : {};
-  if (
-    typeof openaiStreamingRaw.apiKey !== "string" &&
-    typeof legacyStreamingRaw.openaiApiKey === "string"
-  ) {
-    openaiStreamingRaw.apiKey = legacyStreamingRaw.openaiApiKey;
-  }
-  if (
-    typeof openaiStreamingRaw.model !== "string" &&
-    typeof legacyStreamingRaw.sttModel === "string"
-  ) {
-    openaiStreamingRaw.model = legacyStreamingRaw.sttModel;
-  }
-  if (
-    openaiStreamingRaw.silenceDurationMs == null &&
-    typeof legacyStreamingRaw.silenceDurationMs === "number"
-  ) {
-    openaiStreamingRaw.silenceDurationMs = legacyStreamingRaw.silenceDurationMs;
-  }
-  if (
-    openaiStreamingRaw.vadThreshold == null &&
-    typeof legacyStreamingRaw.vadThreshold === "number"
-  ) {
-    openaiStreamingRaw.vadThreshold = legacyStreamingRaw.vadThreshold;
-  }
-  if (typeof openaiStreamingRaw.apiKey !== "string" || !openaiStreamingRaw.apiKey.trim()) {
-    if (process.env.OPENAI_API_KEY) {
-      openaiStreamingRaw.apiKey = process.env.OPENAI_API_KEY;
-    }
-  }
-  if (
-    typeof openaiStreamingRaw.model !== "string" &&
-    typeof process.env.REALTIME_TRANSCRIPTION_MODEL === "string"
-  ) {
-    openaiStreamingRaw.model = process.env.REALTIME_TRANSCRIPTION_MODEL;
-  }
-  if (
-    typeof openaiStreamingRaw.model !== "string" &&
-    typeof process.env.STREAMING_STT_MODEL === "string"
-  ) {
-    openaiStreamingRaw.model = process.env.STREAMING_STT_MODEL;
-  }
-  if (openaiStreamingRaw.vadThreshold == null && typeof process.env.VAD_THRESHOLD === "string") {
-    openaiStreamingRaw.vadThreshold = Number.parseFloat(process.env.VAD_THRESHOLD);
-  }
-  if (
-    openaiStreamingRaw.silenceDurationMs == null &&
-    typeof process.env.SILENCE_DURATION_MS === "string"
-  ) {
-    openaiStreamingRaw.silenceDurationMs = Number.parseInt(process.env.SILENCE_DURATION_MS, 10);
-  }
-  if (Object.keys(openaiStreamingRaw).length > 0) {
-    resolved.streaming.providers.openai = openaiStreamingRaw;
-  }
-  if (
-    typeof resolved.streaming.provider === "string" &&
-    resolved.streaming.provider.trim() &&
-    !(resolved.streaming.provider in resolved.streaming.providers)
-  ) {
-    resolved.streaming.providers[resolved.streaming.provider] = {};
-  }
+  // Keep parsing legacy OpenAI-shaped fields, but isolate them to the OpenAI provider blob.
+  resolved.streaming = mergeLegacyStreamingOpenAICompat(resolved.streaming);
 
-  resolved.realtime = {
-    ...resolved.realtime,
-    providers: { ...(resolved.realtime.providers ?? {}) },
-  };
-  const openaiRealtimeRaw =
-    resolved.realtime.providers.openai && typeof resolved.realtime.providers.openai === "object"
-      ? { ...(resolved.realtime.providers.openai as Record<string, unknown>) }
-      : {};
-  if (typeof openaiRealtimeRaw.apiKey !== "string" || !openaiRealtimeRaw.apiKey.trim()) {
-    if (process.env.OPENAI_API_KEY) {
-      openaiRealtimeRaw.apiKey = process.env.OPENAI_API_KEY;
-    }
-  }
-  if (
-    typeof openaiRealtimeRaw.model !== "string" &&
-    typeof process.env.REALTIME_VOICE_MODEL === "string"
-  ) {
-    openaiRealtimeRaw.model = process.env.REALTIME_VOICE_MODEL;
-  }
-  if (
-    typeof openaiRealtimeRaw.voice !== "string" &&
-    typeof process.env.REALTIME_VOICE_VOICE === "string"
-  ) {
-    openaiRealtimeRaw.voice = process.env.REALTIME_VOICE_VOICE;
-  }
+  resolved.realtime = mergeLegacyRealtimeOpenAICompat(resolved.realtime);
   if (
     typeof resolved.realtime.instructions !== "string" &&
     typeof process.env.REALTIME_VOICE_INSTRUCTIONS === "string"
   ) {
     resolved.realtime.instructions = process.env.REALTIME_VOICE_INSTRUCTIONS;
-  }
-  if (
-    openaiRealtimeRaw.temperature == null &&
-    typeof process.env.REALTIME_VOICE_TEMPERATURE === "string"
-  ) {
-    openaiRealtimeRaw.temperature = Number.parseFloat(process.env.REALTIME_VOICE_TEMPERATURE);
-  }
-  if (openaiRealtimeRaw.vadThreshold == null && typeof process.env.VAD_THRESHOLD === "string") {
-    openaiRealtimeRaw.vadThreshold = Number.parseFloat(process.env.VAD_THRESHOLD);
-  }
-  if (
-    openaiRealtimeRaw.silenceDurationMs == null &&
-    typeof process.env.SILENCE_DURATION_MS === "string"
-  ) {
-    openaiRealtimeRaw.silenceDurationMs = Number.parseInt(process.env.SILENCE_DURATION_MS, 10);
-  }
-  if (Object.keys(openaiRealtimeRaw).length > 0) {
-    resolved.realtime.providers.openai = openaiRealtimeRaw;
-  }
-  if (
-    typeof resolved.realtime.provider === "string" &&
-    resolved.realtime.provider.trim() &&
-    !(resolved.realtime.provider in resolved.realtime.providers)
-  ) {
-    resolved.realtime.providers[resolved.realtime.provider] = {};
   }
 
   return normalizeVoiceCallConfig(resolved);

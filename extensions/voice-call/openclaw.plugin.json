@@ -88,19 +88,36 @@
     },
     "streaming.provider": {
       "label": "Streaming Provider",
+      "help": "Uses the first registered realtime transcription provider when unset.",
       "advanced": true
     },
-    "streaming.providers.openai.apiKey": {
-      "label": "OpenAI Realtime API Key",
-      "sensitive": true,
-      "advanced": true
-    },
-    "streaming.providers.openai.model": {
-      "label": "Realtime STT Model",
+    "streaming.providers": {
+      "label": "Streaming Provider Config",
       "advanced": true
     },
     "streaming.streamPath": {
       "label": "Media Stream Path",
+      "advanced": true
+    },
+    "realtime.enabled": {
+      "label": "Enable Realtime Voice",
+      "advanced": true
+    },
+    "realtime.provider": {
+      "label": "Realtime Voice Provider",
+      "help": "Uses the first registered realtime voice provider when unset.",
+      "advanced": true
+    },
+    "realtime.streamPath": {
+      "label": "Realtime Stream Path",
+      "advanced": true
+    },
+    "realtime.instructions": {
+      "label": "Realtime Instructions",
+      "advanced": true
+    },
+    "realtime.providers": {
+      "label": "Realtime Provider Config",
       "advanced": true
     },
     "tts.provider": {
@@ -108,34 +125,8 @@
       "help": "Deep-merges with messages.tts (Microsoft is ignored for calls).",
       "advanced": true
     },
-    "tts.providers.openai.model": {
-      "label": "OpenAI TTS Model",
-      "advanced": true
-    },
-    "tts.providers.openai.voice": {
-      "label": "OpenAI TTS Voice",
-      "advanced": true
-    },
-    "tts.providers.openai.apiKey": {
-      "label": "OpenAI API Key",
-      "sensitive": true,
-      "advanced": true
-    },
-    "tts.providers.elevenlabs.modelId": {
-      "label": "ElevenLabs Model ID",
-      "advanced": true
-    },
-    "tts.providers.elevenlabs.voiceId": {
-      "label": "ElevenLabs Voice ID",
-      "advanced": true
-    },
-    "tts.providers.elevenlabs.apiKey": {
-      "label": "ElevenLabs API Key",
-      "sensitive": true,
-      "advanced": true
-    },
-    "tts.providers.elevenlabs.baseUrl": {
-      "label": "ElevenLabs Base URL",
+    "tts.providers": {
+      "label": "TTS Provider Config",
       "advanced": true
     },
     "publicUrl": {
@@ -469,19 +460,6 @@
       },
       "skipSignatureVerification": {
         "type": "boolean"
-      },
-      "stt": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "provider": {
-            "type": "string",
-            "enum": ["openai"]
-          },
-          "model": {
-            "type": "string"
-          }
-        }
       },
       "tts": {
         "type": "object",

@@ -76,7 +76,15 @@ Put under `plugins.entries.voice-call.config`:
 
   streaming: {
     enabled: true,
+    // optional; if omitted, Voice Call picks the first registered
+    // realtime-transcription provider by autoSelectOrder
+    provider: "openai",
     streamPath: "/voice/stream",
+    providers: {
+      openai: {
+        model: "gpt-4o-transcribe",
+      },
+    },
     preStartTimeoutMs: 5000,
     maxPendingConnections: 32,
     maxPendingConnectionsPerIp: 4,
@@ -145,4 +153,4 @@ Actions:
 - While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
 - Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
 - Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
-- Media streaming requires `ws` plus a configured realtime-transcription provider. The bundled provider today is OpenAI.
+- Realtime provider selection is generic. Configure `streaming.provider` / `realtime.provider` and put provider-owned options under `providers.<id>`.
