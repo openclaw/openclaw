@@ -235,6 +235,7 @@ export async function statusCommand(
       updateChannelSource: channelInfo.source,
       memory,
       memoryPlugin,
+      gatewayMemoryStatus,
       gateway: {
         mode: gatewayMode,
         url: gatewayConnection.url,
