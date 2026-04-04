@@ -346,30 +346,21 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     }
   });
 
-  // Only enable per-message sequential keys when the queue mode includes steer.
-  // In collect/followup modes, steer injection is not used, so per-message keys
-  // would break FIFO ordering for no benefit.
-  const queueCfg = cfg.messages?.queue;
-  const telegramQueueMode =
-    (queueCfg?.byChannel as Record<string, string | undefined> | undefined)?.telegram ??
-    queueCfg?.mode;
-  const isSteerMode =
-    telegramQueueMode === "steer" || telegramQueueMode === "steer-backlog" ||
-    telegramQueueMode === "steer+backlog";
-
-  // Cache chatId:threadId → sessionKey so the sequential key middleware can
-  // check whether an embedded Pi run is active without heavy session resolution.
+  // Cache chatId:threadId → {sessionKey, isSteerMode} so the sequential key
+  // middleware can check whether an embedded Pi run is active and whether the
+  // session uses steer queue mode — without heavy session resolution per update.
   // Populated by bot-handlers when sessions are resolved for each message.
-  const chatSessionCache = new Map<string, string>();
+  const chatSessionCache = new Map<string, { sessionKey: string; isSteerMode: boolean }>();
 
   bot.use(
     botRuntime.sequentialize((ctx) =>
       getTelegramSequentialKey(ctx, {
-        isRunActiveForChat: isSteerMode && telegramDeps.isRunActiveForSessionKey
+        isRunActiveForChat: telegramDeps.isRunActiveForSessionKey
           ? (chatId, threadId, senderId) => {
               const cacheKey = buildChatSessionCacheKey(chatId, threadId, senderId);
-              const sessionKey = chatSessionCache.get(cacheKey);
-              return sessionKey ? telegramDeps.isRunActiveForSessionKey!(sessionKey) : false;
+              const cached = chatSessionCache.get(cacheKey);
+              if (!cached?.isSteerMode) return false;
+              return telegramDeps.isRunActiveForSessionKey!(cached.sessionKey);
             }
           : undefined,
       }),

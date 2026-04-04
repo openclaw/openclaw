@@ -109,12 +109,20 @@ export function buildChatSessionCacheKey(
   chatId: number | string,
   threadId?: number,
   senderId?: string | number | null,
+  isGroup?: boolean,
 ): string {
   let key = `${chatId}`;
   if (threadId != null) key += `:${threadId}`;
-  if (senderId != null) key += `:${senderId}`;
+  // Only include senderId for DMs — group sessions are topic-scoped, not sender-scoped.
+  if (senderId != null && !isGroup) key += `:${senderId}`;
   return key;
 }
+
+export type ChatSessionCacheEntry = {
+  sessionKey: string;
+  /** Whether the resolved session uses a steer-capable queue mode. */
+  isSteerMode: boolean;
+};
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -355,18 +363,28 @@ export const registerTelegramHandlers = ({
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-    // Keep the chatId:threadId → sessionKey cache current so the sequential
-    // key middleware can check whether an embedded run is active.
-    if (chatSessionCache && typeof params.chatId === "number") {
-      const resolvedThread = resolvedThreadId ?? dmThreadId;
-      const cacheKey = buildChatSessionCacheKey(params.chatId, resolvedThread, params.senderId);
-      chatSessionCache.set(cacheKey, sessionKey);
-    }
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
     const store = loadSessionStore(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    // Keep the chatId:threadId → sessionKey cache current so the sequential
+    // key middleware can check whether an embedded run is active.
+    if (chatSessionCache && typeof params.chatId === "number") {
+      const resolvedThread = resolvedThreadId ?? dmThreadId;
+      const cacheKey = buildChatSessionCacheKey(
+        params.chatId, resolvedThread, params.senderId, params.isGroup,
+      );
+      // Check session-level override first, then fall back to channel/global config.
+      const queueCfg = runtimeCfg.messages?.queue;
+      const channelMode =
+        (queueCfg?.byChannel as Record<string, string | undefined> | undefined)?.telegram ??
+        queueCfg?.mode;
+      const effectiveMode = entry?.queueMode ?? channelMode;
+      const isSteer = effectiveMode === "steer" || effectiveMode === "steer-backlog"
+        || effectiveMode === "steer+backlog";
+      chatSessionCache.set(cacheKey, { sessionKey, isSteerMode: isSteer });
+    }
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
