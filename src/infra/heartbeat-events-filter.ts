@@ -52,6 +52,29 @@ export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string
   );
 }
 
+export function buildLocationEventPrompt(
+  locationEvents: string[],
+  opts?: { deliverToUser?: boolean },
+): string {
+  const deliverToUser = opts?.deliverToUser ?? true;
+  const eventText = locationEvents.join("\n").trim();
+  if (!deliverToUser) {
+    return (
+      "A location update was received from a connected node. " +
+      "The location data is shown below. " +
+      "Handle this internally according to your HEARTBEAT.md instructions. " +
+      "Reply HEARTBEAT_OK when nothing needs user-facing follow-up.\n\n" +
+      eventText
+    );
+  }
+  return (
+    "A location update was received from a connected node. " +
+    "The location data is shown below. " +
+    "Process it according to your HEARTBEAT.md instructions.\n\n" +
+    eventText
+  );
+}
+
 const HEARTBEAT_OK_PREFIX = HEARTBEAT_TOKEN.toLowerCase();
 
 // Detect heartbeat-specific noise so cron reminders don't trigger on non-reminder events.

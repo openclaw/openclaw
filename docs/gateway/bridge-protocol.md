@@ -48,7 +48,7 @@ authoritative pin without explicit user intent or other out-of-band verification
 Client → Gateway:
 
 - `req` / `res`: scoped gateway RPC (chat, sessions, config, health, voicewake, skills.bins)
-- `event`: node signals (voice transcript, agent request, chat subscribe, exec lifecycle)
+- `event`: node signals (voice transcript, agent request, chat subscribe, exec lifecycle, location update)
 
 Gateway → Client:
 

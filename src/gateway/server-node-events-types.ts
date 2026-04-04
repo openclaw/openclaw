@@ -27,7 +27,7 @@ export type NodeEventContext = {
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
-  logGateway: { warn: (msg: string) => void };
+  logGateway: { info: (msg: string) => void; warn: (msg: string) => void };
 };
 
 export type NodeEvent = {

@@ -267,6 +267,7 @@ Notes:
 - Location is **off by default**.
 - “Always” requires system permission; background fetch is best-effort.
 - The response includes lat/lon, accuracy (meters), and timestamp.
+- Nodes can also push `location.update` events via `node.event` for passive location monitoring (e.g. iOS significant location changes). See [Location Command](/nodes/location-command#event-locationupdate) for details.
 
 ## SMS (Android nodes)
 

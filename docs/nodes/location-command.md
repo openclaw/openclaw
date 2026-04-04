@@ -1,5 +1,5 @@
 ---
-summary: "Location command for nodes (location.get), permission modes, and Android foreground behavior"
+summary: "Location command (location.get) and event (location.update) for nodes, permission modes, and background behavior"
 read_when:
   - Adding location node support or permissions UI
   - Designing Android location permissions or foreground behavior
@@ -78,6 +78,57 @@ Errors (stable codes):
 - `LOCATION_BACKGROUND_UNAVAILABLE`: app is backgrounded but only While Using allowed.
 - `LOCATION_TIMEOUT`: no fix in time.
 - `LOCATION_UNAVAILABLE`: system failure / no providers.
+
+## Event: `location.update`
+
+Nodes can push location updates to the gateway via `node.event` with
+`event: "location.update"`. The gateway enqueues the update as a system event
+so hooks (e.g. severance) can react to location changes.
+
+Payload:
+
+```json
+{
+  "lat": 48.20849,
+  "lon": 16.37208,
+  "accuracyMeters": 12.5,
+  "source": "ios-significant-location"
+}
+```
+
+- `lat` and `lon` are required (finite numbers).
+- `accuracyMeters` and `source` are optional.
+- `sessionKey` is optional; defaults to `node-<nodeId>`.
+
+The gateway deduplicates events per node via `contextKey: location:<nodeId>` and
+triggers a heartbeat wake so the agent session can process the location change.
+
+### Heartbeat delivery
+
+`location.update` is **event-driven, not polling-based**. The gateway:
+
+1. Enqueues the location summary as a system event (`enqueueSystemEvent`).
+2. Immediately triggers `requestHeartbeatNow` with reason `"location-update"`.
+3. The heartbeat runner wakes within 250ms (coalesce window).
+
+The reason `"location-update"` is classified as `"wake"`, which means:
+
+- **File gate bypass**: the heartbeat runs even if `HEARTBEAT.md` is empty.
+- **Pending events inspection**: system events tagged with `location:*` context
+  keys are included in the heartbeat prompt, so the agent sees the location
+  data (lat, lon, accuracy, source) in the same run.
+
+This follows the same tagged-event pattern as cron events (`cron:*` context
+keys). The agent receives the location data as part of its heartbeat prompt
+and can act on it immediately (e.g. record to memory, trigger severance logic).
+
+### iOS significant location monitoring
+
+On iOS, the app uses `SignificantLocationMonitor` to push `location.update`
+events automatically when the "Always" location mode is enabled and
+`authorizedAlways` permission is granted. When the app is backgrounded, the
+monitor wakes the gateway connection before sending (see
+`handleSignificantLocationWakeIfNeeded`).
 
 ## Background behavior
 

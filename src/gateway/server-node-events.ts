@@ -639,6 +639,46 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
       return;
     }
+    case "location.update": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return;
+      }
+      const lat = typeof obj.lat === "number" && Number.isFinite(obj.lat) ? obj.lat : null;
+      const lon = typeof obj.lon === "number" && Number.isFinite(obj.lon) ? obj.lon : null;
+      if (lat === null || lon === null) {
+        return;
+      }
+      const accuracyMeters =
+        typeof obj.accuracyMeters === "number" && Number.isFinite(obj.accuracyMeters)
+          ? obj.accuracyMeters
+          : undefined;
+      const rawSource = normalizeNonEmptyString(obj.source);
+      const source = rawSource ? compactNotificationEventText(rawSource) : null;
+      const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+
+      let summary = `Location update (node=${nodeId}): lat=${lat} lon=${lon}`;
+      if (accuracyMeters !== undefined) {
+        summary += ` accuracy=${accuracyMeters}m`;
+      }
+      if (source) {
+        summary += ` source=${source}`;
+      }
+
+      ctx.logGateway.info(
+        `location.update received node=${nodeId}` + (source ? ` source=${source}` : ""),
+      );
+
+      const queued = enqueueSystemEvent(summary, {
+        sessionKey,
+        contextKey: `location:${nodeId}`,
+      });
+      if (queued) {
+        requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "location-update" }));
+      }
+      return;
+    }
     case "push.apns.register": {
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj) {
