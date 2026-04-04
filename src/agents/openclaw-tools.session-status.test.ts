@@ -664,6 +664,7 @@ describe("session_status tool", () => {
       "/tmp/main/sessions.json",
       expect.objectContaining({
         "agent:main:subagent:child": expect.objectContaining({
+          liveModelSwitchPending: true,
           modelOverride: "claude-sonnet-4-6",
         }),
       }),
@@ -1407,5 +1408,6 @@ describe("session_status tool", () => {
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
+    expect(saved.liveModelSwitchPending).toBe(true);
   });
 });

@@ -413,14 +413,9 @@ export async function handleDirectiveOnly(
         entry: sessionEntry,
         selection: modelSelection,
         profileOverride,
+        markLiveSwitchPending: true,
       });
       modelSelectionUpdated = applied.updated;
-      if (applied.updated) {
-        // Signal the embedded runner that this is a user-initiated model
-        // switch, so it can distinguish it from system-initiated fallback
-        // rotations and correctly throw LiveSessionModelSwitchError.
-        sessionEntry.liveModelSwitchPending = true;
-      }
     }
     if (directives.hasQueueDirective && directives.queueReset) {
       delete sessionEntry.queueMode;
