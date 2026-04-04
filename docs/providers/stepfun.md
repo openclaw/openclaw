@@ -57,6 +57,21 @@ openclaw onboard --auth-choice stepfun-plan-api-key-intl --stepfun-api-key "$STE
 - Step Plan default model: `stepfun-plan/step-3.5-flash`
 - Step Plan alternate model: `stepfun-plan/step-3.5-flash-2603`
 
+## Built-in catalogs
+
+Standard (`stepfun`):
+
+| Model ref                | Context | Max output | Notes                  |
+| ------------------------ | ------- | ---------- | ---------------------- |
+| `stepfun/step-3.5-flash` | 262,144 | 65,536     | Default standard model |
+
+Step Plan (`stepfun-plan`):
+
+| Model ref                          | Context | Max output | Notes                      |
+| ---------------------------------- | ------- | ---------- | -------------------------- |
+| `stepfun-plan/step-3.5-flash`      | 262,144 | 65,536     | Default Step Plan model    |
+| `stepfun-plan/step-3.5-flash-2603` | 262,144 | 65,536     | Additional Step Plan model |
+
 ## Config snippets
 
 Standard provider:

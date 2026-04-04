@@ -13,14 +13,17 @@ OpenAI-compatible endpoint with API-key authentication. Create your API key in t
 [Xiaomi MiMo console](https://platform.xiaomimimo.com/#/console/api-keys), then configure the
 bundled `xiaomi` provider with that key.
 
-## Model overview
+## Built-in catalog
 
-- **mimo-v2-flash**: default text model, 262144-token context window
-- **mimo-v2-pro**: reasoning text model, 1048576-token context window
-- **mimo-v2-omni**: reasoning multimodal model with text and image input, 262144-token context window
 - Base URL: `https://api.xiaomimimo.com/v1`
 - API: `openai-completions`
 - Authorization: `Bearer $XIAOMI_API_KEY`
+
+| Model ref              | Input       | Context   | Max output | Notes                        |
+| ---------------------- | ----------- | --------- | ---------- | ---------------------------- |
+| `xiaomi/mimo-v2-flash` | text        | 262,144   | 8,192      | Default model                |
+| `xiaomi/mimo-v2-pro`   | text        | 1,048,576 | 32,000     | Reasoning-enabled            |
+| `xiaomi/mimo-v2-omni`  | text, image | 262,144   | 32,000     | Reasoning-enabled multimodal |
 
 ## CLI setup
 
