@@ -59,7 +59,9 @@ describe("maybeRestoreCredsFromBackup", () => {
     const credsPath = path.join(dir, "creds.json");
     const backupPath = path.join(dir, "creds.json.bak");
     const backupContent = JSON.stringify({ me: { id: "backup@s.whatsapp.net" } });
-    // Simulate transient truncation during concurrent saveCreds() write
+    // Simulate transient truncation during concurrent saveCreds() write —
+    // file was just written (mtime is now), so the age check treats it as
+    // in-progress and skips restore.
     fsSync.writeFileSync(credsPath, "");
     fsSync.writeFileSync(backupPath, backupContent);
 
@@ -67,6 +69,23 @@ describe("maybeRestoreCredsFromBackup", () => {
 
     // creds.json should NOT be overwritten — the empty state is transient
     expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("");
+  });
+
+  it("restores from backup when creds.json is crash-truncated (empty and stale)", async () => {
+    const dir = await makeCaseDir();
+    const credsPath = path.join(dir, "creds.json");
+    const backupPath = path.join(dir, "creds.json.bak");
+    const backupContent = JSON.stringify({ me: { id: "backup@s.whatsapp.net" } });
+    // Simulate crash-truncated file: 0 bytes, last modified >5 s ago
+    fsSync.writeFileSync(credsPath, "");
+    const staleTime = new Date(Date.now() - 10_000);
+    fsSync.utimesSync(credsPath, staleTime, staleTime);
+    fsSync.writeFileSync(backupPath, backupContent);
+
+    maybeRestoreCredsFromBackup(dir);
+
+    // Empty + stale → treated as crash-truncated, backup should be restored
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe(backupContent);
   });
 
   it("skips restore when creds.json is a single byte (transient write)", async () => {

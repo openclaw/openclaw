@@ -52,10 +52,28 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     // that situation overwrites the in-progress write and emits a noisy WARN
     // on every startup/reconnect (see #60625).  Skip the restore when the
     // file exists on disk so the pending write can complete normally.
+    //
+    // Edge case: if a crash leaves creds.json permanently at 0 bytes, the
+    // file will never self-heal.  We detect this by checking file age — a
+    // truly crash-truncated file will be stale (not modified for >5 s),
+    // whereas a transient write completes within milliseconds.
     try {
       const stats = fsSync.statSync(credsPath);
       if (stats.isFile()) {
-        return;
+        if (stats.size > 0) {
+          // Non-empty but unparseable (size 1 = partial write) — transient,
+          // skip restore so the in-progress write can complete.
+          return;
+        }
+        // size === 0: check whether it's a transient truncation (fresh) or
+        // a permanent crash artifact (stale).
+        const ageMs = Date.now() - stats.mtimeMs;
+        if (ageMs < 5_000) {
+          // Recently touched — likely a write in progress, skip restore.
+          return;
+        }
+        // Empty AND stale — treat as crash-truncated, fall through to
+        // backup-restore path.
       }
     } catch {
       // statSync throws when the file is truly absent — fall through to
