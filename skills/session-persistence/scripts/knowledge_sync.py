@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-knowledge_sync.py - Sync Key Decisions from checkpoint to knowledge-graph.
+knowledge_sync.py - Sync key decisions from checkpoint to knowledge-graph.
 
 Usage:
-    python3 knowledge_sync.py sync
-    python3 knowledge_sync.py dry-run
+    python3 knowledge_sync.py push [--dir <dir>]
+    python3 knowledge_sync.py pull [--dir <dir>]
+    python3 knowledge_sync.py diff
     python3 knowledge_sync.py status
 """
-
 import sys
 from pathlib import Path
 
@@ -21,7 +21,7 @@ def extract_key_decisions(text: str) -> list[str]:
     decisions: list[str] = []
     in_section = False
     for line in text.splitlines():
-        if "### 🔑 Key Decisions" in line or "### Key Decisions" in line:
+        if "### \U0001f5dd Key Decisions" in line or "### Key Decisions" in line:
             in_section = True
             continue
         if in_section:
@@ -34,7 +34,7 @@ def extract_key_decisions(text: str) -> list[str]:
 
 
 def get_pending_updates(text: str) -> list[str]:
-    """Extract items from the pending-update section of knowledge-graph."""
+    """Extract items from the pending update section of knowledge-graph."""
     updates: list[str] = []
     in_section = False
     for line in text.splitlines():
@@ -55,85 +55,91 @@ def is_duplicate(decision: str, existing: list[str]) -> bool:
     return any(e[:PREFIX_MATCH_CHARS].lower() == prefix for e in existing)
 
 
-def cmd_sync() -> None:
+def cmd_push(target_dir: Path | None = None) -> None:
+    """Push key decisions from checkpoint into knowledge-graph."""
     if not CHECKPOINT_FILE.exists():
-        print(f"ERROR: Checkpoint not found: {CHECKPOINT_FILE}")
+        print("ERROR: Checkpoint file not found.")
         sys.exit(1)
-
     checkpoint_text = CHECKPOINT_FILE.read_text()
     decisions = extract_key_decisions(checkpoint_text)
     if not decisions:
-        print("No Key Decisions found in checkpoint.")
+        print("No key decisions found in checkpoint.")
         return
 
-    kg_text = KNOWLEDGE_GRAPH_FILE.read_text() if KNOWLEDGE_GRAPH_FILE.exists() else ""
-    existing = get_pending_updates(kg_text)
-
+    existing_text = KNOWLEDGE_GRAPH_FILE.read_text() if KNOWLEDGE_GRAPH_FILE.exists() else ""
+    existing = existing_text.splitlines()
     new_items = [d for d in decisions if not is_duplicate(d, existing)]
+
     if not new_items:
-        print("No new items to sync (all already in pending-update).")
+        print("All decisions already present in knowledge-graph. Nothing to push.")
         return
 
-    append_block = "\n"
-    for item in new_items:
-        append_block += f"- {item}\n"
-
-    if "pending-update" in kg_text.lower():
-        lines = kg_text.splitlines(keepends=True)
-        result: list[str] = []
-        inserted = False
-        for i, line in enumerate(lines):
-            result.append(line)
-            if not inserted and "pending-update" in line.lower():
-                # Find end of pending-update section
-                j = i + 1
-                while j < len(lines) and not (lines[j].startswith("##") and "pending" not in lines[j].lower()):
-                    j += 1
-                result.extend(lines[i + 1:j])
-                for item in new_items:
-                    result.append(f"- {item}\n")
-                result.extend(lines[j:])
-                inserted = True
-                break
-        KNOWLEDGE_GRAPH_FILE.write_text("".join(result))
-    else:
-        with open(KNOWLEDGE_GRAPH_FILE, "a") as f:
-            f.write(f"\n## pending-update\n{append_block}")
-
-    print(f"Synced {len(new_items)} new decision(s) to knowledge-graph.")
-    for item in new_items:
-        print(f"  + {item}")
+    KNOWLEDGE_GRAPH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(KNOWLEDGE_GRAPH_FILE, "a") as f:
+        f.write("\n")
+        for item in new_items:
+            f.write(f"- {item}\n")
+    print(f"Pushed {len(new_items)} new decision(s) to knowledge-graph.")
 
 
-def cmd_dry_run() -> None:
-    if not CHECKPOINT_FILE.exists():
-        print(f"ERROR: Checkpoint not found: {CHECKPOINT_FILE}")
+def cmd_pull(target_dir: Path | None = None) -> None:
+    """Pull pending updates from knowledge-graph back into checkpoint."""
+    if not KNOWLEDGE_GRAPH_FILE.exists():
+        print("ERROR: Knowledge graph file not found.")
         sys.exit(1)
+    kg_text = KNOWLEDGE_GRAPH_FILE.read_text()
+    updates = get_pending_updates(kg_text)
+    if not updates:
+        print("No pending updates found in knowledge-graph.")
+        return
 
+    existing_text = CHECKPOINT_FILE.read_text() if CHECKPOINT_FILE.exists() else ""
+    existing = existing_text.splitlines()
+    new_items = [u for u in updates if not is_duplicate(u, existing)]
+
+    if not new_items:
+        print("All pending updates already in checkpoint. Nothing to pull.")
+        return
+
+    CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(CHECKPOINT_FILE, "a") as f:
+        f.write("\n### \U0001f4e5 Pulled from Knowledge Graph\n")
+        for item in new_items:
+            f.write(f"- {item}\n")
+    print(f"Pulled {len(new_items)} update(s) from knowledge-graph into checkpoint.")
+
+
+def cmd_diff() -> None:
+    """Show decisions in checkpoint not yet in knowledge-graph."""
+    if not CHECKPOINT_FILE.exists():
+        print("ERROR: Checkpoint file not found.")
+        sys.exit(1)
     checkpoint_text = CHECKPOINT_FILE.read_text()
     decisions = extract_key_decisions(checkpoint_text)
-    kg_text = KNOWLEDGE_GRAPH_FILE.read_text() if KNOWLEDGE_GRAPH_FILE.exists() else ""
-    existing = get_pending_updates(kg_text)
-
+    existing_text = KNOWLEDGE_GRAPH_FILE.read_text() if KNOWLEDGE_GRAPH_FILE.exists() else ""
+    existing = existing_text.splitlines()
     new_items = [d for d in decisions if not is_duplicate(d, existing)]
-    print(f"Would sync {len(new_items)} new item(s):")
-    for item in new_items:
-        print(f"  + {item}")
     if not new_items:
-        print("  (nothing to sync)")
+        print("knowledge-graph is up to date. No diff.")
+    else:
+        print(f"{len(new_items)} decision(s) not yet in knowledge-graph:")
+        for item in new_items:
+            print(f"  + {item}")
 
 
 def cmd_status() -> None:
-    checkpoint_exists = CHECKPOINT_FILE.exists()
+    """Print sync status summary."""
+    cp_exists = CHECKPOINT_FILE.exists()
     kg_exists = KNOWLEDGE_GRAPH_FILE.exists()
-    print(f"checkpoint: {'found' if checkpoint_exists else 'missing'}")
-    print(f"knowledge-graph: {'found' if kg_exists else 'missing'}")
-    if checkpoint_exists:
+    print(f"checkpoint: {'found' if cp_exists else 'missing'} ({CHECKPOINT_FILE})")
+    print(f"knowledge_graph: {'found' if kg_exists else 'missing'} ({KNOWLEDGE_GRAPH_FILE})")
+    if cp_exists:
         decisions = extract_key_decisions(CHECKPOINT_FILE.read_text())
-        print(f"key_decisions_in_checkpoint: {len(decisions)}")
+        print(f"decisions_in_checkpoint: {len(decisions)}")
     if kg_exists:
-        updates = get_pending_updates(KNOWLEDGE_GRAPH_FILE.read_text())
-        print(f"pending_updates_in_graph: {len(updates)}")
+        kg_text = KNOWLEDGE_GRAPH_FILE.read_text()
+        lines = [l for l in kg_text.splitlines() if l.strip().startswith("- ")]
+        print(f"entries_in_knowledge_graph: {len(lines)}")
 
 
 def main() -> None:
@@ -142,10 +148,18 @@ def main() -> None:
         print(__doc__)
         sys.exit(1)
     cmd = args[0]
-    if cmd == "sync":
-        cmd_sync()
-    elif cmd == "dry-run":
-        cmd_dry_run()
+    rest = args[1:]
+    target_dir: Path | None = None
+    if "--dir" in rest:
+        idx = rest.index("--dir")
+        if idx + 1 < len(rest):
+            target_dir = Path(rest[idx + 1])
+    if cmd == "push":
+        cmd_push(target_dir)
+    elif cmd == "pull":
+        cmd_pull(target_dir)
+    elif cmd == "diff":
+        cmd_diff()
     elif cmd == "status":
         cmd_status()
     else:
