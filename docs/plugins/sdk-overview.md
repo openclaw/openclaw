@@ -294,6 +294,13 @@ Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
 
+Provider plugins can also expose a narrow plugin-local contract barrel when a
+helper is intentionally provider-specific and does not belong in a generic SDK
+subpath yet. Current bundled example: the Anthropic provider keeps its Claude
+stream helpers in its own public `api.ts` / `contract-api.ts` seam instead of
+promoting Anthropic beta-header and `service_tier` logic into a generic
+`plugin-sdk/*` contract.
+
 <Warning>
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
   imports. If a helper is truly shared, promote it to a neutral SDK subpath

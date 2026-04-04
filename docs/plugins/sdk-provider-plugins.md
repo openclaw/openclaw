@@ -309,6 +309,14 @@ API key auth, and dynamic model resolution.
     - `openrouter`: `openrouter-thinking`
     - `zai`: `tool-stream-default-on`
 
+    Some stream helpers stay provider-local on purpose. Current bundled
+    example: `@openclaw/anthropic-provider` exports
+    `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
+    `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the
+    lower-level Anthropic wrapper builders from its public `api.ts` /
+    `contract-api.ts` seam. Those helpers remain Anthropic-specific because
+    they also encode Claude OAuth beta handling and `context1m` gating.
+
     <Tabs>
       <Tab title="Token exchange">
         For providers that need a token exchange before each inference call:

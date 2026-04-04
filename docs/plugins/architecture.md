@@ -711,10 +711,18 @@ api.registerProvider({
 
 - Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
   `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
-  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, and `isModernModelRef`
-  because it owns Claude 4.6 forward-compat, provider-family hints, auth
-  repair guidance, usage endpoint integration, prompt-cache eligibility,
-  auth-aware config defaults, and Claude default/adaptive thinking policy.
+  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  and `wrapStreamFn` because it owns Claude 4.6 forward-compat,
+  provider-family hints, auth repair guidance, usage endpoint integration,
+  prompt-cache eligibility, auth-aware config defaults, Claude
+  default/adaptive thinking policy, and Anthropic-specific stream shaping for
+  beta headers, `/fast` / `serviceTier`, and `context1m`.
+- Anthropic's Claude-specific stream helpers stay in the bundled plugin's own
+  public `api.ts` / `contract-api.ts` seam for now. That package surface
+  exports `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
+  `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level
+  Anthropic wrapper builders instead of widening the generic SDK around one
+  provider's beta-header rules.
 - OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
   `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `supportsXHighThinking`, and `isModernModelRef`
