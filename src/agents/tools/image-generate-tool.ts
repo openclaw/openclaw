@@ -126,11 +126,12 @@ function resolveImageGenerationModelCandidates(
     providerDefaults.set(providerId, `${providerId}/${modelId}`);
   }
 
+  const primaryProvider = resolveDefaultModelRef(cfg).provider;
   const orderedProviders = [
-    resolveDefaultModelRef(cfg).provider,
-    "openai",
-    "google",
-    ...providerDefaults.keys(),
+    primaryProvider,
+    ...[...providerDefaults.keys()]
+      .filter((providerId) => providerId !== primaryProvider)
+      .toSorted(),
   ];
   const orderedRefs: string[] = [];
   const seen = new Set<string>();

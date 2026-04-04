@@ -46,7 +46,7 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 }
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
-const OPENAI_PDF_MODEL = "openai/gpt-5-mini";
+const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
 const TEST_PDF_INPUT = { base64: "dGVzdA==", filename: "doc.pdf" } as const;
 const FAKE_PDF_MEDIA = {
   kind: "document",
@@ -295,12 +295,12 @@ describe("resolvePdfModelConfigForTool", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.4" },
-            imageModel: { primary: "openai/gpt-5-mini" },
+            imageModel: { primary: "openai/gpt-5.4-mini" },
           },
         },
       };
       expect(resolvePdfModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5-mini",
+        primary: "openai/gpt-5.4-mini",
       });
     });
   });

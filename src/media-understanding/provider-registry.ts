@@ -14,6 +14,9 @@ function mergeProviderIntoRegistry(
         ...existing,
         ...provider,
         capabilities: provider.capabilities ?? existing.capabilities,
+        defaultModels: provider.defaultModels ?? existing.defaultModels,
+        autoPriority: provider.autoPriority ?? existing.autoPriority,
+        nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
       }
     : provider;
   registry.set(normalizedKey, merged);
@@ -41,6 +44,9 @@ export function buildMediaUnderstandingRegistry(
             ...existing,
             ...provider,
             capabilities: provider.capabilities ?? existing.capabilities,
+            defaultModels: provider.defaultModels ?? existing.defaultModels,
+            autoPriority: provider.autoPriority ?? existing.autoPriority,
+            nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
           }
         : provider;
       registry.set(normalizedKey, merged);

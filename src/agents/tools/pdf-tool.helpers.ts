@@ -4,22 +4,16 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
 /**
- * Providers known to support native PDF document input.
- * When the model's provider is in this set, the tool sends raw PDF bytes
- * via provider-specific API calls instead of extracting text/images first.
- */
-export const NATIVE_PDF_PROVIDERS = new Set(["anthropic", "google"]);
-
-/**
  * Check whether a provider supports native PDF document input.
  */
 export function providerSupportsNativePdf(provider: string): boolean {
-  return NATIVE_PDF_PROVIDERS.has(provider.toLowerCase().trim());
+  return providerSupportsNativePdfDocument({ providerId: provider });
 }
 
 /**

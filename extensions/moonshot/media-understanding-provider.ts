@@ -126,6 +126,8 @@ export async function describeMoonshotVideo(
 export const moonshotMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "moonshot",
   capabilities: ["image", "video"],
+  defaultModels: { image: "kimi-k2.5", video: DEFAULT_MOONSHOT_VIDEO_MODEL },
+  autoPriority: { video: 20 },
   describeImage: describeImageWithModel,
   describeImages: describeImagesWithModel,
   describeVideo: describeMoonshotVideo,
