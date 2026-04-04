@@ -947,6 +947,7 @@ Options:
 Notes:
 
 - `--non-interactive` requires `--yes` and explicit scopes (or `--all`).
+- `--all` removes service, state, workspace, and app together.
 
 ### `tasks`
 
