@@ -101,6 +101,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals/node host: forward prepared `system.run` approval plans on the async node invoke path so mutable script operands keep their approval-time binding and drift revalidation instead of dropping back to unbound execution.
 - Synology Chat/security: default low-level HTTPS helper TLS verification to on so helper/API defaults match the shipped safe account default, and only explicit `allowInsecureSsl: true` opts out.
 - Android/canvas security: require exact normalized A2UI URL matches before forwarding canvas bridge actions, rejecting query mismatches and descendant paths while still allowing fragment-only A2UI navigation.
+- Cron: send failure notifications through the job's primary delivery channel using the same session context as successful delivery when no explicit `failureDestination` is configured. (#60622) Thanks @artwalker.
 
 ## 2026.4.2
 

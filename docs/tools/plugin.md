@@ -56,6 +56,11 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 The install path uses the same resolver as the CLI: local path/archive, explicit
 `clawhub:<pkg>`, or bare package spec (ClawHub first, then npm fallback).
 
+If config is invalid, install normally fails closed and points you at
+`openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
+reinstall path for plugins that opt into
+`openclaw.install.allowInvalidConfigRecovery`.
+
 ## Plugin types
 
 OpenClaw recognizes two plugin formats:

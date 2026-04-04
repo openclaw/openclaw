@@ -85,6 +85,13 @@ For isolated jobs, runtime teardown now includes best-effort browser cleanup for
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`).
 
+Failure notifications follow a separate destination path:
+
+- `cron.failureDestination` sets a global default for failure notifications.
+- `job.delivery.failureDestination` overrides that per job.
+- If neither is set and the job already delivers via `announce`, failure notifications now fall back to that primary announce target.
+- `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
+
 ## CLI examples
 
 One-shot reminder (main session):

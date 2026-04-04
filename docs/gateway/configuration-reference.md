@@ -3392,6 +3392,30 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 
+### `cron.failureDestination`
+
+```json5
+{
+  cron: {
+    failureDestination: {
+      mode: "announce",
+      channel: "last",
+      to: "channel:C1234567890",
+      accountId: "main",
+    },
+  },
+}
+```
+
+- Default destination for cron failure notifications across all jobs.
+- `mode`: `"announce"` or `"webhook"`; defaults to `"announce"` when enough target data exists.
+- `channel`: channel override for announce delivery. `"last"` reuses the last known delivery channel.
+- `to`: explicit announce target or webhook URL. Required for webhook mode.
+- `accountId`: optional account override for delivery.
+- Per-job `delivery.failureDestination` overrides this global default.
+- When neither global nor per-job failure destination is set, jobs that already deliver via `announce` now fall back to that primary announce target on failure.
+- `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
+
 See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
 
 ---
