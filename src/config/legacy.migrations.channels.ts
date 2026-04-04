@@ -242,7 +242,7 @@ function hasLegacySlackStreamingKeys(value: unknown): boolean {
   return entry.streamMode !== undefined || typeof entry.streaming === "boolean";
 }
 
-function hasLegacyStreamingKeysInAccounts(
+function hasLegacyKeysInAccounts(
   value: unknown,
   matchEntry: (entry: Record<string, unknown>) => boolean,
 ): boolean {
@@ -342,7 +342,7 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     path: ["channels", "telegram", "accounts"],
     message:
       "channels.telegram.accounts.<id>.streamMode is legacy; use channels.telegram.accounts.<id>.streaming instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
   },
   {
     path: ["channels", "discord"],
@@ -354,7 +354,7 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       "channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
   },
   {
     path: ["channels", "slack"],
@@ -366,7 +366,7 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     path: ["channels", "slack", "accounts"],
     message:
       "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacySlackStreamingKeys),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacySlackStreamingKeys),
   },
 ];
 
@@ -381,7 +381,7 @@ const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
     path: ["channels", "slack", "accounts"],
     message:
       "channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacySlackChannelAllowAlias),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacySlackChannelAllowAlias),
   },
   {
     path: ["channels", "googlechat"],
@@ -393,7 +393,7 @@ const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
     path: ["channels", "googlechat", "accounts"],
     message:
       "channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyGoogleChatGroupAllowAlias),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyGoogleChatGroupAllowAlias),
   },
   {
     path: ["channels", "discord"],
@@ -405,8 +405,7 @@ const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       "channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
-    match: (value) =>
-      hasLegacyStreamingKeysInAccounts(value, hasLegacyDiscordGuildChannelAllowAlias),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordGuildChannelAllowAlias),
   },
 ];
 
