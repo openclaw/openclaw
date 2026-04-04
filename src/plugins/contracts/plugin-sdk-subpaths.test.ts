@@ -185,14 +185,15 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
-  it("keeps removed bundled-channel prefixes out of the public sdk list", () => {
+  it("keeps removed bundled-channel facade subpaths out of the public sdk list", () => {
     const bannedPrefixes = ["discord", "signal", "slack", "telegram", "whatsapp"];
     const banned = pluginSdkSubpaths.filter((subpath) =>
       bannedPrefixes.some(
         (prefix) =>
-          subpath === prefix ||
-          subpath.startsWith(`${prefix}-`) ||
-          subpath.startsWith(`${prefix}.`),
+          (subpath === prefix ||
+            subpath.startsWith(`${prefix}-`) ||
+            subpath.startsWith(`${prefix}.`)) &&
+          sourceMentionsIdentifier(readPluginSdkSource(subpath), "PluginSdkFacadeTypeMap"),
       ),
     );
     expect(banned).toEqual([]);

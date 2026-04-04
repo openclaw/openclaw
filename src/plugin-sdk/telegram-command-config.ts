@@ -130,6 +130,11 @@ function loadTelegramCommandConfigContract(): TelegramCommandConfigContract {
   return cachedTelegramCommandConfigContract;
 }
 
+export function getTelegramCommandNamePattern(): RegExp {
+  return loadTelegramCommandConfigContract().TELEGRAM_COMMAND_NAME_PATTERN;
+}
+
+// Backward-compatible pure export for import-time-safe callers.
 export const TELEGRAM_COMMAND_NAME_PATTERN = FALLBACK_TELEGRAM_COMMAND_NAME_PATTERN;
 
 export function normalizeTelegramCommandName(value: string): string {
