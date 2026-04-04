@@ -637,11 +637,38 @@ Common options:
 - `--no-usage`: skip model provider usage/quota snapshots (OAuth/API-backed only).
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
 
+`channels status` options:
+
+- `--probe`
+- `--timeout <ms>`
+- `--json`
+
+`channels capabilities` options:
+
+- `--channel <name>`
+- `--account <id>` (only with `--channel`)
+- `--target <dest>`
+- `--timeout <ms>`
+- `--json`
+
+`channels resolve` options:
+
+- `<entries...>`
+- `--channel <name>`
+- `--account <id>`
+- `--kind <auto|user|group>`
+- `--json`
+
 `channels logs` options:
 
 - `--channel <name|all>` (default `all`)
 - `--lines <n>` (default `200`)
 - `--json`
+
+Notes:
+
+- `channels login` supports `--verbose`.
+- `channels capabilities --account` only applies when `--channel` is set.
 
 More detail: [/concepts/oauth](/concepts/oauth)
 
