@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // Keep defaults to OS-managed immutable bins only.
@@ -28,12 +29,43 @@ export type WritableTrustedSafeBinDir = {
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
+// Detect whether the filesystem is case-insensitive by probing the OS
+// temp directory. This handles case-sensitive APFS on macOS and
+// case-sensitive volumes on Windows without false assumptions.
+// normalizeConfiguredSafeBins() lowercases bin paths, so trusted dirs
+// must also be lowercased for the Set membership check to match.
+function detectCaseInsensitiveFs(): boolean {
+  try {
+    const tmpDir = os.tmpdir();
+    // If the uppercased path resolves to the same inode as the original,
+    // the filesystem is case-insensitive.
+    const original = fs.statSync(tmpDir);
+    const flipped = (() => {
+      try {
+        return fs.statSync(tmpDir.toUpperCase());
+      } catch {
+        return null;
+      }
+    })();
+    if (!flipped) {
+      return false;
+    }
+    return original.ino === flipped.ino && original.dev === flipped.dev;
+  } catch {
+    // Fall back to platform heuristic if the probe fails.
+    return process.platform === "darwin" || process.platform === "win32";
+  }
+}
+
+const CASE_INSENSITIVE_FS = detectCaseInsensitiveFs();
+
 function normalizeTrustedDir(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
-  return path.resolve(trimmed);
+  const resolved = path.resolve(trimmed);
+  return CASE_INSENSITIVE_FS ? resolved.toLowerCase() : resolved;
 }
 
 export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null): string[] {
@@ -93,7 +125,7 @@ export function getTrustedSafeBinDirs(
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
   const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
   const resolvedDir = path.dirname(path.resolve(params.resolvedPath));
-  return trustedDirs.has(resolvedDir);
+  return trustedDirs.has(CASE_INSENSITIVE_FS ? resolvedDir.toLowerCase() : resolvedDir);
 }
 
 export function listWritableExplicitTrustedSafeBinDirs(
