@@ -6,7 +6,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
   it("preserves multi-segment model ids (openrouter provider models)", () => {
     const cfg = {
       agents: {
-        defaults: { model: "openrouter/anthropic/claude-sonnet-4-5" },
+        defaults: { model: "openrouter/anthropic/claude-sonnet-4-6" },
       },
     } as OpenClawConfig;
 
@@ -14,7 +14,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection).toEqual(
       expect.objectContaining({
         provider: "openrouter",
-        modelId: "anthropic/claude-sonnet-4-5",
+        modelId: "anthropic/claude-sonnet-4-6",
       }),
     );
   });
@@ -59,7 +59,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
         defaults: {
           model: "fast@work",
           models: {
-            "openrouter/anthropic/claude-sonnet-4-5": { alias: "fast" },
+            "openrouter/anthropic/claude-sonnet-4-6": { alias: "fast" },
           },
         },
       },
@@ -69,7 +69,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection).toEqual(
       expect.objectContaining({
         provider: "openrouter",
-        modelId: "anthropic/claude-sonnet-4-5",
+        modelId: "anthropic/claude-sonnet-4-6",
         profileId: "work",
       }),
     );

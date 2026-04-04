@@ -7,7 +7,7 @@ summary: 用于 web_fetch 的 Firecrawl 回退（反机器人 + 缓存提取）
 title: Firecrawl
 x-i18n:
   generated_at: "2026-02-03T10:10:35Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 08a7ad45b41af41204e44d2b0be0f980b7184d80d2fa3977339e42a47beb2851
   source_path: tools/firecrawl.md

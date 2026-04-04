@@ -5,7 +5,7 @@ summary: 入站音频/语音消息如何被下载、转录并注入回复
 title: 音频与语音消息
 x-i18n:
   generated_at: "2026-02-01T21:17:35Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b926c47989ab0d1ee1fb8ae6372c51d27515b53d6fefe211a85856d372f14569
   source_path: nodes/audio.md

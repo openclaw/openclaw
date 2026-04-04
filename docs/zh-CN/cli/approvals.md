@@ -6,7 +6,7 @@ summary: CLI 参考：`openclaw approvals`（Gateway 网关或节点主机的执
 title: approvals
 x-i18n:
   generated_at: "2026-02-03T10:04:09Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 4329cdaaec2c5f5d619415b6431196512d4834dc1ccd7363576f03dd9b845130
   source_path: cli/approvals.md

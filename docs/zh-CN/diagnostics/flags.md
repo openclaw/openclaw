@@ -6,7 +6,7 @@ summary: 用于定向调试日志的诊断标志
 title: 诊断标志
 x-i18n:
   generated_at: "2026-02-03T10:05:34Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: daf0eca0e6bd1cbc2c400b2e94e1698709a96b9cdba1a8cf00bd580a61829124
   source_path: diagnostics/flags.md

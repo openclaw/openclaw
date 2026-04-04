@@ -6,7 +6,7 @@ summary: OpenClaw 如何轮换认证配置文件并在模型之间进行回退
 title: 模型故障转移
 x-i18n:
   generated_at: "2026-02-03T07:46:17Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: eab7c0633824d941cf0d6ce4294f0bc8747fbba2ce93650e9643eca327cd04a9
   source_path: concepts/model-failover.md

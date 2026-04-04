@@ -7,7 +7,7 @@ summary: 上下文：模型看到的内容、如何构建以及如何检查
 title: 上下文
 x-i18n:
   generated_at: "2026-02-03T07:46:15Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b32867b9b93254fdd1077d0d97c203cabfdba3330bb941693c83feba8e5db0cc
   source_path: concepts/context.md

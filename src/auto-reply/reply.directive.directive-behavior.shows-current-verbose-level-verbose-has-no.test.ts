@@ -34,7 +34,7 @@ async function runCommand(
     makeWhatsAppDirectiveConfig(
       home,
       {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         ...options.defaults,
       },
       options.extra ?? {},
@@ -59,7 +59,7 @@ function makeWorkElevatedAllowlistConfig(home: string) {
   const base = makeWhatsAppDirectiveConfig(
     home,
     {
-      model: "anthropic/claude-opus-4-5",
+      model: "anthropic/claude-opus-4-6",
     },
     {
       tools: {
@@ -96,7 +96,7 @@ function makeAllowlistedElevatedConfig(
   return makeWhatsAppDirectiveConfig(
     home,
     {
-      model: "anthropic/claude-opus-4-5",
+      model: "anthropic/claude-opus-4-6",
       ...defaults,
     },
     {
@@ -135,7 +135,7 @@ describe("directive behavior", () => {
       const fastText = await runCommand(home, "/fast", {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": {
+            "anthropic/claude-opus-4-6": {
               params: { fastMode: true },
             },
           },
@@ -205,7 +205,7 @@ describe("directive behavior", () => {
       const statusText = await runCommand(home, "/fast status", {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": {
+            "anthropic/claude-opus-4-6": {
               params: { fastMode: true },
             },
           },

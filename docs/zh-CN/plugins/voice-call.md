@@ -6,7 +6,7 @@ summary: Voice Call 插件：通过 Twilio/Telnyx/Plivo 进行出站 + 入站通
 title: Voice Call 插件
 x-i18n:
   generated_at: "2026-02-03T07:53:40Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d731c63bf52781cc49262db550d0507d7fc33e5e7ce5d87efaf5d44aedcafef7
   source_path: plugins/voice-call.md

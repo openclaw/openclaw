@@ -7,7 +7,7 @@ summary: 使用 Nix 声明式安装 OpenClaw
 title: Nix
 x-i18n:
   generated_at: "2026-02-03T07:49:51Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: f1452194cfdd74613b5b3ab90b0d506eaea2d16b147497987710d6ad658312ba
   source_path: install/nix.md

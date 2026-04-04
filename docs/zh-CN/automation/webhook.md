@@ -6,7 +6,7 @@ summary: 用于唤醒和隔离智能体运行的 Webhook 入口
 title: Webhooks
 x-i18n:
   generated_at: "2026-02-03T07:43:23Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: f26b88864567be82366b1f66a4772ef2813c7846110c62fce6caf7313568265e
   source_path: automation/webhook.md
@@ -73,7 +73,7 @@ Gateway 网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
   "deliver": true,
   "channel": "last",
   "to": "+15551234567",
-  "model": "openai/gpt-5.2-mini",
+  "model": "openai/gpt-5.4-mini",
   "thinking": "low",
   "timeoutSeconds": 120
 }
@@ -143,7 +143,7 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'x-openclaw-token: SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
 ```
 
 如果你启用了 `agents.defaults.models` 限制，请确保覆盖的模型包含在其中。

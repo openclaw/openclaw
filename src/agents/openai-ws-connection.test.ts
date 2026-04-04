@@ -355,7 +355,7 @@ describe("OpenAIWebSocketManager", () => {
 
       const event: ResponseCreateEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         input: [{ type: "message", role: "user", content: "Hello" }],
       };
       manager.send(event);
@@ -368,7 +368,7 @@ describe("OpenAIWebSocketManager", () => {
       const manager = buildManager();
       const event: ClientEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       };
       expect(() => manager.send(event)).toThrow(/cannot send/);
     });
@@ -378,7 +378,7 @@ describe("OpenAIWebSocketManager", () => {
 
       const event: ResponseCreateEvent = {
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         previous_response_id: "resp_abc123",
         input: [{ type: "function_call_output", call_id: "call_1", output: "result" }],
       };
@@ -686,13 +686,13 @@ describe("OpenAIWebSocketManager", () => {
     it("sends a response.create event with generate: false", async () => {
       const { manager, sock } = await createConnectedManager();
 
-      manager.warmUp({ model: "gpt-5.2", instructions: "You are helpful." });
+      manager.warmUp({ model: "gpt-5.4", instructions: "You are helpful." });
 
       expect(sock.sentMessages).toHaveLength(1);
       const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
       expect(sent["type"]).toBe("response.create");
       expect(sent["generate"]).toBe(false);
-      expect(sent["model"]).toBe("gpt-5.2");
+      expect(sent["model"]).toBe("gpt-5.4");
       expect(sent["input"]).toEqual([]);
       expect(sent["instructions"]).toBe("You are helpful.");
     });
@@ -701,7 +701,7 @@ describe("OpenAIWebSocketManager", () => {
       const { manager, sock } = await createConnectedManager();
 
       manager.warmUp({
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         tools: [{ type: "function", name: "exec", description: "Run a command" }],
       });
 
@@ -795,7 +795,7 @@ describe("OpenAIWebSocketManager", () => {
       manager.onMessage((e) => received.push(e));
 
       // Send initial turn
-      manager.send({ type: "response.create", model: "gpt-5.2", input: "Hello" });
+      manager.send({ type: "response.create", model: "gpt-5.4", input: "Hello" });
 
       // Simulate streaming events from server
       sock.simulateMessage({ type: "response.created", response: makeResponse("resp_1") });
@@ -817,7 +817,7 @@ describe("OpenAIWebSocketManager", () => {
       // Send continuation turn using the tracked previous_response_id
       manager.send({
         type: "response.create",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         previous_response_id: manager.previousResponseId!,
         input: [{ type: "function_call_output", call_id: "call_99", output: "tool result" }],
       });
@@ -844,7 +844,7 @@ function makeResponse(
     object: "response",
     created_at: Date.now(),
     status,
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     output: [],
     usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
   };

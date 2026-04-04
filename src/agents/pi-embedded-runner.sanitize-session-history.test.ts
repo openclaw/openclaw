@@ -159,7 +159,7 @@ describe("sanitizeSessionHistory", () => {
       ],
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: makeUsage(0, 0, 0),
       stopReason: "stop",
       timestamp: nextTimestamp(),
@@ -185,7 +185,7 @@ describe("sanitizeSessionHistory", () => {
     content: [{ type: "text", text: params.text }],
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason: "stop",
     timestamp: params.timestamp ?? nextTimestamp(),
     usage: params.usage,
@@ -209,7 +209,7 @@ describe("sanitizeSessionHistory", () => {
     content,
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: params.usage ?? makeUsage(0, 0, 0),
     stopReason: params.stopReason ?? "stop",
     timestamp: params.timestamp ?? nextTimestamp(),
@@ -363,7 +363,7 @@ describe("sanitizeSessionHistory", () => {
       messages: mockMessages,
       modelApi: "openai-completions",
       provider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
       sessionManager: mockSessionManager,
       sessionId: TEST_SESSION_ID,
     });
@@ -769,7 +769,7 @@ describe("sanitizeSessionHistory", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2-codex",
+        modelId: "gpt-5.4",
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
@@ -778,7 +778,7 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
       messages,
-      modelId: "gpt-5.2-codex",
+      modelId: "gpt-5.4",
       sessionManager,
     });
 
@@ -798,7 +798,7 @@ describe("sanitizeSessionHistory", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2",
+        modelId: "gpt-5.4",
       }),
     ];
     const sessionManager = makeInMemorySessionManager(sessionEntries);
@@ -957,7 +957,7 @@ describe("sanitizeSessionHistory", () => {
 
     const messages = makeThinkingAndTextAssistantMessages();
 
-    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.2" });
+    const result = await sanitizeGithubCopilotHistory({ messages, modelId: "gpt-5.4" });
     const types = getAssistantContentTypes(result);
     expect(types).toContain("thinking");
   });

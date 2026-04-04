@@ -211,7 +211,7 @@ export async function runCliAgentWithBackendConfig(params: {
     } satisfies OpenClawConfig,
     prompt: "hi",
     provider: "codex-cli",
-    model: "gpt-5.2-codex",
+    model: "gpt-5.4",
     timeoutMs: 1_000,
     runId: params.runId,
     cliSessionId: "thread-123",

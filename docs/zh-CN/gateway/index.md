@@ -5,7 +5,7 @@ summary: Gateway 网关服务、生命周期和运维的运行手册
 title: Gateway 网关运行手册
 x-i18n:
   generated_at: "2026-02-03T07:50:03Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 497d58090faaa6bdae62780ce887b40a1ad81e2e99ff186ea2a5c2249c35d9ba
   source_path: gateway/index.md

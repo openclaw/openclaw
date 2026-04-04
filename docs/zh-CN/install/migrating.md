@@ -6,7 +6,7 @@ summary: 将 OpenClaw 安装从一台机器迁移到另一台
 title: 迁移指南
 x-i18n:
   generated_at: "2026-02-03T07:49:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 604d862c4bf86e7924d09028db8cc2514ca6f1d64ebe8bb7d1e2dde57ef70caa
   source_path: install/migrating.md

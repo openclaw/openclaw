@@ -5,7 +5,7 @@ summary: 精选的常用 OpenClaw 文档链接。
 title: 文档目录
 x-i18n:
   generated_at: "2026-02-04T17:53:20Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 489085dae583ba0690b1b972f037610313973df95813283069c95a06bdc949fa
   source_path: start/docs-directory.md

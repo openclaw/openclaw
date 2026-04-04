@@ -45,7 +45,7 @@ function makeCfg(
   const base: OpenClawConfig = {
     agents: {
       defaults: {
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
         workspace: path.join(home, "openclaw"),
       },
     },
@@ -131,7 +131,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       cfgOverrides: {
         agents: {
           defaults: {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
             subagents: { model: "ollama/llama3.2:3b" },
           },
         },
@@ -143,14 +143,14 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
       name: "falls back to main model when subagents.model is unset",
       cfgOverrides: undefined,
       expectedProvider: "anthropic",
-      expectedModel: "claude-sonnet-4-5",
+      expectedModel: "claude-sonnet-4-6",
     },
     {
       name: "supports subagents.model with {primary} object format",
       cfgOverrides: {
         agents: {
           defaults: {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
             subagents: { model: { primary: "google/gemini-2.5-flash" } },
           },
         },
@@ -184,7 +184,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: "anthropic/claude-sonnet-4-5",
+              model: "anthropic/claude-sonnet-4-6",
               workspace: path.join(home, "openclaw"),
               subagents: { model: "ollama/llama3.2:3b" },
             },
@@ -205,7 +205,7 @@ describe("runCronIsolatedAgentTurn: subagent model resolution (#11461)", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: "anthropic/claude-sonnet-4-5",
+              model: "anthropic/claude-sonnet-4-6",
               workspace: path.join(home, "openclaw"),
               subagents: { model: "ollama/llama3.2:3b" },
             },

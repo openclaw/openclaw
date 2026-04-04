@@ -21,7 +21,7 @@ import {
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.2" },
+      model: { primary: "openai/gpt-5.4" },
       models: {
         "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
       },
@@ -30,8 +30,8 @@ const EXPLICIT_ALLOWLIST_CONFIG = {
 } as OpenClawConfig;
 
 const BUNDLED_ALLOWLIST_CATALOG = [
-  { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-  { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+  { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
+  { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
 ];
 
 const ANTHROPIC_OPUS_CATALOG = [
@@ -219,9 +219,9 @@ describe("model-selection", () => {
       },
       {
         name: "passes through openrouter upstream provider ids",
-        variants: ["openrouter/anthropic/claude-sonnet-4-5"],
+        variants: ["openrouter/anthropic/claude-sonnet-4-6"],
         defaultProvider: "openai",
-        expected: { provider: "openrouter", model: "anthropic/claude-sonnet-4-5" },
+        expected: { provider: "openrouter", model: "anthropic/claude-sonnet-4-6" },
       },
       {
         name: "normalizes Vercel Claude shorthand to anthropic-prefixed model ids",
@@ -243,9 +243,9 @@ describe("model-selection", () => {
       },
       {
         name: "passes through non-Claude Vercel model ids unchanged",
-        variants: ["vercel-ai-gateway/openai/gpt-5.2"],
+        variants: ["vercel-ai-gateway/openai/gpt-5.4"],
         defaultProvider: "openai",
-        expected: { provider: "vercel-ai-gateway", model: "openai/gpt-5.2" },
+        expected: { provider: "vercel-ai-gateway", model: "openai/gpt-5.4" },
       },
       {
         name: "keeps already-suffixed codex variants unchanged",
@@ -537,7 +537,7 @@ describe("model-selection", () => {
         catalog: BUNDLED_ALLOWLIST_CATALOG,
         raw: "anthropic/claude-sonnet-4-6",
         defaultProvider: "openai",
-        defaultModel: "gpt-5.2",
+        defaultModel: "gpt-5.4",
       });
 
       expect(result).toEqual({

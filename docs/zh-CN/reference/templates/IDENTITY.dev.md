@@ -5,7 +5,7 @@ read_when:
 summary: 开发智能体身份（C-3PO）
 x-i18n:
   generated_at: "2026-02-01T21:37:36Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: f26b6d1e03a91775bb0291a78b23e870b2df57db0ceb006f07b218e015fd37eb
   source_path: reference/templates/IDENTITY.dev.md

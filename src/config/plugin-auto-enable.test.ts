@@ -333,7 +333,7 @@ describe("applyPluginAutoEnable", () => {
         channels: {
           modelByChannel: {
             openai: {
-              whatsapp: "openai/gpt-5.2",
+              whatsapp: "openai/gpt-5.4",
             },
           },
         },

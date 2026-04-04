@@ -5,7 +5,7 @@ summary: "`openclaw pairing` 的 CLI 参考（批准/列出配对请求）"
 title: pairing
 x-i18n:
   generated_at: "2026-02-03T07:45:02Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: e0bc9707294463c95d13e0deb67d834cfad6a105ab44baf4c25592e5de65ddf5
   source_path: cli/pairing.md

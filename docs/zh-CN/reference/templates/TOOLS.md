@@ -4,7 +4,7 @@ read_when:
 summary: TOOLS.md 的工作区模板
 x-i18n:
   generated_at: "2026-02-01T21:38:05Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3ed08cd537620749c40ab363f5db40a058d8ddab4d0192a1f071edbfcf37a739
   source_path: reference/templates/TOOLS.md

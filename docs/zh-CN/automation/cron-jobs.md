@@ -7,7 +7,7 @@ summary: Gateway网关调度器的定时任务与唤醒
 title: 定时任务
 x-i18n:
   generated_at: "2026-02-01T19:37:32Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d43268b0029f1b13d0825ddcc9c06a354987ea17ce02f3b5428a9c68bf936676
   source_path: automation/cron-jobs.md

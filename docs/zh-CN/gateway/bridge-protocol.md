@@ -7,7 +7,7 @@ summary: Bridge 协议（旧版节点）：TCP JSONL、配对、作用域 RPC
 title: Bridge 协议
 x-i18n:
   generated_at: "2026-02-03T07:47:42Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 789bcf3cbc6841fc293e054b919e63d661b3cc4cd205b2094289f00800127fe2
   source_path: gateway/bridge-protocol.md

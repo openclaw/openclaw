@@ -884,7 +884,7 @@ IRC 由扩展支持，并配置在 `channels.irc` 下。
       },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["openai/gpt-5-mini"],
+        fallbacks: ["openai/gpt-5.4-mini"],
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
@@ -924,7 +924,7 @@ IRC 由扩展支持，并配置在 `channels.irc` 下。
 | `opus`              | `anthropic/claude-opus-4-6`            |
 | `sonnet`            | `anthropic/claude-sonnet-4-6`          |
 | `gpt`               | `openai/gpt-5.4`                       |
-| `gpt-mini`          | `openai/gpt-5-mini`                    |
+| `gpt-mini`          | `openai/gpt-5.4-mini`                  |
 | `gemini`            | `google/gemini-3.1-pro-preview`        |
 | `gemini-flash`      | `google/gemini-3-flash-preview`        |
 | `gemini-flash-lite` | `google/gemini-3.1-flash-lite-preview` |
@@ -979,7 +979,7 @@ Anthropic Claude 4.6 模型在未显式设置 thinking 级别时，默认使用 
     defaults: {
       heartbeat: {
         every: "30m", // 0m 表示禁用
-        model: "openai/gpt-5.2-mini",
+        model: "openai/gpt-5.4-mini",
         includeReasoning: false,
         lightContext: false, // 默认：false；true 仅保留工作区引导文件中的 HEARTBEAT.md
         isolatedSession: false, // 默认：false；true 表示每次心跳都在全新会话中运行（无对话历史）
@@ -1017,7 +1017,7 @@ Anthropic Claude 4.6 模型在未显式设置 thinking 级别时，默认使用 
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // 当 identifierPolicy=custom 时使用
         postCompactionSections: ["Session Startup", "Red Lines"], // [] 表示禁用重新注入
-        model: "openrouter/anthropic/claude-sonnet-4-5", // 可选，仅用于压缩的模型覆盖
+        model: "openrouter/anthropic/claude-sonnet-4-6", // 可选，仅用于压缩的模型覆盖
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,
@@ -1822,7 +1822,7 @@ Talk 模式的默认值（macOS/iOS/Android）。
     profile: "coding",
     byProvider: {
       "google-antigravity": { profile: "minimal" },
-      "openai/gpt-5.2": { allow: ["group:fs", "sessions_list"] },
+      "openai/gpt-5.4": { allow: ["group:fs", "sessions_list"] },
     },
   },
 }
@@ -1863,7 +1863,7 @@ Talk 模式的默认值（macOS/iOS/Android）。
       notifyOnExitEmptySuccess: false,
       applyPatch: {
         enabled: false,
-        allowModels: ["gpt-5.2"],
+        allowModels: ["gpt-5.4"],
       },
     },
   },
@@ -2650,7 +2650,7 @@ openclaw gateway --port 19001
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
         deliver: true,
         channel: "last",
-        model: "openai/gpt-5.2-mini",
+        model: "openai/gpt-5.4-mini",
       },
     ],
   },

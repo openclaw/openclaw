@@ -5,7 +5,7 @@ summary: WebSocket Gateway 网关架构、组件和客户端流程
 title: Gateway 网关架构
 x-i18n:
   generated_at: "2026-02-03T07:45:55Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: c636d5d8a5e628067432b30671466309e3d630b106d413f1708765bf2a9399a1
   source_path: concepts/architecture.md

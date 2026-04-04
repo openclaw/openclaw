@@ -66,7 +66,7 @@ Gateway 网关上任何可用的模型都可以使用 `kilocode/` 前缀：
 ```
 kilocode/kilo/auto              (default - smart routing)
 kilocode/anthropic/claude-sonnet-4
-kilocode/openai/gpt-5.2
+kilocode/openai/gpt-5.4
 kilocode/google/gemini-3-pro-preview
 ...and many more
 ```

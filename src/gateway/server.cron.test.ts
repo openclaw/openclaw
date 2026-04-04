@@ -379,7 +379,7 @@ describe("gateway server cron", () => {
         id: mergeJobId,
         patch: {
           payload: {
-            model: "anthropic/claude-sonnet-4-5",
+            model: "anthropic/claude-sonnet-4-6",
           },
         },
       });
@@ -395,7 +395,7 @@ describe("gateway server cron", () => {
         | undefined;
       expect(modelOnlyPatched?.payload?.kind).toBe("agentTurn");
       expect(modelOnlyPatched?.payload?.message).toBe("hello");
-      expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-5");
+      expect(modelOnlyPatched?.payload?.model).toBe("anthropic/claude-sonnet-4-6");
 
       const deliveryPatchRes = await rpcReq(ws, "cron.update", {
         id: mergeJobId,

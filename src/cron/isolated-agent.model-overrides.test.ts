@@ -41,7 +41,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
           provider: "openai",
         },
         {
-          id: "claude-opus-4-5",
+          id: "claude-opus-4-6",
           name: "Claude Opus 4.5",
           provider: "anthropic",
         },
@@ -76,13 +76,13 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
         await runTurnWithStoredModelOverride(home, {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,
-          model: "anthropic/claude-opus-4-5",
+          model: "anthropic/claude-opus-4-6",
         })
       ).res;
       expect(res.status).toBe("ok");
       const explicitOverride = expectEmbeddedProviderModel({
         provider: "anthropic",
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
       });
       explicitOverride.assert();
     });
@@ -105,7 +105,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
             sessionId: "existing-gmail-session",
             updatedAt: Date.now(),
             providerOverride: "anthropic",
-            modelOverride: "claude-opus-4-5",
+            modelOverride: "claude-opus-4-6",
           },
         })
       ).res;
@@ -122,7 +122,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
     await withTempHome(async (home) => {
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
         {
-          id: "claude-opus-4-5",
+          id: "claude-opus-4-6",
           name: "Opus 4.5",
           provider: "anthropic",
         },
@@ -132,9 +132,9 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
         cfgOverrides: {
           agents: {
             defaults: {
-              model: { primary: "anthropic/claude-opus-4-5" },
+              model: { primary: "anthropic/claude-opus-4-6" },
               models: {
-                "anthropic/claude-opus-4-5": { alias: "Opus" },
+                "anthropic/claude-opus-4-6": { alias: "Opus" },
               },
             },
           },
@@ -151,7 +151,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
       expect(res.status).toBe("ok");
       const ignoredGmailModel = expectEmbeddedProviderModel({
         provider: "anthropic",
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
       });
       ignoredGmailModel.assert();
     });

@@ -6,7 +6,7 @@ summary: Node + tsx "__name is not a function" 崩溃说明及解决方法
 title: Node + tsx 崩溃
 x-i18n:
   generated_at: "2026-02-01T20:24:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: f9e9bd2281508337a0696126b0db2d47a2d0f56de7a11872fbc0ac4689f9ad41
   source_path: debug/node-issue.md

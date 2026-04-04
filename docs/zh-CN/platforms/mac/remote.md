@@ -5,7 +5,7 @@ summary: macOS 应用通过 SSH 控制远程 OpenClaw Gateway 网关的流程
 title: 远程控制
 x-i18n:
   generated_at: "2026-02-03T07:52:53Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 61b43707250d5515fd0f85f092bdde24598f14904398ff3fca3736bcc48d72f8
   source_path: platforms/mac/remote.md

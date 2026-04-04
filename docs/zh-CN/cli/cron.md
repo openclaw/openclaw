@@ -6,7 +6,7 @@ summary: "`openclaw cron` 的 CLI 参考（调度和运行后台作业）"
 title: cron
 x-i18n:
   generated_at: "2026-02-03T07:44:47Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: bc9317c824f3b6339df657cc269961d9b5f121da65ec2b23a07d454e6d611135
   source_path: cli/cron.md

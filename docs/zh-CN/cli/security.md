@@ -6,7 +6,7 @@ summary: "`openclaw security` 的 CLI 参考（审计和修复常见安全隐患
 title: security
 x-i18n:
   generated_at: "2026-02-03T07:45:13Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 19705b0fff848fa6f302b4ed09b7660c64e09048dba517c7f6a833d2db40bebf
   source_path: cli/security.md

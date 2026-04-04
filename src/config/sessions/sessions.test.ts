@@ -278,10 +278,10 @@ describe("session store lock (Promise chain mutex)", () => {
         model: "claude-opus-4-6",
       },
       {
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       },
     );
-    expect(merged.model).toBe("gpt-5.2");
+    expect(merged.model).toBe("gpt-5.4");
     expect(merged.modelProvider).toBeUndefined();
   });
 

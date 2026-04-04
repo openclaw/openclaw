@@ -30,7 +30,7 @@ function makeAssistantToolCall(
       { type: "text", text },
       { type: "toolCall", id: toolCallId, name: "test_tool", arguments: {} },
     ],
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason: "stop",
     timestamp,
   });
@@ -225,7 +225,7 @@ describe("pruneHistoryForContextShare", () => {
           { type: "toolCall", id: "call_a", name: "tool_a", arguments: {} },
           { type: "toolCall", id: "call_b", name: "tool_b", arguments: {} },
         ],
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         stopReason: "stop",
         timestamp: 1,
       }),

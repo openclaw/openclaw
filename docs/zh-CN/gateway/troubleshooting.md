@@ -5,7 +5,7 @@ summary: OpenClaw 常见故障的快速故障排除指南
 title: 故障排除
 x-i18n:
   generated_at: "2026-02-03T10:09:42Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: a07bb06f0b5ef56872578aaff6ac83adb740e2f1d23e3eed86934b51f62a877e
   source_path: gateway/troubleshooting.md

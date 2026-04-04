@@ -6,7 +6,7 @@ summary: 智能体、信封和提示词的时区处理
 title: 时区
 x-i18n:
   generated_at: "2026-02-01T20:24:13Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 9ee809c96897db1126c7efcaa5bf48a63cdcb2092abd4b3205af224ebd882766
   source_path: concepts/timezone.md

@@ -6,7 +6,7 @@ summary: "`openclaw update` 的 CLI 参考（相对安全的源码更新 + Gatew
 title: update
 x-i18n:
   generated_at: "2026-02-03T07:45:34Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3a08e8ac797612c498eef54ecb83e61c9a1ee5de09162a01dbb4b3bd72897206
   source_path: cli/update.md

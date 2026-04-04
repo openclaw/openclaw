@@ -5,7 +5,7 @@ summary: macOS 应用如何报告 Gateway 网关/Baileys 健康状态
 title: 健康检查
 x-i18n:
   generated_at: "2026-02-03T07:52:40Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0560e96501ddf53a499f8960cfcf11c2622fcb9056bfd1bcc57876e955cab03d
   source_path: platforms/mac/health.md

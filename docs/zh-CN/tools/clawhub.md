@@ -7,7 +7,7 @@ summary: ClawHub 指南：公共 Skills / 插件注册中心与 CLI 工作流
 title: ClawHub
 x-i18n:
   generated_at: "2026-02-01T21:42:32Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8b7f8fab80a34e409f37fa130a49ff5b487966755a7b0d214dfebf5207c7124c
   source_path: tools/clawhub.md

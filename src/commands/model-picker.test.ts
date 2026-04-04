@@ -92,7 +92,7 @@ describe("promptDefaultModel", () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "anthropic",
-        id: "claude-sonnet-4-5",
+        id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.5",
       },
     ]);
@@ -223,17 +223,17 @@ describe("promptModelAllowlist", () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "anthropic",
-        id: "claude-opus-4-5",
+        id: "claude-opus-4-6",
         name: "Claude Opus 4.5",
       },
       {
         provider: "anthropic",
-        id: "claude-sonnet-4-5",
+        id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.5",
       },
       {
         provider: "openai",
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         name: "GPT-5.2",
       },
     ]);
@@ -245,12 +245,12 @@ describe("promptModelAllowlist", () => {
     await promptModelAllowlist({
       config,
       prompter,
-      allowedKeys: ["anthropic/claude-opus-4-5"],
+      allowedKeys: ["anthropic/claude-opus-4-6"],
     });
 
     const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
     expect(options.map((opt: { value: string }) => opt.value)).toEqual([
-      "anthropic/claude-opus-4-5",
+      "anthropic/claude-opus-4-6",
     ]);
   });
 
@@ -258,7 +258,7 @@ describe("promptModelAllowlist", () => {
     loadModelCatalog.mockResolvedValue([
       {
         provider: "anthropic",
-        id: "claude-sonnet-4-5",
+        id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.5",
       },
       {
@@ -329,16 +329,16 @@ describe("applyModelAllowlist", () => {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.2": { alias: "gpt" },
-            "anthropic/claude-opus-4-5": { alias: "opus" },
+            "openai/gpt-5.4": { alias: "gpt" },
+            "anthropic/claude-opus-4-6": { alias: "opus" },
           },
         },
       },
     } as OpenClawConfig;
 
-    const next = applyModelAllowlist(config, ["openai/gpt-5.2"]);
+    const next = applyModelAllowlist(config, ["openai/gpt-5.4"]);
     expect(next.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.2": { alias: "gpt" },
+      "openai/gpt-5.4": { alias: "gpt" },
     });
   });
 
@@ -347,7 +347,7 @@ describe("applyModelAllowlist", () => {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.2": { alias: "gpt" },
+            "openai/gpt-5.4": { alias: "gpt" },
           },
         },
       },
@@ -363,18 +363,18 @@ describe("applyModelFallbacksFromSelection", () => {
     const config = {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-5" },
+          model: { primary: "anthropic/claude-opus-4-6" },
         },
       },
     } as OpenClawConfig;
 
     const next = applyModelFallbacksFromSelection(config, [
-      "anthropic/claude-opus-4-5",
-      "anthropic/claude-sonnet-4-5",
+      "anthropic/claude-opus-4-6",
+      "anthropic/claude-sonnet-4-6",
     ]);
     expect(next.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-opus-4-5",
-      fallbacks: ["anthropic/claude-sonnet-4-5"],
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
     });
   });
 
@@ -382,15 +382,15 @@ describe("applyModelFallbacksFromSelection", () => {
     const config = {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-5", fallbacks: ["openai/gpt-5.2"] },
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: ["openai/gpt-5.4"] },
         },
       },
     } as OpenClawConfig;
 
-    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.2"]);
+    const next = applyModelFallbacksFromSelection(config, ["openai/gpt-5.4"]);
     expect(next.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-opus-4-5",
-      fallbacks: ["openai/gpt-5.2"],
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: ["openai/gpt-5.4"],
     });
   });
 });

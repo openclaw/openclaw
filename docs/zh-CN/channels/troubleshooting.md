@@ -6,7 +6,7 @@ summary: 渠道专属故障排除快捷指南（Discord/Telegram/WhatsApp）
 title: 渠道故障排除
 x-i18n:
   generated_at: "2026-02-01T19:58:09Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 6542ee86b3e50929caeaab127642d135dfbc0d8a44876ec2df0fff15bf57cd63
   source_path: channels/troubleshooting.md

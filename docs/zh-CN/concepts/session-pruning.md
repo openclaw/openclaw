@@ -5,7 +5,7 @@ read_when:
 summary: 会话剪枝：工具结果修剪以减少上下文膨胀
 x-i18n:
   generated_at: "2026-02-03T07:46:35Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 9b0aa2d1abea7050ba848a2db038ccc3e6e2d83c6eb4e3843a2ead0ab847574a
   source_path: concepts/session-pruning.md

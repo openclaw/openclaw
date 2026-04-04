@@ -24,7 +24,7 @@ function makeToolCallResultPairInput(): Array<AssistantMessage | ToolResultMessa
           arguments: { path: "package.json" },
         },
       ],
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       stopReason: "toolUse",
       timestamp: nextTimestamp(),
     }),
@@ -43,7 +43,7 @@ function makeEmptyAssistantErrorMessage(): AssistantMessage {
   return makeAgentAssistantMessage({
     stopReason: "error",
     content: [],
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     timestamp: nextTimestamp(),
   }) satisfies AssistantMessage;
 }
@@ -54,7 +54,7 @@ function makeOpenAiResponsesAssistantMessage(
 ): AssistantMessage {
   return makeAgentAssistantMessage({
     content,
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     stopReason,
     timestamp: nextTimestamp(),
   });
@@ -202,7 +202,7 @@ describe("sanitizeSessionMessagesImages", () => {
         ],
         api: "openai-responses",
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         usage: {
           input: 0,
           output: 0,
@@ -230,7 +230,7 @@ describe("sanitizeSessionMessagesImages", () => {
         content: [{ type: "text", text: "" }],
         api: "openai-responses",
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         usage: {
           input: 0,
           output: 0,

@@ -13,7 +13,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       makeModelSnapshotEntry({
         provider: "openai",
         modelApi: "openai-responses",
-        modelId: "gpt-5.2-codex",
+        modelId: "gpt-5.4",
       }),
     ]);
 
@@ -58,7 +58,7 @@ describe("sanitizeSessionHistory openai tool id preservation", () => {
       messages: makeMessages(withReasoning),
       modelApi: "openai-responses",
       provider: "openai",
-      modelId: "gpt-5.2-codex",
+      modelId: "gpt-5.4",
       sessionManager: makeSessionManager(),
       sessionId: "test-session",
     });

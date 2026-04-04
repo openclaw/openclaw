@@ -18,7 +18,7 @@ export const DEFAULT_TEST_MODEL_CATALOG: Array<{
   name: string;
   provider: string;
 }> = [
-  { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
+  { id: "claude-opus-4-6", name: "Opus 4.5", provider: "anthropic" },
   { id: "claude-sonnet-4-1", name: "Sonnet 4.1", provider: "anthropic" },
   { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
 ];
@@ -102,7 +102,7 @@ export function makeElevatedDirectiveConfig(home: string) {
   return makeWhatsAppDirectiveConfig(
     home,
     {
-      model: "anthropic/claude-opus-4-5",
+      model: "anthropic/claude-opus-4-6",
       elevatedDefault: "on",
     },
     {
@@ -189,7 +189,7 @@ export function makeRestrictedElevatedDisabledConfig(home: string) {
   return {
     agents: {
       defaults: {
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         workspace: path.join(home, "openclaw"),
       },
       list: [

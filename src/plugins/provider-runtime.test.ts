@@ -1013,7 +1013,7 @@ describe("provider-runtime", () => {
           resolveProviderCacheTtlEligibility({
             provider: DEMO_PROVIDER_ID,
             context: createDemoProviderContext({
-              modelId: "anthropic/claude-sonnet-4-5",
+              modelId: "anthropic/claude-sonnet-4-6",
             }),
           }),
         expected: true,
@@ -1245,10 +1245,10 @@ describe("provider-runtime", () => {
         context: {
           env: process.env,
           entries: [
-            { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
-            { provider: "openai", id: "gpt-5.2-pro", name: "GPT-5.2 Pro" },
-            { provider: "openai", id: "gpt-5-mini", name: "GPT-5 mini" },
-            { provider: "openai", id: "gpt-5-nano", name: "GPT-5 nano" },
+            { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
+            { provider: "openai", id: "gpt-5.4-pro", name: "GPT-5.2 Pro" },
+            { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5 mini" },
+            { provider: "openai", id: "gpt-5.4-nano", name: "GPT-5 nano" },
             { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
           ],
         },

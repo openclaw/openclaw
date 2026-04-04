@@ -5,7 +5,7 @@ summary: 提升的 exec 模式和 /elevated 指令
 title: 提升模式
 x-i18n:
   generated_at: "2026-02-03T07:55:23Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 83767a01609304026d145feb0aa0b0533e8cf8b16cd200f724d9e3e8cf2920c3
   source_path: tools/elevated.md

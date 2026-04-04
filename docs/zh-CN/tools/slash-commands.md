@@ -6,7 +6,7 @@ summary: 斜杠命令：文本 vs 原生、配置和支持的命令
 title: 斜杠命令
 x-i18n:
   generated_at: "2026-02-03T10:12:40Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ca0deebf89518e8c62828fbb9bf4621c5fff8ab86ccb22e37da61a28f9a7886a
   source_path: tools/slash-commands.md
@@ -145,7 +145,7 @@ x-i18n:
 /model
 /model list
 /model 3
-/model openai/gpt-5.2
+/model openai/gpt-5.4
 /model opus@anthropic:default
 /model status
 ```

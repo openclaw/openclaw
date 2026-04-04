@@ -7,7 +7,7 @@ summary: 集成浏览器控制服务 + 操作命令
 title: 浏览器（OpenClaw 托管）
 x-i18n:
   generated_at: "2026-02-03T09:26:06Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: a868d040183436a1fb355130995e79782cb817b5ea298beaf1e1d2cb82e21c4c
   source_path: tools/browser.md

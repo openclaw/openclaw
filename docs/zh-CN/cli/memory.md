@@ -6,7 +6,7 @@ summary: "`openclaw memory`（status/index/search）的 CLI 参考"
 title: memory
 x-i18n:
   generated_at: "2026-02-01T20:21:11Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 95a9e94306f95be2218a909be59be5bbaa5d31322b71b23564c71a89c3a3941a
   source_path: cli/memory.md

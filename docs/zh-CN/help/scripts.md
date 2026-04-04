@@ -6,7 +6,7 @@ summary: 仓库脚本：用途、范围和安全注意事项
 title: 脚本
 x-i18n:
   generated_at: "2026-02-01T21:38:11Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: bfedc3c123c4a43b351f793e2137568786f90732723da5fd223c2a088bc59e43
   source_path: help/scripts.md

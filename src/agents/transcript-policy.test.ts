@@ -185,7 +185,7 @@ describe("resolveTranscriptPolicy", () => {
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
-      modelId: "claude-opus-4-5",
+      modelId: "claude-opus-4-6",
       modelApi: "anthropic-messages",
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
@@ -230,7 +230,7 @@ describe("resolveTranscriptPolicy", () => {
   it("enables strict tool call id sanitization for openai-completions APIs", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",
-      modelId: "gpt-5.2",
+      modelId: "gpt-5.4",
       modelApi: "openai-completions",
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
@@ -322,7 +322,7 @@ describe("resolveTranscriptPolicy", () => {
     {
       title: "Anthropic provider",
       provider: "anthropic",
-      modelId: "claude-opus-4-5",
+      modelId: "claude-opus-4-6",
       modelApi: "anthropic-messages" as const,
       preserveSignatures: true,
     },

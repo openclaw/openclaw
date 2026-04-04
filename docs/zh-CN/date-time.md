@@ -6,7 +6,7 @@ summary: 信封、提示词、工具和连接器中的日期与时间处理
 title: 日期与时间
 x-i18n:
   generated_at: "2026-02-01T20:24:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 753af5946a006215d6af2467fa478f3abb42b1dff027cf85d5dc4c7ba4b58d39
   source_path: date-time.md

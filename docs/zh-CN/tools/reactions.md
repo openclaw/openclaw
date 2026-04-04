@@ -5,7 +5,7 @@ summary: 跨渠道共享的表情回应语义
 title: 表情回应
 x-i18n:
   generated_at: "2026-02-01T21:42:41Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 0f11bff9adb4bd02604f96ebe2573a623702796732b6e17dfeda399cb7be0fa6
   source_path: tools/reactions.md

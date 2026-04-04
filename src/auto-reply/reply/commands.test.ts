@@ -221,8 +221,8 @@ vi.mock("../../channels/plugins/pairing.js", async () => {
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+    { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
     { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
     { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
     { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
@@ -2443,7 +2443,7 @@ describe("handleCommands /allowlist", () => {
 describe("/models command", () => {
   const cfg = {
     commands: { text: true },
-    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
   } as unknown as OpenClawConfig;
 
   it.each(["discord", "whatsapp"])("lists providers on %s (text)", async (surface) => {
@@ -2487,7 +2487,7 @@ describe("/models command", () => {
         includes: [
           "Models (anthropic",
           "page 1/",
-          "anthropic/claude-opus-4-5",
+          "anthropic/claude-opus-4-6",
           "Switch: /model <provider/model>",
           "All: /models anthropic all",
         ],
@@ -2496,7 +2496,7 @@ describe("/models command", () => {
       {
         name: "ignores page argument when all flag is present",
         command: "/models anthropic 3 all",
-        includes: ["Models (anthropic", "page 1/1", "anthropic/claude-opus-4-5"],
+        includes: ["Models (anthropic", "page 1/1", "anthropic/claude-opus-4-6"],
         excludes: ["Page out of range"],
       },
       {
@@ -2538,7 +2538,7 @@ describe("/models command", () => {
         defaults: {
           model: {
             primary: "localai/ultra-chat",
-            fallbacks: ["anthropic/claude-opus-4-5"],
+            fallbacks: ["anthropic/claude-opus-4-6"],
           },
           imageModel: "visionpro/studio-v1",
         },
@@ -2565,7 +2565,7 @@ describe("/models command", () => {
     const scopedCfg = {
       commands: { text: true },
       agents: {
-        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        defaults: { model: { primary: "anthropic/claude-opus-4-6" } },
         list: [{ id: "support", model: "localai/ultra-chat" }],
       },
     } as unknown as OpenClawConfig;

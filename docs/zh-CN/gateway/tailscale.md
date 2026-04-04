@@ -6,7 +6,7 @@ summary: 为 Gateway 网关仪表盘集成 Tailscale Serve/Funnel
 title: Tailscale
 x-i18n:
   generated_at: "2026-02-03T07:49:04Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: c900c70a9301f2909a3a29a6fb0e6edfc8c18dba443f2e71b9cfadbc58167911
   source_path: gateway/tailscale.md

@@ -7,7 +7,7 @@ summary: 日志概述：文件日志、控制台输出、CLI 跟踪和控制 UI
 title: 日志
 x-i18n:
   generated_at: "2026-02-03T07:50:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 884fcf4a906adff34d546908e22abd283cb89fe0845076cf925c72384ec3556b
   source_path: logging.md

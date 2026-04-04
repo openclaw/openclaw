@@ -6,7 +6,7 @@ summary: OpenClaw 的首次运行新手引导流程（macOS 应用）
 title: 新手引导
 x-i18n:
   generated_at: "2026-02-03T07:54:07Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ae883b2deb1f9032be7c47a04d67e1741dffbdcc4445de1e0bbaa976e606bc10
   source_path: start/onboarding.md

@@ -6,7 +6,7 @@ summary: 通过阿里云 Model Studio 使用 Qwen 模型
 title: Qwen
 x-i18n:
   generated_at: "2026-03-23T00:00:00Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ""
   source_path: providers/qwen.md

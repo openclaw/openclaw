@@ -6,7 +6,7 @@ summary: stable、beta 和 dev 渠道：语义、切换和标签
 title: 开发渠道
 x-i18n:
   generated_at: "2026-02-03T10:07:21Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 2b01219b7e705044ce39838a0da7c7fa65c719809ab2f8a51e14529064af81bf
   source_path: install/development-channels.md

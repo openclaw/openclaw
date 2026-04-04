@@ -5,7 +5,7 @@ summary: OpenClaw 是一个多渠道 AI 智能体 Gateway 网关，可在任何�
 title: OpenClaw
 x-i18n:
   generated_at: "2026-02-04T17:53:40Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: fc8babf7885ef91d526795051376d928599c4cf8aff75400138a0d7d9fa3b75f
   source_path: index.md

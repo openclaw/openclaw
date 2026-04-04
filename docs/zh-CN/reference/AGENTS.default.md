@@ -5,7 +5,7 @@ read_when:
 summary: 个人助手设置的默认 OpenClaw 智能体指令和 Skills 列表
 x-i18n:
   generated_at: "2026-02-03T10:09:19Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 20ec2b8d8fc03c16bbf0a75f011092e86382ca4182e8c0a4bc5f8ffd2be9c647
   source_path: reference/AGENTS.default.md

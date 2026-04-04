@@ -5,7 +5,7 @@ summary: 智能体运行时（嵌入式 pi-mono）、工作区契约和会话引
 title: 智能体运行时
 x-i18n:
   generated_at: "2026-02-03T10:04:53Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 04b4e0bc6345d2afd9a93186e5d7a02a393ec97da2244e531703cb6a1c182325
   source_path: concepts/agent.md

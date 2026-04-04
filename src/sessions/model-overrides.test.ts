@@ -7,14 +7,14 @@ function applyOpenAiSelection(entry: SessionEntry) {
     entry,
     selection: {
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
     },
   });
 }
 
 function expectRuntimeModelFieldsCleared(entry: SessionEntry, before: number) {
   expect(entry.providerOverride).toBe("openai");
-  expect(entry.modelOverride).toBe("gpt-5.2");
+  expect(entry.modelOverride).toBe("gpt-5.4");
   expect(entry.modelProvider).toBeUndefined();
   expect(entry.model).toBeUndefined();
   expect((entry.updatedAt ?? 0) > before).toBe(true);
@@ -54,7 +54,7 @@ describe("applyModelOverrideToSessionEntry", () => {
       modelProvider: "anthropic",
       model: "claude-sonnet-4-6",
       providerOverride: "openai",
-      modelOverride: "gpt-5.2",
+      modelOverride: "gpt-5.4",
       contextTokens: 160_000,
     };
 
@@ -71,9 +71,9 @@ describe("applyModelOverrideToSessionEntry", () => {
       sessionId: "sess-3",
       updatedAt: before,
       modelProvider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       providerOverride: "openai",
-      modelOverride: "gpt-5.2",
+      modelOverride: "gpt-5.4",
       contextTokens: 200_000,
     };
 
@@ -81,13 +81,13 @@ describe("applyModelOverrideToSessionEntry", () => {
       entry,
       selection: {
         provider: "openai",
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       },
     });
 
     expect(result.updated).toBe(false);
     expect(entry.modelProvider).toBe("openai");
-    expect(entry.model).toBe("gpt-5.2");
+    expect(entry.model).toBe("gpt-5.4");
     expect(entry.contextTokens).toBe(200_000);
     expect(entry.updatedAt).toBe(before);
   });

@@ -6,7 +6,7 @@ summary: Deepgram 语音转录，用于接收语音消息
 title: Deepgram
 x-i18n:
   generated_at: "2026-02-01T21:34:47Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8f19e072f08672116ed1a72578635c0dcebb2b1f0dfcbefa12f80b21a18ad25c
   source_path: providers/deepgram.md

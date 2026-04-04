@@ -71,7 +71,7 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
-  "openai/gpt-5.2-pro",
+  "openai/gpt-5.4-pro",
 ]);
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "google/gemini-3.1-flash-lite-preview",
@@ -453,10 +453,10 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
 
   it("strips scaffolding for known OpenAI transcript wrappers", () => {
     expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2-pro"),
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4-pro"),
     ).toBe("Visible");
     expect(
-      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.2"),
+      maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4"),
     ).toBe("<final>Visible</final>");
   });
 
@@ -629,7 +629,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-4.7", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
-    { modelKey: "openai/gpt-5.2", expected: false },
+    { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
   });

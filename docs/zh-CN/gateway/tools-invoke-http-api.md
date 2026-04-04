@@ -6,7 +6,7 @@ summary: 通过 Gateway 网关 HTTP 端点直接调用单个工具
 title: 工具调用 API
 x-i18n:
   generated_at: "2026-02-03T07:48:58Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 17ccfbe0b0d9bb61cc46fb21f5c09b106ba6e8e4c2c14135a11ca8d5b77b8a88
   source_path: gateway/tools-invoke-http-api.md

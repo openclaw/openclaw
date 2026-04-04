@@ -5,7 +5,7 @@ summary: 项目起源、贡献者和许可证。
 title: 致谢
 x-i18n:
   generated_at: "2026-02-04T17:53:19Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d55e520313e131025b22cb20b3d2fbd44619e1668d09b5bd9d56d7df019bc46c
   source_path: reference/credits.md

@@ -7,7 +7,7 @@ summary: LINE Messaging API 插件的配置、设置和使用方法
 title: LINE
 x-i18n:
   generated_at: "2026-02-03T07:43:38Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8fbac126786f95b9454f3cc61906c2798393a8d7914e787d3755c020c7ab2da6
   source_path: channels/line.md

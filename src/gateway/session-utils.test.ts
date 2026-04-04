@@ -558,7 +558,7 @@ describe("gateway session utils", () => {
           workspace: "/tmp/default-workspace",
           model: {
             primary: "openai/gpt-5.4",
-            fallbacks: ["openai-codex/gpt-5.2-codex"],
+            fallbacks: ["openai-codex/gpt-5.4"],
           },
         },
         list: [{ id: "main", default: true }],
@@ -571,7 +571,7 @@ describe("gateway session utils", () => {
       workspace: "/tmp/default-workspace",
       model: {
         primary: "openai/gpt-5.4",
-        fallbacks: ["openai-codex/gpt-5.2-codex"],
+        fallbacks: ["openai-codex/gpt-5.4"],
       },
     });
   });
@@ -583,7 +583,7 @@ describe("gateway session utils", () => {
         defaults: {
           model: {
             primary: "openai/gpt-5.4",
-            fallbacks: ["openai-codex/gpt-5.2-codex"],
+            fallbacks: ["openai-codex/gpt-5.4"],
           },
         },
         list: [

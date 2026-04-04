@@ -6,7 +6,7 @@ summary: Bun 工作流（实验性）：安装及与 pnpm 相比的注意事项
 title: Bun（实验性）
 x-i18n:
   generated_at: "2026-02-03T07:49:24Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: eb3f4c222b6bae49938d8bf53a0818fe5f5e0c0c3c1adb3e0a832ce8f785e1e3
   source_path: install/bun.md

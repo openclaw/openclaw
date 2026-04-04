@@ -6,7 +6,7 @@ summary: Mattermost 机器人设置和 OpenClaw 配置
 title: Mattermost
 x-i18n:
   generated_at: "2026-02-03T07:43:43Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 57fabe5eb0efbcb885f4178b317b2fa99a41daf609e3a471de2b44db9def4ad7
   source_path: channels/mattermost.md

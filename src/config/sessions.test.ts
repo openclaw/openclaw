@@ -699,7 +699,7 @@ describe("sessions", () => {
       update: async () => {
         firstStarted.resolve();
         await releaseFirst.promise;
-        return { modelOverride: "anthropic/claude-opus-4-5" };
+        return { modelOverride: "anthropic/claude-opus-4-6" };
       },
     });
     const p2 = updateSessionStoreEntry({
@@ -716,7 +716,7 @@ describe("sessions", () => {
     await Promise.all([p1, p2]);
 
     const store = loadSessionStore(storePath);
-    expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
+    expect(store[mainSessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-6");
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
     await expect(fs.stat(`${storePath}.lock`)).rejects.toThrow();
   });

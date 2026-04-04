@@ -5,7 +5,7 @@ summary: 渠道连接的健康检查步骤
 title: 健康检查
 x-i18n:
   generated_at: "2026-02-03T07:47:59Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 74f242e98244c135e1322682ed6b67d70f3b404aca783b1bb5de96a27c2c1b01
   source_path: gateway/health.md

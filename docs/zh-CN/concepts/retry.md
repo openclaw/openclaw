@@ -6,7 +6,7 @@ summary: 出站提供商调用的重试策略
 title: 重试策略
 x-i18n:
   generated_at: "2026-02-01T20:23:37Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 55bb261ff567f46ce447be9c0ee0c5b5e6d2776287d7662762656c14108dd607
   source_path: concepts/retry.md

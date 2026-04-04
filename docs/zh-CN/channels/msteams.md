@@ -5,7 +5,7 @@ summary: Microsoft Teams 机器人支持状态、功能和配置
 title: Microsoft Teams
 x-i18n:
   generated_at: "2026-02-03T07:46:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 2046cb8fa3dd349f4b25a40c013a87188af8f75c1886a782698bff2bb9f70971
   source_path: channels/msteams.md

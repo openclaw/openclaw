@@ -7,7 +7,7 @@ summary: macOS 权限持久化（TCC）和签名要求
 title: macOS 权限
 x-i18n:
   generated_at: "2026-02-01T21:32:58Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d012589c0583dd0b3792d695f3f71a6ff265704cf02a3b79f8c4a5b14712e6aa
   source_path: platforms/mac/permissions.md

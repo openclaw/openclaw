@@ -7,7 +7,7 @@ summary: 出站渠道的 Markdown 格式化管道
 title: Markdown 格式化
 x-i18n:
   generated_at: "2026-02-01T20:22:42Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: f9cbf9b744f9a218860730f29435bcad02d3db80b1847fed5f17c063c97d4820
   source_path: concepts/markdown-formatting.md

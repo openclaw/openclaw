@@ -6,7 +6,7 @@ summary: 通过 zca-cli（QR 登录）支持 Zalo 个人账户、功能和配置
 title: Zalo Personal
 x-i18n:
   generated_at: "2026-02-03T07:44:34Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 2a249728d556e5cc52274627bdaf390fa10e815afa04f4497feb57a2a0cb9261
   source_path: channels/zalouser.md

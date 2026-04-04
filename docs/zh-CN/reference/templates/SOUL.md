@@ -4,7 +4,7 @@ read_when:
 summary: SOUL.md 的工作区模板
 x-i18n:
   generated_at: "2026-02-01T21:37:45Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b62a054ecddb454527a6819aa8d4f51d7616bc6154fbf4c6f5f6b20d8aa52bcd
   source_path: reference/templates/SOUL.md

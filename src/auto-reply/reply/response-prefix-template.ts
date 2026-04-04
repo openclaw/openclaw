@@ -6,9 +6,9 @@
  */
 
 export type ResponsePrefixContext = {
-  /** Short model name (e.g., "gpt-5.2", "claude-opus-4-6") */
+  /** Short model name (e.g., "gpt-5.4", "claude-opus-4-6") */
   model?: string;
-  /** Full model ID including provider (e.g., "openai-codex/gpt-5.2") */
+  /** Full model ID including provider (e.g., "openai-codex/gpt-5.4") */
   modelFull?: string;
   /** Provider name (e.g., "openai-codex", "anthropic") */
   provider?: string;
@@ -30,10 +30,10 @@ const TEMPLATE_VAR_PATTERN = /\{([a-zA-Z][a-zA-Z0-9.]*)\}/g;
  *
  * @example
  * resolveResponsePrefixTemplate("[{model} | think:{thinkingLevel}]", {
- *   model: "gpt-5.2",
+ *   model: "gpt-5.4",
  *   thinkingLevel: "high"
  * })
- * // Returns: "[gpt-5.2 | think:high]"
+ * // Returns: "[gpt-5.4 | think:high]"
  */
 export function resolveResponsePrefixTemplate(
   template: string | undefined,
@@ -70,14 +70,14 @@ export function resolveResponsePrefixTemplate(
  * Extract short model name from a full model string.
  *
  * Strips:
- * - Provider prefix (e.g., "openai/" from "openai/gpt-5.2")
+ * - Provider prefix (e.g., "openai/" from "openai/gpt-5.4")
  * - Date suffixes (e.g., "-20260205" from "claude-opus-4-6-20260205")
  * - Common version suffixes (e.g., "-latest")
  *
  * @example
- * extractShortModelName("openai-codex/gpt-5.2") // "gpt-5.2"
+ * extractShortModelName("openai-codex/gpt-5.4") // "gpt-5.4"
  * extractShortModelName("claude-opus-4-6-20260205") // "claude-opus-4-6"
- * extractShortModelName("gpt-5.2-latest") // "gpt-5.2"
+ * extractShortModelName("gpt-5.4-latest") // "gpt-5.4"
  */
 export function extractShortModelName(fullModel: string): string {
   // Strip provider prefix

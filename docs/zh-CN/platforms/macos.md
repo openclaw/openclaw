@@ -6,7 +6,7 @@ summary: OpenClaw macOS 配套应用（菜单栏 + Gateway 网关代理）
 title: macOS 应用
 x-i18n:
   generated_at: "2026-02-03T07:53:14Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: a5b1c02e5905e4cbc6c0688149cdb50a5bf7653e641947143e169ad948d1f057
   source_path: platforms/macos.md

@@ -5,7 +5,7 @@ summary: Tlon/Urbit 支持状态、功能和配置
 title: Tlon
 x-i18n:
   generated_at: "2026-02-03T07:44:17Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 19d7ffe23e82239fd2a2e35913e0d52c809b2c2b939dd39184e6c27a539ed97d
   source_path: channels/tlon.md

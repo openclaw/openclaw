@@ -7,7 +7,7 @@ summary: 选择心跳还是定时任务进行自动化的指南
 title: 定时任务与心跳对比
 x-i18n:
   generated_at: "2026-02-01T19:38:18Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 5f71a63181baa41b1c307eb7bfac561df7943d4627077dfa2861eb9f76ab086b
   source_path: automation/cron-vs-heartbeat.md

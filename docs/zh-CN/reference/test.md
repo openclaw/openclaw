@@ -5,7 +5,7 @@ summary: 如何在本地运行测试（vitest）以及何时使用 force/coverag
 title: 测试
 x-i18n:
   generated_at: "2026-02-03T10:09:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: be7b751fb81c8c94b1293624bdca6582e60a26084960d1df9558061969502e6f
   source_path: reference/test.md
