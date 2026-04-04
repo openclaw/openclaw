@@ -163,6 +163,10 @@ export class EvolutionService {
     this.detector.clearProcessedSignals();
   }
 
+  isEnabled(): boolean {
+    return this.config.enabled;
+  }
+
   // --------------------------------------------------------------------------
   // Internals
   // --------------------------------------------------------------------------

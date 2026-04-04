@@ -219,4 +219,40 @@ describe("SkillEvolver", () => {
     );
     expect(entries[0]?.change.mergeTarget).toBe("ev_desc");
   });
+
+  it("drops parsed entries with invalid evolution targets", async () => {
+    const addObservation = vi.fn(async () => "stored");
+    const evolver = new SkillEvolver(
+      { addObservation } as unknown as GraphitiClient,
+      vi.fn(
+        async () =>
+          '[{"section":"Instructions","action":"append","content":"This target is invalid.","target":"sidebar","source_signal":"user_correction","context_summary":"Bad target."},{"section":"Troubleshooting","action":"append","content":"Retry once after reconnecting.","target":"body","source_signal":"execution_failure","context_summary":"Valid target."}]',
+      ),
+      2,
+    );
+
+    const entries = await evolver.generateExperiences(
+      "search-skill",
+      makeContext([
+        {
+          type: "execution_failure",
+          section: "Troubleshooting",
+          excerpt: "retry after reconnecting",
+        },
+      ]),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.change).toMatchObject({
+      section: "Troubleshooting",
+      action: "append",
+      target: "body",
+      content: "Retry once after reconnecting.",
+    });
+    expect(addObservation).toHaveBeenCalledWith(
+      "skill_evolution",
+      expect.stringContaining("Retry once after reconnecting."),
+      expect.stringContaining("retry after reconnecting"),
+    );
+  });
 });

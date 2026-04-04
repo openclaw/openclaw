@@ -33,6 +33,14 @@ export type ExperienceContext = {
 
 type LlmCallFn = (systemPrompt: string, userPrompt: string) => Promise<string>;
 
+const EVOLUTION_SECTIONS = new Set<EvolutionChange["section"]>([
+  "Instructions",
+  "Examples",
+  "Troubleshooting",
+]);
+const EVOLUTION_ACTIONS = new Set<EvolutionChange["action"]>(["append", "replace", "skip"]);
+const EVOLUTION_TARGETS = new Set<EvolutionChange["target"]>(["description", "body"]);
+
 // ============================================================================
 // Evolver
 // ============================================================================
@@ -179,11 +187,18 @@ RULES:
       // Skip entries with skip action
       if (obj.action === "skip") continue;
 
+      const section = this.parseSection(obj.section);
+      const action = this.parseAction(obj.action);
+      const target = this.parseTarget(obj.target);
+      if (!section || !action || !target) {
+        continue;
+      }
+
       const change: EvolutionChange = {
-        section: (obj.section as EvolutionChange["section"]) ?? "Instructions",
-        action: (obj.action as EvolutionChange["action"]) ?? "append",
+        section,
+        action,
         content: String(obj.content ?? ""),
-        target: (obj.target as EvolutionChange["target"]) ?? "body",
+        target,
         skipReason: obj.skip_reason as EvolutionChange["skipReason"],
         mergeTarget:
           typeof obj.merge_target === "number"
@@ -319,5 +334,32 @@ RULES:
 
   private escapeRegExp(content: string): string {
     return content.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  private parseSection(value: unknown): EvolutionChange["section"] | null {
+    if (value == null) {
+      return "Instructions";
+    }
+    return typeof value === "string" && EVOLUTION_SECTIONS.has(value as EvolutionChange["section"])
+      ? (value as EvolutionChange["section"])
+      : null;
+  }
+
+  private parseAction(value: unknown): EvolutionChange["action"] | null {
+    if (value == null) {
+      return "append";
+    }
+    return typeof value === "string" && EVOLUTION_ACTIONS.has(value as EvolutionChange["action"])
+      ? (value as EvolutionChange["action"])
+      : null;
+  }
+
+  private parseTarget(value: unknown): EvolutionChange["target"] | null {
+    if (value == null) {
+      return "body";
+    }
+    return typeof value === "string" && EVOLUTION_TARGETS.has(value as EvolutionChange["target"])
+      ? (value as EvolutionChange["target"])
+      : null;
   }
 }

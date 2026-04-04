@@ -87,12 +87,16 @@ export class NudgeManager {
     if (!this.config.enabled) return null;
 
     this.turnsSinceMemory++;
-    this.turnsSinceSkill++;
+    if (this.evolutionService.isEnabled()) {
+      this.turnsSinceSkill++;
+    }
 
     const memoryDue =
       this.config.memoryInterval > 0 && this.turnsSinceMemory >= this.config.memoryInterval;
     const skillDue =
-      this.config.skillInterval > 0 && this.turnsSinceSkill >= this.config.skillInterval;
+      this.evolutionService.isEnabled() &&
+      this.config.skillInterval > 0 &&
+      this.turnsSinceSkill >= this.config.skillInterval;
 
     if (!memoryDue && !skillDue) return null;
 
@@ -160,7 +164,7 @@ export class NudgeManager {
       await this.runMemoryReview(snippet);
     }
 
-    if (action === "skill_review" || action === "both") {
+    if (this.evolutionService.isEnabled() && (action === "skill_review" || action === "both")) {
       await this.runSkillReview(snippet, messages);
     }
   }
