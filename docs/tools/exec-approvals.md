@@ -108,7 +108,7 @@ Important distinction:
 
 - `tools.exec.host=auto` chooses where exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses how host exec is approved: `security=full` plus `ask=off`.
-- `auto` does not let a tool call override a sandboxed session to `gateway` or `node`. If you want a different host, set `tools.exec.host` or use `/exec host=...` explicitly.
+- `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`, and `host=gateway` is only allowed from `auto` when no sandbox runtime is active. If you want a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 If you want a more conservative setup, tighten either layer back to `allowlist` / `on-miss`
 or `deny`.

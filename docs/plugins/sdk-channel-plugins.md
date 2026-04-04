@@ -96,8 +96,11 @@ surface.
 For setup specifically:
 
 - `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
-  lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, and the
-  delegated setup-proxy builders
+  import-safe setup patch adapters (`createPatchedAccountSetupAdapter`,
+  `createEnvPatchedAccountSetupAdapter`,
+  `createSetupInputPresenceValidator`), lookup-note output,
+  `promptResolvedAllowFrom`, `splitSetupEntries`, and the delegated
+  setup-proxy builders
 - `openclaw/plugin-sdk/setup-adapter-runtime` is the narrow env-aware adapter
   seam for `createEnvPatchedAccountSetupAdapter`
 - `openclaw/plugin-sdk/channel-setup` covers the optional-install setup
