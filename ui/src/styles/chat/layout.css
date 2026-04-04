@@ -743,8 +743,8 @@
 }
 
 .chat-controls__session {
-  min-width: 140px;
-  max-width: 300px;
+  min-width: 98px;
+  max-width: 190px;
 }
 
 .chat-controls__session-row {
@@ -755,8 +755,13 @@
 }
 
 .chat-controls__model {
-  min-width: 170px;
-  max-width: 320px;
+  min-width: 124px;
+  max-width: 206px;
+}
+
+.chat-controls__thinking-select {
+  min-width: 88px;
+  max-width: 118px;
 }
 
 .chat-controls__thinking {
@@ -781,13 +786,17 @@
 .chat-controls__session select {
   padding: 6px 10px;
   font-size: 13px;
-  max-width: 300px;
+  max-width: 190px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .chat-controls__model select {
-  max-width: 320px;
+  max-width: 206px;
+}
+
+.chat-controls__thinking-select select {
+  max-width: 118px;
 }
 
 .chat-controls__thinking {
@@ -815,6 +824,11 @@
 
   .chat-controls__model {
     min-width: 140px;
+    max-width: none;
+  }
+
+  .chat-controls__thinking-select {
+    min-width: 130px;
     max-width: none;
   }
 
@@ -862,6 +876,10 @@
 
   .chat-controls__model {
     min-width: 150px;
+  }
+
+  .chat-controls__thinking-select {
+    min-width: 140px;
   }
 }
 

@@ -3,20 +3,19 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import {
-  formatThinkingLevels,
-  normalizeThinkLevel,
-  normalizeVerboseLevel,
-  resolveThinkingDefaultForModel,
-} from "../../../../src/auto-reply/thinking.shared.js";
+import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
+import type { GatewayBrowserClient } from "../gateway.ts";
 import {
   DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   isSubagentSessionKey,
   parseAgentSessionKey,
-} from "../../../../src/routing/session-key.js";
-import { createChatModelOverride, resolvePreferredServerChatModel } from "../chat-model-ref.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+} from "../session-key.ts";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
+} from "../thinking.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -56,6 +55,24 @@ export type SlashCommandContext = {
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
 };
+
+function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.toLowerCase();
+  if (["off", "false", "no", "0"].includes(key)) {
+    return "off";
+  }
+  if (["full", "all", "everything"].includes(key)) {
+    return "full";
+  }
+  if (["on", "minimal", "true", "yes", "1"].includes(key)) {
+    return "on";
+  }
+  return undefined;
+}
+
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -205,7 +222,7 @@ async function executeThink(
       return {
         content: formatDirectiveOptions(
           `Current thinking level: ${resolveCurrentThinkingLevel(session, models)}.`,
-          formatThinkingLevels(session?.modelProvider, session?.model),
+          formatThinkingLevels(session?.modelProvider),
         ),
       };
     } catch (err) {
@@ -218,7 +235,7 @@ async function executeThink(
     try {
       const session = await loadCurrentSession(client, sessionKey);
       return {
-        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider, session?.model)}.`,
+        content: `Unrecognized thinking level "${rawLevel}". Valid levels: ${formatThinkingLevels(session?.modelProvider)}.`,
       };
     } catch (err) {
       return { content: `Failed to validate thinking level: ${String(err)}` };

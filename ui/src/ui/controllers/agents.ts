@@ -1,9 +1,9 @@
-import { resolveAgentIdFromSessionKey } from "../../../../src/routing/session-key.js";
 import {
   resolveChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { resolveAgentIdFromSessionKey } from "../session-key.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,

@@ -61,17 +61,23 @@ function createChatHeaderState(
   overrides: {
     model?: string | null;
     modelProvider?: string | null;
+    thinkingLevel?: string | null;
     models?: ModelCatalogEntry[];
     omitSessionFromList?: boolean;
   } = {},
 ): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
   let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
+  let currentThinkingLevel = overrides.thinkingLevel ?? null;
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
   const catalog = overrides.models ?? createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG);
   const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
     if (method === "sessions.patch") {
       const nextModel = (params.model as string | null | undefined) ?? null;
+      const nextThinkingLevel = params.thinkingLevel as string | null | undefined;
+      if ("thinkingLevel" in params) {
+        currentThinkingLevel = nextThinkingLevel ?? null;
+      }
       if (!nextModel) {
         currentModel = null;
         currentModelProvider = null;
@@ -97,11 +103,15 @@ function createChatHeaderState(
       return { messages: [], thinkingLevel: null };
     }
     if (method === "sessions.list") {
-      return createSessionsListResult({
+      const result = createSessionsListResult({
         model: currentModel,
         modelProvider: currentModelProvider,
         omitSessionFromList,
       });
+      if (result.sessions[0]) {
+        result.sessions[0].thinkingLevel = currentThinkingLevel ?? undefined;
+      }
+      return result;
     }
     if (method === "models.list") {
       return { models: catalog };
@@ -119,11 +129,17 @@ function createChatHeaderState(
     sessionKey: "main",
     connected: true,
     sessionsHideCron: true,
-    sessionsResult: createSessionsListResult({
-      model: currentModel,
-      modelProvider: currentModelProvider,
-      omitSessionFromList,
-    }),
+    sessionsResult: (() => {
+      const result = createSessionsListResult({
+        model: currentModel,
+        modelProvider: currentModelProvider,
+        omitSessionFromList,
+      });
+      if (result.sessions[0]) {
+        result.sessions[0].thinkingLevel = currentThinkingLevel ?? undefined;
+      }
+      return result;
+    })(),
     chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
@@ -938,6 +954,72 @@ describe("chat view", () => {
     expect(state.sessionsResult?.sessions[0]?.model).toBe("gpt-5-mini");
     expect(state.sessionsResult?.sessions[0]?.modelProvider).toBe("openai");
     vi.unstubAllGlobals();
+  });
+
+  it("shows the default thinking level in the chat header picker", async () => {
+    const { state } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+    expect(thinkingSelect?.value).toBe("");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Default (off)");
+  });
+
+  it("patches the current session thinking level from the chat header picker", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+
+    thinkingSelect!.value = "off";
+    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: "off",
+    });
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBe("off");
+  });
+
+  it("clears the session thinking override back to the default thinking level", async () => {
+    const { state, request } = createChatHeaderState({
+      model: "gpt-5",
+      modelProvider: "openai",
+      thinkingLevel: "high",
+    });
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const thinkingSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-thinking-select="true"]',
+    );
+    expect(thinkingSelect).not.toBeNull();
+    expect(thinkingSelect?.value).toBe("high");
+
+    thinkingSelect!.value = "";
+    thinkingSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      thinkingLevel: null,
+    });
+    expect(state.sessionsResult?.sessions[0]?.thinkingLevel).toBeUndefined();
   });
 
   it("reloads effective tools after a chat-header model switch for the active tools panel", async () => {
