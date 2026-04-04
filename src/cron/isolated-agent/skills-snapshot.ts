@@ -30,6 +30,7 @@ export function resolveCronSkillsSnapshot(params: {
 
   return buildWorkspaceSkillSnapshot(params.workspaceDir, {
     config: params.config,
+    agentId: params.agentId,
     skillFilter,
     eligibility: { remote: getRemoteSkillEligibility() },
     snapshotVersion,

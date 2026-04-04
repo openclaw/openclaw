@@ -165,6 +165,35 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
 
+  it("inherits agents.defaults.skills when agentId is provided", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "alpha-skill"),
+      name: "alpha-skill",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "beta-skill"),
+      name: "beta-skill",
+      description: "Beta skill",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      ...resolveTestSkillDirs(workspaceDir),
+      config: {
+        agents: {
+          defaults: {
+            skills: ["alpha-skill"],
+          },
+          list: [{ id: "writer", workspace: workspaceDir }],
+        },
+      },
+      agentId: "writer",
+    });
+
+    expect(commands.map((entry) => entry.skillName)).toEqual(["alpha-skill"]);
+  });
+
   it("includes enabled Claude bundle markdown commands as native OpenClaw slash commands", async () => {
     const workspaceDir = await makeWorkspace();
     const pluginRoot = path.join(tempHome!.home, ".openclaw", "extensions", "compound-bundle");

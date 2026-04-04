@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
+import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
@@ -617,7 +618,7 @@ export function buildWorkspaceSkillSnapshot(
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
-  const skillFilter = normalizeSkillFilter(opts?.skillFilter);
+  const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -643,10 +644,23 @@ type WorkspaceSkillBuildOptions = {
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
   entries?: SkillEntry[];
+  agentId?: string;
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
 };
+
+function resolveEffectiveWorkspaceSkillFilter(
+  opts?: WorkspaceSkillBuildOptions,
+): string[] | undefined {
+  if (opts?.skillFilter !== undefined) {
+    return normalizeSkillFilter(opts.skillFilter);
+  }
+  if (!opts?.config || !opts.agentId) {
+    return undefined;
+  }
+  return resolveEffectiveAgentSkillFilter(opts.config, opts.agentId);
+}
 
 function resolveWorkspaceSkillPromptState(
   workspaceDir: string,
@@ -657,10 +671,11 @@ function resolveWorkspaceSkillPromptState(
   resolvedSkills: Skill[];
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
-    opts?.skillFilter,
+    effectiveSkillFilter,
     opts?.eligibility,
   );
   const promptEntries = eligible.filter(
@@ -697,6 +712,7 @@ export function resolveSkillsPromptForRun(params: {
   entries?: SkillEntry[];
   config?: OpenClawConfig;
   workspaceDir: string;
+  agentId?: string;
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
@@ -706,6 +722,7 @@ export function resolveSkillsPromptForRun(params: {
     const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
+      agentId: params.agentId,
     });
     return prompt.trim() ? prompt : "";
   }
@@ -718,9 +735,32 @@ export function loadWorkspaceSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    skillFilter?: string[];
+    agentId?: string;
   },
 ): SkillEntry[] {
-  return loadSkillEntries(workspaceDir, opts);
+  const entries = loadSkillEntries(workspaceDir, opts);
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  if (effectiveSkillFilter === undefined) {
+    return entries;
+  }
+  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, undefined);
+}
+
+export function loadVisibleWorkspaceSkillEntries(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+    skillFilter?: string[];
+    agentId?: string;
+    eligibility?: SkillEligibilityContext;
+  },
+): SkillEntry[] {
+  const entries = loadSkillEntries(workspaceDir, opts);
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
 }
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
@@ -766,6 +806,8 @@ export async function syncSkillsToWorkspace(params: {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
   config?: OpenClawConfig;
+  skillFilter?: string[];
+  agentId?: string;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
 }) {
@@ -778,8 +820,10 @@ export async function syncSkillsToWorkspace(params: {
   await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
 
-    const entries = loadSkillEntries(sourceDir, {
+    const entries = loadWorkspaceSkillEntries(sourceDir, {
       config: params.config,
+      skillFilter: params.skillFilter,
+      agentId: params.agentId,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
     });
