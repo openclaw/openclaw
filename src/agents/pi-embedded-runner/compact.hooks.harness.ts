@@ -81,6 +81,9 @@ export const sessionMessages: unknown[] = [
 ];
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const resolveEmbeddedAgentStreamFnMock = vi.fn((_params?: unknown) => vi.fn());
+export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
+export const resolveAgentTransportOverrideMock = vi.fn(() => undefined);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -122,6 +125,12 @@ export function resetCompactSessionStateMocks(): void {
     },
   );
   sessionAbortCompactionMock.mockReset();
+  resolveEmbeddedAgentStreamFnMock.mockReset();
+  resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  applyExtraParamsToAgentMock.mockReset();
+  applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
+  resolveAgentTransportOverrideMock.mockReset();
+  resolveAgentTransportOverrideMock.mockReturnValue(undefined);
 }
 
 export function resetCompactHooksHarnessMocks(): void {
@@ -223,6 +232,8 @@ export async function loadCompactHooksHarness(): Promise<{
             session.messages = [...(messages as typeof session.messages)];
           }),
           streamFn: vi.fn(),
+          setTransport: vi.fn(),
+          transport: "sse",
         },
         compact: vi.fn(async () => {
           session.messages.splice(1);
@@ -338,6 +349,15 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("./tool-schema-runtime.js", () => ({
     logProviderToolSchemaDiagnostics: vi.fn(),
     normalizeProviderToolSchemas: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+  }));
+
+  vi.doMock("./stream-resolution.js", () => ({
+    resolveEmbeddedAgentStreamFn: resolveEmbeddedAgentStreamFnMock,
+  }));
+
+  vi.doMock("./extra-params.js", () => ({
+    applyExtraParamsToAgent: applyExtraParamsToAgentMock,
+    resolveAgentTransportOverride: resolveAgentTransportOverrideMock,
   }));
 
   vi.doMock("./tool-split.js", () => ({
