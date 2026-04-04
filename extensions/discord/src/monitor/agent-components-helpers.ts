@@ -8,7 +8,8 @@ import {
   type StringSelectMenuInteraction,
   type UserSelectMenuInteraction,
 } from "@buape/carbon";
-import { ChannelType } from "discord-api-types/v10";
+import type { ModalSubmitLabelComponent } from "discord-api-types/v10";
+import { ChannelType, ComponentType } from "discord-api-types/v10";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -727,6 +728,27 @@ export function mapSelectValues(entry: DiscordComponentEntry, values: string[]):
   return values;
 }
 
+/**
+ * Read a RadioGroup's selected value directly from the raw interaction payload.
+ * Carbon's FieldsHandler reads `.values` (array) for non-TextInput components,
+ * but Discord's RadioGroup submission uses `.value` (singular string | null).
+ * This bypasses Carbon to read the correct field.
+ */
+function resolveRadioGroupValueFromRaw(
+  interaction: ModalInteraction,
+  fieldId: string,
+): string | null {
+  for (const component of interaction.rawData.data.components ?? []) {
+    if (component.type === ComponentType.Label) {
+      const sub = (component as ModalSubmitLabelComponent).component;
+      if (sub?.custom_id === fieldId && sub.type === ComponentType.RadioGroup) {
+        return sub.value ?? null;
+      }
+    }
+  }
+  return null;
+}
+
 export function resolveModalFieldValues(
   field: DiscordModalEntry["fields"][number],
   interaction: ModalInteraction,
@@ -743,9 +765,15 @@ export function resolveModalFieldValues(
         const value = required ? fields.getText(field.id, true) : fields.getText(field.id);
         return value ? [value] : [];
       }
-      case "select":
-      case "checkbox":
       case "radio": {
+        const value = resolveRadioGroupValueFromRaw(interaction, field.id);
+        if (required && !value) {
+          throw new Error(`Missing required field: ${field.id}`);
+        }
+        return value ? mapOptionLabels(optionLabels, [value]) : [];
+      }
+      case "select":
+      case "checkbox": {
         const values = required
           ? fields.getStringSelect(field.id, true)
           : (fields.getStringSelect(field.id) ?? []);
