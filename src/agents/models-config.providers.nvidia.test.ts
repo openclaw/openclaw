@@ -35,13 +35,26 @@ describe("NVIDIA provider", () => {
 describe("MiniMax implicit provider (#15275)", () => {
   it("should use anthropic-messages API for API-key provider", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ MINIMAX_API_KEY: "test-key" }, async () => {
+    await withEnvAsync({ MINIMAX_API_KEY: "test-key", MINIMAX_API_HOST: undefined }, async () => {
       const providers = await resolveImplicitProvidersForTest({ agentDir });
       expect(providers?.minimax).toBeDefined();
       expect(providers?.minimax?.api).toBe("anthropic-messages");
       expect(providers?.minimax?.authHeader).toBe(true);
       expect(providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     });
+  });
+
+  it("should respect MINIMAX_API_HOST env var for CN endpoint (#34487)", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await withEnvAsync(
+      { MINIMAX_API_KEY: "test-key", MINIMAX_API_HOST: "https://api.minimaxi.com" },
+      async () => {
+        const providers = await resolveImplicitProvidersForTest({ agentDir });
+        expect(providers?.minimax).toBeDefined();
+        expect(providers?.minimax?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+        expect(providers?.["minimax-portal"]?.baseUrl).toBe("https://api.minimaxi.com/anthropic");
+      },
+    );
   });
 
   it("should set authHeader for minimax portal provider", async () => {
