@@ -1274,7 +1274,12 @@ for usage/billing and raise limits as needed.
   </Accordion>
 
   <Accordion title="How do I bind a host folder into the sandbox?">
-    Set `agents.defaults.sandbox.docker.binds` to `["host:path:mode"]` (e.g., `"/home/user/src:/src:ro"`). Global + per-agent binds merge; per-agent binds are ignored when `scope: "shared"`. Use `:ro` for anything sensitive and remember binds bypass the sandbox filesystem walls. See [Sandboxing](/gateway/sandboxing#custom-bind-mounts) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check) for examples and safety notes.
+    Set `agents.defaults.sandbox.docker.binds` to `["host:path:mode"]` (e.g., `"/home/user/src:/src:ro"`). Global + per-agent binds merge; per-agent binds are ignored when `scope: "shared"`. Use `:ro` for anything sensitive and remember binds bypass the sandbox filesystem walls.
+
+    OpenClaw validates bind sources against both the normalized path and the canonical path resolved through the deepest existing ancestor. That means symlink-parent escapes still fail closed even when the last path segment does not exist yet, and allowed-root checks still apply after symlink resolution.
+
+    See [Sandboxing](/gateway/sandboxing#custom-bind-mounts) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check) for examples and safety notes.
+
   </Accordion>
 
   <Accordion title="How does memory work?">
