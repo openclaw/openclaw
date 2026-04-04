@@ -6,8 +6,6 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
-import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
@@ -15,6 +13,7 @@ import {
 } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
+import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 

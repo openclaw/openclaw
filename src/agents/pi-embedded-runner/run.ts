@@ -156,6 +156,8 @@ export async function runEmbeddedPiAgent(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
+        modelProviderId: provider,
+        modelId,
         messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,

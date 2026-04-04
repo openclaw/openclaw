@@ -6,4 +6,4 @@ export {
   hasActionableMatrixMigration,
   hasPendingMatrixMigration,
   maybeCreateMatrixMigrationSnapshot,
-} from "openclaw/plugin-sdk/matrix-runtime-heavy";
+} from "./runtime-heavy-api.js";

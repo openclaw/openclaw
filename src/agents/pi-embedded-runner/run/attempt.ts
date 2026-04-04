@@ -1464,6 +1464,8 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
+          modelProviderId: params.model.provider,
+          modelId: params.model.id,
           messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
@@ -1531,7 +1533,8 @@ export async function runEmbeddedAttempt(
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Called each run; only mutates already-answered user turns that still carry image blocks.
+          // Only mutates user turns older than a few assistant replies so recent
+          // history stays byte-identical for prompt-cache prefix matching.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.replaceMessages(activeSession.messages);

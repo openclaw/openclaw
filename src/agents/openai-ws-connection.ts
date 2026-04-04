@@ -34,6 +34,7 @@ export interface ResponseObject {
   output: OutputItem[];
   usage?: UsageInfo;
   error?: { code: string; message: string };
+  incomplete_details?: { reason?: string };
 }
 
 export interface UsageInfo {
@@ -160,9 +161,16 @@ export interface RateLimitUpdatedEvent {
 
 export interface ErrorEvent {
   type: "error";
-  code: string;
-  message: string;
+  status?: number;
+  code?: string;
+  message?: string;
   param?: string;
+  error?: {
+    type?: string;
+    code?: string;
+    message?: string;
+    param?: string;
+  };
 }
 
 export type OpenAIWebSocketEvent =
@@ -567,4 +575,20 @@ export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {
     };
     this.send(event);
   }
+}
+
+export function getOpenAIWebSocketErrorDetails(event: ErrorEvent): {
+  status?: number;
+  type?: string;
+  code?: string;
+  message?: string;
+  param?: string;
+} {
+  return {
+    status: typeof event.status === "number" ? event.status : undefined,
+    type: event.error?.type,
+    code: event.error?.code ?? event.code,
+    message: event.error?.message ?? event.message,
+    param: event.error?.param ?? event.param,
+  };
 }

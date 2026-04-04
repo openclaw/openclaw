@@ -16,7 +16,6 @@ import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pi
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
-import { resolveDiscordPreviewStreamMode } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
@@ -40,6 +39,7 @@ import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
+import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import {

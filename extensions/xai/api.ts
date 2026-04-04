@@ -1,5 +1,7 @@
 import {
   applyModelCompatPatch,
+  getModelProviderHint,
+  normalizeNativeXaiModelId,
   normalizeProviderId,
   resolveProviderEndpoint,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -19,8 +21,6 @@ export {
   XAI_DEFAULT_MAX_TOKENS,
 } from "./model-definitions.js";
 export { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-export { normalizeXaiModelId } from "./model-id.js";
-
 export const XAI_TOOL_SCHEMA_PROFILE = "xai";
 export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
 
@@ -47,8 +47,10 @@ function isXaiNativeEndpoint(baseUrl: unknown): boolean {
 }
 
 export function isXaiModelHint(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("x-ai/");
+  return getModelProviderHint(modelId) === "x-ai";
 }
+
+export { normalizeNativeXaiModelId as normalizeXaiModelId };
 
 function shouldUseXaiResponsesTransport(params: {
   provider: string;
