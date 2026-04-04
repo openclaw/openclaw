@@ -129,7 +129,6 @@ vi.mock("../agents/auth-profiles.js", () => {
 });
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderUsageAuthWithPluginMock: vi.fn(async (..._args: unknown[]) => null),
   providerRuntimeMock: {
     augmentModelCatalogWithProviderPlugins: vi.fn((catalog: unknown) => catalog),
     buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
@@ -153,7 +152,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderStreamFn: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
-    resolveProviderUsageSnapshotWithPlugin: vi.fn(async () => undefined),
     resolveProviderXHighThinking: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),
@@ -167,7 +165,6 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
-    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
   };
 });
 
@@ -178,7 +175,6 @@ vi.mock("../plugins/provider-runtime.ts", async () => {
   return {
     ...actual,
     ...providerRuntimeMocks.providerRuntimeMock,
-    resolveProviderUsageAuthWithPlugin: providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock,
   };
 });
 
@@ -204,6 +200,7 @@ describe("resolveProviderAuths key normalization", () => {
     Z_AI_API_KEY: undefined,
     MINIMAX_API_KEY: undefined,
     MINIMAX_CODE_PLAN_KEY: undefined,
+    MINIMAX_CODING_API_KEY: undefined,
     XIAOMI_API_KEY: undefined,
   } satisfies Record<string, string | undefined>;
 
@@ -224,8 +221,6 @@ describe("resolveProviderAuths key normalization", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
-    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockReset();
-    providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -419,6 +414,16 @@ describe("resolveProviderAuths key normalization", () => {
         MINIMAX_API_KEY: "api-key",
       },
       expected: [{ provider: "minimax", token: "code-plan-key" }],
+    });
+  });
+
+  it("accepts MINIMAX_CODING_API_KEY as a coding-plan alias", async () => {
+    await expectResolvedAuthsFromSuiteHome({
+      providers: ["minimax"],
+      env: {
+        MINIMAX_CODING_API_KEY: "coding-api-key",
+      },
+      expected: [{ provider: "minimax", token: "coding-api-key" }],
     });
   });
 

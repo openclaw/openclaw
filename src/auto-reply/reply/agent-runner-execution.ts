@@ -558,6 +558,8 @@ export async function runAgentTurnWithFallback(params: {
                     ],
                   images: params.opts?.images,
                   imageOrder: params.opts?.imageOrder,
+                  messageProvider: params.followupRun.run.messageProvider,
+                  agentAccountId: params.followupRun.run.agentAccountId,
                 });
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,

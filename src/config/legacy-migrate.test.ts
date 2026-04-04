@@ -499,6 +499,49 @@ describe("legacy migrate channel streaming aliases", () => {
       streaming: "off",
     });
   });
+
+  it("removes legacy googlechat streamMode aliases", () => {
+    const raw = {
+      channels: {
+        googlechat: {
+          streamMode: "append",
+          accounts: {
+            work: {
+              streamMode: "replace",
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(
+      (validated.config.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (validated.config.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+
+    const res = migrateLegacyConfig(raw);
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.streamMode (legacy key no longer used).",
+    );
+    expect(res.changes).toContain(
+      "Removed channels.googlechat.accounts.work.streamMode (legacy key no longer used).",
+    );
+    expect(
+      (res.config?.channels?.googlechat as Record<string, unknown> | undefined)?.streamMode,
+    ).toBeUndefined();
+    expect(
+      (res.config?.channels?.googlechat?.accounts?.work as Record<string, unknown> | undefined)
+        ?.streamMode,
+    ).toBeUndefined();
+  });
 });
 
 describe("legacy migrate nested channel enabled aliases", () => {
@@ -558,7 +601,7 @@ describe("legacy migrate nested channel enabled aliases", () => {
     });
   });
 
-  it("moves legacy allow toggles into enabled for slack, googlechat, discord, and matrix", () => {
+  it("moves legacy allow toggles into enabled for slack, googlechat, discord, matrix, and zalouser", () => {
     const res = migrateLegacyConfig({
       channels: {
         slack: {
@@ -633,6 +676,22 @@ describe("legacy migrate nested channel enabled aliases", () => {
             },
           },
         },
+        zalouser: {
+          groups: {
+            "group:trusted": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "group:legacy": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -660,6 +719,12 @@ describe("legacy migrate nested channel enabled aliases", () => {
     expect(res.changes).toContain(
       "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (true).",
     );
+    expect(res.changes).toContain(
+      "Moved channels.zalouser.groups.group:trusted.allow → channels.zalouser.groups.group:trusted.enabled (false).",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.zalouser.accounts.work.groups.group:legacy.allow → channels.zalouser.accounts.work.groups.group:legacy.enabled (true).",
+    );
     expect(res.config?.channels?.slack?.channels?.ops).toEqual({
       enabled: false,
     });
@@ -673,6 +738,12 @@ describe("legacy migrate nested channel enabled aliases", () => {
       enabled: false,
     });
     expect(res.config?.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+      enabled: true,
+    });
+    expect(res.config?.channels?.zalouser?.groups?.["group:trusted"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.zalouser?.accounts?.work?.groups?.["group:legacy"]).toEqual({
       enabled: true,
     });
   });

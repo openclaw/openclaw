@@ -473,13 +473,13 @@ describe("failover-error", () => {
   it("coerces failover-worthy errors into FailoverError with metadata", () => {
     const err = coerceToFailoverError("credit balance too low", {
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
     });
     expect(err?.name).toBe("FailoverError");
     expect(err?.reason).toBe("billing");
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
-    expect(err?.model).toBe("claude-opus-4-5");
+    expect(err?.model).toBe("claude-opus-4-6");
   });
 
   it("maps overloaded to a 503 fallback status", () => {

@@ -5,7 +5,7 @@ summary: 管理沙箱容器并检查生效的沙箱策略
 title: 沙箱 CLI
 x-i18n:
   generated_at: "2026-02-03T07:45:18Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 6e1186f26c77e188206ce5e198ab624d6b38bc7bb7c06e4d2281b6935c39e347
   source_path: cli/sandbox.md

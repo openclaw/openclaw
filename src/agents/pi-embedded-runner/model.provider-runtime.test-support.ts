@@ -150,7 +150,7 @@ function buildDynamicModel(
       if (existing) {
         return undefined;
       }
-      const template = findTemplate(params, "github-copilot", ["gpt-5.2-codex"]);
+      const template = findTemplate(params, "github-copilot", ["gpt-5.4"]);
       if (lower === "gpt-5.4" && template) {
         return cloneTemplate(
           template,
@@ -182,17 +182,17 @@ function buildDynamicModel(
     case "openai-codex": {
       const template =
         lower === "gpt-5.4"
-          ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.2-codex"])
+          ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4"])
           : lower === "gpt-5.4-mini"
             ? findTemplate(params, "openai-codex", [
                 "gpt-5.4",
                 "gpt-5.1-codex-mini",
                 "gpt-5.3-codex",
-                "gpt-5.2-codex",
+                "gpt-5.4",
               ])
             : lower === "gpt-5.3-codex-spark"
-              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.2-codex"])
-              : findTemplate(params, "openai-codex", ["gpt-5.2-codex"]);
+              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4"])
+              : findTemplate(params, "openai-codex", ["gpt-5.4"]);
       const fallback = {
         provider: "openai-codex",
         api: "openai-codex-responses",
@@ -256,13 +256,13 @@ function buildDynamicModel(
     case "openai": {
       const templateIds =
         lower === "gpt-5.4"
-          ? ["gpt-5.2"]
+          ? ["gpt-5.4"]
           : lower === "gpt-5.4-pro"
-            ? ["gpt-5.2-pro", "gpt-5.2"]
+            ? ["gpt-5.4-pro", "gpt-5.4"]
             : lower === "gpt-5.4-mini"
-              ? ["gpt-5-mini"]
+              ? ["gpt-5.4-mini"]
               : lower === "gpt-5.4-nano"
-                ? ["gpt-5-nano", "gpt-5-mini"]
+                ? ["gpt-5.4-nano", "gpt-5.4-mini"]
                 : undefined;
       if (!templateIds) {
         return undefined;
@@ -330,7 +330,7 @@ function buildDynamicModel(
       const template = findTemplate(
         params,
         "anthropic",
-        lower === "claude-opus-4-6" ? ["claude-opus-4-5"] : ["claude-sonnet-4-5"],
+        lower === "claude-opus-4-6" ? ["claude-opus-4-6"] : ["claude-sonnet-4-6"],
       );
       return cloneTemplate(
         template,

@@ -6,7 +6,7 @@ summary: OpenClaw 如何内置 Apple 设备型号标识符以在 macOS 应用中
 title: 设备型号数据库
 x-i18n:
   generated_at: "2026-02-01T21:37:07Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 1d99c2538a0d8fdd80fa468fa402f63479ef2522e83745a0a46527a86238aeb2
   source_path: reference/device-models.md

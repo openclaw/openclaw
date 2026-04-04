@@ -111,7 +111,7 @@ describe("legacy config detection", () => {
   it("does not rewrite removed agent config migrations", async () => {
     const res = migrateLegacyConfig({
       agent: {
-        model: "openai/gpt-5.2",
+        model: "openai/gpt-5.4",
         tools: { allow: ["sessions.list"], deny: ["danger"] },
         elevated: { enabled: true, allowFrom: { discord: ["user:1"] } },
         bash: { timeoutSec: 12 },

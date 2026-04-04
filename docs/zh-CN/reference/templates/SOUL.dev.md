@@ -5,7 +5,7 @@ read_when:
 summary: 开发智能体灵魂（C-3PO）
 x-i18n:
   generated_at: "2026-02-03T10:09:44Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8ba3131f4396c4f3ec2c22f3d1147f218453b0c51e73305e681d419dea97c410
   source_path: reference/templates/SOUL.dev.md

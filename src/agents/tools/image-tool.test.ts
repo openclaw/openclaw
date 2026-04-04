@@ -274,7 +274,7 @@ function createMinimaxImageConfig(): OpenClawConfig {
 function createDefaultImageFallbackExpectation(primary: string) {
   return {
     primary,
-    fallbacks: ["openai/gpt-5-mini", "anthropic/claude-opus-4-5"],
+    fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
   };
 }
 
@@ -487,7 +487,7 @@ describe("image tool implicit imageModel config", () => {
   it("stays disabled without auth when no pairing is possible", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
       expect(createImageTool({ config: cfg, agentDir })).toBeNull();
@@ -618,12 +618,12 @@ describe("image tool implicit imageModel config", () => {
         agents: {
           defaults: {
             model: { primary: "minimax/MiniMax-M2.7" },
-            imageModel: { primary: "openai/gpt-5-mini" },
+            imageModel: { primary: "openai/gpt-5.4-mini" },
           },
         },
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5-mini",
+        primary: "openai/gpt-5.4-mini",
       });
     });
   });
@@ -638,7 +638,7 @@ describe("image tool implicit imageModel config", () => {
         agents: {
           defaults: {
             model: { primary: "acme/vision-1" },
-            imageModel: { primary: "openai/gpt-5-mini" },
+            imageModel: { primary: "openai/gpt-5.4-mini" },
           },
         },
         models: {
@@ -652,7 +652,7 @@ describe("image tool implicit imageModel config", () => {
       };
       // Tool should still be available for explicit image analysis requests
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
-        primary: "openai/gpt-5-mini",
+        primary: "openai/gpt-5.4-mini",
       });
       const tool = createImageTool({ config: cfg, agentDir, modelHasVision: true });
       expect(tool).not.toBeNull();
@@ -1229,7 +1229,7 @@ describe("image tool response validation", () => {
       role: "assistant",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5-mini",
+      model: "gpt-5.4-mini",
       stopReason: "stop",
       timestamp: Date.now(),
       usage: makeZeroUsageSnapshot(),
@@ -1278,7 +1278,7 @@ describe("image tool response validation", () => {
     expect(() =>
       __testing.coerceImageAssistantText({
         provider: "openai",
-        model: "gpt-5-mini",
+        model: "gpt-5.4-mini",
         message,
       }),
     ).toThrow(expectedError);
@@ -1287,12 +1287,12 @@ describe("image tool response validation", () => {
   it("returns trimmed text from image-model responses", () => {
     const text = __testing.coerceImageAssistantText({
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
       message: {
         ...createAssistantMessage({
           api: "anthropic-messages",
           provider: "anthropic",
-          model: "claude-opus-4-5",
+          model: "claude-opus-4-6",
         }),
         content: [{ type: "text", text: "  hello  " }],
       } as never,

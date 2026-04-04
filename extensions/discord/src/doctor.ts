@@ -1,12 +1,11 @@
 import {
   type ChannelDoctorAdapter,
   type ChannelDoctorConfigMutation,
-  type ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import { type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { collectProviderDangerousNameMatchingScopes } from "openclaw/plugin-sdk/runtime";
+import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
-import { isDiscordMutableAllowEntry } from "./security-audit.js";
 
 type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
@@ -24,6 +23,27 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
 
 function sanitizeForLog(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+}
+
+function isDiscordMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+
+  const maybeMentionId = text.replace(/^<@!?/, "").replace(/>$/, "");
+  if (/^\d+$/.test(maybeMentionId)) {
+    return false;
+  }
+
+  for (const prefix of ["discord:", "user:", "pk:"]) {
+    if (!text.startsWith(prefix)) {
+      continue;
+    }
+    return text.slice(prefix.length).trim().length === 0;
+  }
+
+  return true;
 }
 
 function normalizeDiscordDmAliases(params: {
@@ -513,42 +533,6 @@ function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
     `- Option B (recommended): resolve names to stable Discord IDs and rewrite the allowlist entries.`,
   ];
 }
-
-function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  return (
-    entry.streamMode !== undefined ||
-    typeof entry.streaming === "boolean" ||
-    (typeof entry.streaming === "string" &&
-      entry.streaming !== resolveDiscordPreviewStreamMode(entry))
-  );
-}
-
-function hasLegacyDiscordAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyDiscordStreamingAliases(account));
-}
-
-const DISCORD_LEGACY_CONFIG_RULES: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "discord"],
-    message:
-      "channels.discord.streamMode and boolean channels.discord.streaming are legacy; use channels.discord.streaming.",
-    match: hasLegacyDiscordStreamingAliases,
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      "channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming.",
-    match: hasLegacyDiscordAccountStreamingAliases,
-  },
-];
 
 export const discordDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "topOrNested",

@@ -6,7 +6,7 @@ summary: 使用 apply_patch 工具应用多文件补丁
 title: apply_patch 工具
 x-i18n:
   generated_at: "2026-02-01T21:39:24Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8cec2b4ee3afa9105fc3dd1bc28a338917df129afc634ac83620a3347c46bcec
   source_path: tools/apply-patch.md

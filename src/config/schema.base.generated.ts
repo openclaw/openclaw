@@ -21043,7 +21043,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.exec.applyPatch.allowModels": {
       label: "apply_patch Model Allowlist",
-      help: 'Optional allowlist of model ids (e.g. "gpt-5.2" or "openai/gpt-5.2").',
+      help: 'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
       tags: ["access", "tools"],
     },
     "tools.loopDetection.enabled": {
@@ -24496,6 +24496,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.3",
+  version: "2026.4.4",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

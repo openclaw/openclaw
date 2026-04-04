@@ -6,7 +6,7 @@ summary: 通过 signal-cli（JSON-RPC + SSE）支持 Signal，设置和号码模
 title: Signal
 x-i18n:
   generated_at: "2026-02-03T07:44:15Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: ca4de8b3685017f54a959e3e2699357ab40b3e4e68574bd7fb5739e4679e7d8a
   source_path: channels/signal.md

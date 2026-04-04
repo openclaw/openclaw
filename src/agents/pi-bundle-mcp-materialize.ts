@@ -68,8 +68,19 @@ export async function materializeBundleMcpToolsForRun(params: {
   const catalog = await params.runtime.getCatalog();
   const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const tools: BundleMcpToolRuntime["tools"] = [];
+  const sortedCatalogTools = [...catalog.tools].toSorted((a, b) => {
+    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+    if (serverOrder !== 0) {
+      return serverOrder;
+    }
+    const toolOrder = a.toolName.localeCompare(b.toolName);
+    if (toolOrder !== 0) {
+      return toolOrder;
+    }
+    return a.serverName.localeCompare(b.serverName);
+  });
 
-  for (const tool of catalog.tools) {
+  for (const tool of sortedCatalogTools) {
     const originalName = tool.toolName.trim();
     if (!originalName) {
       continue;

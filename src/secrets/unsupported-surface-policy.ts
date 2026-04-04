@@ -1,4 +1,5 @@
-import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
+import { fileURLToPath } from "node:url";
+import { createJiti } from "jiti";
 import { isRecord } from "../utils.js";
 
 type ChannelUnsupportedSecretRefSurface = {
@@ -16,8 +17,37 @@ const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
   "auth-profiles.oauth.*",
 ] as const;
 
+type BundledChannelContractSurfacesModule = {
+  getBundledChannelContractSurfaces?: () => unknown[];
+};
+
+const CONTRACT_SURFACES_MODULE_PATH = fileURLToPath(
+  new URL("../channels/plugins/contract-surfaces.js", import.meta.url),
+);
+let bundledChannelContractSurfacesModule: BundledChannelContractSurfacesModule | null | undefined;
+let bundledChannelContractSurfacesLoader: ReturnType<typeof createJiti> | undefined;
+
+function loadBundledChannelContractSurfacesModule(): BundledChannelContractSurfacesModule | null {
+  if (bundledChannelContractSurfacesModule !== undefined) {
+    return bundledChannelContractSurfacesModule;
+  }
+  try {
+    bundledChannelContractSurfacesLoader ??= createJiti(import.meta.url, { interopDefault: true });
+    bundledChannelContractSurfacesModule = bundledChannelContractSurfacesLoader(
+      CONTRACT_SURFACES_MODULE_PATH,
+    ) as BundledChannelContractSurfacesModule;
+  } catch {
+    bundledChannelContractSurfacesModule = null;
+  }
+  return bundledChannelContractSurfacesModule;
+}
+
 function listChannelUnsupportedSecretRefSurfaces(): ChannelUnsupportedSecretRefSurface[] {
-  return getBundledChannelContractSurfaces() as ChannelUnsupportedSecretRefSurface[];
+  const module = loadBundledChannelContractSurfacesModule();
+  if (typeof module?.getBundledChannelContractSurfaces !== "function") {
+    return [];
+  }
+  return module.getBundledChannelContractSurfaces() as ChannelUnsupportedSecretRefSurface[];
 }
 
 function collectChannelUnsupportedSecretRefSurfacePatterns(): string[] {
@@ -84,12 +114,14 @@ export function collectUnsupportedSecretRefConfigCandidates(
     }
   }
 
-  for (const surface of listChannelUnsupportedSecretRefSurfaces()) {
-    const channelCandidates = surface.collectUnsupportedSecretRefConfigCandidates?.(raw);
-    if (!channelCandidates?.length) {
-      continue;
+  if (isRecord(raw.channels)) {
+    for (const surface of listChannelUnsupportedSecretRefSurfaces()) {
+      const channelCandidates = surface.collectUnsupportedSecretRefConfigCandidates?.(raw);
+      if (!channelCandidates?.length) {
+        continue;
+      }
+      candidates.push(...channelCandidates);
     }
-    candidates.push(...channelCandidates);
   }
 
   return candidates;

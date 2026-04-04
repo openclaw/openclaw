@@ -22,6 +22,7 @@ Related:
 ```bash
 openclaw memory status
 openclaw memory status --deep
+openclaw memory status --fix
 openclaw memory index --force
 openclaw memory search "meeting notes"
 openclaw memory search --query "deployment" --max-results 20
@@ -46,6 +47,7 @@ openclaw memory index --agent main --verbose
 
 - `--deep`: probe vector + embedding availability.
 - `--index`: run a reindex if the store is dirty (implies `--deep`).
+- `--fix`: repair stale recall locks and normalize promotion metadata.
 - `--json`: print JSON output.
 
 `memory index`:

@@ -84,12 +84,12 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
           },
         } as never,
         {
-          model: "gpt-5.2",
+          model: "gpt-5.4",
         },
       ),
     ).toEqual({
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
     });
   });
 });
