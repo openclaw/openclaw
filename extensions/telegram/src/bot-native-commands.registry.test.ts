@@ -57,6 +57,7 @@ function createTelegramPluginRegistry() {
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
+    videoGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
     gatewayHandlers: {},
