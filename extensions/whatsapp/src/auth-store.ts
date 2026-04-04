@@ -45,6 +45,23 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
       return;
     }
 
+    // readCredsJsonRaw returns null when the file is missing, empty, or
+    // unreadable.  When the file *exists* but is empty/truncated (size <= 1),
+    // this is almost certainly a transient state caused by a concurrent
+    // saveCreds() write — not actual corruption.  Restoring from backup in
+    // that situation overwrites the in-progress write and emits a noisy WARN
+    // on every startup/reconnect (see #60625).  Skip the restore when the
+    // file exists on disk so the pending write can complete normally.
+    try {
+      const stats = fsSync.statSync(credsPath);
+      if (stats.isFile()) {
+        return;
+      }
+    } catch {
+      // statSync throws when the file is truly absent — fall through to
+      // the backup-restore path below.
+    }
+
     const backupRaw = readCredsJsonRaw(backupPath);
     if (!backupRaw) {
       return;
