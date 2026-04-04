@@ -1,5 +1,5 @@
-import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 import { resolveLegacyAuthChoiceAliasesForCli } from "./auth-choice-legacy.js";
+import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
 export type { AuthChoiceGroupId };
 
