@@ -618,6 +618,11 @@ export function createImageGenerateTool(options?: {
         .filter((entry): entry is string => Boolean(entry));
       const lines = [
         `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
+        // Expose the saved paths so the model sees the actual file locations and
+        // does not hallucinate a different path (e.g. media/output/<name>.png)
+        // when referencing the image in its reply.  Delivery is driven by
+        // details.media.mediaUrls; these MEDIA: lines are informational only.
+        ...savedImages.map((image) => `MEDIA:${image.path}`),
       ];
 
       return {

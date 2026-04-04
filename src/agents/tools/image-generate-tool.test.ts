@@ -364,8 +364,66 @@ describe("createImageGenerateTool", () => {
         revisedPrompts: ["A more cinematic cat"],
       },
     });
+    // The content text must include MEDIA: paths so the model sees the actual
+    // saved locations and does not hallucinate a wrong path in its reply.
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
-    expect(text).not.toContain("MEDIA:");
+    expect(text).toContain("MEDIA:/tmp/generated-1.png");
+    expect(text).toContain("MEDIA:/tmp/generated-2.png");
+  });
+
+  it("includes MEDIA: path in content text so model does not hallucinate a wrong path (regression #61029)", async () => {
+    // Regression test: before the fix the content text had no MEDIA: line, so
+    // the model would guess a path like "media/output/<name>.png" which does not
+    // exist and triggers LocalMediaAccessError on delivery.
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("jpg-data"),
+          mimeType: "image/jpeg",
+          fileName: "kodo_sawaki_zazen.jpg",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      id: "kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      size: 8,
+      contentType: "image/jpeg",
+    });
+
+    const tool = createImageGenerateTool({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "google/gemini-3.1-flash-image-preview" },
+          },
+        },
+      },
+    });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image_generate tool");
+    }
+
+    const result = await tool.execute("call-reg", { prompt: "kodo sawaki zazen" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+
+    // Content text must contain the actual saved path so the model does not
+    // hallucinate media/output/<name>.png or any other wrong path.
+    expect(text).toContain(
+      "MEDIA:/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+    );
+    // The structured delivery path must also be correct.
+    expect(result.details).toMatchObject({
+      media: {
+        mediaUrls: [
+          "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+        ],
+      },
+    });
   });
 
   it("rejects counts outside the supported range", async () => {
