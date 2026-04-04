@@ -75,7 +75,7 @@ Not all providers support all parameters. The tool passes what each provider sup
   agents: {
     defaults: {
       // String form: primary model only
-      imageGenerationModel: "google/gemini-3-pro-image-preview",
+      imageGenerationModel: "google/gemini-3.1-flash-image-preview",
 
       // Object form: primary + ordered fallbacks
       imageGenerationModel: {
@@ -94,9 +94,18 @@ When generating an image, OpenClaw tries providers in this order:
 1. **`model` parameter** from the tool call (if the agent specifies one)
 2. **`imageGenerationModel.primary`** from config
 3. **`imageGenerationModel.fallbacks`** in order
-4. **Auto-detection** — queries all registered providers for defaults, preferring: configured primary provider, then OpenAI, then Google, then others
+4. **Auto-detection** — uses auth-backed provider defaults only:
+   - current default provider first
+   - remaining registered image-generation providers in provider-id order
 
 If a provider fails (auth error, rate limit, etc.), the next candidate is tried automatically. If all fail, the error includes details from each attempt.
+
+Notes:
+
+- Auto-detection is auth-aware. A provider default only enters the candidate list
+  when OpenClaw can actually authenticate that provider.
+- Use `action: "list"` to inspect the currently registered providers, their
+  default models, and auth env-var hints.
 
 ### Image editing
 
