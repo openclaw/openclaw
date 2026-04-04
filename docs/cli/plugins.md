@@ -62,6 +62,7 @@ openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
 openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
+openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 ```
 
 Bare package names are checked against ClawHub first, then npm. Security note:
@@ -70,6 +71,10 @@ treat plugin installs like running code. Prefer pinned versions.
 `--force` reuses the existing install target and overwrites an already-installed
 plugin or hook pack in place. Use it when you are intentionally reinstalling
 the same id from a new local path, archive, ClawHub package, or npm artifact.
+
+`--pin` applies to npm installs only. It is not supported with `--marketplace`,
+because marketplace installs persist marketplace source metadata instead of an
+npm spec.
 
 `--dangerously-force-unsafe-install` is a break-glass option for false positives
 in the built-in dangerous-code scanner. It allows the install to continue even
@@ -135,6 +140,7 @@ Use `--marketplace` when you want to pass the marketplace source explicitly:
 ```bash
 openclaw plugins install <plugin-name> --marketplace <marketplace-name>
 openclaw plugins install <plugin-name> --marketplace <owner/repo>
+openclaw plugins install <plugin-name> --marketplace https://github.com/<owner>/<repo>
 openclaw plugins install <plugin-name> --marketplace ./my-marketplace
 ```
 
@@ -143,11 +149,12 @@ Marketplace sources can be:
 - a Claude known-marketplace name from `~/.claude/plugins/known_marketplaces.json`
 - a local marketplace root or `marketplace.json` path
 - a GitHub repo shorthand such as `owner/repo`
+- a GitHub repo URL such as `https://github.com/owner/repo`
 - a git URL
 
 For remote marketplaces loaded from GitHub or git, plugin entries must stay
 inside the cloned marketplace repo. OpenClaw accepts relative path sources from
-that repo and rejects external git, GitHub, URL/archive, and absolute-path
+that repo and rejects HTTP(S), absolute-path, git, GitHub, and other non-path
 plugin sources from remote manifests.
 
 For local paths and archives, OpenClaw auto-detects:
@@ -288,5 +295,6 @@ openclaw plugins marketplace list <source> --json
 ```
 
 Marketplace list accepts a local marketplace path, a `marketplace.json` path, a
-GitHub shorthand like `owner/repo`, or a git URL. `--json` prints the resolved
-source label plus the parsed marketplace manifest and plugin entries.
+GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json`
+prints the resolved source label plus the parsed marketplace manifest and
+plugin entries.

@@ -217,6 +217,7 @@ openclaw plugins install <spec> --force    # overwrite existing install
 openclaw plugins install <path>            # install from local path
 openclaw plugins install -l <path>         # link (no copy) for dev
 openclaw plugins install <plugin> --marketplace <source>
+openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 openclaw plugins install <spec> --pin      # record exact resolved npm spec
 openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id>             # update one plugin
@@ -239,6 +240,9 @@ plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 It is not supported with `--link`, which reuses the source path instead of
 copying over a managed install target.
 
+`--pin` is npm-only. It is not supported with `--marketplace`, because
+marketplace installs persist marketplace source metadata instead of an npm spec.
+
 `--dangerously-force-unsafe-install` is a break-glass override for false
 positives from the built-in dangerous-code scanner. It allows plugin installs
 and plugin updates to continue past built-in `critical` findings, but it still
@@ -257,6 +261,12 @@ directories.
 
 `openclaw plugins inspect <id>` also reports detected bundle capabilities plus
 supported or unsupported MCP and LSP server entries for bundle-backed plugins.
+
+Marketplace sources can be a Claude known-marketplace name from
+`~/.claude/plugins/known_marketplaces.json`, a local marketplace root or
+`marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo
+URL, or a git URL. For remote marketplaces, plugin entries must stay inside the
+cloned marketplace repo and use relative path sources only.
 
 See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 

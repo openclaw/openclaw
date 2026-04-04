@@ -410,11 +410,17 @@ openclaw plugins install @myorg/openclaw-my-plugin
 ```
 
 OpenClaw tries ClawHub first and falls back to npm automatically. You can also
-force a specific source:
+force ClawHub explicitly:
 
 ```bash
 openclaw plugins install clawhub:@myorg/openclaw-my-plugin   # ClawHub only
-openclaw plugins install npm:@myorg/openclaw-my-plugin       # npm only
+```
+
+There is no matching `npm:` override. Use the normal npm package spec when you
+want the npm path after ClawHub fallback:
+
+```bash
+openclaw plugins install @myorg/openclaw-my-plugin
 ```
 
 **In-repo plugins:** place under the bundled plugin workspace tree and they are automatically
