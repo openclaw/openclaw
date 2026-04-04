@@ -651,43 +651,47 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("ignores configured fs roots for sandboxed outbound media delivery", async () => {
-    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const sandboxStateDir = path.join("/tmp", "openclaw-sandbox-deliver-media-roots");
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: sandboxStateDir }, async () => {
-      await deliverTelegramPayload({
-        sendTelegram,
-        cfg: {
-          channels: { telegram: {} },
-          tools: {
-            fs: {
-              roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
-            },
+    vi.stubEnv("OPENCLAW_STATE_DIR", sandboxStateDir);
+
+    await deliverOutboundPayloads({
+      cfg: {
+        channels: { whatsapp: {} },
+        tools: {
+          fs: {
+            roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
           },
-          agents: {
-            defaults: {
-              sandbox: {
-                mode: "all",
-              },
+        },
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
             },
           },
         },
-        session: { key: "agent:main:main", agentId: "main" },
-        payload: {
+      },
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [
+        {
           text: "hi",
           mediaUrl: path.join(sandboxStateDir, "sandboxes", "main", "image.png"),
         },
-      });
+      ],
+      deps: { whatsapp: sendWhatsApp },
+      session: { key: "agent:main:main", agentId: "main" },
     });
 
-    expect(sendTelegram).toHaveBeenCalledWith(
-      "123",
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
       "hi",
       expect.objectContaining({
         mediaLocalRoots: expect.arrayContaining([path.join(sandboxStateDir, "sandboxes")]),
       }),
     );
-    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
+    const sendOpts = sendWhatsApp.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
     expect(sendOpts?.mediaLocalRoots).not.toContain(path.resolve("/packs/shared"));
   });
 
