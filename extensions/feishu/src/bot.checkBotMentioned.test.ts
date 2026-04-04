@@ -50,6 +50,20 @@ function makeShareChatEvent(content: unknown): FeishuMessageEvent {
   };
 }
 
+function makeInteractiveEvent(content: unknown): FeishuMessageEvent {
+  return {
+    sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+    message: {
+      message_id: "msg_1",
+      chat_id: "oc_chat1",
+      chat_type: "group",
+      message_type: "interactive",
+      content: JSON.stringify(content),
+      mentions: [],
+    },
+  };
+}
+
 describe("parseFeishuMessageEvent – mentionedBot", () => {
   const BOT_OPEN_ID = "ou_bot_123";
 
@@ -189,5 +203,24 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     });
     const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
+  });
+
+  it("extracts header and element text from interactive cards", () => {
+    const event = makeInteractiveEvent({
+      card: {
+        header: { title: { content: "Weekly Report" }, template: "blue" },
+        body: {
+          elements: [
+            { tag: "markdown", content: "## Progress" },
+            { tag: "div", text: { content: "Finished feature A" } },
+            { tag: "button", text: { content: "Approve" } },
+          ],
+        },
+      },
+    });
+
+    const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
+    expect(ctx.content).toBe("Weekly Report\n## Progress\nFinished feature A\nApprove");
+    expect(ctx.rawContent).toBe(event.message.content);
   });
 });

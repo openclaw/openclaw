@@ -2677,4 +2677,68 @@ describe("handleFeishuMessage command authorization", () => {
     await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
+
+  it("fetches full interactive card content and forwards raw card JSON in context", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "msg-interactive-1",
+      chatId: "oc-dm",
+      contentType: "interactive",
+      content: "Weekly Report\nCompleted A\nApprove",
+      rawContent: JSON.stringify({
+        header: { title: { content: "Weekly Report" }, template: "blue" },
+        body: {
+          elements: [
+            { tag: "div", text: { content: "Completed A" } },
+            { tag: "button", text: { content: "Approve" }, value: { action: "approve" } },
+          ],
+        },
+      }),
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-card-user",
+        },
+      },
+      message: {
+        message_id: "msg-interactive-1",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "interactive",
+        content: JSON.stringify({ text: "[Interactive Card]" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith({
+      cfg,
+      messageId: "msg-interactive-1",
+      accountId: "default",
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        CommandBody: "Weekly Report\nCompleted A\nApprove",
+        RawBody: JSON.stringify({
+          header: { title: { content: "Weekly Report" }, template: "blue" },
+          body: {
+            elements: [
+              { tag: "div", text: { content: "Completed A" } },
+              { tag: "button", text: { content: "Approve" }, value: { action: "approve" } },
+            ],
+          },
+        }),
+      }),
+    );
+  });
 });

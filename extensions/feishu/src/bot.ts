@@ -43,6 +43,7 @@ import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
+import { isInteractiveCardPlaceholder, parseInteractiveCardPayload } from "./interactive-card.js";
 import {
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
@@ -166,6 +167,7 @@ export function parseFeishuMessageEvent(
     parentId: event.message.parent_id || undefined,
     threadId: event.message.thread_id || undefined,
     content,
+    rawContent: event.message.content,
     contentType: event.message.message_type,
   };
 
@@ -184,7 +186,8 @@ export function buildFeishuAgentBody(params: {
   ctx: Pick<
     FeishuMessageContext,
     "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId" | "hasAnyMention"
-  >;
+  > &
+    Partial<Pick<FeishuMessageContext, "contentType" | "rawContent">>;
   quotedContent?: string;
   permissionErrorForAgent?: FeishuPermissionError;
   botOpenId?: string;
@@ -212,6 +215,11 @@ export function buildFeishuAgentBody(params: {
   if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
     const targetNames = ctx.mentionTargets.map((t) => t.name).join(", ");
     messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
+  }
+  if (ctx.contentType === "interactive" && ctx.rawContent) {
+    messageBody +=
+      "\n\n[System: Raw Feishu interactive card JSON follows. Parse this JSON for card metadata/actions when needed.]\n" +
+      ctx.rawContent;
   }
 
   // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
@@ -370,6 +378,30 @@ export async function handleFeishuMessage(params: {
     } catch (err) {
       log(`feishu[${account.accountId}]: merge_forward fetch failed: ${String(err)}`);
       ctx = { ...ctx, content: "[Merged and Forwarded Message - fetch error]" };
+    }
+  }
+  if (event.message.message_type === "interactive") {
+    try {
+      const interactive = await getMessageFeishu({
+        cfg,
+        messageId: event.message.message_id,
+        accountId: account.accountId,
+      });
+      if (interactive?.contentType === "interactive") {
+        const nextContent =
+          !isInteractiveCardPlaceholder(interactive.content) || isInteractiveCardPlaceholder(ctx.content)
+            ? interactive.content
+            : ctx.content;
+        const parsed = parseInteractiveCardPayload(interactive.rawContent ?? "");
+        const nextRawCardJson = parsed.rawCardJson ?? interactive.rawContent ?? ctx.rawContent;
+        ctx = {
+          ...ctx,
+          content: nextContent,
+          rawContent: nextRawCardJson ?? ctx.rawContent,
+        };
+      }
+    } catch (err) {
+      log(`feishu[${account.accountId}]: interactive card fetch failed: ${String(err)}`);
     }
   }
 
@@ -1028,7 +1060,7 @@ export async function handleFeishuMessage(params: {
         InboundHistory: inboundHistory,
         ReplyToId: ctx.parentId,
         RootMessageId: ctx.rootId,
-        RawBody: ctx.content,
+        RawBody: ctx.rawContent ?? ctx.content,
         CommandBody: ctx.content,
         From: feishuFrom,
         To: feishuTo,

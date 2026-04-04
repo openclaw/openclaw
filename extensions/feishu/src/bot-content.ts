@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { parseInteractiveCardPayload } from "./interactive-card.js";
 import { downloadMessageResourceFeishu } from "./media.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -127,6 +128,9 @@ export function resolveFeishuGroupSession(params: {
 export function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
     return parsePostContent(content).textContent;
+  }
+  if (messageType === "interactive") {
+    return parseInteractiveCardPayload(content).text;
   }
 
   try {

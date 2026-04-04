@@ -1,6 +1,7 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { parseInteractiveCardPayload } from "./interactive-card.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
@@ -97,6 +98,11 @@ type FeishuGetMessageResponse = {
   };
 };
 
+type FeishuMessageGetRequestWithRawCard = {
+  path: { message_id: string };
+  params?: { raw_card_content?: boolean };
+};
+
 /** Send a direct message as a fallback when a reply target is unavailable. */
 async function sendFallbackDirect(
   client: FeishuCreateMessageClient,
@@ -176,43 +182,6 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
-  if (!parsed || typeof parsed !== "object") {
-    return "[Interactive Card]";
-  }
-
-  // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
-  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
-  const elements = Array.isArray(candidate.elements)
-    ? candidate.elements
-    : Array.isArray(candidate.body?.elements)
-      ? candidate.body!.elements
-      : null;
-  if (!elements) {
-    return "[Interactive Card]";
-  }
-
-  const texts: string[] = [];
-  for (const element of elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
-    }
-  }
-  return texts.join("\n").trim() || "[Interactive Card]";
-}
-
 function parseFeishuMessageContent(rawContent: string, msgType: string): string {
   if (!rawContent) {
     return "";
@@ -235,7 +204,7 @@ function parseFeishuMessageContent(rawContent: string, msgType: string): string 
   }
 
   if (msgType === "interactive") {
-    return parseInteractiveCardContent(parsed);
+    return parseInteractiveCardPayload(rawContent).text;
   }
 
   if (typeof parsed === "string") {
@@ -272,6 +241,7 @@ function parseFeishuMessageItem(
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
+    rawContent,
     contentType: msgType,
     createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
     threadId: item.thread_id || undefined,
@@ -294,11 +264,15 @@ export async function getMessageFeishu(params: {
   }
 
   const client = createFeishuClient(account);
+  const getMessageWithRawCard = client.im.message.get as unknown as (
+    opts: FeishuMessageGetRequestWithRawCard,
+  ) => Promise<FeishuGetMessageResponse>;
 
   try {
-    const response = (await client.im.message.get({
+    const response = await getMessageWithRawCard({
       path: { message_id: messageId },
-    })) as FeishuGetMessageResponse;
+      params: { raw_card_content: true },
+    });
 
     if (response.code !== 0) {
       return null;
