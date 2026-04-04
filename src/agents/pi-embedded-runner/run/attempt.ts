@@ -91,6 +91,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { stripSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
@@ -228,6 +229,13 @@ export function resolveEmbeddedAgentStreamFn(params: {
 }): StreamFn {
   if (params.providerStreamFn) {
     const inner = params.providerStreamFn;
+    const normalizeContext = (context: Parameters<StreamFn>[1]) =>
+      context.systemPrompt
+        ? {
+            ...context,
+            systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
+          }
+        : context;
     // Provider-owned transports bypass pi-coding-agent's default auth lookup,
     // so keep injecting the resolved runtime apiKey for streamSimple-compatible
     // transports that still read credentials from options.apiKey.
@@ -235,10 +243,13 @@ export function resolveEmbeddedAgentStreamFn(params: {
       const { authStorage, model } = params;
       return async (m, context, options) => {
         const apiKey = await authStorage.getApiKey(model.provider);
-        return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
+        return inner(m, normalizeContext(context), {
+          ...options,
+          apiKey: apiKey ?? options?.apiKey,
+        });
       };
     }
-    return inner;
+    return (m, context, options) => inner(m, normalizeContext(context), options);
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;

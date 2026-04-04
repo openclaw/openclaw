@@ -8,6 +8,7 @@ import {
   wrapOllamaCompatNumCtx,
 } from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   buildAfterTurnRuntimeContext,
@@ -245,6 +246,34 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       streamFn({ provider: "demo-provider", id: "demo-model" } as never, {} as never, {}),
     ).resolves.toMatchObject({
       apiKey: "demo-runtime-key",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("strips the internal cache boundary before provider-owned stream calls", async () => {
+    const providerStreamFn = vi.fn(async (_model, context) => context);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "demo-provider",
+        id: "demo-model",
+      } as never,
+    });
+
+    await expect(
+      streamFn(
+        { provider: "demo-provider", id: "demo-model" } as never,
+        {
+          systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        } as never,
+        {},
+      ),
+    ).resolves.toMatchObject({
+      systemPrompt: "Stable prefix\nDynamic suffix",
     });
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
