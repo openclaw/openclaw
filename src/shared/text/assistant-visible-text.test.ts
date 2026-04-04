@@ -160,5 +160,25 @@ describe("stripAssistantInternalScaffolding", () => {
       ].join("\n");
       expectVisibleText(input, expected);
     });
+
+    it("preserves special tokens inside fenced code blocks", () => {
+      const input = [
+        "Here are the model tokens:",
+        "",
+        "```",
+        "<|assistant|>Hello<|end|>",
+        "```",
+        "",
+        "As you can see above.",
+      ].join("\n");
+      expectVisibleText(input, input);
+    });
+
+    it("preserves special tokens inside inline code spans", () => {
+      expectVisibleText(
+        "The token `<|assistant|>` marks the start.",
+        "The token `<|assistant|>` marks the start.",
+      );
+    });
   });
 });
