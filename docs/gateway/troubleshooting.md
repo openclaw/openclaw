@@ -183,7 +183,7 @@ openclaw gateway status
 openclaw status
 openclaw logs --follow
 openclaw doctor
-openclaw gateway status --deep
+openclaw gateway status --deep   # also scan system-level services
 ```
 
 Look for:
@@ -191,6 +191,7 @@ Look for:
 - `Runtime: stopped` with exit hints.
 - Service config mismatch (`Config (cli)` vs `Config (service)`).
 - Port/listener conflicts.
+- Extra launchd/systemd/schtasks installs when `--deep` is used.
 
 Common signatures:
 

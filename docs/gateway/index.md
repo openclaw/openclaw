@@ -127,7 +127,7 @@ All of these run on the main Gateway port and use the same trusted operator auth
 
 ```bash
 openclaw gateway status
-openclaw gateway status --deep
+openclaw gateway status --deep   # adds a system-level service scan
 openclaw gateway status --json
 openclaw gateway install
 openclaw gateway restart
@@ -136,6 +136,9 @@ openclaw secrets reload
 openclaw logs --follow
 openclaw doctor
 ```
+
+`gateway status --deep` is for extra service discovery (LaunchDaemons/systemd system
+units/schtasks), not a deeper RPC health probe.
 
 ## Remote access
 

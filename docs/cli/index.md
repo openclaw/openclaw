@@ -1452,6 +1452,11 @@ Subcommands:
 - `gateway install|uninstall|start|stop|restart`
 - `gateway run`
 
+Notes:
+
+- `gateway status --deep` adds a system-level service scan. Use `gateway probe`,
+  `health --verbose`, or top-level `status --deep` for deeper runtime probe detail.
+
 Common RPCs:
 
 - `config.set` (validate + write full config; use `baseHash` for optimistic concurrency)
