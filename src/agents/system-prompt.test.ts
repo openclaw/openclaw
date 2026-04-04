@@ -697,8 +697,54 @@ describe("buildAgentSystemPrompt", () => {
     expect(line).toContain("model=anthropic/claude");
     expect(line).toContain("default_model=anthropic/claude-opus-4-5");
     expect(line).toContain("channel=telegram");
-    expect(line).toContain("capabilities=inlineButtons");
+    expect(line).toContain("capabilities=inlinebuttons");
     expect(line).toContain("thinking=low");
+  });
+
+  it("normalizes runtime capability ordering and casing for cache stability", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+      },
+      "telegram",
+      [" React ", "inlineButtons", "react"],
+      "low",
+    );
+
+    expect(line).toContain("capabilities=inlinebuttons,react");
+  });
+
+  it("keeps semantically equivalent structured prompt inputs byte-stable", () => {
+    const clean = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: ["inlinebuttons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+      heartbeatPrompt: "ping",
+      extraSystemPrompt: "Group chat context\nSecond line",
+      workspaceNotes: ["Reminder: keep commits scoped."],
+      modelAliasLines: ["- Sonnet: anthropic/claude-sonnet-4-5"],
+    });
+    const noisy = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "telegram",
+        capabilities: [" react ", "inlineButtons", "react"],
+      },
+      skillsPrompt:
+        "<available_skills>\r\n  <skill>  \r\n    <name>demo</name>\t\r\n  </skill>\r\n</available_skills>\r\n",
+      heartbeatPrompt: " ping  \r\n",
+      extraSystemPrompt: "  Group chat context  \r\nSecond line \t\r\n",
+      workspaceNotes: ["  Reminder: keep commits scoped. \t\r\n"],
+      modelAliasLines: ["  - Sonnet: anthropic/claude-sonnet-4-5 \t\r\n"],
+    });
+
+    expect(noisy).toBe(clean);
+    expect(noisy).not.toContain("\r");
+    expect(noisy).not.toMatch(/[ \t]+$/m);
   });
 
   it("describes sandboxed runtime and elevated when allowed", () => {

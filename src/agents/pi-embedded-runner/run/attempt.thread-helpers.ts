@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -8,13 +9,19 @@ export function composeSystemPromptWithHookContext(params: {
   prependSystemContext?: string;
   appendSystemContext?: string;
 }): string | undefined {
-  const prependSystem = params.prependSystemContext?.trim();
-  const appendSystem = params.appendSystemContext?.trim();
+  const prependSystem =
+    typeof params.prependSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.prependSystemContext)
+      : "";
+  const appendSystem =
+    typeof params.appendSystemContext === "string"
+      ? normalizeStructuredPromptSection(params.appendSystemContext)
+      : "";
   if (!prependSystem && !appendSystem) {
     return undefined;
   }
   return joinPresentTextSegments(
-    [params.prependSystemContext, params.baseSystemPrompt, params.appendSystemContext],
+    [prependSystem, params.baseSystemPrompt, appendSystem],
     { trim: true },
   );
 }
