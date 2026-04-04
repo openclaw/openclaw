@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 
-// ---------------------------------------------------------------------------
-// Hoisted mocks – these must be declared before any vi.mock() calls so the
-// mock factories can reference them.
-// ---------------------------------------------------------------------------
 const state = vi.hoisted(() => ({
   runWithModelFallbackMock: vi.fn(),
   runAgentAttemptMock: vi.fn(),
@@ -15,9 +11,6 @@ const state = vi.hoisted(() => ({
   deliverAgentCommandResultMock: vi.fn(),
 }));
 
-// ---------------------------------------------------------------------------
-// Module mocks
-// ---------------------------------------------------------------------------
 vi.mock("./model-fallback.js", () => ({
   runWithModelFallback: (params: unknown) => state.runWithModelFallbackMock(params),
 }));
@@ -269,16 +262,12 @@ vi.mock("./workspace.js", () => ({
   ensureAgentWorkspace: async () => ({ dir: "/tmp/workspace" }),
 }));
 
-// ACP session manager mock – resolveSession returns null (non-ACP path).
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     resolveSession: () => null,
   }),
 }));
 
-// ---------------------------------------------------------------------------
-// Test suite
-// ---------------------------------------------------------------------------
 async function getAgentCommand() {
   return (await import("./agent-command.js")).agentCommand;
 }
@@ -317,14 +306,11 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       invocation += 1;
       if (invocation === 1) {
-        // First invocation: simulate the embedded runner detecting a live
-        // session model switch and throwing LiveSessionModelSwitchError.
         throw new LiveSessionModelSwitchError({
           provider: "openai",
           model: "gpt-5.4",
         });
       }
-      // Second invocation: succeed with the switched model.
       const result = await params.run(params.provider, params.model);
       return {
         result,
@@ -343,9 +329,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       senderIsOwner: true,
     });
 
-    // runWithModelFallback should have been called twice:
-    // 1st time with the default provider/model (throws LiveSessionModelSwitchError)
-    // 2nd time with the switched provider/model
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
     const secondCall = state.runWithModelFallbackMock.mock.calls[1]?.[0] as
@@ -382,7 +365,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       }),
     ).rejects.toThrow("provider down");
 
-    // Verify that a lifecycle error event was emitted.
     const lifecycleErrorCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
       return arg?.stream === "lifecycle" && arg?.data?.phase === "error";
@@ -418,8 +400,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       senderIsOwner: true,
     });
 
-    // After successful retry, a lifecycle "end" event should be emitted
-    // (not an "error" event from the first iteration's switch).
     const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
       return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
@@ -433,7 +413,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       invocation += 1;
       if (invocation === 1) {
-        // First invocation: switch includes an auth profile change.
         throw new LiveSessionModelSwitchError({
           provider: "openai",
           model: "gpt-5.4",
@@ -441,7 +420,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           authProfileIdSource: "user",
         });
       }
-      // Second invocation: succeed with the switched model.
       const result = await params.run(params.provider, params.model);
       return {
         result,
@@ -464,11 +442,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       senderIsOwner: true,
     });
 
-    // The retried attempt must receive the switched provider for auth profile
-    // validation, not the original default provider.
     expect(capturedAuthProfileProvider).toBe("openai");
-
-    // runWithModelFallback should have been called twice.
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
   });
 
@@ -501,12 +475,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       senderIsOwner: true,
     });
 
-    // First call: no session override (initial state).
     expect(resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
     expect(resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
       hasSessionModelOverride: false,
     });
-    // Second call (retry): session now has a model override from the switch.
     expect(resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
       hasSessionModelOverride: true,
     });
@@ -517,7 +489,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       invocation += 1;
       if (invocation === 1) {
-        // Auth-only switch: same default provider/model, only authProfileId changes.
         throw new LiveSessionModelSwitchError({
           provider: "anthropic",
           model: "claude",
@@ -544,8 +515,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       senderIsOwner: true,
     });
 
-    // Both calls should see hasSessionModelOverride: false because the model
-    // did not actually change — only the auth profile was switched.
     expect(resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
     expect(resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
       hasSessionModelOverride: false,
@@ -560,7 +529,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       invocation += 1;
       if (invocation === 1) {
-        // Provider-only switch: model name stays the same, only provider changes.
         throw new LiveSessionModelSwitchError({
           provider: "openai",
           model: "claude",
@@ -585,12 +553,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       senderIsOwner: true,
     });
 
-    // First call: no session override (initial state).
     expect(resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
     expect(resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
       hasSessionModelOverride: false,
     });
-    // Second call (retry): provider changed so session should have a model override.
     expect(resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
       hasSessionModelOverride: true,
     });

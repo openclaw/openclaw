@@ -742,14 +742,7 @@ async function agentCommandInternal(
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
-    // Retry loop: when the embedded runner detects a live session model switch
-    // (e.g. a subagent whose persisted session targets a different provider/model),
-    // it throws LiveSessionModelSwitchError.  Catch it and restart the full
-    // runWithModelFallback cycle with the updated provider/model, mirroring the
-    // same retry logic used by the main auto-reply runner
-    // (see: agent-runner-execution.ts).
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    for (;;) {
       try {
         const runContext = resolveAgentRunContext(opts);
         const messageChannel = resolveMessageChannel(
@@ -757,16 +750,12 @@ async function agentCommandInternal(
           opts.replyChannel ?? opts.channel,
         );
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
-        // Keep fallback candidate resolution centralized so session model overrides,
-        // per-agent overrides, and default fallbacks stay consistent across callers.
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
           agentId: sessionAgentId,
           hasSessionModelOverride: Boolean(storedModelOverride),
         });
 
-        // Track model fallback attempts so retries on an existing session don't
-        // re-inject the original prompt as a duplicate user message.
         let fallbackAttemptIndex = 0;
         const fallbackResult = await runWithModelFallback({
           cfg,
@@ -806,7 +795,6 @@ async function agentCommandInternal(
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory: !isNewSession || (await sessionFileHasContent(sessionFile)),
               onAgentEvent: (evt) => {
-                // Track lifecycle end for fallback emission below.
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&
@@ -863,8 +851,6 @@ async function agentCommandInternal(
               { cause: err },
             );
           }
-          // Validate the switched model against the agent allowlist before
-          // accepting the switch, matching the stored/explicit override paths.
           const switchRef = normalizeModelRef(err.provider, err.model);
           const switchKey = modelKey(switchRef.provider, switchRef.model);
           if (!allowAnyModel && !allowedModelKeys.has(switchKey)) {
@@ -889,24 +875,14 @@ async function agentCommandInternal(
               { cause: err },
             );
           }
-          // Capture the pre-switch provider and model before mutating, so the
-          // guard below can detect whether either actually changed.
           const previousProvider = provider;
           const previousModel = model;
           provider = err.provider;
           model = err.model;
           fallbackProvider = err.provider;
           fallbackModel = err.model;
-          // Keep auth-profile validation in sync so the next attempt resolves
-          // the correct session-level auth profile for the new provider.
           providerForAuthProfileValidation = err.provider;
-          // Forward auth-profile fields carried by the switch request so the
-          // retried run uses the right credentials (mirrors the main runner).
-          // Clear the stale compaction count so the new profile is not
-          // treated as already aged by resolveSessionAuthProfileOverride.
           if (sessionEntry) {
-            // Shallow-copy to avoid mutating the cached/shared original
-            // entry in-place, which could leak overrides across runs.
             sessionEntry = { ...sessionEntry };
             sessionEntry.authProfileOverride = err.authProfileId;
             sessionEntry.authProfileOverrideSource = err.authProfileId
@@ -914,10 +890,6 @@ async function agentCommandInternal(
               : undefined;
             sessionEntry.authProfileOverrideCompactionCount = undefined;
           }
-          // Only update storedModelOverride when the model or provider actually
-          // changed (or was already overridden).  Auth-only switches that keep
-          // the same provider/model should not flip hasSessionModelOverride to
-          // true, because that would alter fallback candidate resolution.
           if (
             storedModelOverride ||
             err.model !== previousModel ||
@@ -925,7 +897,6 @@ async function agentCommandInternal(
           ) {
             storedModelOverride = err.model;
           }
-          // Reset lifecycle tracking for the retry iteration.
           lifecycleEnded = false;
           log.info(
             `Live session model switch in subagent run ${runId}: switching to ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}`,
@@ -946,7 +917,7 @@ async function agentCommandInternal(
         }
         throw err;
       }
-    } // end while
+    }
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {
