@@ -12,6 +12,7 @@ import {
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
   isReplySkip,
+  resolveAnnounceTargetFromKey,
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
@@ -58,11 +59,23 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    const announceTarget = await resolveAnnounceTarget({
-      sessionKey: params.targetSessionKey,
-      displayKey: params.displayKey,
-    });
-    const targetChannel = announceTarget?.channel ?? "unknown";
+    const announceTarget = params.requesterSessionKey
+      ? await resolveAnnounceTarget({
+          sessionKey: params.requesterSessionKey,
+          displayKey: params.requesterSessionKey,
+        })
+      : await resolveAnnounceTarget({
+          sessionKey: params.targetSessionKey,
+          displayKey: params.displayKey,
+        });
+    const targetDisplayTarget =
+      resolveAnnounceTargetFromKey(params.displayKey) ??
+      resolveAnnounceTargetFromKey(params.targetSessionKey) ??
+      (await resolveAnnounceTarget({
+        sessionKey: params.targetSessionKey,
+        displayKey: params.displayKey,
+      }));
+    const targetDisplayChannel = targetDisplayTarget?.channel ?? "unknown";
 
     if (
       params.maxPingPongTurns > 0 &&
@@ -79,7 +92,7 @@ export async function runSessionsSendA2AFlow(params: {
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
           targetSessionKey: params.displayKey,
-          targetChannel,
+          targetChannel: targetDisplayChannel,
           currentRole,
           turn,
           maxTurns: params.maxPingPongTurns,
@@ -92,7 +105,9 @@ export async function runSessionsSendA2AFlow(params: {
           lane: AGENT_LANE_NESTED,
           sourceSessionKey: nextSessionKey,
           sourceChannel:
-            nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
+            nextSessionKey === params.requesterSessionKey
+              ? params.requesterChannel
+              : targetDisplayChannel,
           sourceTool: "sessions_send",
         });
         if (!replyText || isReplySkip(replyText)) {
@@ -110,7 +125,7 @@ export async function runSessionsSendA2AFlow(params: {
       requesterSessionKey: params.requesterSessionKey,
       requesterChannel: params.requesterChannel,
       targetSessionKey: params.displayKey,
-      targetChannel,
+      targetChannel: targetDisplayChannel,
       originalMessage: params.message,
       roundOneReply: primaryReply,
       latestReply,
