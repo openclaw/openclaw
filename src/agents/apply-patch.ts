@@ -343,6 +343,8 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
+
+    // Enforce workspace boundary against a host-mapped path when available.
     if (options.workspaceOnly !== false && resolved.hostPath) {
       await assertSandboxPath({
         filePath: resolved.hostPath,
@@ -352,6 +354,15 @@ async function resolvePatchPath(
         allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
     }
+
+    // Enforce per-tool filesystem policy (PathGuard) for sandbox patch targets.
+    // Prefer hostPath when available; otherwise fall back to containerPath.
+    if (options.fsPolicy) {
+      const policyRoot = resolved.hostPath ? options.cwd : options.sandbox.root;
+      const targetPath = resolved.hostPath ?? resolved.containerPath;
+      await checkPathGuardStrict(targetPath, options.fsPolicy, policyRoot);
+    }
+
     return {
       resolved: resolved.hostPath ?? resolved.containerPath,
       display: resolved.relativePath || resolved.containerPath,
