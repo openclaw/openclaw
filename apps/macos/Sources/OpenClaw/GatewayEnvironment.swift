@@ -293,13 +293,47 @@ enum GatewayEnvironment {
 
     /// Exposed for tests so CLI version output normalization stays local to gateway checks.
     static func normalizeGatewayVersionOutput(_ raw: String?) -> String? {
-        guard var normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !normalized.isEmpty else {
-            return nil
+        guard let raw else { return nil }
+
+        let lines = raw
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let prefixedPattern = #"^openclaw\s+(v?\d+\.\d+\.\d+(?:[-+][^\s()]+)?)\s*(?:\([^\n]+\))?$"#
+        let barePattern = #"^(v?\d+\.\d+\.\d+(?:[-+][^\s()]+)?)\s*(?:\([^\n]+\))?$"#
+
+        func extractVersion(from line: String, pattern: String) -> String? {
+            guard let range = line.range(of: pattern, options: [.regularExpression, .caseInsensitive]),
+                  let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            else {
+                return nil
+            }
+
+            let nsRange = NSRange(range, in: line)
+            guard let match = regex.firstMatch(in: line, options: [], range: nsRange),
+                  match.numberOfRanges > 1,
+                  let versionRange = Range(match.range(at: 1), in: line)
+            else {
+                return nil
+            }
+
+            return String(line[versionRange])
         }
-        if normalized.lowercased().hasPrefix("openclaw ") {
-            normalized = String(normalized.dropFirst("openclaw ".count))
+
+        for line in lines {
+            if let version = extractVersion(from: line, pattern: prefixedPattern) {
+                return version
+            }
         }
-        return normalized
+
+        for line in lines {
+            if let version = extractVersion(from: line, pattern: barePattern) {
+                return version
+            }
+        }
+
+        return nil
     }
 
     private static func readGatewayVersion(binary: String) -> Semver? {
