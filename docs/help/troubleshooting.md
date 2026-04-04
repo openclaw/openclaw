@@ -136,7 +136,12 @@ flowchart TD
     Common log signatures:
 
     - `device identity required` → HTTP/non-secure context cannot complete device auth.
+    - `origin not allowed` → browser `Origin` is not allowed for the Control UI
+      gateway target.
     - `AUTH_TOKEN_MISMATCH` with retry hints (`canRetryWithDeviceToken=true`) → one trusted device-token retry may occur automatically.
+    - `too many failed authentication attempts (retry later)` from a localhost
+      browser origin → repeated failures from that same `Origin` are temporarily
+      locked out; another localhost origin uses a separate bucket.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
     - `gateway connect failed:` → UI is targeting the wrong URL/port or unreachable gateway.
 
@@ -336,6 +341,7 @@ flowchart TD
     - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
     - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from this host.
     - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no live CDP target.
+    - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release emulation state without restarting the gateway.
 
     Deep pages:
 

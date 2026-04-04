@@ -169,6 +169,10 @@ Common scopes:
 - `operator.approvals`
 - `operator.pairing`
 
+Plugin-registered gateway RPC methods may request their own operator scope, but
+reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,
+`update.*`) always resolve to `operator.admin`.
+
 Method scope is only the first gate. Some slash commands reached through
 `chat.send` apply stricter command-level checks on top. For example, persistent
 `/config set` and `/config unset` writes require `operator.admin`.
@@ -222,6 +226,11 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
 - For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
+- After approval, forwarded `node.invoke system.run` calls reuse that canonical
+  `systemRunPlan` as the authoritative command/cwd/session context.
+- If a caller mutates `command`, `rawCommand`, `cwd`, `agentId`, or
+  `sessionKey` between prepare and the final approved `system.run` forward, the
+  gateway rejects the run instead of trusting the mutated payload.
 
 ## Agent delivery fallback
 

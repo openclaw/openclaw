@@ -6,6 +6,7 @@ import { applyExtraParamsToAgent } from "./extra-params.js";
 
 export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   headers?: Record<string, string>;
+  options?: SimpleStreamOptions;
   payload: TPayload;
 };
 
@@ -45,6 +46,7 @@ export function runExtraParamsCase<
 
   const baseStreamFn: StreamFn = (model, _context, options) => {
     captured.headers = options?.headers;
+    captured.options = options;
     options?.onPayload?.(params.payload, model);
     return createMockStream();
   };

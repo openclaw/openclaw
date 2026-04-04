@@ -1,4 +1,5 @@
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
@@ -149,8 +150,6 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   ],
 };
 
-const ADMIN_METHOD_PREFIXES = ["exec.approvals.", "config.", "wizard.", "update."] as const;
-
 const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
   Object.entries(METHOD_SCOPE_GROUPS).flatMap(([scope, methods]) =>
     methods.map((method) => [method, scope as OperatorScope]),
@@ -162,12 +161,13 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (explicitScope) {
     return explicitScope;
   }
+  const reservedScope = resolveReservedGatewayMethodScope(method);
+  if (reservedScope) {
+    return reservedScope;
+  }
   const pluginScope = getActivePluginRegistry()?.gatewayMethodScopes?.[method];
   if (pluginScope) {
     return pluginScope;
-  }
-  if (ADMIN_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix))) {
-    return ADMIN_SCOPE;
   }
   return undefined;
 }

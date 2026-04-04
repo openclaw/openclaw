@@ -4,7 +4,6 @@
 // without recursing through provider-specific facades.
 
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
-import type { ProviderPlugin } from "../plugins/types.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -15,6 +14,7 @@ import {
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
 } from "../plugins/provider-replay-helpers.js";
+import type { ProviderPlugin } from "../plugins/types.js";
 import type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicyContext,

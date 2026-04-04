@@ -395,9 +395,7 @@ export function buildAgentSystemPrompt(params: {
   const runtimeChannel = runtimeInfo?.channel?.trim().toLowerCase();
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(
-    runtimeCapabilities
-      .map((cap) => String(cap).trim().toLowerCase())
-      .filter(Boolean),
+    runtimeCapabilities.map((cap) => String(cap).trim().toLowerCase()).filter(Boolean),
   );
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
@@ -535,15 +533,11 @@ export function buildAgentSystemPrompt(params: {
     hasGateway && !isMinimal ? "" : "",
     "",
     // Skip model aliases for subagent/none modes
-    modelAliasLines.length > 0 && !isMinimal
-      ? "## Model Aliases"
-      : "",
+    modelAliasLines.length > 0 && !isMinimal ? "## Model Aliases" : "",
     modelAliasLines.length > 0 && !isMinimal
       ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
       : "",
-    modelAliasLines.length > 0 && !isMinimal
-      ? modelAliasLines.join("\n")
-      : "",
+    modelAliasLines.length > 0 && !isMinimal ? modelAliasLines.join("\n") : "",
     modelAliasLines.length > 0 && !isMinimal ? "" : "",
     userTimezone
       ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."

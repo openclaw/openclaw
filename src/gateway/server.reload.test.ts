@@ -785,9 +785,7 @@ describe("gateway hot reload", () => {
         targetIds: ["talk.providers.*.apiKey"],
       });
       expect(postResolve.ok).toBe(true);
-      expect(postResolve.payload?.assignments?.[0]?.path).toBe(
-        "talk.providers.elevenlabs.apiKey",
-      );
+      expect(postResolve.payload?.assignments?.[0]?.path).toBe("talk.providers.elevenlabs.apiKey");
       expect(postResolve.payload?.assignments?.[0]?.value).toBe("talk-key-before-reload-failure");
     } finally {
       if (previousRefValue === undefined) {

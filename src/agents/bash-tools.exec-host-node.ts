@@ -227,6 +227,7 @@ export async function executeNodeHostCommand(
       params: {
         command: runArgv,
         rawCommand: runRawCommand,
+        systemRunPlan: prepared.plan,
         cwd: runCwd,
         env: nodeEnv,
         timeoutMs: typeof params.timeoutSec === "number" ? params.timeoutSec * 1000 : undefined,

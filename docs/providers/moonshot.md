@@ -178,6 +178,11 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
 - Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi/<modelId>`.
 - Current Kimi Coding default model ref is `kimi/kimi-code`. Legacy `kimi/k2p5` remains accepted as a compatibility model id.
 - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.5`.
+- Native Moonshot endpoints (`https://api.moonshot.ai/v1` and
+  `https://api.moonshot.cn/v1`) advertise streaming usage compatibility on the
+  shared `openai-completions` transport. OpenClaw now keys that off endpoint
+  capabilities, so compatible custom provider ids targeting the same native
+  Moonshot hosts inherit the same streaming-usage behavior.
 - Override pricing and context metadata in `models.providers` if needed.
 - If Moonshot publishes different context limits for a model, adjust
   `contextWindow` accordingly.

@@ -248,6 +248,10 @@ parts of the same session entry.
 
 That means fallback retries have to coordinate with live model switching:
 
+- Only explicit user-driven model changes mark a pending live switch. That
+  includes `/model`, `session_status(model=...)`, and `sessions.patch`.
+- System-driven model changes such as fallback rotation, heartbeat overrides,
+  or compaction never mark a pending live switch on their own.
 - Before a fallback retry starts, the reply runner persists the selected
   fallback override fields to the session entry.
 - Live-session reconciliation prefers persisted session overrides over stale

@@ -42,6 +42,14 @@ openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
 
+Notes:
+
+- For `attachOnly` and remote CDP profiles, `openclaw browser stop` closes the
+  active control session and clears temporary emulation overrides even when
+  OpenClaw did not launch the browser process itself.
+- For local managed profiles, `openclaw browser stop` stops the spawned browser
+  process.
+
 ## If the command is missing
 
 If `openclaw browser` is an unknown command, check `plugins.allow` in
@@ -109,7 +117,16 @@ Screenshot:
 
 ```bash
 openclaw browser screenshot
+openclaw browser screenshot --full-page
+openclaw browser screenshot --ref e12
 ```
+
+Notes:
+
+- `--full-page` is for page captures only; it cannot be combined with `--ref`
+  or `--element`.
+- `existing-session` / `user` profiles support page screenshots and `--ref`
+  screenshots from snapshot output, but not CSS `--element` screenshots.
 
 Navigate/click/type (ref-based UI automation):
 
@@ -197,6 +214,7 @@ Current existing-session limits:
 - `type` does not support `slowly=true`
 - `press` does not support `delayMs`
 - `wait --load networkidle` is not supported
+- screenshots support page captures and `--ref`, but not CSS `--element`
 - `responsebody`, download interception, PDF export, and batch actions still
   require a managed browser or raw CDP profile
 
