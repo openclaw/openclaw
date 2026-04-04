@@ -326,7 +326,8 @@ fly ssh console --command "rm /data/openclaw.json"
 
 ### State Not Persisting
 
-If you lose credentials or sessions after a restart, the state dir is writing to the container filesystem.
+If you lose auth profiles, channel/provider state, or sessions after a restart,
+the state dir is writing to the container filesystem.
 
 **Fix:** Ensure `OPENCLAW_STATE_DIR=/data` is set in `fly.toml` and redeploy.
 
