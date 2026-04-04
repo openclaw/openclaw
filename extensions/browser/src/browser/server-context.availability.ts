@@ -74,10 +74,17 @@ export function createProfileAvailability({
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
-    // CDP control-plane reachability must not be gated by SSRF policy —
-    // the configured CDP endpoint is a trusted management channel.
-    // SSRF enforcement applies at navigation time (navigation-guard.ts).
-    return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
+    // Loopback CDP endpoints (127.0.0.1) are OpenClaw's own management channel
+    // and must never be blocked by SSRF policy — loopback is definitionally
+    // same-machine and has no SSRF risk. For non-loopback (remote/private)
+    // endpoints the user-configured SSRF policy still applies as defence-in-depth.
+    // Navigation-time SSRF enforcement is handled separately in navigation-guard.ts.
+    return await isChromeCdpReady(
+      profile.cdpUrl,
+      httpTimeoutMs,
+      wsTimeoutMs,
+      profile.cdpIsLoopback ? undefined : state().resolved.ssrfPolicy,
+    );
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
@@ -85,7 +92,11 @@ export function createProfileAvailability({
       return await isReachable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
+    return await isChromeReachable(
+      profile.cdpUrl,
+      httpTimeoutMs,
+      profile.cdpIsLoopback ? undefined : state().resolved.ssrfPolicy,
+    );
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
