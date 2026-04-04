@@ -82,12 +82,50 @@ function intersectAll(
   if (defined.some((v) => v.length === 0)) {
     return [];
   }
-  let acc = new Set(defined[0]);
-  for (const list of defined.slice(1)) {
-    const next = new Set(list);
-    acc = new Set([...acc].filter((v) => next.has(v)));
+
+  // allowedPaths is a glob allowlist. Tightening should remain usable even when
+  // a stricter list uses different (more specific) patterns.
+  //
+  // Conservative intersection:
+  // - If the next list is (heuristically) a subset of the current list, keep next (tighter).
+  // - Else if current is subset of next, keep current.
+  // - Else fall back to exact-token intersection.
+  const isSubsetByPrefixHeuristic = (a: string[], b: string[]) => {
+    const normalize = (p: string) => p.replace(/\\/g, "/").trim();
+    const asPrefix = (p: string) => {
+      const n = normalize(p);
+      return n.endsWith("/**") ? n.slice(0, -3) : null;
+    };
+    return b.every((bp) => {
+      const bNorm = normalize(bp);
+      return a.some((ap) => {
+        if (ap === bp) {
+          return true;
+        }
+        const aPrefix = asPrefix(ap);
+        if (aPrefix) {
+          return bNorm === aPrefix || bNorm.startsWith(aPrefix + "/");
+        }
+        return false;
+      });
+    });
+  };
+
+  let acc = defined[0];
+  for (const next of defined.slice(1)) {
+    if (isSubsetByPrefixHeuristic(acc, next)) {
+      acc = next;
+      continue;
+    }
+    if (isSubsetByPrefixHeuristic(next, acc)) {
+      continue;
+    }
+
+    const nextSet = new Set(next);
+    acc = acc.filter((v) => nextSet.has(v));
   }
-  return Array.from(acc);
+
+  return acc;
 }
 
 export function combineToolFsPolicies(
