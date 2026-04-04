@@ -39,9 +39,13 @@ import type {
   ProviderResolveUsageAuthContext,
   ProviderPlugin,
   ProviderResolveDynamicModelContext,
+  ProviderResolveTransportTurnStateContext,
+  ProviderResolveWebSocketSessionPolicyContext,
   ProviderRuntimeModel,
   ProviderThinkingPolicyContext,
+  ProviderTransportTurnState,
   ProviderValidateReplayTurnsContext,
+  ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
@@ -523,6 +527,30 @@ export function wrapProviderStreamFn(params: {
   context: ProviderWrapStreamFnContext;
 }) {
   return resolveProviderHookPlugin(params)?.wrapStreamFn?.(params.context) ?? undefined;
+}
+
+export function resolveProviderTransportTurnStateWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveTransportTurnStateContext;
+}): ProviderTransportTurnState | undefined {
+  return (
+    resolveProviderHookPlugin(params)?.resolveTransportTurnState?.(params.context) ?? undefined
+  );
+}
+
+export function resolveProviderWebSocketSessionPolicyWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveWebSocketSessionPolicyContext;
+}): ProviderWebSocketSessionPolicy | undefined {
+  return (
+    resolveProviderHookPlugin(params)?.resolveWebSocketSessionPolicy?.(params.context) ?? undefined
+  );
 }
 
 export async function createProviderEmbeddingProvider(params: {

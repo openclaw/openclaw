@@ -698,6 +698,57 @@ export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
 };
 
 /**
+ * Provider-owned transport turn state.
+ *
+ * Use this for provider-native request headers or metadata that should stay
+ * stable across retries while still being attached by generic core transports.
+ */
+export type ProviderTransportTurnState = {
+  headers?: Record<string, string>;
+  metadata?: Record<string, string>;
+};
+
+/**
+ * Provider-owned request identity for transport turns.
+ *
+ * Use this when the provider exposes native request/session metadata that must
+ * be attached by both HTTP and WebSocket transports.
+ */
+export type ProviderResolveTransportTurnStateContext = {
+  provider: string;
+  modelId: string;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+  turnId: string;
+  attempt: number;
+  transport: "stream" | "websocket";
+};
+
+/**
+ * Provider-owned WebSocket session policy.
+ *
+ * Use this for session-scoped headers or cool-down behavior that should apply
+ * before a generic WebSocket transport decides to retry or fall back.
+ */
+export type ProviderWebSocketSessionPolicy = {
+  headers?: Record<string, string>;
+  degradeCooldownMs?: number;
+};
+
+/**
+ * Provider-owned WebSocket session policy input.
+ *
+ * Use this when the provider wants to control native session handshake headers
+ * or the post-failure cool-down window for a generic WebSocket transport.
+ */
+export type ProviderResolveWebSocketSessionPolicyContext = {
+  provider: string;
+  modelId: string;
+  model?: ProviderRuntimeModel;
+  sessionId?: string;
+};
+
+/**
  * Generic embedding provider shape returned by provider plugins.
  *
  * Keep this aligned with the memory embedding contract without forcing the
@@ -1166,6 +1217,26 @@ export type ProviderPlugin = {
    * transport implementation.
    */
   wrapStreamFn?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
+  /**
+   * Provider-owned native transport turn identity.
+   *
+   * Use this when a provider wants generic transports to attach provider-native
+   * request headers or metadata on each turn without hardcoding vendor logic in
+   * core.
+   */
+  resolveTransportTurnState?: (
+    ctx: ProviderResolveTransportTurnStateContext,
+  ) => ProviderTransportTurnState | null | undefined;
+  /**
+   * Provider-owned WebSocket session policy.
+   *
+   * Use this when a provider wants generic WebSocket transports to attach
+   * native session headers or tune the session-scoped cool-down before HTTP
+   * fallback.
+   */
+  resolveWebSocketSessionPolicy?: (
+    ctx: ProviderResolveWebSocketSessionPolicyContext,
+  ) => ProviderWebSocketSessionPolicy | null | undefined;
   /**
    * Provider-owned embedding provider factory.
    *

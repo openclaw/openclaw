@@ -501,6 +501,68 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]).not.toHaveProperty("strict");
   });
 
+  it("adds native OpenAI turn metadata on direct Responses routes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" } as never,
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+        openclaw_turn_attempt: "1",
+        openclaw_transport: "stream",
+      },
+    ) as { metadata?: Record<string, string> };
+
+    expect(params.metadata).toMatchObject({
+      openclaw_session_id: "session-123",
+      openclaw_turn_id: "turn-123",
+      openclaw_turn_attempt: "1",
+      openclaw_transport: "stream",
+    });
+  });
+
+  it("leaves proxy-like OpenAI Responses routes without native turn metadata by default", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" } as never,
+      undefined,
+    ) as { metadata?: Record<string, string> };
+
+    expect(params).not.toHaveProperty("metadata");
+  });
+
   it("gates responses service_tier to native OpenAI endpoints", () => {
     const nativeParams = buildOpenAIResponsesParams(
       {

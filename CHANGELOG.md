@@ -24,7 +24,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep OpenAI-compatible proxies on the older compat shim path, fix Responses WebSocket warm-up payloads, and retry one early retryable WebSocket failure before HTTP fallback while keeping forced WebSocket errors explicit.
+- Providers/OpenAI: preserve native `reasoning.effort: "none"` and strict tool schemas on direct OpenAI-family endpoints, keep OpenAI-compatible proxies on the older compat shim path, fix Responses WebSocket warm-up payloads, keep native OpenAI/Codex/Azure turns on stable session and turn identity headers/metadata, and hold auto-mode WebSocket sessions on SSE during a short cool-down after early WebSocket failure while keeping forced WebSocket errors explicit.
 - Providers/OpenAI Codex: split native `contextWindow` from runtime `contextTokens` for `openai-codex/gpt-5.4`, keep the default effective cap at `272000`, and expose a per-model config override via `models.providers.*.models[].contextTokens`.
 - Android/Talk Mode: restore spoken assistant replies on node-scoped sessions by keeping reply routing synced to the resolved node session key and pausing mic capture during reply playback. (#60306) Thanks @MKV21.
 - Agents/fallback: persist selected fallback overrides before retry attempts start, prefer persisted overrides during live-session reconciliation, and keep provider-scoped auth-profile failover from snapping retries back to stale primary selections.

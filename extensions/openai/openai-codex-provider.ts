@@ -29,6 +29,10 @@ import {
   matchesExactOrPrefix,
 } from "./shared.js";
 import { wrapOpenAICodexProviderStream } from "./stream-hooks.js";
+import {
+  resolveOpenAITransportTurnState,
+  resolveOpenAIWebSocketSessionPolicy,
+} from "./transport-policy.js";
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
@@ -313,6 +317,8 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       };
     },
     wrapStreamFn: (ctx) => wrapOpenAICodexProviderStream(ctx),
+    resolveTransportTurnState: (ctx) => resolveOpenAITransportTurnState(ctx),
+    resolveWebSocketSessionPolicy: (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx),
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;
