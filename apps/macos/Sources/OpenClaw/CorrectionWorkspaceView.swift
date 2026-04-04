@@ -21,23 +21,9 @@ struct CorrectionWorkspaceView: View {
     @State private var casebookSnapshot: OpenClawKit.CorrectionCasebookSnapshot =
         OpenClawKit.CorrectionCasebookStore.load()
     @State private var sessionIdentitySnapshot: SessionIdentitySnapshot = .empty
+    @State private var allIssues: [CorrectionWorkspaceIssue] = []
     @State private var pendingDispatch: CorrectionWorkspaceDispatchConfirmation?
     @State private var researchInFlightCaseKeys: Set<String> = []
-    @State private var interfaceBreath = false
-
-    private var allIssues: [CorrectionWorkspaceIssue] {
-        CorrectionWorkspaceIssueBuilder.build(
-            state: self.state,
-            healthStore: self.healthStore,
-            heartbeatStore: self.heartbeatStore,
-            activityStore: self.activityStore,
-            agentEventStore: self.agentEventStore,
-            controlChannel: self.controlChannel,
-            pairingPrompter: self.pairingPrompter,
-            devicePairingPrompter: self.devicePairingPrompter,
-            sessionIdentities: self.sessionIdentitySnapshot,
-            casebook: self.casebookSnapshot)
-    }
 
     private var actionableIssues: [CorrectionWorkspaceIssue] {
         self.allIssues.filter { $0.severity != .healthy }
@@ -111,11 +97,10 @@ struct CorrectionWorkspaceView: View {
             }
         }
         .task {
+            if self.allIssues.isEmpty {
+                self.rebuildIssues()
+            }
             await self.refreshSignals()
-            self.syncSelection()
-        }
-        .onAppear {
-            self.startInterfaceBreathing()
         }
         .sheet(item: self.$pendingDispatch) { dispatch in
             CorrectionWorkspaceDispatchSheet(
@@ -163,7 +148,6 @@ struct CorrectionWorkspaceView: View {
                 }
             }
         }
-        .modifier(CorrectionWorkspaceParallaxModifier(depth: 10))
     }
 
     private var compactControlDeck: some View {
@@ -592,7 +576,7 @@ struct CorrectionWorkspaceView: View {
                     .fill(Color.white.opacity(0.42))
                     .frame(width: 54, height: 54)
                     .blur(radius: 10)
-                    .offset(x: self.interfaceBreath ? -22 : 12, y: self.interfaceBreath ? -24 : -38)
+                    .offset(x: -12, y: -28)
             }
             .frame(width: 184, height: 184)
 
@@ -823,13 +807,6 @@ struct CorrectionWorkspaceView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(tint.opacity(0.30), lineWidth: 0.9))
-    }
-
-    private func startInterfaceBreathing() {
-        guard !self.interfaceBreath else { return }
-        withAnimation(.easeInOut(duration: 3.8).repeatForever(autoreverses: true)) {
-            self.interfaceBreath = true
-        }
     }
 
     private var summaryStrip: some View {
@@ -1153,12 +1130,6 @@ struct CorrectionWorkspaceView: View {
                             }
                             .buttonStyle(.plain)
                             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                            .scrollTransition(axis: .vertical) { content, phase in
-                                content
-                                    .scaleEffect(phase.isIdentity ? 1 : 0.985)
-                                    .opacity(phase.isIdentity ? 1 : 0.76)
-                                    .offset(y: phase.value * 16)
-                            }
                         }
                     }
                     .padding(.top, 4)
@@ -1247,14 +1218,7 @@ struct CorrectionWorkspaceView: View {
         if let sessionIdentitySnapshot = await SessionIdentityStore.loadSnapshot(limit: 200) {
             self.sessionIdentitySnapshot = sessionIdentitySnapshot
         }
-        self.syncCasebook()
-    }
-
-    private func syncCasebook() {
-        let inputs = self.allIssues
-            .filter(\.tracksCasebook)
-            .map(\.caseInput)
-        self.casebookSnapshot = OpenClawKit.CorrectionCasebookStore.syncActiveCases(inputs)
+        self.rebuildIssues()
     }
 
     @MainActor
@@ -2005,20 +1969,15 @@ struct CorrectionWorkspaceStableView: View {
     }
 
     private func rebuildIssues() {
-        let initialIssues = CorrectionWorkspaceIssueBuilder.build(
-            state: self.state,
-            healthStore: self.healthStore,
-            heartbeatStore: self.heartbeatStore,
-            activityStore: self.activityStore,
-            agentEventStore: self.agentEventStore,
-            controlChannel: self.controlChannel,
-            pairingPrompter: self.pairingPrompter,
-            devicePairingPrompter: self.devicePairingPrompter,
-            sessionIdentities: self.sessionIdentitySnapshot,
-            casebook: self.casebookSnapshot)
+        let initialIssues = self.buildIssues(casebook: self.casebookSnapshot)
         self.casebookSnapshot = OpenClawKit.CorrectionCasebookStore.syncActiveCases(
             initialIssues.filter(\.tracksCasebook).map(\.caseInput))
-        self.allIssues = CorrectionWorkspaceIssueBuilder.build(
+        self.allIssues = self.buildIssues(casebook: self.casebookSnapshot)
+        self.syncSelection()
+    }
+
+    private func buildIssues(casebook: OpenClawKit.CorrectionCasebookSnapshot) -> [CorrectionWorkspaceIssue] {
+        CorrectionWorkspaceIssueBuilder.build(
             state: self.state,
             healthStore: self.healthStore,
             heartbeatStore: self.heartbeatStore,
@@ -2028,8 +1987,7 @@ struct CorrectionWorkspaceStableView: View {
             pairingPrompter: self.pairingPrompter,
             devicePairingPrompter: self.devicePairingPrompter,
             sessionIdentities: self.sessionIdentitySnapshot,
-            casebook: self.casebookSnapshot)
-        self.syncSelection()
+            casebook: casebook)
     }
 
     private func refresh() async {
@@ -3141,8 +3099,6 @@ private struct CorrectionWorkspaceSummary {
 }
 
 private struct CorrectionWorkspaceAmbientBackdrop: View {
-    @State private var drifting = false
-
     var body: some View {
         GeometryReader { proxy in
             ZStack {
@@ -3158,36 +3114,38 @@ private struct CorrectionWorkspaceAmbientBackdrop: View {
                 self.blob(
                     color: Color(red: 0.99, green: 0.82, blue: 0.60).opacity(0.26),
                     size: CGSize(width: proxy.size.width * 0.40, height: proxy.size.width * 0.30),
-                    offset: self.drifting ? CGSize(width: -122, height: -106) : CGSize(width: -72, height: -176))
+                    offset: CGSize(width: -92, height: -142))
 
                 self.blob(
                     color: Color.white.opacity(0.32),
                     size: CGSize(width: proxy.size.width * 0.34, height: proxy.size.width * 0.24),
-                    offset: self.drifting ? CGSize(width: 22, height: -74) : CGSize(width: -18, height: -116))
+                    offset: CGSize(width: 4, height: -98))
 
                 self.blob(
                     color: Color(red: 0.76, green: 0.87, blue: 0.96).opacity(0.28),
                     size: CGSize(width: proxy.size.width * 0.42, height: proxy.size.width * 0.28),
-                    offset: self.drifting ? CGSize(width: 168, height: 86) : CGSize(width: 132, height: 148))
+                    offset: CGSize(width: 148, height: 118))
 
                 Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .opacity(0.22)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.12),
+                                Color.white.opacity(0.05),
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom))
             }
             .ignoresSafeArea()
         }
-        .task {
-            withAnimation(.easeInOut(duration: 12.0).repeatForever(autoreverses: true)) {
-                self.drifting.toggle()
-            }
-        }
+        .allowsHitTesting(false)
     }
 
     private func blob(color: Color, size: CGSize, offset: CGSize) -> some View {
         Ellipse()
             .fill(color)
             .frame(width: size.width, height: size.height)
-            .blur(radius: 58)
+            .blur(radius: 44)
             .offset(offset)
     }
 }
@@ -3630,7 +3588,6 @@ private struct CorrectionWorkspaceDetailHero: View {
         }
         .padding(22)
         .background(CorrectionWorkspacePanelBackground(tint: self.issue.severity.color.opacity(0.20)))
-        .modifier(CorrectionWorkspaceParallaxModifier(depth: 12))
     }
 
     private func actionTitle(_ action: CorrectionWorkspaceAction) -> String {
