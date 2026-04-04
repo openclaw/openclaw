@@ -121,6 +121,7 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
   telegramDeps = defaultTelegramBotDeps,
+  chatSessionCache,
 }: RegisterTelegramHandlerParams) => {
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
     cfg,
@@ -342,6 +343,11 @@ export const registerTelegramHandlers = ({
         ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
         : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+    // Keep the chatId → sessionKey cache current so the sequential key
+    // middleware can check whether an embedded run is active for this chat.
+    if (chatSessionCache && typeof params.chatId === "number") {
+      chatSessionCache.set(params.chatId, sessionKey);
+    }
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
     });

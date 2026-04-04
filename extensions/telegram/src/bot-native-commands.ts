@@ -195,6 +195,8 @@ export type RegisterTelegramHandlerParams = {
     replyMedia?: TelegramMediaRef[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
+  /** Cache mapping chatId → sessionKey for sequential key run-active checks. */
+  chatSessionCache?: Map<number, string>;
 };
 
 export function buildTelegramNativeCommandCallbackData(commandText: string): string {

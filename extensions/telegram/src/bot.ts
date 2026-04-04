@@ -346,13 +346,20 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     }
   });
 
-  // TODO: wire isRunActiveForChat to the actual session/lane runtime so
-  // per-message keys are only used when a run is in progress for the chat.
-  // Example: isRunActiveForChat: (chatId) => sessionManager.hasActiveLane(chatId)
+  // Cache chatId → sessionKey so the sequential key middleware can check
+  // whether an embedded Pi run is active without heavy session resolution.
+  // Populated by bot-handlers when sessions are resolved for each message.
+  const chatSessionCache = new Map<number, string>();
+
   bot.use(
     botRuntime.sequentialize((ctx) =>
       getTelegramSequentialKey(ctx, {
-        isRunActiveForChat: undefined, // placeholder — replace with runtime check
+        isRunActiveForChat: telegramDeps.isRunActiveForSession
+          ? (chatId) => {
+              const sessionId = chatSessionCache.get(chatId);
+              return sessionId ? telegramDeps.isRunActiveForSession!(sessionId) : false;
+            }
+          : undefined,
       }),
     ),
   );
@@ -587,6 +594,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     processMessage,
     logger,
     telegramDeps,
+    chatSessionCache,
   });
 
   const originalStop = bot.stop.bind(bot);
