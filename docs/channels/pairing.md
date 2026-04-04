@@ -77,6 +77,12 @@ The setup code is a base64-encoded JSON payload that contains:
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
 - `bootstrapToken`: a short-lived single-device bootstrap token used for the initial pairing handshake
 
+That bootstrap token carries the built-in pairing bootstrap profile:
+
+- primary handed-off `node` token stays `scopes: []`
+- any handed-off `operator` token stays bounded to the bootstrap allowlist:
+  `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`
+
 Treat the setup code like a password while it is valid.
 
 ### Approve a node device
