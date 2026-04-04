@@ -75,6 +75,7 @@ import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import { createBoundaryAwareStreamFnForModel } from "../../provider-transport-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -251,6 +252,13 @@ export function resolveEmbeddedAgentStreamFn(params: {
 
   if (params.model.provider === "anthropic-vertex") {
     return createAnthropicVertexStreamFnForModel(params.model);
+  }
+
+  if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
+    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+    if (boundaryAwareStreamFn) {
+      return boundaryAwareStreamFn;
+    }
   }
 
   return currentStreamFn;
