@@ -5,6 +5,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId };
 
 type GoogleApiCarrier = {
@@ -138,20 +139,14 @@ export function normalizeGoogleProviderConfig(
 }
 
 export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  if (apiKey.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(apiKey) as { token?: string; projectId?: string };
-      if (typeof parsed.token === "string" && parsed.token) {
-        return {
-          headers: {
-            Authorization: `Bearer ${parsed.token}`,
-            "Content-Type": "application/json",
-          },
-        };
-      }
-    } catch {
-      // Fall back to API key mode.
-    }
+  const parsed = apiKey.startsWith("{") ? parseGoogleOauthApiKey(apiKey) : null;
+  if (parsed?.token) {
+    return {
+      headers: {
+        Authorization: `Bearer ${parsed.token}`,
+        "Content-Type": "application/json",
+      },
+    };
   }
 
   return {

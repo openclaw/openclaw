@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isGoogleGenerativeAiApi,
   normalizeGoogleGenerativeAiBaseUrl,
+  parseGeminiAuth,
   resolveGoogleGenerativeAiApiOrigin,
   resolveGoogleGenerativeAiTransport,
   shouldNormalizeGoogleGenerativeAiProviderConfig,
@@ -90,5 +91,23 @@ describe("google generative ai helpers", () => {
     expect(
       resolveGoogleGenerativeAiApiOrigin("https://generativelanguage.googleapis.com/v1beta"),
     ).toBe("https://generativelanguage.googleapis.com");
+  });
+
+  it("parses project-aware oauth auth payloads into bearer headers", () => {
+    expect(parseGeminiAuth(JSON.stringify({ token: "oauth-token", projectId: "project-1" }))).toEqual({
+      headers: {
+        Authorization: "Bearer oauth-token",
+        "Content-Type": "application/json",
+      },
+    });
+  });
+
+  it("falls back to API key headers for raw tokens", () => {
+    expect(parseGeminiAuth("api-key-123")).toEqual({
+      headers: {
+        "x-goog-api-key": "api-key-123",
+        "Content-Type": "application/json",
+      },
+    });
   });
 });
