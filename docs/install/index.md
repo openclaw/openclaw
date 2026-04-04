@@ -133,6 +133,12 @@ openclaw doctor         # check for config issues
 openclaw gateway status # verify the Gateway is running
 ```
 
+If you want managed startup after install:
+
+- macOS: LaunchAgent via `openclaw onboard --install-daemon` or `openclaw gateway install`
+- Linux/WSL2: systemd user service via the same commands
+- Native Windows: Scheduled Task first, with a per-user Startup-folder login item fallback if task creation is denied
+
 ## Hosting and deployment
 
 Deploy OpenClaw on a cloud server or VPS:

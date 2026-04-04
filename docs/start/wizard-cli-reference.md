@@ -20,7 +20,7 @@ Local mode (default) walks you through:
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
-- Daemon install (LaunchAgent or systemd user unit)
+- Daemon install (LaunchAgent, systemd user unit, or native Windows Scheduled Task with Startup-folder fallback)
 - Health check
 - Skills setup
 
@@ -79,6 +79,9 @@ It does not install or modify anything on the remote host.
     - Linux and Windows via WSL2: systemd user unit
       - Wizard attempts `loginctl enable-linger <user>` so gateway stays up after logout.
       - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
+    - Native Windows: Scheduled Task first
+      - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
+      - Scheduled Tasks remain preferred because they provide better supervisor status.
     - Runtime selection: Node (recommended; required for WhatsApp and Telegram). Bun is not recommended.
   </Step>
   <Step title="Health check">
