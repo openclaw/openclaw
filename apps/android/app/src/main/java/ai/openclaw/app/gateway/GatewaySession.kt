@@ -64,6 +64,7 @@ data class GatewayConnectErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
   val recommendedNextStep: String?,
+  val reason: String? = null,
 )
 
 private data class SelectedConnectAuth(
@@ -115,6 +116,8 @@ class GatewaySession(
     val message: String,
     val details: GatewayConnectErrorDetails? = null,
   )
+
+  data class RpcResult(val ok: Boolean, val payloadJson: String?, val error: ErrorShape?)
 
   private val json = Json { ignoreUnknownKeys = true }
   private val writeLock = Mutex()
@@ -196,6 +199,13 @@ class GatewaySession(
   }
 
   suspend fun request(method: String, paramsJson: String?, timeoutMs: Long = 15_000): String {
+    val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
+    if (res.ok) return res.payloadJson ?: ""
+    val err = res.error
+    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+  }
+
+  suspend fun requestDetailed(method: String, paramsJson: String?, timeoutMs: Long = 15_000): RpcResult {
     val conn = currentConnection ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
@@ -204,9 +214,7 @@ class GatewaySession(
         json.parseToJsonElement(paramsJson)
       }
     val res = conn.request(method, params, timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    val err = res.error
-    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+    return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
   suspend fun refreshNodeCanvasCapability(timeoutMs: Long = 8_000): Boolean {
@@ -631,6 +639,7 @@ class GatewaySession(
                 code = it["code"].asStringOrNull(),
                 canRetryWithDeviceToken = it["canRetryWithDeviceToken"].asBooleanOrNull() == true,
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
+                reason = it["reason"].asStringOrNull(),
               )
             }
           ErrorShape(code, msg, details)
