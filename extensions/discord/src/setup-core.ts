@@ -52,7 +52,7 @@ export function setDiscordGuildChannelAllowlist(
     const existing = guilds[guildKey] ?? {};
     if (entry.channelKey) {
       const channels = { ...existing.channels };
-      channels[entry.channelKey] = { allow: true };
+      channels[entry.channelKey] = { enabled: true };
       guilds[guildKey] = { ...existing, channels };
     } else {
       guilds[guildKey] = existing;

@@ -30,7 +30,7 @@ export function createSlackSystemEventTestHarness(overrides?: SlackSystemEventTe
       ? {
           C1: {
             users: overrides.channelUsers,
-            allow: true,
+            enabled: true,
           },
         }
       : undefined,

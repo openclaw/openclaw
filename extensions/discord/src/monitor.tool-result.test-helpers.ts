@@ -37,7 +37,7 @@ export const CATEGORY_GUILD_CFG = {
       guilds: {
         "*": {
           requireMention: false,
-          channels: { c1: { allow: true } },
+          channels: { c1: { enabled: true } },
         },
       },
     },
@@ -122,7 +122,7 @@ export async function createCategoryGuildHandler(runtimeError?: (err: unknown) =
   return createGuildHandler({
     cfg: CATEGORY_GUILD_CFG,
     guildEntries: {
-      "*": { requireMention: false, channels: { c1: { allow: true } } },
+      "*": { requireMention: false, channels: { c1: { enabled: true } } },
     },
     runtimeError,
   });
@@ -298,7 +298,7 @@ export function createMentionRequiredGuildConfig(overrides?: Partial<Config>): C
         guilds: {
           "*": {
             requireMention: true,
-            channels: { c1: { allow: true } },
+            channels: { c1: { enabled: true } },
           },
         },
       },

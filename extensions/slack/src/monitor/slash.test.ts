@@ -695,7 +695,7 @@ describe("Slack native command argument menus", () => {
 
 function createPolicyHarness(overrides?: {
   groupPolicy?: "open" | "allowlist";
-  channelsConfig?: Record<string, { allow?: boolean; requireMention?: boolean }>;
+  channelsConfig?: Record<string, { enabled?: boolean; requireMention?: boolean }>;
   channelId?: string;
   channelName?: string;
   allowFrom?: string[];
@@ -864,7 +864,7 @@ describe("slack slash commands channel policy", () => {
   it("blocks explicitly denied channels when groupPolicy is open", async () => {
     const harness = createPolicyHarness({
       groupPolicy: "open",
-      channelsConfig: { C_DENIED: { allow: false } },
+      channelsConfig: { C_DENIED: { enabled: false } },
       channelId: "C_DENIED",
       channelName: "denied",
     });

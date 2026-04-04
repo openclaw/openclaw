@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -504,6 +507,177 @@ describe("legacy migrate channel streaming aliases", () => {
     });
     expect(res.config?.channels?.discord).toMatchObject({
       streaming: "off",
+    });
+  });
+});
+
+describe("legacy migrate nested channel enabled aliases", () => {
+  it("accepts legacy allow aliases through with-plugins validation and normalizes them", () => {
+    const raw = {
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: false,
+            },
+          },
+        },
+        googlechat: {
+          groups: {
+            "spaces/aaa": {
+              allow: true,
+            },
+          },
+        },
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                general: {
+                  allow: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(validated.config.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+    expect(validated.config.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+      enabled: true,
+    });
+    expect(validated.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
+      enabled: false,
+    });
+
+    const rawValidated = validateConfigObjectRawWithPlugins(raw);
+    expect(rawValidated.ok).toBe(true);
+    if (!rawValidated.ok) {
+      return;
+    }
+    expect(rawValidated.config.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("moves legacy allow toggles into enabled for slack, googlechat, and discord", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              channels: {
+                general: {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        googlechat: {
+          groups: {
+            "spaces/aaa": {
+              allow: false,
+            },
+          },
+          accounts: {
+            work: {
+              groups: {
+                "spaces/bbb": {
+                  allow: true,
+                },
+              },
+            },
+          },
+        },
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                general: {
+                  allow: false,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              guilds: {
+                "200": {
+                  channels: {
+                    help: {
+                      allow: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Moved channels.slack.channels.ops.allow → channels.slack.channels.ops.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.slack.accounts.work.channels.general.allow → channels.slack.accounts.work.channels.general.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.googlechat.groups.spaces/aaa.allow → channels.googlechat.groups.spaces/aaa.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.googlechat.accounts.work.groups.spaces/bbb.allow → channels.googlechat.accounts.work.groups.spaces/bbb.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.guilds.100.channels.general.allow → channels.discord.guilds.100.channels.general.enabled.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
+    );
+    expect(res.config?.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+      enabled: false,
+    });
+    expect(res.config?.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
+      enabled: false,
+    });
+  });
+
+  it("drops legacy allow when enabled is already set", () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: true,
+              enabled: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Removed channels.slack.channels.ops.allow (channels.slack.channels.ops.enabled already set).",
+    );
+    expect(res.config?.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
     });
   });
 });
