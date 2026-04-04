@@ -1285,6 +1285,8 @@ export function buildGatewaySessionRow(params: {
     outputTokens: entry?.outputTokens,
     totalTokens,
     totalTokensFresh,
+    // currentWindowTokens: actual context in use (post-compaction = transcript tokens when fresh=false)
+    currentWindowTokens: totalTokensFresh ? totalTokens : (transcriptUsage?.totalTokens ?? totalTokens),
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

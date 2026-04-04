@@ -48,6 +48,8 @@ export type GatewaySessionRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  /** Current context window tokens (post-compaction). Use this for UI context %, not totalTokens which is lifetime. */
+  currentWindowTokens?: number;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
   startedAt?: number;

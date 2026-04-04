@@ -294,10 +294,9 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  if (session?.totalTokensFresh === false) {
-    return nothing;
-  }
-  const used = session?.totalTokens ?? 0;
+  // Use currentWindowTokens if available (post-compaction), fall back to totalTokens (lifetime)
+  // Note: We no longer hide when totalTokensFresh=false because currentWindowTokens is valid
+  const used = session?.currentWindowTokens ?? session?.totalTokens ?? 0;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
