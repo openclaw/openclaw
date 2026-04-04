@@ -9,7 +9,6 @@ import {
 } from "../infra/exec-approval-surface.js";
 import {
   maxAsk,
-  minSecurity,
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovals,
   type ExecAsk,
@@ -203,7 +202,13 @@ export function resolveExecHostApprovalContext(params: {
     security: params.security,
     ask: params.ask,
   });
-  const hostSecurity = minSecurity(params.security, approvals.agent.security);
+  // exec-approvals.json is the authoritative security policy and must be able to grant
+  // a less-restrictive level (e.g. "full") even when tool/runtime defaults are stricter
+  // (e.g. "allowlist"). This matches node-host behavior and mirrors the ask=off special
+  // case: exec-approvals.json can suppress prompts AND grant broader execution rights.
+  // When exec-approvals.json has no explicit agent or defaults entry, approvals.agent.security
+  // falls back to params.security, so this is backward-compatible.
+  const hostSecurity = approvals.agent.security;
   // An explicit ask=off policy in exec-approvals.json must be able to suppress
   // prompts even when tool/runtime defaults are stricter (for example on-miss).
   const hostAsk = approvals.agent.ask === "off" ? "off" : maxAsk(params.ask, approvals.agent.ask);
