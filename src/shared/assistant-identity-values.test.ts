@@ -1,24 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { coerceIdentityValue } from "./assistant-identity-values.js";
 
-describe("shared/assistant-identity-values", () => {
-  it("returns undefined for missing or blank values", () => {
-    expect(coerceIdentityValue(undefined, 10)).toBeUndefined();
-    expect(coerceIdentityValue("   ", 10)).toBeUndefined();
-    expect(coerceIdentityValue(42 as unknown as string, 10)).toBeUndefined();
+describe("coerceIdentityValue", () => {
+  it("returns undefined for non-string input", () => {
+    expect(coerceIdentityValue(123 as any, 50)).toBeUndefined();
+    expect(coerceIdentityValue(null, 50)).toBeUndefined();
+    expect(coerceIdentityValue(undefined, 50)).toBeUndefined();
   });
 
-  it("trims values and preserves strings within the limit", () => {
-    expect(coerceIdentityValue("  OpenClaw  ", 20)).toBe("OpenClaw");
-    expect(coerceIdentityValue("  OpenClaw  ", 8)).toBe("OpenClaw");
+  it("returns undefined for empty or whitespace-only strings", () => {
+    expect(coerceIdentityValue("", 50)).toBeUndefined();
+    expect(coerceIdentityValue("   ", 50)).toBeUndefined();
   });
 
-  it("truncates overlong trimmed values at the exact limit", () => {
-    expect(coerceIdentityValue("  OpenClaw Assistant  ", 8)).toBe("OpenClaw");
+  it("returns trimmed value within maxLength", () => {
+    expect(coerceIdentityValue("  hello  ", 50)).toBe("hello");
+    expect(coerceIdentityValue("test", 10)).toBe("test");
   });
 
-  it("returns an empty string when truncating to a zero-length limit", () => {
-    expect(coerceIdentityValue("  OpenClaw  ", 0)).toBe("");
-    expect(coerceIdentityValue("  OpenClaw  ", -1)).toBe("OpenCla");
+  it("truncates values exceeding maxLength", () => {
+    const long = "a".repeat(100);
+    const result = coerceIdentityValue(long, 50);
+    expect(result?.length).toBe(50);
+    expect(result).toBe(long.slice(0, 50));
+  });
+
+  it("handles exact boundary length", () => {
+    expect(coerceIdentityValue("abc", 3)).toBe("abc");
+    expect(coerceIdentityValue("abcd", 3)).toBe("abc");
+  });
+
+  it("handles maxLength of 0", () => {
+    expect(coerceIdentityValue("test", 0)).toBe("");
   });
 });
