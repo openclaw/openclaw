@@ -74,6 +74,7 @@ Docs: https://docs.openclaw.ai
 - Agents/exec approvals: let `exec-approvals.json` agent security override stricter gateway tool defaults so approved subagents can use `security: "full"` without falling back to allowlist enforcement again. (#60310) Thanks @lml2468.
 - Tasks/maintenance: reconcile stale cron and chat-backed CLI task rows against live cron-job and agent-run ownership instead of treating any persisted session key as proof that the task is still running. (#60310) Thanks @lml2468.
 - Providers/GitHub Copilot: send IDE identity headers on runtime model requests and GitHub token exchange so IDE-authenticated Copilot runs stop failing with missing `Editor-Version`. (#60641) Thanks @VACInc and @vincentkoc.
+- Model picker/providers: treat bundled BytePlus and Volcengine plan aliases as their native providers during setup, and expose their bundled standard/coding catalogs before auth so setup can suggest the right models. (#58819) Thanks @Luckymingxuan.
 - Prompt caching: route Codex Responses and Anthropic Vertex through boundary-aware cache shaping, and report the actual outbound system prompt in cache traces so cache reuse and misses line up with what providers really receive. Thanks @vincentkoc.
 - MiniMax/pricing: keep bundled MiniMax highspeed pricing distinct in provider catalogs and preserve the lower M2.5 cache-read pricing when onboarding older MiniMax models. (#54214) Thanks @octo-patch.
 
