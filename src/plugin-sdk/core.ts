@@ -334,12 +334,19 @@ export function defineChannelPluginEntry<TPlugin>({
   registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  const resolvedConfigSchema = typeof configSchema === "function" ? configSchema() : configSchema;
+  let resolvedConfigSchema: ChannelPlugin<TResolvedAccount>["configSchema"] | undefined;
+  const getConfigSchema = (): ChannelPlugin<TResolvedAccount>["configSchema"] => {
+    resolvedConfigSchema ??=
+      typeof configSchema === "function" ? configSchema() : configSchema;
+    return resolvedConfigSchema;
+  };
   const entry = {
     id,
     name,
     description,
-    configSchema: resolvedConfigSchema,
+    get configSchema() {
+      return getConfigSchema();
+    },
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
