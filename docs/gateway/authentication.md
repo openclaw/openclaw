@@ -158,6 +158,10 @@ Onboarding shortcut:
 openclaw onboard --auth-choice anthropic-cli
 ```
 
+Interactive `openclaw onboard` and `openclaw configure` prefer Claude CLI for
+Anthropic and do not show setup-token in the assistant picker. Setup-token
+remains supported through the manual commands above.
+
 ## Checking model auth status
 
 ```bash

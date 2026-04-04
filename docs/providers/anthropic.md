@@ -305,6 +305,11 @@ Or in onboarding:
 openclaw onboard --auth-choice anthropic-cli
 ```
 
+Interactive `openclaw onboard` and `openclaw configure` now prefer **Anthropic
+Claude CLI** first and **Anthropic API key** second. The setup-token flow
+remains supported through manual auth commands, but is not shown in the
+assistant picker.
+
 What this does:
 
 - verifies Claude CLI is already signed in on the gateway host
@@ -339,7 +344,7 @@ you need to.
 
 More details: [/gateway/cli-backends](/gateway/cli-backends)
 
-## Option C: Claude setup-token
+## Option C: Claude setup-token (manual)
 
 **Best for:** using your Claude subscription with Anthropic **Extra Usage**
 enabled, or while transitioning to API-key billing.
@@ -352,23 +357,16 @@ Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. 
 claude setup-token
 ```
 
-Paste the token into OpenClaw (wizard: **Anthropic token (paste setup-token)**), or run it on the gateway host:
+Then either run it on the gateway host:
 
 ```bash
 openclaw models auth setup-token --provider anthropic
 ```
 
-If you generated the token on a different machine, paste it:
+Or if you generated the token on a different machine, paste it:
 
 ```bash
 openclaw models auth paste-token --provider anthropic
-```
-
-### CLI setup (setup-token)
-
-```bash
-# Paste a setup-token during setup
-openclaw onboard --auth-choice setup-token
 ```
 
 ### Config snippet (setup-token)

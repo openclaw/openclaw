@@ -105,6 +105,14 @@ function normalizeProviderWizardSetup(params: {
     ...(normalizeText(params.setup.choiceHint)
       ? { choiceHint: normalizeText(params.setup.choiceHint) }
       : {}),
+    ...(typeof params.setup.assistantPriority === "number" &&
+    Number.isFinite(params.setup.assistantPriority)
+      ? { assistantPriority: params.setup.assistantPriority }
+      : {}),
+    ...(params.setup.assistantVisibility === "manual-only" ||
+    params.setup.assistantVisibility === "visible"
+      ? { assistantVisibility: params.setup.assistantVisibility }
+      : {}),
     ...(normalizeText(params.setup.groupId)
       ? { groupId: normalizeText(params.setup.groupId) }
       : {}),

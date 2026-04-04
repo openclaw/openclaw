@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type { FlowContribution, FlowOption } from "./types.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
 import {
   resolveProviderModelPickerEntries,
   resolveProviderWizardOptions,
 } from "../plugins/provider-wizard.js";
 import { resolvePluginProviders } from "../plugins/providers.runtime.js";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { FlowContribution, FlowOption } from "./types.js";
 import { mergeFlowContributions, sortFlowContributionsByLabel } from "./types.js";
 
 export type ProviderFlowScope = "text-inference" | "image-generation";
@@ -95,6 +95,10 @@ export function resolveManifestProviderSetupFlowContributions(params?: {
         value: choice.choiceId,
         label: choice.choiceLabel,
         ...(choice.choiceHint ? { hint: choice.choiceHint } : {}),
+        ...(choice.assistantPriority !== undefined
+          ? { assistantPriority: choice.assistantPriority }
+          : {}),
+        ...(choice.assistantVisibility ? { assistantVisibility: choice.assistantVisibility } : {}),
         ...(choice.groupId && choice.groupLabel
           ? {
               group: {
@@ -142,6 +146,10 @@ export function resolveRuntimeFallbackProviderSetupFlowContributions(params?: {
         value: option.value,
         label: option.label,
         ...(option.hint ? { hint: option.hint } : {}),
+        ...(option.assistantPriority !== undefined
+          ? { assistantPriority: option.assistantPriority }
+          : {}),
+        ...(option.assistantVisibility ? { assistantVisibility: option.assistantVisibility } : {}),
         group: {
           id: option.groupId,
           label: option.groupLabel,

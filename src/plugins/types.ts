@@ -1,9 +1,9 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   ApiKeyCredential,
   AuthProfileCredential,
@@ -925,6 +925,8 @@ export type ProviderPluginWizardSetup = {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
