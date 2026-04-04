@@ -164,6 +164,26 @@ describe("web fetch runtime", () => {
     });
   });
 
+  it("uses runtime-only providers when runtime providers are preferred", () => {
+    const runtimeOnly = createProvider({
+      pluginId: "third-party-fetch",
+      id: "thirdparty",
+      credentialPath: "plugins.entries.third-party-fetch.config.webFetch.apiKey",
+      autoDetectOrder: 0,
+      getConfiguredCredentialValue: () => "runtime-key",
+    });
+    resolveBundledPluginWebFetchProvidersMock.mockReturnValue([]);
+    resolveRuntimeWebFetchProvidersMock.mockReturnValue([runtimeOnly]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {},
+      sandboxed: false,
+      preferRuntimeProviders: true,
+    });
+
+    expect(resolved?.provider.id).toBe("thirdparty");
+  });
+
   it("auto-detects providers from provider-declared env vars", () => {
     const provider = createProvider({
       pluginId: "firecrawl",
@@ -233,7 +253,7 @@ describe("web fetch runtime", () => {
     expect(resolved?.provider.id).toBe("firecrawl");
   });
 
-  it("keeps non-sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
+  it("prefers runtime providers for non-sandboxed web fetch when requested", () => {
     const bundled = createProvider({
       pluginId: "firecrawl",
       id: "firecrawl",
@@ -257,6 +277,6 @@ describe("web fetch runtime", () => {
       preferRuntimeProviders: true,
     });
 
-    expect(resolved?.provider.id).toBe("firecrawl");
+    expect(resolved?.provider.id).toBe("thirdparty");
   });
 });
