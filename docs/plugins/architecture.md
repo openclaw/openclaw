@@ -300,7 +300,8 @@ That same pattern should be preferred for future capabilities.
 ### Multi-capability company plugin example
 
 A company plugin should feel cohesive from the outside. If OpenClaw has shared
-contracts for models, speech, media understanding, and web search, a vendor can
+contracts for models, speech, realtime voice, media understanding,
+image generation, video generation, web fetch, and web search, a vendor can
 own all of its surfaces in one place:
 
 ```ts

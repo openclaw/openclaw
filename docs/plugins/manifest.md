@@ -231,6 +231,7 @@ Each list is optional:
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                  |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.             |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                |
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                       |
 | `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                      |
 | `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks. |
@@ -305,10 +306,13 @@ Fields:
 | `modelPrefixes` | `string[]` | Prefixes matched with `startsWith` against shorthand model ids.                 |
 | `modelPatterns` | `string[]` | Regex sources matched against shorthand model ids after profile suffix removal. |
 
-Legacy top-level `speechProviders`, `mediaUnderstandingProviders`, and
-`imageGenerationProviders` are deprecated. Use `openclaw doctor --fix` to move
-them under `contracts`; normal manifest loading no longer treats them as
-capability ownership.
+Legacy top-level capability keys are deprecated. Use `openclaw doctor --fix` to
+move `speechProviders`, `realtimeTranscriptionProviders`,
+`realtimeVoiceProviders`, `mediaUnderstandingProviders`,
+`imageGenerationProviders`, `videoGenerationProviders`,
+`webFetchProviders`, and `webSearchProviders` under `contracts`; normal
+manifest loading no longer treats those top-level fields as capability
+ownership.
 
 ## Manifest versus package.json
 
