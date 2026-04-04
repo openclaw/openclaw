@@ -3,6 +3,7 @@ import {
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../agents/schema/clean-for-gemini.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { applyModelCompatPatch } from "../plugins/provider-model-compat.js";
 import type {
   AnyAgentTool,
   ProviderNormalizeToolSchemasContext,
@@ -77,6 +78,13 @@ export function resolveXaiModelCompatPatch(): ModelCompatConfig {
     nativeWebSearchTool: true,
     toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   };
+}
+
+export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
+  return applyModelCompatPatch(
+    model as T & { compat?: ModelCompatConfig },
+    resolveXaiModelCompatPatch(),
+  ) as T;
 }
 
 export function findUnsupportedSchemaKeywords(
