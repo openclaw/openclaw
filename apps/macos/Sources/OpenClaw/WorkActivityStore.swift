@@ -4,6 +4,15 @@ import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
+/// Helper class to store task reference outside of @MainActor context for proper cleanup
+private final class TaskStorage {
+    var task: Task<Void, Never>?
+
+    deinit {
+        task?.cancel()
+    }
+}
+
 @MainActor
 @Observable
 final class WorkActivityStore {
@@ -16,6 +25,10 @@ final class WorkActivityStore {
         let label: String
         let startedAt: Date
         var lastUpdate: Date
+
+        mutating func refreshTimestamp() {
+            self.lastUpdate = Date()
+        }
     }
 
     private(set) var current: Activity?
@@ -23,13 +36,40 @@ final class WorkActivityStore {
     private(set) var lastToolLabel: String?
     private(set) var lastToolUpdatedAt: Date?
 
-    private var jobs: [String: Activity] = [:]
+    internal var jobs: [String: Activity] = [:]
     private var tools: [String: Activity] = [:]
     private var currentSessionKey: String?
     private var toolSeqBySession: [String: Int] = [:]
 
+    // MARK: - Watchdog Configuration
+
+    /// Watchdog system to clear stale jobs that never received a "done" event.
+    /// This prevents the menubar icon from freezing when AI providers (e.g. Anthropic)
+    /// return overload/timeout errors and the gateway never sends run-end events.
+    ///
+    /// The watchdog runs every 30 seconds and evicts jobs/tools that haven't been
+    /// updated in over 120 seconds. Job timestamps are refreshed on streaming updates
+    /// and tool activity to prevent false evictions of healthy long-running tasks.
+    private static let jobWatchdogInterval: TimeInterval = 30.0
+    private static let jobStaleThreshold: TimeInterval = 120.0
+    private let watchdogTaskStorage: TaskStorage = TaskStorage()
+
+    /// Access the watchdog task for testing purposes
+    internal var watchdogTask: Task<Void, Never>? {
+        get { watchdogTaskStorage.task }
+        set { watchdogTaskStorage.task = newValue }
+    }
+
     private var mainSessionKeyStorage = "main"
     private let toolResultGrace: TimeInterval = 2.0
+
+    init() {
+        self.startWatchdog()
+    }
+
+    deinit {
+        // TaskStorage will automatically cancel the task in its own deinit
+    }
 
     var mainSessionKey: String {
         self.mainSessionKeyStorage
@@ -38,14 +78,21 @@ final class WorkActivityStore {
     func handleJob(sessionKey: String, state: String) {
         let isStart = state.lowercased() == "started" || state.lowercased() == "streaming"
         if isStart {
-            let activity = Activity(
-                sessionKey: sessionKey,
-                role: self.role(for: sessionKey),
-                kind: .job,
-                label: "job",
-                startedAt: Date(),
-                lastUpdate: Date())
-            self.setJobActive(activity)
+            if var existing = self.jobs[sessionKey], state.lowercased() == "streaming" {
+                // Update timestamp for streaming updates on existing jobs
+                existing.refreshTimestamp()
+                self.setJobActive(existing)
+            } else {
+                // Create new job activity
+                let activity = Activity(
+                    sessionKey: sessionKey,
+                    role: self.role(for: sessionKey),
+                    kind: .job,
+                    label: "job",
+                    startedAt: Date(),
+                    lastUpdate: Date())
+                self.setJobActive(activity)
+            }
         } else {
             // Job ended (done/error/aborted/etc). Clear everything for this session.
             self.clearTool(sessionKey: sessionKey)
@@ -66,6 +113,13 @@ final class WorkActivityStore {
             self.lastToolLabel = label
             self.lastToolUpdatedAt = Date()
             self.toolSeqBySession[sessionKey, default: 0] += 1
+
+            // Refresh the job's lastUpdate timestamp to keep it alive during tool activity
+            if var job = self.jobs[sessionKey] {
+                job.refreshTimestamp()
+                self.jobs[sessionKey] = job
+            }
+
             let activity = Activity(
                 sessionKey: sessionKey,
                 role: self.role(for: sessionKey),
@@ -256,5 +310,59 @@ final class WorkActivityStore {
             return array.map { self.unwrapJSONValue($0) }
         }
         return value
+    }
+
+    // MARK: - Watchdog
+
+    /// Periodically evicts jobs and tools that have been stuck with no completion event.
+    /// This prevents the menubar icon from freezing when the AI provider (e.g. Anthropic)
+    /// returns an overload/timeout error and the gateway never sends the run-end event.
+    private func startWatchdog() {
+        self.watchdogTask?.cancel()
+        self.watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(Self.jobWatchdogInterval * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                await MainActor.run { self?.evictStaleActivities() }
+            }
+        }
+    }
+
+    internal func evictStaleActivities() {
+        let now = Date()
+        let threshold = Self.jobStaleThreshold
+        var changed = false
+
+        // Collect stale keys first to avoid mutation during iteration
+        var staleJobKeys: [String] = []
+        var staleToolKeys: [String] = []
+
+        for (key, activity) in self.jobs {
+            if now.timeIntervalSince(activity.lastUpdate) > threshold {
+                staleJobKeys.append(key)
+            }
+        }
+        for (key, activity) in self.tools {
+            if now.timeIntervalSince(activity.lastUpdate) > threshold {
+                staleToolKeys.append(key)
+            }
+        }
+
+        // Remove stale activities
+        for key in staleJobKeys {
+            self.jobs.removeValue(forKey: key)
+            changed = true
+        }
+        for key in staleToolKeys {
+            self.tools.removeValue(forKey: key)
+            changed = true
+        }
+
+        if changed {
+            if let key = self.currentSessionKey, !self.isActive(sessionKey: key) {
+                self.pickNextSession()
+            }
+            self.refreshDerivedState()
+        }
     }
 }
