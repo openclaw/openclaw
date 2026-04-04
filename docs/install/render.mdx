@@ -119,13 +119,15 @@ For OpenClaw, vertical scaling is usually sufficient. Horizontal scaling require
 
 ## Backups and migration
 
-Export your configuration and workspace at any time using the shell access in the Render Dashboard:
+Export your state, config, auth profiles, and workspace at any time using the
+shell access in the Render Dashboard:
 
 ```bash
 openclaw backup create
 ```
 
-This creates a portable backup archive you can restore on any OpenClaw host. See [Backup](/cli/backup) for details.
+This creates a portable backup archive with OpenClaw state plus any configured
+workspace. See [Backup](/cli/backup) for details.
 
 ## Troubleshooting
 
@@ -143,7 +145,7 @@ Free tier services spin down after 15 minutes of inactivity. The first request a
 ### Data loss after redeploy
 
 This happens on free tier (no persistent disk). Upgrade to a paid plan, or
-regularly export your config via `openclaw backup create` in the Render shell.
+regularly export a full backup via `openclaw backup create` in the Render shell.
 
 ### Health check failures
 
