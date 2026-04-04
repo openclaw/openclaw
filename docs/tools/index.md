@@ -69,6 +69,11 @@ These tools ship with OpenClaw and are available without installing any plugins:
 
 For image work, use `image` for analysis and `image_generate` for generation or editing. If you target `openai/*`, `google/*`, `fal/*`, or another non-default image provider, configure that provider's auth/API key first.
 
+`session_status` is the lightweight status/readback tool in the sessions group.
+It answers `/status`-style questions about the current session and can
+optionally set a per-session model override; `model=default` clears that
+override.
+
 ### Plugin-provided tools
 
 Plugins can register additional tools. Some examples:

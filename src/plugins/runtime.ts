@@ -1,30 +1,17 @@
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
-
-const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
-
-type RegistrySurfaceState = {
-  registry: PluginRegistry | null;
-  pinned: boolean;
-  version: number;
-};
-
-type RegistryState = {
-  activeRegistry: PluginRegistry | null;
-  activeVersion: number;
-  httpRoute: RegistrySurfaceState;
-  channel: RegistrySurfaceState;
-  key: string | null;
-  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
-  importedPluginIds: Set<string>;
-};
+import {
+  PLUGIN_REGISTRY_STATE,
+  type RegistryState,
+  type RegistrySurfaceState,
+} from "./runtime-state.js";
 
 const state: RegistryState = (() => {
   const globalState = globalThis as typeof globalThis & {
-    [REGISTRY_STATE]?: RegistryState;
+    [PLUGIN_REGISTRY_STATE]?: RegistryState;
   };
-  if (!globalState[REGISTRY_STATE]) {
-    globalState[REGISTRY_STATE] = {
+  if (!globalState[PLUGIN_REGISTRY_STATE]) {
+    globalState[PLUGIN_REGISTRY_STATE] = {
       activeRegistry: null,
       activeVersion: 0,
       httpRoute: {
@@ -42,7 +29,7 @@ const state: RegistryState = (() => {
       importedPluginIds: new Set<string>(),
     };
   }
-  return globalState[REGISTRY_STATE];
+  return globalState[PLUGIN_REGISTRY_STATE];
 })();
 
 export function recordImportedPluginId(pluginId: string): void {

@@ -57,15 +57,35 @@ automatically.
 
 ## Available models
 
-- **doubao-seed-1-8** - Doubao Seed 1.8 (general, default)
-- **doubao-seed-code-preview** - Doubao coding model
-- **ark-code-latest** - Coding plan default
-- **Kimi K2.5** - Moonshot AI via Volcano Engine
-- **GLM-4.7** - GLM via Volcano Engine
-- **DeepSeek V3.2** - DeepSeek via Volcano Engine
+General provider (`volcengine`):
 
-Most models support text + image input. Context windows range from 128K to 256K
-tokens.
+| Model ref                                    | Name                            | Input       | Context |
+| -------------------------------------------- | ------------------------------- | ----------- | ------- |
+| `volcengine/doubao-seed-1-8-251228`          | Doubao Seed 1.8                 | text, image | 256,000 |
+| `volcengine/doubao-seed-code-preview-251028` | doubao-seed-code-preview-251028 | text, image | 256,000 |
+| `volcengine/kimi-k2-5-260127`                | Kimi K2.5                       | text, image | 256,000 |
+| `volcengine/glm-4-7-251222`                  | GLM 4.7                         | text, image | 200,000 |
+| `volcengine/deepseek-v3-2-251201`            | DeepSeek V3.2                   | text, image | 128,000 |
+
+Coding provider (`volcengine-plan`):
+
+| Model ref                                         | Name                     | Input | Context |
+| ------------------------------------------------- | ------------------------ | ----- | ------- |
+| `volcengine-plan/ark-code-latest`                 | Ark Coding Plan          | text  | 256,000 |
+| `volcengine-plan/doubao-seed-code`                | Doubao Seed Code         | text  | 256,000 |
+| `volcengine-plan/glm-4.7`                         | GLM 4.7 Coding           | text  | 200,000 |
+| `volcengine-plan/kimi-k2-thinking`                | Kimi K2 Thinking         | text  | 256,000 |
+| `volcengine-plan/kimi-k2.5`                       | Kimi K2.5 Coding         | text  | 256,000 |
+| `volcengine-plan/doubao-seed-code-preview-251028` | Doubao Seed Code Preview | text  | 256,000 |
+
+`openclaw onboard --auth-choice volcengine-api-key` currently sets
+`volcengine-plan/ark-code-latest` as the default model while also registering
+the general `volcengine` catalog.
+
+During onboarding/configure model selection, the Volcengine auth choice prefers
+both `volcengine/*` and `volcengine-plan/*` rows. If those models are not
+loaded yet, OpenClaw falls back to the unfiltered catalog instead of showing an
+empty provider-scoped picker.
 
 ## Environment note
 

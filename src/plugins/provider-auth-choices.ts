@@ -10,6 +10,8 @@ export type ProviderAuthChoiceMetadata = {
   choiceId: string;
   choiceLabel: string;
   choiceHint?: string;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
   deprecatedChoiceIds?: string[];
   groupId?: string;
   groupLabel?: string;
@@ -59,6 +61,12 @@ export function resolveManifestProviderAuthChoices(params?: {
           choiceId: choice.choiceId,
           choiceLabel: choice.choiceLabel ?? choice.choiceId,
           ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+          ...(choice.assistantPriority !== undefined
+            ? { assistantPriority: choice.assistantPriority }
+            : {}),
+          ...(choice.assistantVisibility
+            ? { assistantVisibility: choice.assistantVisibility }
+            : {}),
           ...(choice.deprecatedChoiceIds
             ? { deprecatedChoiceIds: choice.deprecatedChoiceIds }
             : {}),

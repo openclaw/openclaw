@@ -11,6 +11,7 @@ import type {
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderRequestTransportOverrides } from "../agents/provider-request-config.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
@@ -749,6 +750,30 @@ export type ProviderResolveWebSocketSessionPolicyContext = {
 };
 
 /**
+ * Provider-owned failover error classification input.
+ *
+ * Use this when provider-specific transport or API errors need classification
+ * hints that generic string matching cannot express safely.
+ */
+export type ProviderFailoverErrorContext = {
+  provider?: string;
+  modelId?: string;
+  errorMessage: string;
+};
+
+/**
+ * Provider-owned config-default application input.
+ *
+ * Use this when a provider needs to add global config defaults that depend on
+ * provider auth mode or provider-specific model families.
+ */
+export type ProviderApplyConfigDefaultsContext = {
+  provider: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+};
+
+/**
  * Generic embedding provider shape returned by provider plugins.
  *
  * Keep this aligned with the memory embedding contract without forcing the
@@ -925,6 +950,8 @@ export type ProviderPluginWizardSetup = {
   choiceId?: string;
   choiceLabel?: string;
   choiceHint?: string;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -1287,6 +1314,20 @@ export type ProviderPlugin = {
     ctx: ProviderFetchUsageSnapshotContext,
   ) => Promise<ProviderUsageSnapshot | null | undefined> | ProviderUsageSnapshot | null | undefined;
   /**
+   * Provider-owned failover context-overflow matcher.
+   *
+   * Return true when the provider recognizes the raw error as a context-window
+   * overflow shape that generic heuristics would miss.
+   */
+  matchesContextOverflowError?: (ctx: ProviderFailoverErrorContext) => boolean | undefined;
+  /**
+   * Provider-owned failover error classification.
+   *
+   * Return a failover reason when the provider recognizes a provider-specific
+   * raw error shape. Return undefined to fall back to generic classification.
+   */
+  classifyFailoverReason?: (ctx: ProviderFailoverErrorContext) => FailoverReason | null | undefined;
+  /**
    * Provider-owned cache TTL eligibility.
    *
    * Use this when a proxy provider supports Anthropic-style prompt caching for
@@ -1357,6 +1398,15 @@ export type ProviderPlugin = {
   resolveDefaultThinkingLevel?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | null | undefined;
+  /**
+   * Provider-owned global config defaults.
+   *
+   * Use this when config materialization needs provider-specific defaults that
+   * depend on auth mode, env, or provider model-family semantics.
+   */
+  applyConfigDefaults?: (
+    ctx: ProviderApplyConfigDefaultsContext,
+  ) => OpenClawConfig | null | undefined;
   /**
    * Provider-owned "modern model" matcher used by live profile/smoke filters.
    *
@@ -1942,6 +1992,13 @@ export type OpenClawPluginApi = {
   registerHttpRoute: (params: OpenClawPluginHttpRouteParams) => void;
   /** Register a native messaging channel plugin (channel capability). */
   registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
+  /**
+   * Register a gateway RPC method for this plugin.
+   *
+   * Reserved core admin namespaces (`config.*`, `exec.approvals.*`,
+   * `wizard.*`, `update.*`) always normalize to `operator.admin` even if a
+   * narrower scope is requested.
+   */
   registerGatewayMethod: (
     method: string,
     handler: GatewayRequestHandler,

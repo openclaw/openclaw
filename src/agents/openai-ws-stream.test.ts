@@ -219,6 +219,7 @@ const mockStreamSimple = vi.fn((model: unknown, context: unknown, options?: unkn
   });
   return stream;
 });
+const mockCreateHttpFallbackStreamFn = vi.fn(() => mockStreamSimple as never);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -280,7 +281,7 @@ function assistantMsg(
     stopReason: toolCalls.length > 0 ? "toolUse" : "stop",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: {},
     timestamp: 0,
   };
@@ -304,7 +305,7 @@ function makeFakeAssistantMessage(text: string) {
     stopReason: "stop" as const,
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: {
       input: 10,
       output: 5,
@@ -347,7 +348,7 @@ function makeResponseObject(
     object: "response",
     created_at: Date.now(),
     status: "completed",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     output,
     usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
   };
@@ -582,7 +583,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -693,7 +694,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -722,7 +723,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -750,7 +751,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -778,7 +779,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -805,7 +806,7 @@ describe("convertMessagesToInputItems", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildAssistantMessageFromResponse", () => {
-  const modelInfo = { api: "openai-responses", provider: "openai", id: "gpt-5.2" };
+  const modelInfo = { api: "openai-responses", provider: "openai", id: "gpt-5.4" };
 
   it("extracts text content from a message output item", () => {
     const response = makeResponseObject("resp_1", "Hello from assistant");
@@ -859,12 +860,53 @@ describe("buildAssistantMessageFromResponse", () => {
     expect(msg.usage.totalTokens).toBe(150);
   });
 
+  it("maps prompt_tokens and completion_tokens usage aliases", () => {
+    const response = makeResponseObject("resp_5b", "Hello");
+    response.usage = {
+      prompt_tokens: 44,
+      completion_tokens: 11,
+      total_tokens: 55,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(44);
+    expect(msg.usage.output).toBe(11);
+    expect(msg.usage.totalTokens).toBe(55);
+  });
+
+  it("falls back to normalized input and output when total_tokens is missing", () => {
+    const response = makeResponseObject("resp_5c", "Hello");
+    response.usage = {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(10);
+    expect(msg.usage.output).toBe(5);
+    expect(msg.usage.totalTokens).toBe(15);
+  });
+
+  it("falls back to normalized input and output when total_tokens is zero", () => {
+    const response = makeResponseObject("resp_5d", "Hello");
+    response.usage = {
+      input_tokens: 10,
+      output_tokens: 5,
+      total_tokens: 0,
+    };
+
+    const msg = buildAssistantMessageFromResponse(response, modelInfo);
+    expect(msg.usage.input).toBe(10);
+    expect(msg.usage.output).toBe(5);
+    expect(msg.usage.totalTokens).toBe(15);
+  });
+
   it("sets model/provider/api from modelInfo", () => {
     const response = makeResponseObject("resp_6", "Hi");
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
     expect(msg.api).toBe("openai-responses");
     expect(msg.provider).toBe("openai");
-    expect(msg.model).toBe("gpt-5.2");
+    expect(msg.model).toBe("gpt-5.4");
   });
 
   it("handles empty output gracefully", () => {
@@ -890,7 +932,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -922,7 +964,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning.summary",
@@ -949,7 +991,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning.summary",
@@ -985,7 +1027,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1006,7 +1048,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1082,7 +1124,7 @@ describe("planTurnInput", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1107,7 +1149,7 @@ describe("planTurnInput", () => {
         buildAssistantMessageFromResponse(turn1Response, {
           api: "openai-responses",
           provider: "openai",
-          id: "gpt-5.2",
+          id: "gpt-5.4",
         }),
       ] as Parameters<typeof convertMessagesToInputItems>[0],
       tools: [],
@@ -1162,7 +1204,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
   const modelStub = {
     api: "openai-responses",
     provider: "openai",
-    id: "gpt-5.2",
+    id: "gpt-5.4",
     contextWindow: 128000,
     maxTokens: 4096,
     reasoning: false,
@@ -1180,8 +1222,11 @@ describe("createOpenAIWebSocketStreamFn", () => {
   beforeEach(() => {
     MockManager.reset();
     streamSimpleCalls.length = 0;
+    mockCreateHttpFallbackStreamFn.mockReset();
+    mockCreateHttpFallbackStreamFn.mockReturnValue(mockStreamSimple as never);
     openAIWsStreamTesting.setDepsForTest({
       createManager: ((options?: unknown) => new MockManager(options)) as never,
+      createHttpFallbackStreamFn: mockCreateHttpFallbackStreamFn as never,
       streamSimple: mockStreamSimple,
     });
   });
@@ -1195,6 +1240,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-1");
     releaseWsSession("sess-2");
     releaseWsSession("sess-fallback");
+    releaseWsSession("sess-boundary-http-fallback");
     releaseWsSession("sess-incremental");
     releaseWsSession("sess-full");
     releaseWsSession("sess-phase");
@@ -1261,7 +1307,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(manager.sentEvents).toHaveLength(1);
     const sent = manager.sentEvents[0] as { type: string; model: string; input: unknown[] };
     expect(sent.type).toBe("response.create");
-    expect(sent.model).toBe("gpt-5.2");
+    expect(sent.model).toBe("gpt-5.4");
     expect(Array.isArray(sent.input)).toBe(true);
   });
 
@@ -1747,7 +1793,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1929,6 +1975,64 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(hasWsSession(sessionId)).toBe(false);
     // HTTP fallback invoked
     expect(streamSimpleCalls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("routes websocket HTTP fallback through the configured HTTP fallback builder", async () => {
+    const httpFallbackCalls: Array<{ model: unknown; context: unknown; options?: unknown }> = [];
+    const httpFallbackStreamFn = vi.fn((model: unknown, context: unknown, options?: unknown) => {
+      httpFallbackCalls.push({ model, context, options });
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const msg = makeFakeAssistantMessage("boundary-safe fallback");
+        stream.push({ type: "done", reason: "stop", message: msg });
+        stream.end();
+      });
+      return stream;
+    });
+    mockCreateHttpFallbackStreamFn.mockReturnValue(httpFallbackStreamFn as never);
+    const sessionId = "sess-boundary-http-fallback";
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
+
+    const stream1 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-ok", "OK"),
+          });
+          for await (const _ of await resolveStream(stream1)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+
+    MockManager.globalSendFailuresRemaining = 2;
+    const stream2 = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      {
+        ...contextStub,
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+      } as Parameters<typeof streamFn>[1],
+    );
+    for await (const _ of await resolveStream(stream2)) {
+      /* consume */
+    }
+
+    expect(mockCreateHttpFallbackStreamFn).toHaveBeenCalled();
+    expect(streamSimpleCalls).toHaveLength(0);
+    expect(httpFallbackCalls).toHaveLength(1);
+    expect(httpFallbackCalls[0]?.context).toMatchObject({
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+    });
   });
 
   it("forwards temperature and maxTokens to response.create", async () => {
@@ -2156,6 +2260,42 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.text).toEqual({ verbosity: "low" });
     expect(sent.service_tier).toBe("priority");
   });
+
+  it("awaits async onPayload mutations before sending response.create", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-onpayload-async");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {
+        onPayload: async (payload: unknown) => {
+          const request = payload as Record<string, unknown>;
+          await Promise.resolve();
+          request.metadata = { async_hook: "applied" };
+          return undefined;
+        },
+      } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-onpayload-async", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.metadata).toMatchObject({ async_hook: "applied" });
+  });
   it("forwards topP and toolChoice to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");
     const opts = { topP: 0.9, toolChoice: "auto" };
@@ -2288,6 +2428,7 @@ describe("releaseWsSession / hasWsSession", () => {
     MockManager.reset();
     openAIWsStreamTesting.setDepsForTest({
       createManager: (() => new MockManager()) as never,
+      createHttpFallbackStreamFn: mockCreateHttpFallbackStreamFn as never,
       streamSimple: mockStreamSimple,
     });
   });
@@ -2307,7 +2448,7 @@ describe("releaseWsSession / hasWsSession", () => {
       {
         api: "openai-responses",
         provider: "openai",
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         contextWindow: 128000,
         maxTokens: 4096,
         reasoning: false,
@@ -2343,7 +2484,7 @@ describe("releaseWsSession / hasWsSession", () => {
       {
         api: "openai-responses",
         provider: "openai",
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         contextWindow: 128000,
         maxTokens: 4096,
         reasoning: false,

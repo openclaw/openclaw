@@ -7,7 +7,7 @@ summary: Web 搜索 + 获取工具（Brave Search API、Perplexity 直连/OpenRo
 title: Web 工具
 x-i18n:
   generated_at: "2026-02-03T10:12:43Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 760b706cc966cb421e370f10f8e76047f8ca9fe0a106d90c05d979976789465a
   source_path: tools/web.md

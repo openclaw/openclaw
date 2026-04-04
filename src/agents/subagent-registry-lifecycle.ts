@@ -1,4 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -604,6 +605,12 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!completeParams.triggerCleanup || suppressedForSteerRestart) {
       return;
     }
+
+    await cleanupBrowserSessionsForLifecycleEnd({
+      sessionKeys: [entry.childSessionKey],
+      onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+    });
+
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
   };
 

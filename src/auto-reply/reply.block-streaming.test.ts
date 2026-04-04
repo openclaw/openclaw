@@ -53,7 +53,7 @@ vi.mock("./command-auth.js", () => ({
 vi.mock("./reply/directive-handling.defaults.js", () => ({
   resolveDefaultModel: vi.fn(() => ({
     defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-5",
+    defaultModel: "claude-opus-4-6",
     aliasIndex: new Map(),
   })),
 }));
@@ -106,7 +106,7 @@ function createReplyConfig(streamMode?: "block"): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         workspace: "/tmp/workspace",
       },
     },
@@ -152,7 +152,7 @@ function createContinueDirectivesResult() {
       blockReplyChunking: undefined,
       resolvedBlockStreamingBreak: "message_end",
       provider: "anthropic",
-      model: "claude-opus-4-5",
+      model: "claude-opus-4-6",
       modelState: {
         resolveDefaultThinkingLevel: async () => undefined,
       },

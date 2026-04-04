@@ -6,7 +6,7 @@ summary: OpenClawをインストールし、数分で最初のチャットを実
 title: はじめに
 x-i18n:
   generated_at: "2026-02-08T17:15:16Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 27aeeb3d18c495380e94e6b011b0df3def518535c9f1eee504f04871d8a32269
   source_path: start/getting-started.md

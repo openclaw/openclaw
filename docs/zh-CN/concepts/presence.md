@@ -7,7 +7,7 @@ summary: OpenClaw 在线状态条目如何生成、合并和显示
 title: 在线状态
 x-i18n:
   generated_at: "2026-02-03T07:46:37Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: c752c76a880878fed673d656db88beb5dbdeefff2491985127ad791521f97d00
   source_path: concepts/presence.md

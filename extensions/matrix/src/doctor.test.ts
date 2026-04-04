@@ -8,6 +8,7 @@ import {
   collectMatrixInstallPathWarnings,
   formatMatrixLegacyCryptoPreview,
   formatMatrixLegacyStatePreview,
+  matrixDoctor,
   runMatrixDoctorSequence,
 } from "./doctor.js";
 
@@ -124,5 +125,49 @@ describe("matrix doctor", () => {
       shouldRepair: true,
     });
     expect(sequence.changeNotes.join("\n")).toContain("Matrix migration snapshot");
+  });
+
+  it("normalizes legacy Matrix room allow aliases to enabled", () => {
+    const normalize = matrixDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          matrix: {
+            groups: {
+              "!ops:example.org": {
+                allow: true,
+              },
+            },
+            accounts: {
+              work: {
+                rooms: {
+                  "!legacy:example.org": {
+                    allow: false,
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.matrix?.groups?.["!ops:example.org"]).toEqual({
+      enabled: true,
+    });
+    expect(result.config.channels?.matrix?.accounts?.work?.rooms?.["!legacy:example.org"]).toEqual({
+      enabled: false,
+    });
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        "Moved channels.matrix.groups.!ops:example.org.allow → channels.matrix.groups.!ops:example.org.enabled (true).",
+        "Moved channels.matrix.accounts.work.rooms.!legacy:example.org.allow → channels.matrix.accounts.work.rooms.!legacy:example.org.enabled (false).",
+      ]),
+    );
   });
 });

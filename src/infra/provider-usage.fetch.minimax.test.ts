@@ -117,6 +117,33 @@ describe("fetchMinimaxUsage", () => {
       },
     },
     {
+      name: "treats MiniMax current_interval_usage_count as remaining quota (not consumed)",
+      payload: {
+        data: {
+          current_interval_total_count: 100,
+          current_interval_usage_count: 98,
+          plan_name: "Coding Plan",
+        },
+      },
+      expected: {
+        plan: "Coding Plan",
+        windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
+      },
+    },
+    {
+      name: "inverts usage_percent when no count fields are present (remaining to used)",
+      payload: {
+        data: {
+          usage_percent: 98,
+          plan_name: "Coding Plan",
+        },
+      },
+      expected: {
+        plan: "Coding Plan",
+        windows: [{ label: "5h", usedPercent: 2, resetAt: undefined }],
+      },
+    },
+    {
       name: "falls back to payload-level reset and plan when nested usage records omit them",
       payload: {
         data: {

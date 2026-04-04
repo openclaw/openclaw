@@ -18,6 +18,25 @@ describe("msteams errors", () => {
     expect(classifyMSTeamsSendError({ statusCode: 403 }).kind).toBe("auth");
   });
 
+  it("classifies ContentStreamNotAllowed as permanent instead of auth", () => {
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 403,
+        response: {
+          body: {
+            error: {
+              code: "ContentStreamNotAllowed",
+            },
+          },
+        },
+      }),
+    ).toMatchObject({
+      kind: "permanent",
+      statusCode: 403,
+      errorCode: "ContentStreamNotAllowed",
+    });
+  });
+
   it("classifies throttling errors and parses retry-after", () => {
     expect(classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5" })).toMatchObject({
       kind: "throttled",
@@ -43,6 +62,12 @@ describe("msteams errors", () => {
   it("provides actionable hints for common cases", () => {
     expect(formatMSTeamsSendErrorHint({ kind: "auth" })).toContain("msteams");
     expect(formatMSTeamsSendErrorHint({ kind: "throttled" })).toContain("throttled");
+    expect(
+      formatMSTeamsSendErrorHint({
+        kind: "permanent",
+        errorCode: "ContentStreamNotAllowed",
+      }),
+    ).toContain("expired the content stream");
   });
 
   describe("isRevokedProxyError", () => {

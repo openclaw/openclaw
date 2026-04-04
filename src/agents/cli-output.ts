@@ -16,6 +16,13 @@ export type CliOutput = {
   usage?: CliUsage;
 };
 
+export type CliStreamingDelta = {
+  text: string;
+  delta: string;
+  sessionId?: string;
+  usage?: CliUsage;
+};
+
 function extractJsonObjectCandidates(raw: string): string[] {
   const candidates: string[] = [];
   let depth = 0;
@@ -95,16 +102,37 @@ function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
 function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
     typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
-  const input = pick("input_tokens") ?? pick("inputTokens");
+  const totalInput = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =
-    pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
+    pick("cache_read_input_tokens") ??
+    pick("cached_input_tokens") ??
+    pick("cacheRead") ??
+    pick("cached");
+  const input =
+    pick("input") ??
+    (Object.hasOwn(raw, "cached") && typeof totalInput === "number"
+      ? Math.max(0, totalInput - (cacheRead ?? 0))
+      : totalInput);
   const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;
   }
   return { input, output, cacheRead, cacheWrite, total };
+}
+
+function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
+  if (isRecord(parsed.usage)) {
+    const usage = toCliUsage(parsed.usage);
+    if (usage) {
+      return usage;
+    }
+  }
+  if (isRecord(parsed.stats)) {
+    return toCliUsage(parsed.stats);
+  }
+  return undefined;
 }
 
 function collectCliText(value: unknown): string {
@@ -120,8 +148,14 @@ function collectCliText(value: unknown): string {
   if (!isRecord(value)) {
     return "";
   }
+  if (typeof value.response === "string") {
+    return value.response;
+  }
   if (typeof value.text === "string") {
     return value.text;
+  }
+  if (typeof value.result === "string") {
+    return value.result;
   }
   if (typeof value.content === "string") {
     return value.content;
@@ -166,13 +200,12 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
   let sawStructuredOutput = false;
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
-    if (isRecord(parsed.usage)) {
-      usage = toCliUsage(parsed.usage) ?? usage;
-    }
+    usage = readCliUsage(parsed) ?? usage;
     const nextText =
       collectCliText(parsed.message) ||
       collectCliText(parsed.content) ||
       collectCliText(parsed.result) ||
+      collectCliText(parsed.response) ||
       collectCliText(parsed);
     const trimmedText = nextText.trim();
     if (trimmedText) {
@@ -216,6 +249,113 @@ function parseClaudeCliJsonlResult(params: {
   return null;
 }
 
+function parseClaudeCliStreamingDelta(params: {
+  providerId: string;
+  parsed: Record<string, unknown>;
+  textSoFar: string;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliStreamingDelta | null {
+  if (!isClaudeCliProvider(params.providerId)) {
+    return null;
+  }
+  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+    return null;
+  }
+  const event = params.parsed.event;
+  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+    return null;
+  }
+  const delta = event.delta;
+  if (delta.type !== "text_delta" || typeof delta.text !== "string") {
+    return null;
+  }
+  if (!delta.text) {
+    return null;
+  }
+  return {
+    text: `${params.textSoFar}${delta.text}`,
+    delta: delta.text,
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
+export function createCliJsonlStreamingParser(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  onAssistantDelta: (delta: CliStreamingDelta) => void;
+}) {
+  let lineBuffer = "";
+  let assistantText = "";
+  let sessionId: string | undefined;
+  let usage: CliUsage | undefined;
+
+  const handleParsedRecord = (parsed: Record<string, unknown>) => {
+    sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
+    if (!sessionId && typeof parsed.thread_id === "string") {
+      sessionId = parsed.thread_id.trim();
+    }
+    if (isRecord(parsed.usage)) {
+      usage = toCliUsage(parsed.usage) ?? usage;
+    }
+
+    const delta = parseClaudeCliStreamingDelta({
+      providerId: params.providerId,
+      parsed,
+      textSoFar: assistantText,
+      sessionId,
+      usage,
+    });
+    if (!delta) {
+      return;
+    }
+    assistantText = delta.text;
+    params.onAssistantDelta(delta);
+  };
+
+  const flushLines = (flushPartial: boolean) => {
+    while (true) {
+      const newlineIndex = lineBuffer.indexOf("\n");
+      if (newlineIndex < 0) {
+        break;
+      }
+      const line = lineBuffer.slice(0, newlineIndex).trim();
+      lineBuffer = lineBuffer.slice(newlineIndex + 1);
+      if (!line) {
+        continue;
+      }
+      for (const parsed of parseJsonRecordCandidates(line)) {
+        handleParsedRecord(parsed);
+      }
+    }
+    if (!flushPartial) {
+      return;
+    }
+    const tail = lineBuffer.trim();
+    lineBuffer = "";
+    if (!tail) {
+      return;
+    }
+    for (const parsed of parseJsonRecordCandidates(tail)) {
+      handleParsedRecord(parsed);
+    }
+  };
+
+  return {
+    push(chunk: string) {
+      if (!chunk) {
+        return;
+      }
+      lineBuffer += chunk;
+      flushLines(false);
+    },
+    finish() {
+      flushLines(true);
+    },
+  };
+}
+
 export function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
@@ -239,9 +379,7 @@ export function parseCliJsonl(
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
-      if (isRecord(parsed.usage)) {
-        usage = toCliUsage(parsed.usage) ?? usage;
-      }
+      usage = readCliUsage(parsed) ?? usage;
 
       const claudeResult = parseClaudeCliJsonlResult({
         providerId,

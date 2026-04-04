@@ -28,11 +28,16 @@ const SEARCH_PROVIDER_ENV_VARS = [
 let originalSearchProviderEnv: Partial<Record<(typeof SEARCH_PROVIDER_ENV_VARS)[number], string>> =
   {};
 
-function createPrompter(params: { selectValue?: string; textValue?: string }): {
+function createPrompter(params: {
+  selectValue?: string;
+  selectValues?: string[];
+  textValue?: string;
+}): {
   prompter: WizardPrompter;
   notes: Array<{ title?: string; message: string }>;
 } {
   const notes: Array<{ title?: string; message: string }> = [];
+  const remainingSelectValues = [...(params.selectValues ?? [])];
   const prompter: WizardPrompter = {
     intro: vi.fn(async () => {}),
     outro: vi.fn(async () => {}),
@@ -40,7 +45,7 @@ function createPrompter(params: { selectValue?: string; textValue?: string }): {
       notes.push({ title, message });
     }),
     select: vi.fn(
-      async () => params.selectValue ?? "perplexity",
+      async () => remainingSelectValues.shift() ?? params.selectValue ?? "perplexity",
     ) as unknown as WizardPrompter["select"],
     multiselect: vi.fn(async () => []) as unknown as WizardPrompter["multiselect"],
     text: vi.fn(async () => params.textValue ?? ""),
@@ -260,14 +265,22 @@ describe("setupSearch", () => {
   it("sets provider and key for kimi", async () => {
     const cfg: OpenClawConfig = {};
     const { prompter } = createPrompter({
-      selectValue: "kimi",
+      selectValues: ["kimi", "https://api.moonshot.ai/v1", "__keep__"],
       textValue: "sk-moonshot",
     });
     const result = await setupSearch(cfg, runtime, prompter);
+    const kimiWebSearchConfig = result.plugins?.entries?.moonshot?.config?.webSearch as
+      | {
+          baseUrl?: string;
+          model?: string;
+        }
+      | undefined;
     expect(result.tools?.web?.search?.provider).toBe("kimi");
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "moonshot")).toBe("sk-moonshot");
     expect(result.plugins?.entries?.moonshot?.enabled).toBe(true);
+    expect(kimiWebSearchConfig?.baseUrl).toBe("https://api.moonshot.ai/v1");
+    expect(kimiWebSearchConfig?.model).toBe("kimi-k2.5");
   });
 
   it("sets provider and key for tavily and enables the plugin", async () => {

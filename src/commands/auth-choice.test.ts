@@ -651,6 +651,27 @@ describe("applyAuthChoice", () => {
 
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
 
+  it("rejects legacy Anthropic token setup aliases", async () => {
+    await setupTempState();
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "token",
+        config: {} as OpenClawConfig,
+        prompter: createPrompter({}),
+        runtime: createExitThrowingRuntime(),
+        setDefaultModel: true,
+        opts: { tokenProvider: "anthropic" },
+      }),
+    ).rejects.toThrow(
+      [
+        'Auth choice "token" is no longer supported for Anthropic setup in OpenClaw.',
+        "Existing Anthropic token profiles still run if they are already configured.",
+        'Use "anthropic-cli" or "apiKey" instead.',
+      ].join("\n"),
+    );
+  });
+
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();
 

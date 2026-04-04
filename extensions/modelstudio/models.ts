@@ -1,4 +1,7 @@
-import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
+import {
+  applyProviderNativeStreamingUsageCompat,
+  supportsNativeStreamingUsageCompat,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -105,44 +108,19 @@ export const MODELSTUDIO_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
 ];
 
 export function isNativeModelStudioBaseUrl(baseUrl: string | undefined): boolean {
-  return resolveProviderRequestCapabilities({
-    provider: "modelstudio",
-    api: "openai-completions",
+  return supportsNativeStreamingUsageCompat({
+    providerId: "modelstudio",
     baseUrl,
-    capability: "llm",
-    transport: "stream",
-  }).supportsNativeStreamingUsageCompat;
-}
-
-function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
-  if (!Array.isArray(provider.models) || provider.models.length === 0) {
-    return provider;
-  }
-
-  let changed = false;
-  const models = provider.models.map((model) => {
-    if (model.compat?.supportsUsageInStreaming !== undefined) {
-      return model;
-    }
-    changed = true;
-    return {
-      ...model,
-      compat: {
-        ...model.compat,
-        supportsUsageInStreaming: true,
-      },
-    };
   });
-
-  return changed ? { ...provider, models } : provider;
 }
 
 export function applyModelStudioNativeStreamingUsageCompat(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
-  return isNativeModelStudioBaseUrl(provider.baseUrl)
-    ? withStreamingUsageCompat(provider)
-    : provider;
+  return applyProviderNativeStreamingUsageCompat({
+    providerId: "modelstudio",
+    providerConfig: provider,
+  });
 }
 
 export function buildModelStudioModelDefinition(params: {

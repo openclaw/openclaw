@@ -142,9 +142,18 @@ Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.
 - `manual`: full prompts for port/bind/auth (alias of `advanced`).
-- In the web-search step, choosing **Grok** can trigger a separate follow-up
-  prompt to enable `x_search` with the same `XAI_API_KEY` and optionally pick
-  an `x_search` model. Other web-search providers do not show that prompt.
+- When an auth choice implies a preferred provider, onboarding prefilters the
+  default-model and allowlist pickers to that provider. For Volcengine and
+  BytePlus, this also matches the coding-plan variants
+  (`volcengine-plan/*`, `byteplus-plan/*`).
+- If the preferred-provider filter yields no loaded models yet, onboarding
+  falls back to the unfiltered catalog instead of leaving the picker empty.
+- In the web-search step, some providers can trigger provider-specific
+  follow-up prompts:
+  - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY`
+    and an `x_search` model choice.
+  - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs
+    `api.moonshot.cn`) and the default Kimi web-search model.
 - Local onboarding DM scope behavior: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
 - Custom Provider: connect any OpenAI or Anthropic compatible endpoint,

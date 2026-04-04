@@ -91,6 +91,20 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
 
+### `gateway usage-cost`
+
+Fetch usage-cost summaries from session logs.
+
+```bash
+openclaw gateway usage-cost
+openclaw gateway usage-cost --days 7
+openclaw gateway usage-cost --json
+```
+
+Options:
+
+- `--days <days>`: number of days to include (default `30`).
+
 ### `gateway status`
 
 `gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional RPC probe.
@@ -113,10 +127,12 @@ Options:
 
 Notes:
 
+- `gateway status` stays available for diagnostics even when the local CLI config is missing or invalid.
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
 - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need the Gateway RPC itself to be healthy.
+- Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
 - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
 - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
 - If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win), token-drift checks skip config token resolution.
@@ -182,6 +198,21 @@ openclaw gateway call status
 openclaw gateway call logs.tail --params '{"sinceMs": 60000}'
 ```
 
+Options:
+
+- `--params <json>`: JSON object string for params (default `{}`)
+- `--url <url>`
+- `--token <token>`
+- `--password <password>`
+- `--timeout <ms>`
+- `--expect-final`
+- `--json`
+
+Notes:
+
+- `--params` must be valid JSON.
+- `--expect-final` is mainly for agent-style RPCs that stream intermediate events before a final payload.
+
 ## Manage the Gateway service
 
 ```bash
@@ -191,6 +222,12 @@ openclaw gateway stop
 openclaw gateway restart
 openclaw gateway uninstall
 ```
+
+Command options:
+
+- `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
+- `gateway install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
+- `gateway uninstall|start|stop|restart`: `--json`
 
 Notes:
 

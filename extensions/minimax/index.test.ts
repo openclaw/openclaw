@@ -8,8 +8,8 @@ import {
 import minimaxPlugin from "./index.js";
 
 describe("minimax provider hooks", () => {
-  it("keeps native reasoning mode for MiniMax transports", () => {
-    const { providers } = registerProviderPlugin({
+  it("keeps native reasoning mode for MiniMax transports", async () => {
+    const { providers } = await registerProviderPlugin({
       plugin: minimaxPlugin,
       id: "minimax",
       name: "MiniMax Provider",
@@ -36,8 +36,8 @@ describe("minimax provider hooks", () => {
     ).toBe("native");
   });
 
-  it("owns replay policy for Anthropic and OpenAI-compatible MiniMax transports", () => {
-    const { providers } = registerProviderPlugin({
+  it("owns replay policy for Anthropic and OpenAI-compatible MiniMax transports", async () => {
+    const { providers } = await registerProviderPlugin({
       plugin: minimaxPlugin,
       id: "minimax",
       name: "MiniMax Provider",
@@ -73,8 +73,8 @@ describe("minimax provider hooks", () => {
     });
   });
 
-  it("owns fast-mode stream wrapping for MiniMax transports", () => {
-    const { providers } = registerProviderPlugin({
+  it("owns fast-mode stream wrapping for MiniMax transports", async () => {
+    const { providers } = await registerProviderPlugin({
       plugin: minimaxPlugin,
       id: "minimax",
       name: "MiniMax Provider",
@@ -128,5 +128,26 @@ describe("minimax provider hooks", () => {
 
     expect(resolvedApiModelId).toBe("MiniMax-M2.7-highspeed");
     expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("registers the bundled MiniMax web search provider", () => {
+    const webSearchProviders: unknown[] = [];
+
+    minimaxPlugin.register({
+      registerProvider() {},
+      registerMediaUnderstandingProvider() {},
+      registerImageGenerationProvider() {},
+      registerSpeechProvider() {},
+      registerWebSearchProvider(provider: unknown) {
+        webSearchProviders.push(provider);
+      },
+    } as never);
+
+    expect(webSearchProviders).toHaveLength(1);
+    expect(webSearchProviders[0]).toMatchObject({
+      id: "minimax",
+      label: "MiniMax Search",
+      envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
+    });
   });
 });

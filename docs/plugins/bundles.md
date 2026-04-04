@@ -105,6 +105,8 @@ loader. Cursor command markdown works through the same path.
   launching stdio servers or connecting to HTTP servers
 - project-local Pi settings still apply after bundle defaults, so workspace
   settings can override bundle MCP entries when needed
+- bundle MCP tool catalogs are sorted deterministically before registration, so
+  upstream `listTools()` order changes do not thrash prompt-cache tool blocks
 
 ##### Transports
 
@@ -165,6 +167,8 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 - full tool names are capped at 64 characters
 - empty server names fall back to `mcp`
 - colliding sanitized names are disambiguated with numeric suffixes
+- final exposed tool order is deterministic by safe name to keep repeated Pi
+  turns cache-stable
 
 #### Embedded Pi settings
 

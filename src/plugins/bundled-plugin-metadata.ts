@@ -150,6 +150,9 @@ function isTopLevelPublicSurfaceSource(name: string): boolean {
   if (name.endsWith(".d.ts")) {
     return false;
   }
+  if (/^config-api(\.[cm]?[jt]s)$/u.test(name)) {
+    return false;
+  }
   return !/(\.test|\.spec)(\.[cm]?[jt]s)$/u.test(name);
 }
 

@@ -14,30 +14,29 @@ object CanvasActionTrust {
     if (candidateUri.scheme.equals("file", ignoreCase = true)) {
       return false
     }
+    val normalizedCandidate = normalizeTrustedRemoteA2uiUri(candidateUri) ?: return false
 
     return trustedA2uiUrls.any { trusted ->
-      isTrustedA2uiPage(candidateUri, trusted)
+      isTrustedA2uiPage(normalizedCandidate, trusted)
     }
   }
 
   private fun isTrustedA2uiPage(candidateUri: URI, trustedUrl: String): Boolean {
     val trustedUri = parseUri(trustedUrl) ?: return false
-    if (!candidateUri.scheme.equals(trustedUri.scheme, ignoreCase = true)) return false
-    if (candidateUri.host?.equals(trustedUri.host, ignoreCase = true) != true) return false
-    if (effectivePort(candidateUri) != effectivePort(trustedUri)) return false
-
-    val trustedPath = trustedUri.rawPath?.takeIf { it.isNotBlank() } ?: return false
-    val candidatePath = candidateUri.rawPath?.takeIf { it.isNotBlank() } ?: return false
-    val trustedPrefix = if (trustedPath.endsWith("/")) trustedPath else "$trustedPath/"
-    return candidatePath == trustedPath || candidatePath.startsWith(trustedPrefix)
+    val normalizedTrusted = normalizeTrustedRemoteA2uiUri(trustedUri) ?: return false
+    return candidateUri == normalizedTrusted
   }
 
-  private fun effectivePort(uri: URI): Int {
-    if (uri.port >= 0) return uri.port
-    return when (uri.scheme?.lowercase()) {
-      "https" -> 443
-      "http" -> 80
-      else -> -1
+  private fun normalizeTrustedRemoteA2uiUri(uri: URI): URI? {
+    val scheme = uri.scheme?.lowercase() ?: return null
+    if (scheme != "http" && scheme != "https") return null
+
+    val host = uri.host?.trim()?.takeIf { it.isNotEmpty() }?.lowercase() ?: return null
+
+    return try {
+      URI(scheme, uri.userInfo, host, uri.port, uri.rawPath, uri.rawQuery, null)
+    } catch (_: Throwable) {
+      null
     }
   }
 

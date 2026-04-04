@@ -170,7 +170,7 @@ export function describeOpenAICodexProviderAuthContract() {
       const { default: openAIPlugin } = await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviders>[0];
       }>(providerAuthContractModules.openAIIndexModuleUrl);
-      const provider = requireProvider(registerProviders(openAIPlugin), "openai-codex");
+      const provider = requireProvider(await registerProviders(openAIPlugin), "openai-codex");
       loginOpenAICodexOAuthMock.mockResolvedValueOnce({
         refresh: "refresh-token",
         access: params.access,
@@ -191,7 +191,7 @@ export function describeOpenAICodexProviderAuthContract() {
       const { default: openAIPlugin } = await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviders>[0];
       }>(providerAuthContractModules.openAIIndexModuleUrl);
-      return requireProvider(registerProviders(openAIPlugin), "openai-codex");
+      return requireProvider(await registerProviders(openAIPlugin), "openai-codex");
     }
 
     it("keeps OAuth auth results provider-owned", async () => {
@@ -323,7 +323,7 @@ export function describeGithubCopilotProviderAuthContract() {
       const { default: githubCopilotPlugin } = await importBundledProviderPlugin<{
         default: Parameters<typeof registerProviders>[0];
       }>(providerAuthContractModules.githubCopilotIndexModuleUrl);
-      return requireProvider(registerProviders(githubCopilotPlugin), "github-copilot");
+      return requireProvider(await registerProviders(githubCopilotPlugin), "github-copilot");
     }
 
     it("keeps device auth results provider-owned", async () => {

@@ -22,6 +22,7 @@ Related:
 ```bash
 openclaw memory status
 openclaw memory status --deep
+openclaw memory status --fix
 openclaw memory index --force
 openclaw memory search "meeting notes"
 openclaw memory search --query "deployment" --max-results 20
@@ -46,6 +47,7 @@ openclaw memory index --agent main --verbose
 
 - `--deep`: probe vector + embedding availability.
 - `--index`: run a reindex if the store is dirty (implies `--deep`).
+- `--fix`: repair stale recall locks and normalize promotion metadata.
 - `--json`: print JSON output.
 
 `memory index`:
@@ -63,6 +65,18 @@ openclaw memory index --agent main --verbose
 - `--json`: print JSON results.
 
 `memory promote`:
+
+Preview and apply short-term memory promotions.
+
+```bash
+openclaw memory promote [--apply] [--limit <n>] [--include-promoted]
+```
+
+- `--apply` -- write promotions to `MEMORY.md` (default: preview only).
+- `--limit <n>` -- cap the number of candidates shown.
+- `--include-promoted` -- include entries already promoted in previous cycles.
+
+Full options:
 
 - Ranks short-term candidates from `memory/YYYY-MM-DD.md` using weighted recall signals (`frequency`, `relevance`, `query diversity`, `recency`).
 - Uses recall events captured when `memory_search` returns daily-memory hits.

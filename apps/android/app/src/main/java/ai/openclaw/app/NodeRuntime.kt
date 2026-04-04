@@ -71,6 +71,7 @@ class NodeRuntime(
 
   private val identityStore = DeviceIdentityStore(appContext)
   private var connectedEndpoint: GatewayEndpoint? = null
+  private var activeGatewayAuth: GatewayConnectAuth? = null
 
   private val cameraHandler: CameraHandler = CameraHandler(
     appContext = appContext,
@@ -299,6 +300,11 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
         updateStatus()
         showLocalCanvasOnConnect()
+        val endpoint = connectedEndpoint
+        val auth = activeGatewayAuth
+        if (endpoint != null && auth != null) {
+          maybeStartOperatorSessionAfterNodeConnect(endpoint, auth)
+        }
       },
       onDisconnected = { message ->
         _nodeConnected.value = false
@@ -800,15 +806,14 @@ class NodeRuntime(
     auth: GatewayConnectAuth,
     reconnect: Boolean = false,
   ) {
+    activeGatewayAuth = auth
     val tls = connectionManager.resolveTlsParams(endpoint)
-    val connectOperator =
-      shouldConnectOperatorSession(
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
-        loadStoredRoleDeviceToken("operator"),
+    val operatorAuth =
+      resolveOperatorSessionConnectAuth(
+        auth = auth,
+        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
       )
-    if (!connectOperator) {
+    if (operatorAuth == null) {
       operatorConnected = false
       operatorStatusText = "Offline"
       operatorSession.disconnect()
@@ -816,9 +821,9 @@ class NodeRuntime(
     } else {
       operatorSession.connect(
         endpoint,
-        auth.token,
-        auth.bootstrapToken,
-        auth.password,
+        operatorAuth.token,
+        operatorAuth.bootstrapToken,
+        operatorAuth.password,
         connectionManager.buildOperatorConnectOptions(),
         tls,
       )
@@ -831,7 +836,7 @@ class NodeRuntime(
       connectionManager.buildNodeConnectOptions(),
       tls,
     )
-    if (reconnect && connectOperator) {
+    if (reconnect && operatorAuth != null) {
       operatorSession.reconnect()
     }
     if (reconnect) {
@@ -929,8 +934,33 @@ class NodeRuntime(
     return deviceAuthStore.loadToken(deviceId, role)
   }
 
+  private fun maybeStartOperatorSessionAfterNodeConnect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
+    if (operatorConnected || operatorStatusText == "Connecting…") {
+      return
+    }
+    val operatorAuth =
+      resolveOperatorSessionConnectAuth(
+        auth = auth,
+        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
+      ) ?: return
+    operatorStatusText = "Connecting…"
+    updateStatus()
+    operatorSession.connect(
+      endpoint,
+      operatorAuth.token,
+      operatorAuth.bootstrapToken,
+      operatorAuth.password,
+      connectionManager.buildOperatorConnectOptions(),
+      connectionManager.resolveTlsParams(endpoint),
+    )
+  }
+
   fun disconnect() {
     connectedEndpoint = null
+    activeGatewayAuth = null
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
@@ -1266,18 +1296,47 @@ class NodeRuntime(
 
 }
 
+internal fun resolveOperatorSessionConnectAuth(
+  auth: NodeRuntime.GatewayConnectAuth,
+  storedOperatorToken: String?,
+): NodeRuntime.GatewayConnectAuth? {
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = explicitToken,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitPassword != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = null,
+      password = explicitPassword,
+    )
+  }
+
+  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (storedToken != null) {
+    // Bootstrap can seed the operator token, but operator should reconnect
+    // through the stored device-token path rather than bootstrap auth itself.
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  return null
+}
+
 internal fun shouldConnectOperatorSession(
-  token: String?,
-  bootstrapToken: String?,
-  password: String?,
+  auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
 ): Boolean {
-  return (
-    !token.isNullOrBlank() ||
-      !bootstrapToken.isNullOrBlank() ||
-      !password.isNullOrBlank() ||
-      !storedOperatorToken.isNullOrBlank()
-    )
+  return resolveOperatorSessionConnectAuth(auth, storedOperatorToken) != null
 }
 
 private enum class HomeCanvasGatewayState {

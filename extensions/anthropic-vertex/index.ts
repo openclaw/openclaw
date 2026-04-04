@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { buildAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitAnthropicVertexProvider,
   resolveAnthropicVertexConfigApiKey,
@@ -7,6 +7,9 @@ import {
 } from "./api.js";
 
 const PROVIDER_ID = "anthropic-vertex";
+const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "anthropic-by-model",
+});
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -36,7 +39,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      buildReplayPolicy: ({ modelId }) => buildAnthropicReplayPolicyForModel(modelId),
+      ...ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
     });
   },
 });

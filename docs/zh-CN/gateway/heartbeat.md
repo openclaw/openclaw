@@ -6,7 +6,7 @@ summary: 心跳轮询消息和通知规则
 title: 心跳
 x-i18n:
   generated_at: "2026-02-03T07:48:57Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 18b017066aa2c41811b985564dd389834906f4576e85b576fb357a0eff482e69
   source_path: gateway/heartbeat.md
@@ -78,7 +78,7 @@ x-i18n:
     defaults: {
       heartbeat: {
         every: "30m", // 默认：30m（0m 禁用）
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // 默认：false（可用时发送单独的 Reasoning: 消息）
         target: "last", // last | none | <channel id>（核心或插件，例如 "bluebubbles"）
         to: "+15551234567", // 可选的渠道特定覆盖

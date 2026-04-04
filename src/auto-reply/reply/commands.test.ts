@@ -2585,10 +2585,11 @@ describe("/models command", () => {
 });
 
 describe("handleCommands plugin commands", () => {
-  it("dispatches registered plugin commands", async () => {
+  it("dispatches registered plugin commands with gateway scopes and session metadata", async () => {
     clearPluginCommands();
     let receivedCtx:
       | {
+          gatewayClientScopes?: string[];
           sessionKey?: string;
           sessionId?: string;
         }
@@ -2607,17 +2608,23 @@ describe("handleCommands plugin commands", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig;
-    const params = buildParams("/card", cfg);
+    const params = buildParams("/card", cfg, {
+      GatewayClientScopes: ["operator.write", "operator.pairing"],
+    });
     params.sessionKey = "agent:main:whatsapp:direct:test-user";
     params.sessionEntry = {
       sessionId: "session-plugin-command",
       updatedAt: Date.now(),
     };
+
+    // Keep the full scope-forwarding chain covered:
+    // chat.send -> MsgContext.GatewayClientScopes -> plugin ctx.gatewayClientScopes.
     const commandResult = await handleCommands(params);
 
     expect(commandResult.shouldContinue).toBe(false);
     expect(commandResult.reply?.text).toBe("from plugin");
     expect(receivedCtx).toMatchObject({
+      gatewayClientScopes: ["operator.write", "operator.pairing"],
       sessionKey: "agent:main:whatsapp:direct:test-user",
       sessionId: "session-plugin-command",
     });
