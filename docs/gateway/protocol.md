@@ -89,6 +89,26 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
+During trusted bootstrap handoff, `hello-ok.auth` may also include additional
+bounded role entries in `deviceTokens`:
+
+```json
+{
+  "auth": {
+    "deviceToken": "…",
+    "role": "node",
+    "scopes": [],
+    "deviceTokens": [
+      {
+        "deviceToken": "…",
+        "role": "operator",
+        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+      }
+    ]
+  }
+}
+```
+
 ### Node example
 
 ```json
@@ -217,6 +237,11 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - After pairing, the Gateway issues a **device token** scoped to the connection
   role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be
   persisted by the client for future connects.
+- Clients should persist the primary `hello-ok.auth.deviceToken` after any
+  successful connect.
+- Additional `hello-ok.auth.deviceTokens` entries are bootstrap handoff tokens.
+  Persist them only when the connect used bootstrap auth on a trusted transport
+  such as `wss://` or loopback/local pairing.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
 - Auth failures include `error.details.code` plus recovery hints:
