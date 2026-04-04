@@ -16,6 +16,7 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
@@ -53,8 +54,6 @@ import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
-import { resolveSlackChannelAllowlist } from "./resolve-channels.js";
-import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
   DEFAULT_ACCOUNT_ID,
   looksLikeSlackTargetId,
@@ -122,6 +121,11 @@ let slackSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | undef
 let slackProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
 let slackMonitorModulePromise: Promise<typeof import("./monitor.js")> | undefined;
 let slackDirectoryLiveModulePromise: Promise<typeof import("./directory-live.js")> | undefined;
+
+const loadSlackResolveChannelsModule = createLazyRuntimeModule(
+  () => import("./resolve-channels.js"),
+);
+const loadSlackResolveUsersModule = createLazyRuntimeModule(() => import("./resolve-users.js"));
 
 async function loadSlackActionRuntime() {
   slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
@@ -269,7 +273,8 @@ const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
   resolveAccount: resolveSlackAccount,
   resolveToken: (account: ResolvedSlackAccount) =>
     account.config.userToken?.trim() || account.botToken?.trim(),
-  resolveNames: ({ token, entries }) => resolveSlackUserAllowlist({ token, entries }),
+  resolveNames: async ({ token, entries }) =>
+    (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({ token, entries }),
 });
 
 const collectSlackSecurityWarnings =
@@ -378,8 +383,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
             token: account.config.userToken?.trim() || account.botToken?.trim(),
             inputs,
             missingTokenNote: "missing Slack token",
-            resolveWithToken: ({ token, inputs }) =>
-              resolveSlackChannelAllowlist({ token, entries: inputs }),
+            resolveWithToken: async ({ token, inputs }) =>
+              (await loadSlackResolveChannelsModule()).resolveSlackChannelAllowlist({
+                token,
+                entries: inputs,
+              }),
             mapResolved: (entry) =>
               toResolvedTarget(entry, entry.archived ? "archived" : undefined),
           });
@@ -388,8 +396,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           token: account.config.userToken?.trim() || account.botToken?.trim(),
           inputs,
           missingTokenNote: "missing Slack token",
-          resolveWithToken: ({ token, inputs }) =>
-            resolveSlackUserAllowlist({ token, entries: inputs }),
+          resolveWithToken: async ({ token, inputs }) =>
+            (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({
+              token,
+              entries: inputs,
+            }),
           mapResolved: (entry) => toResolvedTarget(entry, entry.note),
         });
       },
