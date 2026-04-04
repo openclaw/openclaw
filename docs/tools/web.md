@@ -275,6 +275,9 @@ show the `x_search` prompt.
   Gemini, Grok, and Kimi return one synthesized answer with citations. They
   accept `count` for shared-tool compatibility, but it does not change the
   grounded answer shape.
+  Perplexity behaves the same way when you use the Sonar/OpenRouter
+  compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
+  `model` or `OPENROUTER_API_KEY`).
   Firecrawl and Tavily only support `query` and `count` through `web_search`
   -- use their dedicated tools for advanced options.
 </Warning>
