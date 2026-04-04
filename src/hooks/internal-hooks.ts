@@ -455,3 +455,39 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
     context.sessionEntry !== null
   );
 }
+
+// ============================================================================
+// Agent Turn End Hook Event
+// ============================================================================
+
+export type AgentTurnEndHookContext = {
+  success: boolean;
+  durationMs: number;
+};
+
+export type AgentTurnEndHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "turn:end";
+  context: AgentTurnEndHookContext;
+};
+
+function hasNumberContextField<T extends Record<string, unknown>>(
+  context: Partial<T>,
+  key: keyof T,
+): boolean {
+  return typeof context[key] === "number";
+}
+
+export function isAgentTurnEndEvent(event: InternalHookEvent): event is AgentTurnEndHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent", "turn:end")) {
+    return false;
+  }
+  const context = getHookContext<AgentTurnEndHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasBooleanContextField(context, "success") &&
+    hasNumberContextField(context, "durationMs")
+  );
+}

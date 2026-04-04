@@ -77,6 +77,8 @@ import {
   validateRuntimeModeInput,
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
+import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { SessionActorQueue } from "./session-actor-queue.js";
 
 const ACP_TURN_TIMEOUT_GRACE_MS = 1_000;
@@ -846,6 +848,7 @@ export class AcpSessionManager {
             }
             this.recordTurnCompletion({
               startedAt: turnStartedAt,
+              sessionKey,
             });
             if (taskContext) {
               const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
@@ -887,6 +890,7 @@ export class AcpSessionManager {
             this.recordTurnCompletion({
               startedAt: turnStartedAt,
               errorCode: acpError.code,
+              sessionKey,
             });
             if (taskContext) {
               this.markBackgroundTaskTerminal(taskContext.runId, {
@@ -1573,8 +1577,17 @@ export class AcpSessionManager {
     }
   }
 
-  private recordTurnCompletion(params: { startedAt: number; errorCode?: AcpRuntimeError["code"] }) {
+  private recordTurnCompletion(params: { startedAt: number; errorCode?: AcpRuntimeError["code"]; sessionKey: string }) {
     const durationMs = Math.max(0, Date.now() - params.startedAt);
+    fireAndForgetHook(
+      triggerInternalHook(
+        createInternalHookEvent("agent", "turn:end", params.sessionKey, {
+          success: !params.errorCode,
+          durationMs,
+        }),
+      ),
+      "agent:turn:end",
+    );
     this.turnLatencyStats.totalMs += durationMs;
     this.turnLatencyStats.maxMs = Math.max(this.turnLatencyStats.maxMs, durationMs);
     if (params.errorCode) {
