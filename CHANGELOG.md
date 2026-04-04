@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Ollama: add a bundled Ollama Web Search provider for key-free `web_search` via your configured Ollama host and `ollama signin`. (#59318) Thanks @BruceMacD.
 - Plugins/onboarding: add plugin config TUI prompts to onboard and configure wizards so more plugin setup can stay in the guided flow. (#60590)
 - Plugins/install: add `openclaw plugins install --force` to overwrite existing plugin and hook-pack install targets without using the dangerous-code override flag. (#60544) Thanks @gumadeiras.
+- Plugin SDK/config: export `OpenClawSchema` via `openclaw/plugin-sdk/config-schema` so external tooling can validate and introspect full `openclaw.json` config through a supported public subpath. (#60557) Thanks @feniix.
 - Providers/Anthropic: remove setup-token from new onboarding and auth-command setup paths, keep existing configured legacy token profiles runnable, and steer new Anthropic setup to Claude CLI or API keys.
 - Providers/OpenAI Codex: add forward-compat `openai-codex/gpt-5.4-mini` synthesis across provider runtime, model catalog, and model listing so Codex mini works before bundled Pi catalog updates land.
 - Tools/web_search: add a bundled MiniMax Search provider backed by the Coding Plan search API, with region reuse from `MINIMAX_API_HOST` and plugin-owned credential config. (#54648) Thanks @fengmk2.
