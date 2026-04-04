@@ -413,7 +413,7 @@ imsg send <handle> "test"
 
 ## Managed relay services
 
-If you don't want to maintain a Mac or BlueBubbles server, managed relay services handle the Apple infrastructure and expose iMessage over a standard API.
+If you don't want to maintain a Mac or BlueBubbles server, managed relay services handle the Apple infrastructure and expose iMessage over a standard API. These work on Linux, Windows, VPS, and Docker without any Apple hardware on your end.
 
 | Service | Protocol | Mac required | Starting price | OpenClaw plugin |
 |---------|----------|-------------|---------------|-----------------|
@@ -441,11 +441,13 @@ openclaw plugins install @emotion-machine/claw-messenger
 }
 ```
 
+See [clawmessenger.com](https://clawmessenger.com) for pricing and docs.
+
 ### Blooio
 
-REST API service using iPhone hardware bridges. Supports iMessage, RCS, and SMS with OAuth authentication. No official OpenClaw plugin yet, but can be integrated via the REST API and a custom channel handler.
+REST API service using iPhone hardware bridges. Supports iMessage, RCS, and SMS with OAuth authentication. No official OpenClaw plugin, but can be integrated via the REST API and a custom channel handler.
 
-See [blooio.com/integrations/api](https://blooio.com/integrations/api) for their API docs.
+See [blooio.com/integrations/api](https://blooio.com/integrations/api) for API docs.
 
 ## Configuration reference pointers
 
