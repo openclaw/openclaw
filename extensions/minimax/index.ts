@@ -3,8 +3,6 @@ import {
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
-  type ProviderReplayPolicy,
-  type ProviderReplayPolicyContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
@@ -13,10 +11,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import {
-  buildOpenAICompatibleReplayPolicy,
-  buildStrictAnthropicReplayPolicy,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { buildHybridAnthropicOrOpenAIReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
@@ -43,19 +38,6 @@ function resolveMinimaxReasoningOutputMode(): "native" {
   // Keep MiniMax on native reasoning mode. Tagged enforcement previously
   // suppressed normal assistant replies on this Anthropic-compatible surface.
   return "native";
-}
-
-function buildMinimaxReplayPolicy(
-  ctx: ProviderReplayPolicyContext,
-): ProviderReplayPolicy | undefined {
-  if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
-    const modelId = ctx.modelId?.toLowerCase() ?? "";
-    return buildStrictAnthropicReplayPolicy({
-      dropThinkingBlocks: modelId.includes("claude"),
-    });
-  }
-
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
 }
 
 function getDefaultBaseUrl(region: MiniMaxRegion): string {
@@ -254,7 +236,10 @@ export default definePluginEntry({
         });
         return apiKey ? { token: apiKey } : null;
       },
-      buildReplayPolicy: (ctx) => buildMinimaxReplayPolicy(ctx),
+      buildReplayPolicy: (ctx) =>
+        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
+          anthropicModelDropThinkingBlocks: true,
+        }),
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
@@ -307,7 +292,10 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
-      buildReplayPolicy: (ctx) => buildMinimaxReplayPolicy(ctx),
+      buildReplayPolicy: (ctx) =>
+        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
+          anthropicModelDropThinkingBlocks: true,
+        }),
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
