@@ -1061,6 +1061,63 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("hydrates cache usage from transcript fallback", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cache-hydration";
+        writeBaselineTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+        });
+
+        const text = buildTranscriptStatusText({
+          sessionId,
+          sessionKey: "agent:main:main",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cache: 100% hit · 1.0k cached, 0 new");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("preserves existing nonzero cache usage over transcript fallback values", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-cache-preserve";
+        writeBaselineTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "anthropic/claude-opus-4-6",
+            contextTokens: 32_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 3,
+            contextTokens: 32_000,
+            cacheRead: 12,
+            cacheWrite: 34,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
+
+        expect(normalizeTestText(text)).toContain("Cache: 26% hit · 12 cached, 34 new");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
   it("keeps transcript-derived slash model ids on model-only context lookup", async () => {
     await withTempHome(
       async (dir) => {
