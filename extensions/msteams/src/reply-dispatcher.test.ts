@@ -138,7 +138,26 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     expect(streamInstances).toHaveLength(1);
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledTimes(1);
+    expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
+  });
+
+  it("sends native typing indicator for channel conversations by default", async () => {
+    createDispatcher("channel");
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.onReplyStart?.();
+
+    expect(streamInstances).toHaveLength(0);
     expect(typingCallbacks.onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips native typing indicator when typingIndicator=false", async () => {
+    createDispatcher("channel", { typingIndicator: false });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.onReplyStart?.();
+
+    expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
   });
 
   it("only sends the informative status update once", async () => {

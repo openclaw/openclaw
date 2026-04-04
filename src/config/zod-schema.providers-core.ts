@@ -495,6 +495,7 @@ export const DiscordAccountSchema = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    typingIndicator: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     streaming: z.enum(["off", "partial", "block", "progress"]).optional(),
