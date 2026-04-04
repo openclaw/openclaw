@@ -247,9 +247,6 @@ describe("resolveExecTarget", () => {
   });
 
   it("silently discards mismatched requestedTarget under elevated+node", () => {
-    // When elevated is requested and configuredTarget is "node", the elevated
-    // path always returns "node" regardless of requestedTarget. This is
-    // intentional — elevated overrides per-call host selection.
     expect(
       resolveExecTarget({
         configuredTarget: "node",
