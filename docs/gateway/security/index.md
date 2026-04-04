@@ -921,7 +921,8 @@ and matching it to the header. This only triggers for requests that hit loopback
 and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
 injected by Tailscale.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
-still require token/password auth.
+do **not** use Tailscale identity-header auth. They still follow the gateway's
+configured HTTP auth mode.
 
 Important boundary note:
 

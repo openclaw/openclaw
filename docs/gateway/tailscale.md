@@ -36,7 +36,9 @@ OpenClaw only treats a request as Serve when it arrives from loopback with
 Tailscale’s `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`
 headers.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
-still require token/password auth.
+do **not** use Tailscale identity-header auth. They still follow the gateway's
+normal HTTP auth mode: shared-secret auth by default, or an intentionally
+configured trusted-proxy / private-ingress `none` setup.
 This tokenless flow assumes the gateway host is trusted. If untrusted local code
 may run on the same host, disable `gateway.auth.allowTailscale` and require
 token/password auth instead.

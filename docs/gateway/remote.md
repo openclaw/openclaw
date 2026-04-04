@@ -145,9 +145,10 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
-  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
-  require token/password auth. This tokenless flow assumes the gateway host is
-  trusted. Set it to `false` if you want tokens/passwords everywhere.
+  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints do not
+  use that Tailscale header auth and instead follow the gateway's normal HTTP
+  auth mode. This tokenless flow assumes the gateway host is trusted. Set it to
+  `false` if you want shared-secret auth everywhere.
 - **Trusted-proxy** auth is for non-loopback identity-aware proxy setups only.
   Same-host loopback reverse proxies do not satisfy `gateway.auth.mode: "trusted-proxy"`.
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.
