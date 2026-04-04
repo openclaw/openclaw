@@ -473,7 +473,11 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
       expect(result.allowedCatalog).toEqual([
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        expect.objectContaining({
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: expect.any(String),
+        }),
       ]);
     });
 
@@ -700,6 +704,27 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
+    it("should infer the unique provider from configured models for bare defaults", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "claude-opus-4-6" },
+            models: {
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
     it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

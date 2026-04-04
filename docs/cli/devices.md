@@ -72,6 +72,9 @@ openclaw devices reject <requestId>
 Rotate a device token for a specific role (optionally updating scopes).
 The target role must already exist in that device's approved pairing contract;
 rotation cannot mint a new unapproved role.
+If you omit `--scope`, later reconnects with the stored rotated token reuse that
+token's cached approved scopes. If you pass explicit `--scope` values, those
+become the stored scope set for future cached-token reconnects.
 
 ```
 openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
@@ -142,6 +145,11 @@ openclaw devices approve <requestId>
 ```
 
 5. Retry client connection with the current shared token/password.
+
+Notes:
+
+- Normal reconnect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
+- Trusted `AUTH_TOKEN_MISMATCH` recovery can temporarily send both the shared token and the stored device token together for the one bounded retry.
 
 Related:
 

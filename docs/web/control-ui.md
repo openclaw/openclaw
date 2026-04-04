@@ -27,8 +27,10 @@ Auth is supplied during the WebSocket handshake via:
 
 - `connect.params.auth.token`
 - `connect.params.auth.password`
+- Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
+- trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
   The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
-  Onboarding generates a gateway token by default, so paste it here on first connect.
+  Onboarding generates a gateway token by default, so shared-secret setups usually paste that here on first connect.
 
 ## Device pairing (first connection)
 
@@ -77,7 +79,7 @@ The Control UI can localize itself on first load based on your browser locale, a
 
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
-- Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
+- Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/fast/verbose/reasoning overrides (`sessions.list`, `sessions.patch`)
 - Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
@@ -141,8 +143,13 @@ By default, Control UI/WebSocket Serve requests can authenticate via Tailscale i
 verifies the identity by resolving the `x-forwarded-for` address with
 `tailscale whois` and matching it to the header, and only accepts these when the
 request hits loopback with Tailscale’s `x-forwarded-*` headers. Set
-`gateway.auth.allowTailscale: false` (or force `gateway.auth.mode: "password"`)
-if you want to require a token/password even for Serve traffic.
+`gateway.auth.allowTailscale: false` if you want to require explicit shared-secret
+credentials even for Serve traffic. Then use `gateway.auth.mode: "token"` or
+`"password"`.
+For that async Serve identity path, failed auth attempts for the same client IP
+and auth scope are serialized before rate-limit writes. Concurrent bad retries
+from the same browser can therefore show `retry later` on the second request
+instead of two plain mismatches racing in parallel.
 Tokenless Serve auth assumes the gateway host is trusted. If untrusted local
 code may run on that host, require token/password auth.
 
@@ -156,7 +163,8 @@ Then open:
 
 - `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
 
-Paste the token into the UI settings (sent as `connect.params.auth.token`).
+Paste the matching shared secret into the UI settings (sent as
+`connect.params.auth.token` or `connect.params.auth.password`).
 
 ## Insecure HTTP
 

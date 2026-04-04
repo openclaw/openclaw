@@ -105,7 +105,8 @@ Open:
   Host-header origin fallback mode, but is a dangerous security downgrade.
 - With Serve, Tailscale identity headers can satisfy Control UI/WebSocket auth
   when `gateway.auth.allowTailscale` is `true` (no token/password required).
-  HTTP API endpoints still require token/password. Set
+  HTTP API endpoints do not use those Tailscale identity headers; they follow
+  the gateway's normal HTTP auth mode instead. Set
   `gateway.auth.allowTailscale: false` to require explicit credentials. See
   [Tailscale](/gateway/tailscale) and [Security](/gateway/security). This
   tokenless flow assumes the gateway host is trusted.

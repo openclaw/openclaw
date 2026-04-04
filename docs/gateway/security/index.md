@@ -294,7 +294,7 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `hooks.allowed_agent_ids_unrestricted`                        | warn/critical | Authenticated hook callers may route to any configured agent                         | `hooks.allowedAgentIds`                                                                              | no       |
 | `hooks.request_session_key_enabled`                           | warn/critical | External caller can choose sessionKey                                                | `hooks.allowRequestSessionKey`                                                                       | no       |
 | `hooks.request_session_key_prefixes_missing`                  | warn/critical | No bound on external session key shapes                                              | `hooks.allowedSessionKeyPrefixes`                                                                    | no       |
-| `hooks.path_root`                                             | warn          | Hook path is `/`, making ingress easier to collide or misroute                       | `hooks.path`                                                                                         | no       |
+| `hooks.path_root`                                             | critical      | Hook path is `/`, making ingress easier to collide or misroute                       | `hooks.path`                                                                                         | no       |
 | `hooks.installs_unpinned_npm_specs`                           | warn          | Hook install records are not pinned to immutable npm specs                           | hook install metadata                                                                                | no       |
 | `hooks.installs_missing_integrity`                            | warn          | Hook install records lack integrity metadata                                         | hook install metadata                                                                                | no       |
 | `hooks.installs_version_drift`                                | warn          | Hook install records drift from installed packages                                   | hook install metadata                                                                                | no       |
@@ -920,8 +920,13 @@ UI/WebSocket authentication. OpenClaw verifies the identity by resolving the
 and matching it to the header. This only triggers for requests that hit loopback
 and include `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as
 injected by Tailscale.
+For this async identity check path, failed attempts for the same `{scope, ip}`
+are serialized before the limiter records the failure. Concurrent bad retries
+from one Serve client can therefore lock out the second attempt immediately
+instead of racing through as two plain mismatches.
 HTTP API endpoints (for example `/v1/*`, `/tools/invoke`, and `/api/channels/*`)
-still require token/password auth.
+do **not** use Tailscale identity-header auth. They still follow the gateway's
+configured HTTP auth mode.
 
 Important boundary note:
 
@@ -936,11 +941,14 @@ Important boundary note:
 **Trust assumption:** tokenless Serve auth assumes the gateway host is trusted.
 Do not treat this as protection against hostile same-host processes. If untrusted
 local code may run on the gateway host, disable `gateway.auth.allowTailscale`
-and require token/password auth.
+and require explicit shared-secret auth with `gateway.auth.mode: "token"` or
+`"password"`.
 
 **Security rule:** do not forward these headers from your own reverse proxy. If
 you terminate TLS or proxy in front of the gateway, disable
-`gateway.auth.allowTailscale` and use token/password auth (or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)) instead.
+`gateway.auth.allowTailscale` and use shared-secret auth (`gateway.auth.mode:
+"token"` or `"password"`) or [Trusted Proxy Auth](/gateway/trusted-proxy-auth)
+instead.
 
 Trusted proxies:
 
@@ -1117,6 +1125,9 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Prefer a dedicated profile for the agent (the default `openclaw` profile).
 - Avoid pointing the agent at your personal daily-driver profile.
 - Keep host browser control disabled for sandboxed agents unless you trust them.
+- The standalone loopback browser control API only honors shared-secret auth
+  (gateway token bearer auth or gateway password). It does not consume
+  trusted-proxy or Tailscale Serve identity headers.
 - Treat browser downloads as untrusted input; prefer an isolated downloads directory.
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.

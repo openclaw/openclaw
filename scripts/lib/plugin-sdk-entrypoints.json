@@ -19,6 +19,7 @@
   "approval-reply-runtime",
   "approval-runtime",
   "config-runtime",
+  "config-schema",
   "reply-runtime",
   "reply-dispatch-runtime",
   "reply-reference",

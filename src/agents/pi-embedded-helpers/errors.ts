@@ -226,6 +226,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("prompt too long") ||
     lower.includes("exceeds model context window") ||
     lower.includes("model token limit") ||
+    (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
     lower.includes("exceed context limit") ||
@@ -548,6 +549,11 @@ function classifyFailoverClassificationFromHttpStatus(
   if (status === 401 || status === 403) {
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
+    }
+    // billing message on 401/403 takes precedence over generic auth (e.g. OpenRouter
+    // "Key limit exceeded" 401/403 should trigger model fallback, not auth)
+    if (messageReason === "billing") {
+      return toReasonClassification("billing");
     }
     return toReasonClassification("auth");
   }

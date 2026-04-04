@@ -74,7 +74,10 @@ After the first successful load, the running process serves the active in-memory
   - HTTP APIs, OpenAI compatible (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
   - Control UI and hooks
 - Default bind mode: `loopback`.
-- Auth is required by default (`gateway.auth.token` / `gateway.auth.password`, or `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
+- Auth is required by default. Shared-secret setups use
+  `gateway.auth.token` / `gateway.auth.password` (or
+  `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`), and non-loopback
+  reverse-proxy setups can use `gateway.auth.mode: "trusted-proxy"`.
 
 ## OpenAI-compatible endpoints
 
@@ -142,7 +145,9 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 Then connect clients to `ws://127.0.0.1:18789` locally.
 
 <Warning>
-If gateway auth is configured, clients still must send auth (`token`/`password`) even over SSH tunnels.
+SSH tunnels do not bypass gateway auth. For shared-secret auth, clients still
+must send `token`/`password` even over the tunnel. For identity-bearing modes,
+the request still has to satisfy that auth path.
 </Warning>
 
 See: [Remote Gateway](/gateway/remote), [Authentication](/gateway/authentication), [Tailscale](/gateway/tailscale).

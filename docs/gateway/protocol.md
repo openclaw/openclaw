@@ -109,6 +109,11 @@ bounded role entries in `deviceTokens`:
 }
 ```
 
+For the built-in node/operator bootstrap flow, the primary node token stays
+`scopes: []` and any handed-off operator token stays bounded to the bootstrap
+operator allowlist (`operator.approvals`, `operator.read`,
+`operator.talk.secrets`, `operator.write`).
+
 ### Node example
 
 ```json
@@ -273,9 +278,18 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   persisted by the client for future connects.
 - Clients should persist the primary `hello-ok.auth.deviceToken` after any
   successful connect.
+- Reconnecting with that **stored** device token should also reuse the stored
+  approved scope set for that token. This preserves read/probe/status access
+  that was already granted and avoids silently collapsing reconnects to a
+  narrower implicit admin-only scope.
+- Normal connect auth precedence is explicit shared token/password first, then
+  explicit `deviceToken`, then stored per-device token, then bootstrap token.
 - Additional `hello-ok.auth.deviceTokens` entries are bootstrap handoff tokens.
   Persist them only when the connect used bootstrap auth on a trusted transport
   such as `wss://` or loopback/local pairing.
+- If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
+  caller-requested scope set remains authoritative; cached scopes are only
+  reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
 - Token issuance/rotation stays bounded to the approved role set recorded in
