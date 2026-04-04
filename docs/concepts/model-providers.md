@@ -561,6 +561,13 @@ On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by
 default unless you explicitly set it, and `/fast on` rewrites
 `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 
+Plugin-owned capability split:
+
+- Text/chat defaults stay on `minimax/MiniMax-M2.7`
+- Image generation is `minimax/image-01` or `minimax-portal/image-01`
+- Image understanding is plugin-owned `MiniMax-VL-01` on both MiniMax auth paths
+- Web search stays on provider id `minimax`
+
 ### Ollama
 
 Ollama ships as a bundled provider plugin and uses Ollama's native API:

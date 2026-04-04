@@ -80,6 +80,10 @@ the region in this order:
 That means CN onboarding or `MINIMAX_API_HOST=https://api.minimaxi.com/...`
 automatically keeps MiniMax Search on the CN host too.
 
+Even when you authenticated MiniMax through the OAuth `minimax-portal` path,
+web search still registers as provider id `minimax`; the OAuth provider base URL
+is only used as a region hint for CN/global host selection.
+
 ## Supported parameters
 
 MiniMax Search supports:

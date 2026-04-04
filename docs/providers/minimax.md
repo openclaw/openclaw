@@ -13,7 +13,13 @@ OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 MiniMax also provides:
 
 - bundled speech synthesis via T2A v2
+- bundled image understanding via `MiniMax-VL-01`
 - bundled `web_search` through the MiniMax Coding Plan search API
+
+Provider split:
+
+- `minimax`: API-key text provider, plus bundled image generation, image understanding, speech, and web search
+- `minimax-portal`: OAuth text provider, plus bundled image generation and image understanding
 
 ## Model lineup
 
@@ -45,13 +51,28 @@ To use MiniMax for image generation, set it as the image generation provider:
 
 The plugin uses the same `MINIMAX_API_KEY` or OAuth auth as the text models. No additional configuration is needed if MiniMax is already set up.
 
+Both `minimax` and `minimax-portal` register `image_generate` with the same
+`image-01` model. API-key setups use `MINIMAX_API_KEY`; OAuth setups can use
+the bundled `minimax-portal` auth path instead.
+
 When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
 `MiniMax-M2.7-highspeed` with `input: ["text", "image"]`.
 
-The bundled MiniMax provider catalog also advertises image input on those M2.7
-chat refs, so image-capable routing can use MiniMax without requiring explicit
-provider config first.
+The built-in bundled MiniMax text catalog itself stays text-only metadata until
+that explicit provider config exists. Image understanding is exposed separately
+through the plugin-owned `MiniMax-VL-01` media provider.
+
+## Image understanding
+
+The MiniMax plugin registers image understanding separately from the text
+catalog:
+
+- `minimax`: default image model `MiniMax-VL-01`
+- `minimax-portal`: default image model `MiniMax-VL-01`
+
+That is why automatic media routing can use MiniMax image understanding even
+when the bundled text-provider catalog still shows text-only M2.7 chat refs.
 
 ## Web search
 
@@ -64,6 +85,7 @@ search API.
 - Accepted env alias: `MINIMAX_CODING_API_KEY`
 - Compatibility fallback: `MINIMAX_API_KEY` when it already points at a coding-plan token
 - Region reuse: `plugins.entries.minimax.config.webSearch.region`, then `MINIMAX_API_HOST`, then MiniMax provider base URLs
+- Search stays on provider id `minimax`; OAuth CN/global setup can still steer region indirectly through `models.providers.minimax-portal.baseUrl`
 
 Config lives under `plugins.entries.minimax.config.webSearch.*`.
 See [MiniMax Search](/tools/minimax-search).
