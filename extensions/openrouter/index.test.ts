@@ -3,8 +3,8 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import openrouterPlugin from "./index.js";
 
 describe("openrouter provider hooks", () => {
-  it("owns native reasoning output mode", () => {
-    const provider = registerSingleProviderPlugin(openrouterPlugin);
+  it("owns native reasoning output mode", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
 
     expect(
       provider.resolveReasoningOutputMode?.({

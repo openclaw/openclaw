@@ -62,11 +62,13 @@ export function describeOpenAIProviderCatalogContract() {
           pluginId: "openai",
           artifactBasename: "index.js",
         });
-        openaiProviders = registerProviderPlugin({
-          plugin: openaiPlugin.default,
-          id: "openai",
-          name: "OpenAI",
-        }).providers;
+        openaiProviders = (
+          await registerProviderPlugin({
+            plugin: openaiPlugin.default,
+            id: "openai",
+            name: "OpenAI",
+          })
+        ).providers;
         openaiProvider = requireRegisteredProvider(openaiProviders, "openai", "provider");
         ({
           augmentModelCatalogWithProviderPlugins,

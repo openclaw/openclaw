@@ -217,24 +217,22 @@ function installDiscoveryHooks(state: DiscoveryState) {
         default: Parameters<typeof registerProviders>[0];
       }>(bundledProviderModules.cloudflareAiGatewayIndexModuleUrl),
     ]);
-    state.githubCopilotProvider = requireProvider(
-      registerProviders(githubCopilotPlugin),
-      "github-copilot",
-    );
-    state.ollamaProvider = requireProvider(registerProviders(ollamaPlugin), "ollama");
-    state.vllmProvider = requireProvider(registerProviders(vllmPlugin), "vllm");
-    state.sglangProvider = requireProvider(registerProviders(sglangPlugin), "sglang");
-    state.minimaxProvider = requireProvider(registerProviders(minimaxPlugin), "minimax");
-    state.minimaxPortalProvider = requireProvider(
-      registerProviders(minimaxPlugin),
-      "minimax-portal",
-    );
-    state.modelStudioProvider = requireProvider(
-      registerProviders(modelStudioPlugin),
-      "modelstudio",
-    );
+    const githubCopilotProviders = await registerProviders(githubCopilotPlugin);
+    const ollamaProviders = await registerProviders(ollamaPlugin);
+    const vllmProviders = await registerProviders(vllmPlugin);
+    const sglangProviders = await registerProviders(sglangPlugin);
+    const minimaxProviders = await registerProviders(minimaxPlugin);
+    const modelStudioProviders = await registerProviders(modelStudioPlugin);
+    const cloudflareAiGatewayProviders = await registerProviders(cloudflareAiGatewayPlugin);
+    state.githubCopilotProvider = requireProvider(githubCopilotProviders, "github-copilot");
+    state.ollamaProvider = requireProvider(ollamaProviders, "ollama");
+    state.vllmProvider = requireProvider(vllmProviders, "vllm");
+    state.sglangProvider = requireProvider(sglangProviders, "sglang");
+    state.minimaxProvider = requireProvider(minimaxProviders, "minimax");
+    state.minimaxPortalProvider = requireProvider(minimaxProviders, "minimax-portal");
+    state.modelStudioProvider = requireProvider(modelStudioProviders, "modelstudio");
     state.cloudflareAiGatewayProvider = requireProvider(
-      registerProviders(cloudflareAiGatewayPlugin),
+      cloudflareAiGatewayProviders,
       "cloudflare-ai-gateway",
     );
     setRuntimeAuthStore();

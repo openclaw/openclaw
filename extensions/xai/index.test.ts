@@ -3,8 +3,8 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import plugin from "./index.js";
 
 describe("xai provider plugin", () => {
-  it("owns replay policy for xAI OpenAI-compatible transports", () => {
-    const provider = registerSingleProviderPlugin(plugin);
+  it("owns replay policy for xAI OpenAI-compatible transports", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
 
     expect(
       provider.buildReplayPolicy?.({

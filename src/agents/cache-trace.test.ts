@@ -93,7 +93,7 @@ describe("createCacheTrace", () => {
       options,
     })) as never);
 
-    wrapped?.(
+    void wrapped?.(
       {
         id: "gpt-5.4",
         provider: "openai",
