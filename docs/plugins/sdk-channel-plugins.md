@@ -93,9 +93,21 @@ For setup specifically:
   delegated setup-proxy builders
 - `openclaw/plugin-sdk/setup-adapter-runtime` is the narrow env-aware adapter
   seam for `createEnvPatchedAccountSetupAdapter`
+- `openclaw/plugin-sdk/channel-setup` covers the optional-install setup
+  builders plus a few setup-safe primitives:
+  `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`,
+  `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
+  `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
+  `splitSetupEntries`
 - use the broader `openclaw/plugin-sdk/setup` seam only when you also need the
   heavier shared setup/config helpers such as
   `moveSingleAccountChannelSectionToDefaultAccount(...)`
+
+If your channel only wants to advertise "install this plugin first" in setup
+surfaces, prefer `createOptionalChannelSetupSurface(...)`. The generated
+adapter/wizard fail closed on config writes and finalization, and they reuse
+the same install-required message across validation, finalize, and docs-link
+copy.
 
 For other hot channel paths, prefer the narrow helpers over broader legacy
 surfaces:

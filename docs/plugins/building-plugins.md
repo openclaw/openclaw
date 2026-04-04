@@ -38,6 +38,12 @@ falls back to npm automatically.
   </Card>
 </CardGroup>
 
+If a channel plugin is optional and may not be installed when onboarding/setup
+runs, use `createOptionalChannelSetupSurface(...)` from
+`openclaw/plugin-sdk/channel-setup`. It produces a setup adapter + wizard pair
+that advertises the install requirement and fails closed on real config writes
+until the plugin is installed.
+
 ## Quick start: tool plugin
 
 This walkthrough creates a minimal plugin that registers an agent tool. Channel

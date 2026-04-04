@@ -296,7 +296,7 @@ For hot setup-only paths, prefer the narrow setup helper seams over the broader
 | ---------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `plugin-sdk/setup-runtime`         | setup-time runtime helpers that stay available in `setupEntry` / deferred channel startup | `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
 | `plugin-sdk/setup-adapter-runtime` | environment-aware account setup adapters                                                  | `createEnvPatchedAccountSetupAdapter`                                                                                                                                        |
-| `plugin-sdk/setup-tools`           | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `formatDocsLink`                                                                                                       |
+| `plugin-sdk/setup-tools`           | setup/install CLI/archive/docs helpers                                                    | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR`                                                                |
 
 Use the broader `plugin-sdk/setup` seam when you want the full shared setup
 toolbox, including config-patch helpers such as
@@ -443,6 +443,29 @@ const setupSurface = createOptionalChannelSetupSurface({
 });
 // Returns { setupAdapter, setupWizard }
 ```
+
+`plugin-sdk/channel-setup` also exposes the lower-level
+`createOptionalChannelSetupAdapter(...)` and
+`createOptionalChannelSetupWizard(...)` builders when you only need one half of
+that optional-install surface.
+
+The generated optional adapter/wizard fail closed on real config writes. They
+reuse one install-required message across `validateInput`,
+`applyAccountConfig`, and `finalize`, and append a docs link when `docsPath` is
+set.
+
+For binary-backed setup UIs, prefer the shared delegated helpers instead of
+copying the same binary/status glue into every channel:
+
+- `createDetectedBinaryStatus(...)` for status blocks that vary only by labels,
+  hints, scores, and binary detection
+- `createCliPathTextInput(...)` for path-backed text inputs
+- `createDelegatedSetupWizardStatusResolvers(...)`,
+  `createDelegatedPrepare(...)`, `createDelegatedFinalize(...)`, and
+  `createDelegatedResolveConfigured(...)` when `setupEntry` needs to forward to
+  a heavier full wizard lazily
+- `createDelegatedTextInputShouldPrompt(...)` when `setupEntry` only needs to
+  delegate a `textInputs[*].shouldPrompt` decision
 
 ## Publishing and installing
 
