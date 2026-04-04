@@ -346,17 +346,18 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     }
   });
 
-  // Cache chatId → sessionKey so the sequential key middleware can check
-  // whether an embedded Pi run is active without heavy session resolution.
+  // Cache chatId:threadId → sessionKey so the sequential key middleware can
+  // check whether an embedded Pi run is active without heavy session resolution.
   // Populated by bot-handlers when sessions are resolved for each message.
-  const chatSessionCache = new Map<number, string>();
+  const chatSessionCache = new Map<string, string>();
 
   bot.use(
     botRuntime.sequentialize((ctx) =>
       getTelegramSequentialKey(ctx, {
         isRunActiveForChat: telegramDeps.isRunActiveForSessionKey
-          ? (chatId) => {
-              const sessionKey = chatSessionCache.get(chatId);
+          ? (chatId, threadId) => {
+              const cacheKey = threadId != null ? `${chatId}:${threadId}` : `${chatId}`;
+              const sessionKey = chatSessionCache.get(cacheKey);
               return sessionKey ? telegramDeps.isRunActiveForSessionKey!(sessionKey) : false;
             }
           : undefined,
