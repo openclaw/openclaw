@@ -46,6 +46,22 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### HRR Fact Memory
+
+Structured fact recall using Holographic Reduced Representations. Complements
+RAG-based `memory_search` with instant <2ms factual lookups — no embeddings,
+no vector database, zero external dependencies. Parses MEMORY.md into
+`(subject, relation, object)` triples and answers questions like
+"What is Alice's timezone?" in under 2 milliseconds. Optional observation
+layer tracks belief changes over time.
+
+- **npm:** `openclaw-hrr-memory`
+- **repo:** [github.com/Joncik91/openclaw-hrr-memory](https://github.com/Joncik91/openclaw-hrr-memory)
+
+```bash
+openclaw plugins install openclaw-hrr-memory
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
