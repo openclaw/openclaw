@@ -414,6 +414,15 @@ describe("resolveIMessageInboundDecision tapback filtering", () => {
     expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
   });
 
+  it('drops messages with text starting with "Disliked"', () => {
+    const decision = resolveDecision({
+      message: { text: 'Disliked \u201cNo way\u201d' },
+      messageText: 'Disliked \u201cNo way\u201d',
+      bodyText: 'Disliked \u201cNo way\u201d',
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
   it('drops messages with text starting with "Laughed at"', () => {
     const decision = resolveDecision({
       message: { text: 'Laughed at \u201clol\u201d' },
@@ -485,5 +494,19 @@ describe("resolveIMessageInboundDecision tapback filtering", () => {
       bodyText: "normal message",
     });
     expect(decision.kind).toBe("dispatch");
+  });
+
+  it("drops tapback before access control so pairing is not triggered", () => {
+    // With dmPolicy=pairing, a normal message from an unknown sender would
+    // trigger a pairing challenge. But tapbacks should be dropped before
+    // that check ever runs.
+    const decision = resolveDecision({
+      message: { text: 'Loved \u201cHello\u201d' },
+      messageText: 'Loved \u201cHello\u201d',
+      bodyText: 'Loved \u201cHello\u201d',
+      dmPolicy: "pairing",
+      allowFrom: [],
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
   });
 });

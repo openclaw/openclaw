@@ -323,6 +323,17 @@ export function resolveIMessageInboundDecision(params: {
     return { kind: "drop", reason: "group without chat_id" };
   }
 
+  // Tapback / reaction detection: drop tapback messages early (before access
+  // control) so they never trigger pairing flows or agent responses.  This
+  // mirrors the filtering that the BlueBubbles provider already performs via
+  // resolveTapbackContext.
+  if (bodyText && isIMessageTapback(params.message, bodyText)) {
+    params.logVerbose?.(
+      `imessage: dropping tapback reaction: "${sanitizeTerminalText(truncateUtf16Safe(bodyText, 60))}"`,
+    );
+    return { kind: "drop", reason: "tapback reaction" };
+  }
+
   const groupId = isGroup ? groupIdCandidate : undefined;
   const accessDecision = resolveDmGroupAccessWithLists({
     isGroup,
@@ -391,16 +402,6 @@ export function resolveIMessageInboundDecision(params: {
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
   if (!bodyText) {
     return { kind: "drop", reason: "empty body" };
-  }
-
-  // Tapback / reaction detection: drop tapback messages so they are not
-  // forwarded to the agent as regular text.  This mirrors the filtering
-  // that the BlueBubbles provider already performs via resolveTapbackContext.
-  if (isIMessageTapback(params.message, bodyText)) {
-    params.logVerbose?.(
-      `imessage: dropping tapback reaction: "${sanitizeTerminalText(truncateUtf16Safe(bodyText, 60))}"`,
-    );
-    return { kind: "drop", reason: "tapback reaction" };
   }
 
   const selfChatHit = skipSelfChatHasCheck
