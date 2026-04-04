@@ -284,52 +284,6 @@ export function createSessionsSpawnTool(
               key: requesterInternalKey,
               alias,
               mainKey,
-        const childSessionKey = result.childSessionKey?.trim();
-        const childRunId = isSpawnAcpAcceptedResult(result) ? result.runId?.trim() : undefined;
-        const shouldTrackViaRegistry =
-          result.status === "accepted" &&
-          Boolean(childSessionKey) &&
-          Boolean(childRunId) &&
-          streamTo !== "parent";
-        if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const cfg = loadConfig();
-          const trackedSpawnMode = resolveTrackedSpawnMode({
-            requestedMode: result.mode,
-            threadRequested: thread,
-          });
-          const trackedCleanup = trackedSpawnMode === "session" ? "keep" : cleanup;
-          const { mainKey, alias } = resolveMainSessionAlias(cfg);
-          const requesterInternalKey = opts?.agentSessionKey
-            ? resolveInternalSessionKey({
-                key: opts.agentSessionKey,
-                alias,
-                mainKey,
-              })
-            : alias;
-          const requesterDisplayKey = resolveDisplaySessionKey({
-            key: requesterInternalKey,
-            alias,
-            mainKey,
-          });
-          const requesterOrigin = normalizeDeliveryContext({
-            channel: opts?.agentChannel,
-            accountId: opts?.agentAccountId,
-            to: opts?.agentTo,
-            threadId: opts?.agentThreadId,
-          });
-          try {
-            registerSubagentRun({
-              runId: childRunId,
-              childSessionKey,
-              requesterSessionKey: requesterInternalKey,
-              requesterOrigin,
-              requesterDisplayKey,
-              task,
-              cleanup: trackedCleanup,
-              label: label || undefined,
-              runTimeoutSeconds,
-              expectsCompletionMessage: true,
-              spawnMode: trackedSpawnMode,
             });
             const requesterOrigin = normalizeDeliveryContext({
               channel: opts?.agentChannel,
