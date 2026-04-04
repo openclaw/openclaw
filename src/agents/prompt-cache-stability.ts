@@ -6,7 +6,7 @@ export function normalizePromptCapabilityIds(capabilities: ReadonlyArray<string>
   const seen = new Set<string>();
   const normalized: string[] = [];
   for (const capability of capabilities) {
-    const value = normalizeStructuredPromptSection(String(capability ?? "")).toLowerCase();
+    const value = normalizeStructuredPromptSection(capability).toLowerCase();
     if (!value || seen.has(value)) {
       continue;
     }
