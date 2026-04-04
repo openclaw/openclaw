@@ -136,7 +136,7 @@ Current bundled examples:
 - `opencode` and `opencode-go`: plugin-owned capability metadata plus
   proxy-Gemini thought-signature sanitation
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
-  `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
+  `qwen`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
 - `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
   selection, and usage auth/snapshot logic
@@ -251,7 +251,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 ### Other subscription-style hosted options
 
-- [Qwen / Model Studio](/providers/qwen_modelstudio): Alibaba Cloud Standard pay-as-you-go and Coding Plan subscription endpoints
+- [Qwen Cloud](/providers/qwen): Qwen Cloud provider surface plus Alibaba DashScope and Coding Plan endpoint mapping
 - [MiniMax](/providers/minimax): MiniMax Coding Plan OAuth or API key access
 - [GLM Models](/providers/glm): Z.AI Coding Plan or general API endpoints
 
@@ -360,8 +360,8 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `kimi/kimi-code`
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Example model: `qianfan/deepseek-v3.2`
-- Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
-- Example model: `modelstudio/qwen3.5-plus`
+- Qwen Cloud: `qwen` (`QWEN_API_KEY`, `MODELSTUDIO_API_KEY`, or `DASHSCOPE_API_KEY`)
+- Example model: `qwen/qwen3.5-plus`
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
 - Example model: `nvidia/nvidia/llama-3.1-nemotron-70b-instruct`
 - StepFun: `stepfun` / `stepfun-plan` (`STEPFUN_API_KEY`)

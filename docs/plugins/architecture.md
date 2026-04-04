@@ -817,7 +817,7 @@ api.registerProvider({
 - Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
   transcript/tooling quirks out of core.
 - Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
-  `huggingface`, `kimi-coding`, `modelstudio`, `nvidia`, `qianfan`,
+  `huggingface`, `kimi-coding`, `qwen`, `nvidia`, `qianfan`,
   `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine` use
   `catalog` only.
 - MiniMax and Xiaomi use `catalog` plus usage hooks because their `/usage`
@@ -1535,7 +1535,7 @@ api.registerVideoGenerationProvider({
 });
 
 // shared runtime helper for feature/channel plugins
-const clip = await api.runtime.videoGeneration.generateFile({
+const clip = await api.runtime.videoGeneration.generate({
   prompt: "Show the robot walking through the lab.",
   cfg,
 });

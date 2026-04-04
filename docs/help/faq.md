@@ -576,7 +576,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     **Z.AI / GLM Coding Plan**.
 
     Docs: [Anthropic](/providers/anthropic), [OpenAI](/providers/openai),
-    [Qwen / Model Studio](/providers/qwen_modelstudio),
+    [Qwen Cloud](/providers/qwen),
     [MiniMax](/providers/minimax), [GLM Models](/providers/glm),
     [Local models](/gateway/local-models), [Models](/concepts/models).
 
@@ -607,7 +607,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     For production or multi-user workloads, Anthropic API key auth is the
     safer, recommended choice. If you want other subscription-style hosted
     options in OpenClaw, see [OpenAI](/providers/openai), [Qwen / Model
-    Studio](/providers/qwen_modelstudio), [MiniMax](/providers/minimax), and
+    Cloud](/providers/qwen), [MiniMax](/providers/minimax), and
     [GLM Models](/providers/glm).
 
   </Accordion>
