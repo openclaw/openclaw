@@ -44,7 +44,9 @@ export const buildPromptSection: MemoryPromptSectionBuilder = ({
     "- filename.md — <one-line description>",
     "```",
     "",
-    "The routing zone matches against the current input. Load the file only when the match-term appears. The state zone loads every session. The index zone is for `memory_search` — pointers only, never content.",
+    hasMemorySearch
+      ? "The routing zone matches against the current input. Load the file only when the match-term appears. The state zone loads every session. The index zone is for `memory_search` — pointers only, never content."
+      : "The routing zone matches against the current input. Load the file only when the match-term appears. The state zone loads every session. The index zone lists memory files — pointers only, never content.",
     "",
     "### Four moments of memory work",
     "",
@@ -78,7 +80,7 @@ export const buildPromptSection: MemoryPromptSectionBuilder = ({
     "",
     "### File format",
     "",
-    "Each memory file is plain markdown. First line: `# <title>`. No frontmatter. No metadata beyond what the content says. Keep files under 50 lines — if longer, split or compress.",
+    "Each memory file in `memory/` is plain markdown. First line: `# <title>`. No frontmatter. No metadata beyond what the content says. Keep files under 50 lines — if longer, split or compress. (MEMORY.md follows its own structure above — this rule applies to content files, not the index.)",
     "",
     "Write memories as instructions to your future self: \"User prefers X\" not \"I learned that the user prefers X.\"",
   ];
