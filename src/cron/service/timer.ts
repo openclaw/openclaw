@@ -253,14 +253,21 @@ function emitFailureAlert(
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    /** When true, the alert is for consecutive skipped runs rather than errors. */
+    isSkip?: boolean;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
-  const text = [
-    `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
-    `Last error: ${truncatedError}`,
-  ].join("\n");
+  const text = params.isSkip
+    ? [
+        `Cron job "${safeJobName}" skipped ${params.consecutiveErrors} times`,
+        `Reason: ${truncatedError}`,
+      ].join("\n")
+    : [
+        `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
+        `Last error: ${truncatedError}`,
+      ].join("\n");
 
   if (state.deps.sendCronFailureAlert) {
     void state.deps
@@ -334,36 +341,67 @@ export function applyJobResult(
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
 
-  // Track consecutive errors for backoff / auto-disable.
+  // Track consecutive errors/skips for backoff / auto-disable and failure alerts.
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    job.state.consecutiveSkips = 0;
     const alertConfig = resolveFailureAlert(state, job);
-    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const isBestEffort =
-        job.delivery?.bestEffort === true ||
-        (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
-      if (!isBestEffort) {
-        const now = state.deps.nowMs();
-        const lastAlert = job.state.lastFailureAlertAtMs;
-        const inCooldown =
-          typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
-        if (!inCooldown) {
-          emitFailureAlert(state, {
-            job,
-            error: result.error,
-            consecutiveErrors: job.state.consecutiveErrors,
-            channel: alertConfig.channel,
-            to: alertConfig.to,
-            mode: alertConfig.mode,
-            accountId: alertConfig.accountId,
-          });
-          job.state.lastFailureAlertAtMs = now;
-        }
+    // #60845: Only check job.delivery?.bestEffort here — payload.bestEffortDeliver
+    // gates output delivery, not failure alerting. Treating it as best-effort here
+    // incorrectly suppressed failureAlert for legacy agentTurn jobs.
+    const isBestEffort = job.delivery?.bestEffort === true;
+    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after && !isBestEffort) {
+      const now = state.deps.nowMs();
+      const lastAlert = job.state.lastFailureAlertAtMs;
+      const inCooldown =
+        typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+      if (!inCooldown) {
+        emitFailureAlert(state, {
+          job,
+          error: result.error,
+          consecutiveErrors: job.state.consecutiveErrors,
+          channel: alertConfig.channel,
+          to: alertConfig.to,
+          mode: alertConfig.mode,
+          accountId: alertConfig.accountId,
+        });
+        job.state.lastFailureAlertAtMs = now;
+      }
+    }
+  } else if (result.status === "skipped") {
+    // #60846: Track consecutive skips and evaluate failureAlert so persistently-
+    // skipped jobs are not silently ignored. consecutiveErrors is reset here
+    // because a skipped run is not an execution error.
+    job.state.consecutiveErrors = 0;
+    job.state.lastFailureAlertAtMs = undefined;
+    job.state.consecutiveSkips = (job.state.consecutiveSkips ?? 0) + 1;
+    const alertConfig = resolveFailureAlert(state, job);
+    const isBestEffort = job.delivery?.bestEffort === true;
+    if (alertConfig && job.state.consecutiveSkips >= alertConfig.after && !isBestEffort) {
+      const now = state.deps.nowMs();
+      const lastSkipAlert = job.state.lastSkipAlertAtMs;
+      const inCooldown =
+        typeof lastSkipAlert === "number" &&
+        now - lastSkipAlert < Math.max(0, alertConfig.cooldownMs);
+      if (!inCooldown) {
+        emitFailureAlert(state, {
+          job,
+          error: result.error ?? "job was skipped",
+          consecutiveErrors: job.state.consecutiveSkips,
+          channel: alertConfig.channel,
+          to: alertConfig.to,
+          mode: alertConfig.mode,
+          accountId: alertConfig.accountId,
+          isSkip: true,
+        });
+        job.state.lastSkipAlertAtMs = now;
       }
     }
   } else {
     job.state.consecutiveErrors = 0;
     job.state.lastFailureAlertAtMs = undefined;
+    job.state.consecutiveSkips = 0;
+    job.state.lastSkipAlertAtMs = undefined;
   }
 
   const shouldDelete =

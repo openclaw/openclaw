@@ -125,6 +125,10 @@ export type CronJobState = {
   consecutiveErrors?: number;
   /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
   lastFailureAlertAtMs?: number;
+  /** Number of consecutive skipped runs (reset on non-skipped run). Used for skip-based failureAlert. */
+  consecutiveSkips?: number;
+  /** Last skip-based failure alert timestamp (ms since epoch) for cooldown gating. */
+  lastSkipAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */

@@ -240,6 +240,8 @@ export const CronJobStateSchema = Type.Object(
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    consecutiveSkips: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastSkipAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
