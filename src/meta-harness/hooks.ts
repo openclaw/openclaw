@@ -334,6 +334,49 @@ export function startHeartbeatFlowTrace(
 }
 
 // ---------------------------------------------------------------------------
+// Hook: session:delegation — record delegation from sessions_spawn
+// ---------------------------------------------------------------------------
+
+async function handleDelegation(event: InternalHookEvent): Promise<void> {
+  const ctx = event.context as {
+    childSessionId?: string;
+    agentType?: string;
+    taskBrief?: string;
+    workspaceDir?: string;
+    status?: string;
+  };
+
+  const workspaceDir = getWorkspaceDir(event.context);
+  if (!workspaceDir) {
+    return;
+  }
+
+  const childSessionId = ctx.childSessionId;
+  const agentType = ctx.agentType;
+  const taskBrief = ctx.taskBrief;
+  if (!childSessionId || !agentType || !taskBrief) {
+    return;
+  }
+
+  const entry = getBuilder(event.sessionKey);
+  if (!entry) {
+    return;
+  }
+
+  const gating = await checkWorkspaceGating(workspaceDir);
+  if (!gating.enabled) {
+    return;
+  }
+
+  entry.builder.recordDelegation({
+    child_trace_id: childSessionId,
+    agent_type: agentType,
+    task_brief: taskBrief,
+    status: (ctx.status as import("./types.js").RunOutcome) ?? "completed",
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -352,6 +395,7 @@ export function registerMetaHarnessHooks(): void {
   registerInternalHook("gateway:startup", handleGatewayStartup);
   registerInternalHook("message:received", handleMessageReceived);
   registerInternalHook("session:compact:before", handleSessionCompactBefore);
+  registerInternalHook("session:delegation", handleDelegation);
 
   log.debug("meta-harness hooks registered");
 }

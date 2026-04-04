@@ -178,13 +178,25 @@ describe("e2e: delegation recording", () => {
       status: "completed",
     });
 
+    // Also test via internal hook (the real runtime path from subagent-spawn)
+    await triggerInternalHook(
+      createInternalHookEvent("session", "delegation", sessionKey, {
+        childSessionId: "child-002",
+        agentType: "codex",
+        taskBrief: "review PR",
+        workspaceDir: tmpDir,
+        status: "completed",
+      }),
+    );
+
     await finalizeSessionFlowTrace(sessionKey, tmpDir, "completed");
 
     const traces = await listTraces<FlowTrace>(tmpDir, "traces");
     expect(traces).toHaveLength(1);
-    expect(traces[0].data.delegation_list).toHaveLength(1);
+    expect(traces[0].data.delegation_list).toHaveLength(2);
     expect(traces[0].data.delegation_list[0].agent_type).toBe("claude-code");
-    expect(traces[0].data.delegation_list[0].status).toBe("completed");
+    expect(traces[0].data.delegation_list[1].agent_type).toBe("codex");
+    expect(traces[0].data.delegation_list[1].child_trace_id).toBe("child-002");
   });
 });
 
