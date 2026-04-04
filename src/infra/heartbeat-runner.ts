@@ -957,6 +957,8 @@ export async function runHeartbeatOnce(opts: {
     }
 
     if (!visibility.showAlerts) {
+      heartbeatSuccess = true;
+      await updateTaskTimestamps();
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
