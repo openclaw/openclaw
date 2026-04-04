@@ -2,6 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { formatWhatsAppConfigAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createAsyncComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -19,12 +20,7 @@ import {
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import { whatsappChannelOutbound } from "./channel-outbound.js";
-import { handleWhatsAppReactAction } from "./channel-react-action.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
-import {
-  listWhatsAppDirectoryGroupsFromConfig,
-  listWhatsAppDirectoryPeersFromConfig,
-} from "./directory-config.js";
 import {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,
@@ -46,6 +42,11 @@ import {
 } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
+
+const loadWhatsAppDirectoryConfig = createLazyRuntimeModule(() => import("./directory-config.js"));
+const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
+  () => import("./channel-react-action.js"),
+);
 
 function parseWhatsAppExplicitTarget(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
@@ -124,15 +125,25 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             raw: { e164, jid },
           };
         },
-        listPeers: async (params) => listWhatsAppDirectoryPeersFromConfig(params),
-        listGroups: async (params) => listWhatsAppDirectoryGroupsFromConfig(params),
+        listPeers: async (params) =>
+          (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryPeersFromConfig(params),
+        listGroups: async (params) =>
+          (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsFromConfig(params),
       },
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
         supportsAction: ({ action }) => action === "react",
         handleAction: async ({ action, params, cfg, accountId, toolContext }) =>
-          await handleWhatsAppReactAction({ action, params, cfg, accountId, toolContext }),
+          await (
+            await loadWhatsAppChannelReactAction()
+          ).handleWhatsAppReactAction({
+            action,
+            params,
+            cfg,
+            accountId,
+            toolContext,
+          }),
       },
       auth: {
         ...whatsappApprovalAuth,
