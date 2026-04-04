@@ -36,6 +36,7 @@ import {
   ensureAuthProfileStore,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
@@ -212,12 +213,14 @@ export async function runEmbeddedPiAgent(
           lockedProfileId = undefined;
         }
       }
-      const profileOrder = resolveAuthProfileOrder({
-        cfg: params.config,
-        store: authStore,
-        provider,
-        preferredProfile: preferredProfileId,
-      });
+      const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
+        ? []
+        : resolveAuthProfileOrder({
+            cfg: params.config,
+            store: authStore,
+            provider,
+            preferredProfile: preferredProfileId,
+          });
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
@@ -476,6 +479,10 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          let resolvedStreamApiKey: string | undefined;
+          if (!runtimeAuthState && apiKeyInfo) {
+            resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
+          }
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -525,6 +532,7 @@ export async function runEmbeddedPiAgent(
               runtimeAuthState ? null : apiKeyInfo,
               params.config,
             ),
+            resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,

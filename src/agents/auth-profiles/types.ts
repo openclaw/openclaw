@@ -49,7 +49,8 @@ export type OAuthCredential = OAuthCredentials & {
   displayName?: string;
   /**
    * When set, another CLI owns refresh-token rotation for this credential.
-   * OpenClaw may re-read that external source, but must not refresh on its own.
+   * OpenClaw should prefer that external source as canonical storage and avoid
+   * persisting copied secrets into auth-profiles.json.
    */
   managedBy?: ExternalOAuthManager;
 };

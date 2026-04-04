@@ -2260,6 +2260,42 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.text).toEqual({ verbosity: "low" });
     expect(sent.service_tier).toBe("priority");
   });
+
+  it("awaits async onPayload mutations before sending response.create", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-onpayload-async");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      {
+        onPayload: async (payload: unknown) => {
+          const request = payload as Record<string, unknown>;
+          await Promise.resolve();
+          request.metadata = { async_hook: "applied" };
+          return undefined;
+        },
+      } as unknown as Parameters<typeof streamFn>[2],
+    );
+    await new Promise<void>((resolve, reject) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          MockManager.lastInstance!.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp-onpayload-async", "Done"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            /* consume */
+          }
+          resolve();
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.type).toBe("response.create");
+    expect(sent.metadata).toMatchObject({ async_hook: "applied" });
+  });
   it("forwards topP and toolChoice to response.create", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-topp");
     const opts = { topP: 0.9, toolChoice: "auto" };

@@ -113,6 +113,7 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
+  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
@@ -762,7 +763,11 @@ export async function compactEmbeddedPiSessionDirect(
         modelApi: effectiveModel.api,
       });
       const wsApiKey = shouldUseWebSocketTransport
-        ? await authStorage.getApiKey(provider)
+        ? await resolveEmbeddedAgentApiKey({
+            provider,
+            resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
+            authStorage,
+          })
         : undefined;
       if (shouldUseWebSocketTransport && !wsApiKey) {
         log.warn(
@@ -779,6 +784,7 @@ export async function compactEmbeddedPiSessionDirect(
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: effectiveModel,
+        resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
         authStorage,
       });
       const { effectiveExtraParams } = applyExtraParamsToAgent(

@@ -49,6 +49,7 @@ import {
 } from "./openai-ws-message-conversion.js";
 import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
 import { log } from "./pi-embedded-runner/logger.js";
+import { normalizeProviderId } from "./provider-id.js";
 import { createBoundaryAwareStreamFnForModel } from "./provider-transport-stream.js";
 import {
   buildAssistantMessageWithZeroUsage,
@@ -314,6 +315,119 @@ function createWsManager(
   });
 }
 
+const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+
+function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const url = new URL(trimmed);
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "api.openai.com" &&
+      /^\/v1\/?$/u.test(url.pathname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/iu.test(trimmed);
+}
+
+function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    return new URL(trimmed).hostname.toLowerCase().endsWith(".openai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
+function normalizeTransportIdentityValue(value: string, maxLength = 160): string {
+  const trimmed = value.trim().replace(/[\r\n]+/gu, " ");
+  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+}
+
+function usesNativeOpenAIRoute(provider: string, baseUrl?: string): boolean {
+  const normalizedProvider = normalizeProviderId(provider);
+  if (!normalizedProvider) {
+    return false;
+  }
+  if (normalizedProvider === "openai") {
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
+  }
+  if (AZURE_OPENAI_PROVIDER_IDS.has(normalizedProvider)) {
+    return !baseUrl || isAzureOpenAIBaseUrl(baseUrl);
+  }
+  if (normalizedProvider === OPENAI_CODEX_PROVIDER_ID) {
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
+  }
+  return false;
+}
+
+function resolveNativeOpenAISessionHeaders(params: {
+  provider: string;
+  baseUrl?: string;
+  sessionId?: string;
+}): Record<string, string> | undefined {
+  if (!params.sessionId || !usesNativeOpenAIRoute(params.provider, params.baseUrl)) {
+    return undefined;
+  }
+  const sessionId = normalizeTransportIdentityValue(params.sessionId);
+  if (!sessionId) {
+    return undefined;
+  }
+  return {
+    "x-client-request-id": sessionId,
+    "x-openclaw-session-id": sessionId,
+  };
+}
+
+function resolveNativeOpenAITransportTurnState(params: {
+  provider: string;
+  baseUrl?: string;
+  sessionId?: string;
+  turnId: string;
+  attempt: number;
+  transport: "stream" | "websocket";
+}): ProviderTransportTurnState | undefined {
+  const sessionHeaders = resolveNativeOpenAISessionHeaders({
+    provider: params.provider,
+    baseUrl: params.baseUrl,
+    sessionId: params.sessionId,
+  });
+  if (!sessionHeaders) {
+    return undefined;
+  }
+  const turnId = normalizeTransportIdentityValue(params.turnId);
+  const attempt = String(Math.max(1, params.attempt));
+  return {
+    headers: {
+      ...sessionHeaders,
+      "x-openclaw-turn-id": turnId,
+      "x-openclaw-turn-attempt": attempt,
+    },
+    metadata: {
+      openclaw_session_id: sessionHeaders["x-openclaw-session-id"] ?? "",
+      openclaw_turn_id: turnId,
+      openclaw_turn_attempt: attempt,
+      openclaw_transport: params.transport,
+    },
+  };
+}
+
 function resolveProviderTransportTurnState(
   model: Parameters<StreamFn>[0],
   params: {
@@ -323,24 +437,46 @@ function resolveProviderTransportTurnState(
     transport: "stream" | "websocket";
   },
 ): ProviderTransportTurnState | undefined {
-  return resolveProviderTransportTurnStateWithPlugin({
-    provider: model.provider,
-    context: {
+  if (usesNativeOpenAIRoute(model.provider, (model as { baseUrl?: string }).baseUrl)) {
+    return resolveNativeOpenAITransportTurnState({
       provider: model.provider,
-      modelId: model.id,
-      model: model as ProviderRuntimeModel,
+      baseUrl: (model as { baseUrl?: string }).baseUrl,
       sessionId: params.sessionId,
       turnId: params.turnId,
       attempt: params.attempt,
       transport: params.transport,
-    },
-  });
+    });
+  }
+  return (
+    resolveProviderTransportTurnStateWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: model as ProviderRuntimeModel,
+        sessionId: params.sessionId,
+        turnId: params.turnId,
+        attempt: params.attempt,
+        transport: params.transport,
+      },
+    }) ?? undefined
+  );
 }
 
 function resolveWebSocketSessionPolicy(
   model: Parameters<StreamFn>[0],
   sessionId: string,
 ): { headers?: Record<string, string>; degradeCooldownMs: number } {
+  if (usesNativeOpenAIRoute(model.provider, (model as { baseUrl?: string }).baseUrl)) {
+    return {
+      headers: resolveNativeOpenAISessionHeaders({
+        provider: model.provider,
+        baseUrl: (model as { baseUrl?: string }).baseUrl,
+        sessionId,
+      }),
+      degradeCooldownMs: Math.max(0, wsDegradeCooldownMsOverride ?? DEFAULT_WS_DEGRADE_COOLDOWN_MS),
+    };
+  }
   const policy = resolveProviderWebSocketSessionPolicyWithPlugin({
     provider: model.provider,
     context: {
@@ -691,7 +827,7 @@ export function createOpenAIWebSocketStreamFn(
           tools: convertTools(context.tools),
           metadata: turnState?.metadata,
         }) as Record<string, unknown>;
-        const nextPayload = options?.onPayload?.(payload, model);
+        const nextPayload = await options?.onPayload?.(payload, model);
         payload = mergeTransportMetadata(
           (nextPayload ?? payload) as Record<string, unknown>,
           turnState?.metadata,
