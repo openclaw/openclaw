@@ -27,16 +27,18 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 ## Quick start
 
 <Steps>
-  <Step title="Get an API key">
-    Pick a provider and get an API key. See the provider pages below for
-    sign-up links.
+  <Step title="Choose a provider">
+    Pick a provider and complete any required setup. Some providers are
+    key-free, while others use API keys. See the provider pages below for
+    details.
   </Step>
   <Step title="Configure">
     ```bash
     openclaw configure --section web
     ```
-    This stores the key and sets the provider. You can also set an env var
-    (e.g. `BRAVE_API_KEY`) and skip this step.
+    This stores the provider and any needed credential. You can also set an env
+    var (for example `BRAVE_API_KEY`) and skip this step for API-backed
+    providers.
   </Step>
   <Step title="Use it">
     The agent can now call `web_search`:
@@ -78,8 +80,14 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Kimi" icon="moon" href="/tools/kimi-search">
     AI-synthesized answers with citations via Moonshot web search.
   </Card>
+  <Card title="Ollama Web Search" icon="globe" href="/tools/ollama-search">
+    Key-free search via your configured Ollama host. Requires `ollama signin`.
+  </Card>
   <Card title="Perplexity" icon="search" href="/tools/perplexity-search">
     Structured results with content extraction controls and domain filtering.
+  </Card>
+  <Card title="SearXNG" icon="server" href="/tools/searxng-search">
+    Self-hosted meta-search. No API key needed. Aggregates Google, Bing, DuckDuckGo, and more.
   </Card>
   <Card title="Tavily" icon="globe" href="/tools/tavily">
     Structured results with search depth, topic filtering, and `tavily_extract` for URL extraction.
@@ -88,17 +96,19 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 
 ### Provider comparison
 
-| Provider                               | Result style               | Filters                                          | API key                                     |
-| -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
-| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
-| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
-| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
-| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
-| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
-| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
-| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
+| Provider                                  | Result style               | Filters                                          | API key                                     |
+| ----------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| [Brave](/tools/brave-search)              | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
+| [DuckDuckGo](/tools/duckduckgo-search)    | Structured snippets        | --                                               | None (key-free)                             |
+| [Exa](/tools/exa-search)                  | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
+| [Firecrawl](/tools/firecrawl)             | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
+| [Gemini](/tools/gemini-search)            | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
+| [Grok](/tools/grok-search)                | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
+| [Kimi](/tools/kimi-search)                | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Ollama Web Search](/tools/ollama-search) | Structured snippets        | --                                               | None (`ollama signin` required)             |
+| [Perplexity](/tools/perplexity-search)    | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [SearXNG](/tools/searxng-search)          | Structured snippets        | Categories, language                             | None (self-hosted)                          |
+| [Tavily](/tools/tavily)                   | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
 
 ## Auto-detection
 
@@ -142,8 +152,8 @@ If native Codex search is enabled but the current model is not Codex-capable, Op
 Provider lists in docs and setup flows are alphabetical. Auto-detection keeps a
 separate precedence order:
 
-If no `provider` is set, OpenClaw checks for API keys in this order and uses
-the first one found:
+If no `provider` is set, OpenClaw checks providers in this order and uses the
+first one that is ready:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey`
 2. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
@@ -151,10 +161,17 @@ the first one found:
 4. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
 5. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
 6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
-7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+7. **Exa** -- `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
+8. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+9. **DuckDuckGo** -- key-free HTML fallback with no account or API key
+10. **Ollama Web Search** -- key-free fallback via your configured Ollama host; requires Ollama to be reachable and signed in with `ollama signin`
 
-If no keys are found, it falls back to Brave (you will get a missing-key error
-prompting you to configure one).
+Key-free providers are checked after API-backed providers:
+
+11. **SearXNG** -- `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl` (auto-detect order 200)
+
+If no provider is detected, it falls back to Brave (you will get a missing-key
+error prompting you to configure one).
 
 <Note>
   All provider key fields support SecretRef objects. In auto-detect mode,
@@ -184,8 +201,9 @@ Provider-specific config (API keys, base URLs, modes) lives under
 `plugins.entries.<plugin>.config.webSearch.*`. See the provider pages for
 examples.
 
-For `x_search`, configure `tools.web.x_search.*` directly. It uses the same
-`XAI_API_KEY` fallback as Grok web search.
+For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
+same `XAI_API_KEY` fallback as Grok web search.
+Legacy `tools.web.x_search.*` config is auto-migrated by `openclaw doctor --fix`.
 When you choose Grok during `openclaw onboard` or `openclaw configure --section web`,
 OpenClaw can also offer optional `x_search` setup with the same key.
 This is a separate follow-up step inside the Grok path, not a separate top-level
@@ -271,16 +289,22 @@ tool on the request that serves this tool call.
 
 ```json5
 {
-  tools: {
-    web: {
-      x_search: {
-        enabled: true,
-        apiKey: "xai-...", // optional if XAI_API_KEY is set
-        model: "grok-4-1-fast-non-reasoning",
-        inlineCitations: false,
-        maxTurns: 2,
-        timeoutSeconds: 30,
-        cacheTtlMinutes: 15,
+  plugins: {
+    entries: {
+      xai: {
+        config: {
+          xSearch: {
+            enabled: true,
+            model: "grok-4-1-fast-non-reasoning",
+            inlineCitations: false,
+            maxTurns: 2,
+            timeoutSeconds: 30,
+            cacheTtlMinutes: 15,
+          },
+          webSearch: {
+            apiKey: "xai-...", // optional if XAI_API_KEY is set
+          },
+        },
       },
     },
   },
@@ -360,3 +384,4 @@ If you use tool profiles or allowlists, add `web_search`, `x_search`, or `group:
 - [Web Fetch](/tools/web-fetch) -- fetch a URL and extract readable content
 - [Web Browser](/tools/browser) -- full browser automation for JS-heavy sites
 - [Grok Search](/tools/grok-search) -- Grok as the `web_search` provider
+- [Ollama Web Search](/tools/ollama-search) -- key-free web search through your Ollama host

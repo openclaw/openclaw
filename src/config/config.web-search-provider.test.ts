@@ -7,13 +7,21 @@ vi.mock("../runtime.js", () => ({
 
 const getScopedWebSearchCredential = (key: string) => (search?: Record<string, unknown>) =>
   (search?.[key] as { apiKey?: unknown } | undefined)?.apiKey;
-const getConfiguredPluginWebSearchCredential =
+const getConfiguredPluginWebSearchConfig =
   (pluginId: string) => (config?: Record<string, unknown>) =>
     (
       config?.plugins as
-        | { entries?: Record<string, { config?: { webSearch?: { apiKey?: unknown } } }> }
+        | {
+            entries?: Record<
+              string,
+              { config?: { webSearch?: { apiKey?: unknown; baseUrl?: unknown } } }
+            >;
+          }
         | undefined
-    )?.entries?.[pluginId]?.config?.webSearch?.apiKey;
+    )?.entries?.[pluginId]?.config?.webSearch;
+const getConfiguredPluginWebSearchCredential =
+  (pluginId: string) => (config?: Record<string, unknown>) =>
+    getConfiguredPluginWebSearchConfig(pluginId)(config)?.apiKey;
 
 const mockWebSearchProviders = [
   {
@@ -59,6 +67,15 @@ const mockWebSearchProviders = [
     getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("perplexity"),
   },
   {
+    id: "searxng",
+    envVars: ["SEARXNG_BASE_URL"],
+    credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
+    getCredentialValue: (search?: Record<string, unknown>) =>
+      (search?.searxng as { baseUrl?: unknown } | undefined)?.baseUrl,
+    getConfiguredCredentialValue: (config?: Record<string, unknown>) =>
+      getConfiguredPluginWebSearchConfig("searxng")(config)?.baseUrl,
+  },
+  {
     id: "tavily",
     envVars: ["TAVILY_API_KEY"],
     credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
@@ -74,10 +91,83 @@ vi.mock("../plugins/web-search-providers.js", () => {
   };
 });
 
+const secretInputSchema = {
+  oneOf: [
+    { type: "string" },
+    {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        source: { type: "string" },
+        provider: { type: "string" },
+        id: { type: "string" },
+      },
+      required: ["source", "provider", "id"],
+    },
+  ],
+};
+
+function buildWebSearchPluginSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      webSearch: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          apiKey: secretInputSchema,
+          baseUrl: secretInputSchema,
+          model: { type: "string" },
+        },
+      },
+    },
+  };
+}
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        channels: [],
+        providers: [],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        rootDir: "/tmp/plugins/brave",
+        source: "test",
+        manifestPath: "/tmp/plugins/brave/openclaw.plugin.json",
+        schemaCacheKey: "test:brave",
+        configSchema: buildWebSearchPluginSchema(),
+      },
+      ...["firecrawl", "google", "moonshot", "perplexity", "searxng", "tavily", "xai"].map(
+        (id) => ({
+          id,
+          origin: "bundled",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: `/tmp/plugins/${id}`,
+          source: "test",
+          manifestPath: `/tmp/plugins/${id}/openclaw.plugin.json`,
+          schemaCacheKey: `test:${id}`,
+          configSchema: buildWebSearchPluginSchema(),
+        }),
+      ),
+    ],
+    diagnostics: [],
+  }),
+}));
+
 let validateConfigObjectWithPlugins: typeof import("./config.js").validateConfigObjectWithPlugins;
 let resolveSearchProvider: typeof import("../agents/tools/web-search.js").__testing.resolveSearchProvider;
 
 beforeAll(async () => {
+  vi.resetModules();
   ({ validateConfigObjectWithPlugins } = await import("./config.js"));
   ({
     __testing: { resolveSearchProvider },
@@ -85,16 +175,25 @@ beforeAll(async () => {
 });
 
 describe("web search provider config", () => {
-  it("does not warn for legacy brave config when bundled web search allowlist compat applies", () => {
+  it("does not warn for brave plugin config when bundled web search allowlist compat applies", () => {
     const res = validateConfigObjectWithPlugins({
       plugins: {
         allow: ["bluebubbles", "memory-core"],
+        entries: {
+          brave: {
+            config: {
+              webSearch: {
+                apiKey: "test-brave-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
       },
       tools: {
         web: {
           search: {
             enabled: true,
-            apiKey: "test-brave-key", // pragma: allowlist secret
+            provider: "brave",
           },
         },
       },
@@ -179,6 +278,24 @@ describe("web search provider config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts searxng provider config on the plugin-owned path", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "searxng",
+        providerConfig: {
+          baseUrl: {
+            source: "env",
+            provider: "default",
+            id: "SEARXNG_BASE_URL",
+          },
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects legacy scoped Tavily config", () => {
     const res = validateConfigObjectWithPlugins({
       tools: {
@@ -222,32 +339,6 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
-
-  it("accepts brave llm-context mode config", () => {
-    const res = validateConfigObjectWithPlugins(
-      buildWebSearchProviderConfig({
-        provider: "brave",
-        providerConfig: {
-          mode: "llm-context",
-        },
-      }),
-    );
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects invalid brave mode config values", () => {
-    const res = validateConfigObjectWithPlugins(
-      buildWebSearchProviderConfig({
-        provider: "brave",
-        providerConfig: {
-          mode: "invalid-mode",
-        },
-      }),
-    );
-
-    expect(res.ok).toBe(false);
-  });
 });
 
 describe("web search provider auto-detection", () => {
@@ -261,6 +352,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.SEARXNG_BASE_URL;
     delete process.env.TAVILY_API_KEY;
     delete process.env.XAI_API_KEY;
     delete process.env.KIMI_API_KEY;
@@ -294,6 +386,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
     process.env.FIRECRAWL_API_KEY = "fc-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("firecrawl");
+  });
+
+  it("auto-detects searxng when only SEARXNG_BASE_URL is set", () => {
+    process.env.SEARXNG_BASE_URL = "http://localhost:8080";
+    expect(resolveSearchProvider({})).toBe("searxng");
   });
 
   it("auto-detects kimi when only KIMI_API_KEY is set", () => {

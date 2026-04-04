@@ -7,17 +7,9 @@ import {
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import {
-  resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
 import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -31,6 +23,7 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
+import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist, type SlackChannelResolution } from "../resolve-channels.js";
@@ -38,6 +31,13 @@ import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
+import {
+  isDangerousNameMatchingEnabled,
+  loadConfig,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "./config.runtime.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { SlackExecApprovalHandler } from "./exec-approvals.js";
@@ -49,6 +49,7 @@ import {
   SLACK_SOCKET_RECONNECT_POLICY,
   waitForSlackSocketDisconnect,
 } from "./reconnect-policy.js";
+import { resolveTextChunkLimit } from "./reply.runtime.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
@@ -406,11 +407,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     : undefined;
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
-  const execApprovalsHandler = slackCfg.execApprovals?.enabled
+  const execApprovalsHandler = isSlackExecApprovalClientEnabled({
+    cfg,
+    accountId: account.accountId,
+  })
     ? new SlackExecApprovalHandler({
         app,
         accountId: account.accountId,
-        config: slackCfg.execApprovals,
+        config: slackCfg.execApprovals ?? {},
         cfg,
       })
     : null;

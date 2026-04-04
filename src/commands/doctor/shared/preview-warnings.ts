@@ -1,18 +1,18 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import {
-  collectDiscordNumericIdWarnings,
-  scanDiscordNumericIdEntries,
-} from "../providers/discord.js";
-import {
-  collectTelegramAllowFromUsernameWarnings,
-  collectTelegramEmptyAllowlistExtraWarnings,
-  scanTelegramAllowFromUsernameEntries,
-} from "../providers/telegram.js";
-import {
   collectBundledPluginLoadPathWarnings,
   scanBundledPluginLoadPathMigrations,
 } from "./bundled-plugin-load-paths.js";
+import {
+  collectChannelDoctorEmptyAllowlistExtraWarnings,
+  collectChannelDoctorPreviewWarnings,
+} from "./channel-doctor.js";
+import {
+  collectConfiguredChannelPluginBlockerWarnings,
+  isWarningBlockedByChannelPlugin,
+  scanConfiguredChannelPluginBlockers,
+} from "./channel-plugin-blockers.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 import {
   collectExecSafeBinCoverageWarnings,
@@ -34,30 +34,25 @@ import {
   scanStalePluginConfig,
 } from "./stale-plugin-config.js";
 
-export function collectDoctorPreviewWarnings(params: {
+export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
-}): string[] {
+}): Promise<string[]> {
   const warnings: string[] = [];
 
-  const telegramHits = scanTelegramAllowFromUsernameEntries(params.cfg);
-  if (telegramHits.length > 0) {
+  const channelPluginBlockerHits = scanConfiguredChannelPluginBlockers(params.cfg, process.env);
+  if (channelPluginBlockerHits.length > 0) {
     warnings.push(
-      collectTelegramAllowFromUsernameWarnings({
-        hits: telegramHits,
-        doctorFixCommand: params.doctorFixCommand,
-      }).join("\n"),
+      collectConfiguredChannelPluginBlockerWarnings(channelPluginBlockerHits).join("\n"),
     );
   }
 
-  const discordHits = scanDiscordNumericIdEntries(params.cfg);
-  if (discordHits.length > 0) {
-    warnings.push(
-      collectDiscordNumericIdWarnings({
-        hits: discordHits,
-        doctorFixCommand: params.doctorFixCommand,
-      }).join("\n"),
-    );
+  const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
+    cfg: params.cfg,
+    doctorFixCommand: params.doctorFixCommand,
+  });
+  if (channelDoctorWarnings.length > 0) {
+    warnings.push(...channelDoctorWarnings);
   }
 
   const allowFromScan = maybeRepairOpenPolicyAllowFrom(params.cfg);
@@ -93,8 +88,8 @@ export function collectDoctorPreviewWarnings(params: {
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(params.cfg, {
     doctorFixCommand: params.doctorFixCommand,
-    extraWarningsForAccount: collectTelegramEmptyAllowlistExtraWarnings,
-  });
+    extraWarningsForAccount: collectChannelDoctorEmptyAllowlistExtraWarnings,
+  }).filter((warning) => !isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits));
   if (emptyAllowlistWarnings.length > 0) {
     warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
   }

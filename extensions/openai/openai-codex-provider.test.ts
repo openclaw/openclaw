@@ -86,4 +86,65 @@ describe("openai codex provider", () => {
       "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.",
     );
   });
+
+  it("resolves gpt-5.4 with native contextWindow plus default contextTokens cap", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelRegistry: {
+        find: (providerId: string, modelId: string) => {
+          if (providerId === "openai-codex" && modelId === "gpt-5.3-codex") {
+            return {
+              id: "gpt-5.3-codex",
+              name: "gpt-5.3-codex",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              baseUrl: "https://chatgpt.com/backend-api",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+            };
+          }
+          return null;
+        },
+      } as never,
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.4",
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("augments catalog with gpt-5.4 native contextWindow and runtime cap", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [
+        {
+          id: "gpt-5.3-codex",
+          name: "gpt-5.3-codex",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    });
+
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        id: "gpt-5.4",
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+      }),
+    );
+  });
 });

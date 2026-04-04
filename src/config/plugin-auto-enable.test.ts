@@ -11,7 +11,11 @@ import {
   makeTrackedTempDir,
   mkdirSafeDir,
 } from "../plugins/test-helpers/fs-fixtures.js";
-import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+import {
+  applyPluginAutoEnable,
+  detectPluginAutoEnableCandidates,
+  resolvePluginAutoEnableCandidateReason,
+} from "./plugin-auto-enable.js";
 import { validateConfigObject } from "./validation.js";
 
 const tempDirs: string[] = [];
@@ -44,6 +48,7 @@ function makeRegistry(
     id: string;
     channels: string[];
     autoEnableWhenConfiguredProviders?: string[];
+    contracts?: { webFetchProviders?: string[] };
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
 ): PluginManifestRegistry {
@@ -52,6 +57,7 @@ function makeRegistry(
       id: p.id,
       channels: p.channels,
       autoEnableWhenConfiguredProviders: p.autoEnableWhenConfiguredProviders,
+      contracts: p.contracts,
       channelConfigs: p.channelConfigs,
       providers: [],
       cliBackends: [],
@@ -119,12 +125,53 @@ afterEach(() => {
 });
 
 describe("applyPluginAutoEnable", () => {
+  it("detects typed channel-configured candidates", () => {
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {
+        channels: { slack: { botToken: "x" } },
+      },
+      env: {},
+    });
+
+    expect(candidates).toEqual([
+      {
+        pluginId: "slack",
+        kind: "channel-configured",
+        channelId: "slack",
+      },
+    ]);
+  });
+
+  it("formats typed provider-auth candidates into stable reasons", () => {
+    expect(
+      resolvePluginAutoEnableCandidateReason({
+        pluginId: "google",
+        kind: "provider-auth-configured",
+        providerId: "google",
+      }),
+    ).toBe("google auth configured");
+  });
+
+  it("treats an undefined config as empty", () => {
+    const result = applyPluginAutoEnable({
+      config: undefined,
+      env: {},
+    });
+
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
   it("auto-enables built-in channels without appending to plugins.allow", () => {
     const result = applyWithSlackConfig({ plugins: { allow: ["telegram"] } });
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.slack).toBeUndefined();
     expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.autoEnabledReasons).toEqual({
+      slack: ["slack configured"],
+    });
     expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
   });
 
@@ -133,6 +180,12 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toBeUndefined();
+  });
+
+  it("stores auto-enable reasons in a null-prototype dictionary", () => {
+    const result = applyWithSlackConfig();
+
+    expect(Object.getPrototypeOf(result.autoEnabledReasons)).toBeNull();
   });
 
   it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
@@ -150,6 +203,9 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
     expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.autoEnabledReasons).toEqual({
+      browser: ["browser configured"],
+    });
     expect(result.changes).toContain("browser configured, enabled automatically.");
   });
 
@@ -184,6 +240,59 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.allow).toEqual(["telegram"]);
     expect(result.config.plugins?.entries?.browser).toBeUndefined();
     expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable or allowlist non-bundled web fetch providers from config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "evilfetch",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+      manifestRegistry: makeRegistry([
+        {
+          id: "evil-plugin",
+          channels: [],
+          contracts: { webFetchProviders: ["evilfetch"] },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["evil-plugin"]).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.changes).toEqual([]);
+  });
+
+  it("auto-enables bundled firecrawl when plugin-owned webFetch config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: "firecrawl-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.firecrawl?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "firecrawl"]);
+    expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
   });
 
   it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
@@ -465,10 +574,14 @@ describe("applyPluginAutoEnable", () => {
   it("auto-enables xai when the plugin-owned x_search tool is configured", () => {
     const result = applyPluginAutoEnable({
       config: {
-        tools: {
-          web: {
-            x_search: {
-              apiKey: "x-search-runtime-key",
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                xSearch: {
+                  enabled: true,
+                },
+              },
             },
           },
         },
@@ -520,6 +633,24 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
+  });
+
+  it("auto-enables minimax when minimax API key auth is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "minimax:default": {
+              provider: "minimax",
+              mode: "api_key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
   });
 
   it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {

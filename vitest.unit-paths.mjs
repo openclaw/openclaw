@@ -5,14 +5,28 @@ export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
-  "ui/src/ui/app-chat.test.ts",
-  "ui/src/ui/chat/**/*.test.ts",
-  "ui/src/ui/views/agents-utils.test.ts",
-  "ui/src/ui/views/channels.test.ts",
-  "ui/src/ui/views/chat.test.ts",
-  "ui/src/ui/views/usage-render-details.test.ts",
-  "ui/src/ui/controllers/agents.test.ts",
-  "ui/src/ui/controllers/chat.test.ts",
+];
+
+export const boundaryTestFiles = [
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  "test/extension-plugin-sdk-boundary.test.ts",
+  "test/extension-test-boundary.test.ts",
+  "test/plugin-extension-import-boundary.test.ts",
+  "test/web-fetch-provider-boundary.test.ts",
+  "test/web-search-provider-boundary.test.ts",
+];
+
+export const bundledPluginDependentUnitTestFiles = [
+  "src/infra/matrix-plugin-helper.test.ts",
+  "src/plugin-sdk/facade-runtime.test.ts",
+  "src/plugins/loader.test.ts",
 ];
 
 export const unitTestAdditionalExcludePatterns = [
@@ -20,11 +34,26 @@ export const unitTestAdditionalExcludePatterns = [
   `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
   "src/browser/**",
   "src/line/**",
+  "src/acp/**",
   "src/agents/**",
   "src/auto-reply/**",
   "src/commands/**",
   "src/channels/plugins/contracts/**",
   "src/plugins/contracts/**",
+  "src/infra/boundary-path.test.ts",
+  "src/infra/git-root.test.ts",
+  "src/infra/home-dir.test.ts",
+  "src/infra/openclaw-exec-env.test.ts",
+  "src/infra/openclaw-root.test.ts",
+  "src/infra/package-json.test.ts",
+  "src/infra/path-env.test.ts",
+  "src/infra/stable-node-path.test.ts",
+  ...bundledPluginDependentUnitTestFiles,
+  "src/config/doc-baseline.integration.test.ts",
+  "src/config/schema.base.generated.test.ts",
+  "src/config/schema.help.quality.test.ts",
+  "test/**",
+  "ui/src/ui/**",
 ];
 
 const sharedBaseExcludePatterns = [
@@ -49,4 +78,12 @@ export function isUnitConfigTestFile(file) {
     !matchesAny(normalizedFile, sharedBaseExcludePatterns) &&
     !matchesAny(normalizedFile, unitTestAdditionalExcludePatterns)
   );
+}
+
+export function isBundledPluginDependentUnitTestFile(file) {
+  return bundledPluginDependentUnitTestFiles.includes(normalizeRepoPath(file));
+}
+
+export function isBoundaryTestFile(file) {
+  return boundaryTestFiles.includes(normalizeRepoPath(file));
 }

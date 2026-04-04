@@ -29,7 +29,7 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-export const mockLoadConfig = loadConfigMock;
+export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
 export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
@@ -78,10 +78,8 @@ function createMockSock(): MockSock {
   };
 }
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+vi.mock("./inbound/save-media.runtime.js", () => {
   return {
-    ...actual,
     saveMediaBuffer: vi.fn().mockResolvedValue({
       id: "mid",
       path: "/tmp/mid",
@@ -157,7 +155,10 @@ export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, c
   );
 }
 
-export async function startInboxMonitor(onMessage: InboxOnMessage) {
+export async function startInboxMonitor(
+  onMessage: InboxOnMessage,
+  options: { selfChatMode?: boolean } = {},
+) {
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
@@ -166,6 +167,7 @@ export async function startInboxMonitor(onMessage: InboxOnMessage) {
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
+    selfChatMode: options.selfChatMode,
   });
   return { listener, sock: getSock() };
 }

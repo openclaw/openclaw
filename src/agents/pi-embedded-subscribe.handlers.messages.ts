@@ -13,6 +13,7 @@ import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -38,8 +39,30 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
-const coerceText = (value: unknown): string =>
-  typeof value === "string" ? value : value == null ? "" : String(value);
+const coerceText = (value: unknown): string => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  if (
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol"
+  ) {
+    return String(value);
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value) ?? "";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+};
 
 function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
@@ -131,13 +154,15 @@ export function hasAssistantVisibleReply(params: {
 export function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
+  replace?: boolean;
   mediaUrls?: string[];
   mediaUrl?: string;
-}): { text: string; delta: string; mediaUrls?: string[] } {
+}): { text: string; delta: string; replace?: true; mediaUrls?: string[] } {
   const mediaUrls = resolveSendableOutboundReplyParts(params).mediaUrls;
   return {
     text: params.text ?? "",
     delta: params.delta ?? "",
+    replace: params.replace ? true : undefined,
     mediaUrls: mediaUrls.length ? mediaUrls : undefined,
   };
 }
@@ -288,13 +313,15 @@ export function handleMessageUpdate(
 
     let shouldEmit = false;
     let deltaText = "";
+    let replace = false;
     if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
       shouldEmit = false;
-    } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
-      shouldEmit = false;
     } else {
-      deltaText = cleanedText.slice(previousCleaned.length);
-      shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
+      replace = Boolean(previousCleaned && !cleanedText.startsWith(previousCleaned));
+      deltaText = replace ? "" : cleanedText.slice(previousCleaned.length);
+      shouldEmit = replace
+        ? cleanedText !== previousCleaned || hasMedia || hasAudio
+        : Boolean(deltaText || hasMedia || hasAudio);
     }
 
     ctx.state.lastStreamedAssistant = next;
@@ -308,6 +335,7 @@ export function handleMessageUpdate(
       const data = buildAssistantStreamData({
         text: cleanedText,
         delta: deltaText,
+        replace,
         mediaUrls,
       });
       emitAgentEvent({
@@ -340,7 +368,12 @@ export function handleMessageUpdate(
     evtType === "text_end" &&
     ctx.state.blockReplyBreak === "text_end"
   ) {
-    ctx.flushBlockReplyBuffer();
+    const assistantMessageIndex = ctx.state.assistantMessageIndex;
+    void Promise.resolve()
+      .then(() => ctx.flushBlockReplyBuffer({ assistantMessageIndex }))
+      .catch((err) => {
+        ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
+      });
   }
 }
 
@@ -430,16 +463,6 @@ export function handleMessageEnd(
   });
 
   const onBlockReply = ctx.params.onBlockReply;
-  const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
-    if (!onBlockReply) {
-      return;
-    }
-    void Promise.resolve()
-      .then(() => onBlockReply(payload))
-      .catch((err) => {
-        ctx.log.warn(`block reply callback failed: ${String(err)}`);
-      });
-  };
   const shouldEmitReasoning = Boolean(
     !ctx.params.silentExpected &&
     ctx.state.includeReasoning &&
@@ -454,7 +477,7 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
+    ctx.emitBlockReply({ text: formattedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -528,21 +551,43 @@ export function handleMessageEnd(
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
   }
 
+  const finalizeMessageEnd = () => {
+    ctx.state.deltaBuffer = "";
+    ctx.state.blockBuffer = "";
+    ctx.blockChunker?.reset();
+    ctx.state.blockState.thinking = false;
+    ctx.state.blockState.final = false;
+    ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.lastStreamedAssistant = undefined;
+    ctx.state.lastStreamedAssistantCleaned = undefined;
+    ctx.state.reasoningStreamOpen = false;
+  };
+
   if (
     !ctx.params.silentExpected &&
     ctx.state.blockReplyBreak === "message_end" &&
     ctx.params.onBlockReplyFlush
   ) {
-    void ctx.params.onBlockReplyFlush();
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+    if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
+      return flushBlockReplyBufferResult
+        .then(() => {
+          const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+          if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+            return onBlockReplyFlushResult;
+          }
+        })
+        .finally(() => {
+          finalizeMessageEnd();
+        });
+    }
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush();
+    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
+      return onBlockReplyFlushResult.finally(() => {
+        finalizeMessageEnd();
+      });
+    }
   }
 
-  ctx.state.deltaBuffer = "";
-  ctx.state.blockBuffer = "";
-  ctx.blockChunker?.reset();
-  ctx.state.blockState.thinking = false;
-  ctx.state.blockState.final = false;
-  ctx.state.blockState.inlineCode = createInlineCodeState();
-  ctx.state.lastStreamedAssistant = undefined;
-  ctx.state.lastStreamedAssistantCleaned = undefined;
-  ctx.state.reasoningStreamOpen = false;
+  finalizeMessageEnd();
 }

@@ -26,10 +26,20 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { composeProviderStreamWrappers } from "openclaw/plugin-sdk/provider-stream";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildAnthropicReplayPolicy } from "./replay-policy.js";
+import {
+  createAnthropicBetaHeadersWrapper,
+  createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
+  resolveAnthropicBetas,
+  resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
+} from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
 const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6";
@@ -438,11 +448,25 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
-      capabilities: {
-        providerFamily: "anthropic",
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
+      wrapStreamFn: (ctx) => {
+        const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
+        const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
+        const fastMode = resolveAnthropicFastMode(ctx.extraParams);
+        return composeProviderStreamWrappers(
+          ctx.streamFn,
+          anthropicBetas?.length
+            ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+            : undefined,
+          serviceTier
+            ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
+            : undefined,
+          fastMode !== undefined
+            ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
+            : undefined,
+        );
+      },
       resolveDefaultThinkingLevel: ({ modelId }) =>
         matchesAnthropicModernModel(modelId) &&
         (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||

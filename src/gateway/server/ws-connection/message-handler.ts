@@ -3,6 +3,9 @@ import os from "node:os";
 import type { WebSocket } from "ws";
 import { loadConfig } from "../../../config/config.js";
 import {
+  getDeviceBootstrapTokenProfile,
+  redeemDeviceBootstrapTokenProfile,
+  restoreDeviceBootstrapToken,
   revokeDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
@@ -48,13 +51,14 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
+import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveClientIp,
 } from "../../net.js";
-import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
+import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
   ConnectErrorDetailCodes,
@@ -155,7 +159,7 @@ export function attachGatewayWsMessageHandler(params: {
   requestUserAgent?: string;
   canvasHostUrl?: string;
   connectNonce: string;
-  resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
@@ -190,7 +194,7 @@ export function attachGatewayWsMessageHandler(params: {
     requestUserAgent,
     canvasHostUrl,
     connectNonce,
-    resolvedAuth,
+    getResolvedAuth,
     rateLimiter,
     browserRateLimiter,
     gatewayMethods,
@@ -211,6 +215,17 @@ export function attachGatewayWsMessageHandler(params: {
     logHealth,
     logWsControl,
   } = params;
+
+  const sendFrame = async (obj: unknown): Promise<void> =>
+    await new Promise<void>((resolve, reject) => {
+      socket.send(JSON.stringify(obj), (err) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve();
+      });
+    });
 
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
@@ -418,6 +433,7 @@ export function attachGatewayWsMessageHandler(params: {
         const isControlUi = isOperatorUiClient(connectParams.client);
         const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
         const isWebchat = isWebchatConnect(connectParams);
+        const resolvedAuth = getResolvedAuth();
         if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
@@ -695,6 +711,10 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
+        const bootstrapProfile =
+          authMethod === "bootstrap-token" && bootstrapTokenCandidate
+            ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
+            : null;
 
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
@@ -790,9 +810,9 @@ export function attachGatewayWsMessageHandler(params: {
               isWebchat,
               reason,
             });
-            // QR bootstrap onboarding is node-only and single-use. When a fresh device presents
-            // a valid bootstrap token for the baseline node profile, complete pairing in the same
-            // handshake so iOS does not get stuck retrying with an already-consumed bootstrap token.
+            // Bootstrap setup can silently pair the first fresh node connect. Keep the token alive
+            // until the issued profile is fully redeemed so follow-up operator connects can still
+            // present the same bootstrap token while approval is pending.
             const allowSilentBootstrapPairing =
               authMethod === "bootstrap-token" &&
               reason === "not-paired" &&
@@ -831,16 +851,6 @@ export function attachGatewayWsMessageHandler(params: {
                 callerScopes: scopes,
               });
               if (approved?.status === "approved") {
-                if (allowSilentBootstrapPairing && bootstrapTokenCandidate) {
-                  const revoked = await revokeDeviceBootstrapToken({
-                    token: bootstrapTokenCandidate,
-                  });
-                  if (!revoked.removed) {
-                    logGateway.warn(
-                      `bootstrap token revoke skipped after silent auto-approval device=${approved.device.deviceId}`,
-                    );
-                  }
-                }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
@@ -990,42 +1000,21 @@ export function attachGatewayWsMessageHandler(params: {
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
-
         if (role === "node") {
-          const cfg = loadConfig();
-          const nodeId = connectParams.device?.id ?? connectParams.client.id;
-          const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
-          const allowlist = resolveNodeCommandAllowlist(cfg, {
-            platform: connectParams.client.platform,
-            deviceFamily: connectParams.client.deviceFamily,
+          const reconciliation = await reconcileNodePairingOnConnect({
+            cfg: loadConfig(),
+            connectParams,
+            pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
+            reportedClientIp,
+            requestPairing: async (input) => await requestNodePairing(input),
           });
-          const allowlistedDeclared = declared
-            .map((cmd) => cmd.trim())
-            .filter((cmd) => cmd.length > 0 && allowlist.has(cmd));
-          let pairedNode = await getPairedNode(nodeId);
-          if (!pairedNode) {
-            const pending = await requestNodePairing({
-              nodeId,
-              displayName: connectParams.client.displayName,
-              platform: connectParams.client.platform,
-              version: connectParams.client.version,
-              deviceFamily: connectParams.client.deviceFamily,
-              modelIdentifier: connectParams.client.modelIdentifier,
-              caps: connectParams.caps,
-              commands: allowlistedDeclared,
-              remoteIp: reportedClientIp,
+          if (reconciliation.pendingPairing?.created) {
+            const requestContext = buildRequestContext();
+            requestContext.broadcast("node.pair.requested", reconciliation.pendingPairing.request, {
+              dropIfSlow: true,
             });
-            if (pending.status === "pending" && pending.created) {
-              const requestContext = buildRequestContext();
-              requestContext.broadcast("node.pair.requested", pending.request, {
-                dropIfSlow: true,
-              });
-            }
-            pairedNode = await getPairedNode(nodeId);
           }
-          const pairedCommands = new Set(pairedNode?.commands ?? []);
-          const filtered = allowlistedDeclared.filter((cmd) => pairedCommands.has(cmd));
-          connectParams.commands = filtered;
+          connectParams.commands = reconciliation.effectiveCommands;
         }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
@@ -1068,7 +1057,9 @@ export function attachGatewayWsMessageHandler(params: {
           incrementPresenceVersion();
         }
 
-        const snapshot = buildGatewaySnapshot();
+        const snapshot = buildGatewaySnapshot({
+          includeSensitive: scopes.includes(ADMIN_SCOPE),
+        });
         const cachedHealth = getHealthCache();
         if (cachedHealth) {
           snapshot.health = cachedHealth;
@@ -1113,6 +1104,7 @@ export function attachGatewayWsMessageHandler(params: {
           socket,
           connect: connectParams,
           connId,
+          usesSharedGatewayAuth: authMethod === "token" || authMethod === "password",
           presenceKey,
           clientIp: reportedClientIp,
           canvasHostUrl,
@@ -1172,6 +1164,56 @@ export function attachGatewayWsMessageHandler(params: {
             );
         }
 
+        let consumedBootstrapTokenRecord:
+          | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
+          | undefined;
+        if (
+          authMethod === "bootstrap-token" &&
+          bootstrapProfile &&
+          bootstrapTokenCandidate &&
+          device
+        ) {
+          try {
+            const redemption = await redeemDeviceBootstrapTokenProfile({
+              token: bootstrapTokenCandidate,
+              role,
+              scopes,
+            });
+            if (redemption.fullyRedeemed) {
+              const revoked = await revokeDeviceBootstrapToken({
+                token: bootstrapTokenCandidate,
+              });
+              consumedBootstrapTokenRecord = revoked.record;
+              if (!revoked.removed) {
+                logGateway.warn(
+                  `bootstrap token revoke skipped after profile redemption device=${device.id}`,
+                );
+              }
+            }
+          } catch (err) {
+            logGateway.warn(
+              `bootstrap token redemption bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
+            );
+          }
+        }
+        try {
+          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        } catch (err) {
+          if (consumedBootstrapTokenRecord) {
+            try {
+              await restoreDeviceBootstrapToken({
+                record: consumedBootstrapTokenRecord,
+              });
+            } catch (restoreErr) {
+              logGateway.warn(
+                `bootstrap token restore failed after hello send error device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
+              );
+            }
+          }
+          setCloseCause("hello-send-failed", { error: formatForLog(err) });
+          close();
+          return;
+        }
         logWs("out", "hello-ok", {
           connId,
           methods: gatewayMethods.length,
@@ -1179,8 +1221,6 @@ export function attachGatewayWsMessageHandler(params: {
           presence: snapshot.presence.length,
           stateVersion: snapshot.stateVersion.presence,
         });
-
-        send({ type: "res", id: frame.id, ok: true, payload: helloOk });
         void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );

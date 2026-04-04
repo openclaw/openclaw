@@ -125,25 +125,54 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
   previousSessionId?: string;
   nextSessionId?: string;
   nextSessionFile?: string;
+  nextProvider?: string;
+  nextModel?: string;
+  nextAuthProfileId?: string;
+  nextAuthProfileIdSource?: "auto" | "user";
 }): void {
   const cleaned = params.key.trim();
-  if (!cleaned || !params.previousSessionId || !params.nextSessionId) {
-    return;
-  }
-  if (params.previousSessionId === params.nextSessionId) {
+  if (!cleaned) {
     return;
   }
   const queue = FOLLOWUP_TEST_QUEUES.get(cleaned);
   if (!queue) {
     return;
   }
+  const shouldRewriteSession =
+    Boolean(params.previousSessionId) &&
+    Boolean(params.nextSessionId) &&
+    params.previousSessionId !== params.nextSessionId;
+  const shouldRewriteSelection =
+    typeof params.nextProvider === "string" ||
+    typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextAuthProfileId") ||
+    Object.hasOwn(params, "nextAuthProfileIdSource");
+  if (!shouldRewriteSession && !shouldRewriteSelection) {
+    return;
+  }
   const rewrite = (run?: FollowupRun["run"]) => {
-    if (!run || run.sessionId !== params.previousSessionId) {
+    if (!run) {
       return;
     }
-    run.sessionId = params.nextSessionId!;
-    if (params.nextSessionFile?.trim()) {
-      run.sessionFile = params.nextSessionFile;
+    if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
+      run.sessionId = params.nextSessionId!;
+      if (params.nextSessionFile?.trim()) {
+        run.sessionFile = params.nextSessionFile;
+      }
+    }
+    if (shouldRewriteSelection) {
+      if (typeof params.nextProvider === "string") {
+        run.provider = params.nextProvider;
+      }
+      if (typeof params.nextModel === "string") {
+        run.model = params.nextModel;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileId")) {
+        run.authProfileId = params.nextAuthProfileId?.trim() || undefined;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
+        run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
     }
   };
   rewrite(queue.lastRun);
@@ -200,6 +229,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
     acquireSessionWriteLock: vi.fn(async () => ({
       release: async () => {},
     })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
   }));
   vi.doMock("../../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn(async () => false),

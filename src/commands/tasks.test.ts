@@ -1,0 +1,176 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
+import {
+  createManagedTaskFlow,
+  resetTaskFlowRegistryForTests,
+} from "../tasks/task-flow-registry.js";
+import {
+  resetTaskRegistryDeliveryRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-registry.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
+import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function createRuntime(): RuntimeEnv {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  } as unknown as RuntimeEnv;
+}
+
+async function withTaskCommandStateDir(run: () => Promise<void>): Promise<void> {
+  await withTempDir({ prefix: "openclaw-tasks-command-" }, async (root) => {
+    process.env.OPENCLAW_STATE_DIR = root;
+    resetTaskRegistryDeliveryRuntimeForTests();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
+    try {
+      await run();
+    } finally {
+      resetTaskRegistryDeliveryRuntimeForTests();
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+    }
+  });
+}
+
+describe("tasks commands", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    resetTaskRegistryDeliveryRuntimeForTests();
+    resetTaskRegistryForTests();
+    resetTaskFlowRegistryForTests();
+  });
+
+  it("keeps tasks audit JSON stable while adding TaskFlow summary fields", async () => {
+    await withTaskCommandStateDir(async () => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 40 * 60_000);
+      createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-stale-queued",
+        task: "Inspect issue backlog",
+      });
+      vi.setSystemTime(now);
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/tasks-command",
+        goal: "Inspect issue backlog",
+        status: "waiting",
+        createdAt: now - 40 * 60_000,
+        updatedAt: now - 40 * 60_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksAuditCommand({ json: true }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        summary: {
+          total: number;
+          errors: number;
+          warnings: number;
+          byCode: Record<string, number>;
+          taskFlows: { total: number; byCode: Record<string, number> };
+          combined: { total: number; errors: number; warnings: number };
+        };
+      };
+
+      expect(payload.summary.byCode.stale_running).toBe(1);
+      expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
+      expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(1);
+      expect(payload.summary.combined.total).toBe(3);
+    });
+  });
+
+  it("sorts combined audit findings before applying the limit", async () => {
+    await withTaskCommandStateDir(async () => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 40 * 60_000);
+      createRunningTaskRun({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-stale-queued",
+        task: "Queue audit",
+      });
+      vi.setSystemTime(now);
+      const runningFlow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/tasks-command",
+        goal: "Running flow",
+        status: "running",
+        createdAt: now - 45 * 60_000,
+        updatedAt: now - 45 * 60_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksAuditCommand({ json: true, limit: 1 }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        findings: Array<{ kind: string; code: string; token?: string }>;
+      };
+
+      expect(payload.findings).toHaveLength(1);
+      expect(payload.findings[0]).toMatchObject({
+        kind: "task_flow",
+        code: "stale_running",
+        token: runningFlow.flowId,
+      });
+    });
+  });
+
+  it("keeps tasks maintenance JSON additive for TaskFlow state", async () => {
+    await withTaskCommandStateDir(async () => {
+      const now = Date.now();
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/tasks-command",
+        goal: "Old terminal flow",
+        status: "succeeded",
+        createdAt: now - 8 * 24 * 60 * 60_000,
+        updatedAt: now - 8 * 24 * 60 * 60_000,
+        endedAt: now - 8 * 24 * 60 * 60_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
+
+      const payload = JSON.parse(String(vi.mocked(runtime.log).mock.calls[0]?.[0])) as {
+        mode: string;
+        maintenance: { taskFlows: { pruned: number } };
+        auditBefore: {
+          byCode: Record<string, number>;
+          taskFlows: { byCode: Record<string, number> };
+        };
+        auditAfter: {
+          byCode: Record<string, number>;
+          taskFlows: { byCode: Record<string, number> };
+        };
+      };
+
+      expect(payload.mode).toBe("preview");
+      expect(payload.maintenance.taskFlows.pruned).toBe(1);
+      expect(payload.auditBefore.byCode).toBeDefined();
+      expect(payload.auditBefore.taskFlows.byCode.stale_running).toBe(0);
+      expect(payload.auditAfter.byCode).toBeDefined();
+      expect(payload.auditAfter.taskFlows.byCode.stale_running).toBe(0);
+    });
+  });
+});

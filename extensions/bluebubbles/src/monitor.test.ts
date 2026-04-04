@@ -66,14 +66,18 @@ const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
 const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
-const mockResolveAgentRoute = vi.fn(() => ({
+const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
+  PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
+> = {
   agentId: "main",
   channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
+  lastRoutePolicy: "main",
   matchedBy: "default",
-}));
+};
+const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -87,7 +91,10 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open" as const);
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
   async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
@@ -991,6 +998,79 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToBody).toBe("original message");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
       // Body uses inline [[reply_to:N]] tag format
+      expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
+    });
+
+    it("drops group reply context from non-allowlisted senders in allowlist mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "blocked context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBeUndefined();
+      expect(callArgs.ctx.ReplyToIdFull).toBeUndefined();
+      expect(callArgs.ctx.ReplyToBody).toBeUndefined();
+      expect(callArgs.ctx.ReplyToSender).toBeUndefined();
+      expect(callArgs.ctx.Body).not.toContain("[[reply_to:");
+    });
+
+    it("keeps group reply context in allowlist_quote mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist_quote",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "quoted context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBe("msg-0");
+      expect(callArgs.ctx.ReplyToBody).toBe("quoted context");
+      expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
       expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
     });
 

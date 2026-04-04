@@ -35,12 +35,14 @@ const { MockManager } = vi.hoisted(() => {
 
   // Shared mutable flag so inner class can see it
   let _globalConnectShouldFail = false;
+  let _globalSendFailuresRemaining = 0;
 
   class MockManager extends EventEmitter {
     private _listeners: AnyFn[] = [];
     private _previousResponseId: string | null = null;
     private _connected = false;
     private _broken = false;
+    private _lastCloseInfo: { code: number; reason: string; retryable: boolean } | null = null;
 
     sentEvents: unknown[] = [];
     connectCallCount = 0;
@@ -52,6 +54,10 @@ const { MockManager } = vi.hoisted(() => {
 
     get previousResponseId(): string | null {
       return this._previousResponseId;
+    }
+
+    get lastCloseInfo(): { code: number; reason: string; retryable: boolean } | null {
+      return this._lastCloseInfo;
     }
 
     async connect(_apiKey: string): Promise<void> {
@@ -70,7 +76,10 @@ const { MockManager } = vi.hoisted(() => {
       if (!this._connected) {
         throw new Error("cannot send — not connected");
       }
-      if (this.sendShouldFail) {
+      if (this.sendShouldFail || _globalSendFailuresRemaining > 0) {
+        if (_globalSendFailuresRemaining > 0) {
+          _globalSendFailuresRemaining--;
+        }
         throw new Error("Mock send failure");
       }
       this.sentEvents.push(event);
@@ -112,6 +121,17 @@ const { MockManager } = vi.hoisted(() => {
     // Test helper: simulate WebSocket connection drop mid-request
     simulateClose(code = 1006, reason = "connection lost"): void {
       this._connected = false;
+      this._lastCloseInfo = {
+        code,
+        reason,
+        retryable:
+          code === 1001 ||
+          code === 1005 ||
+          code === 1006 ||
+          code === 1011 ||
+          code === 1012 ||
+          code === 1013,
+      };
       this.emit("close", code, reason);
     }
 
@@ -162,10 +182,18 @@ const { MockManager } = vi.hoisted(() => {
       _globalConnectShouldFail = v;
     }
 
+    static get globalSendFailuresRemaining(): number {
+      return _globalSendFailuresRemaining;
+    }
+    static set globalSendFailuresRemaining(v: number) {
+      _globalSendFailuresRemaining = v;
+    }
+
     static reset(): void {
       TrackedMockManager.lastInstance = null;
       TrackedMockManager.instances = [];
       _globalConnectShouldFail = false;
+      _globalSendFailuresRemaining = 0;
     }
   }
 
@@ -355,6 +383,15 @@ describe("convertTools", () => {
     expect(result[0]?.name).toBe("ping");
   });
 
+  it("normalizes truly empty parameter schemas for parameter-free tools", () => {
+    const tools = [{ name: "ping", description: "No params", parameters: {} }];
+    const result = convertTools(tools as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+
   it("injects properties:{} for type:object schemas missing properties (MCP no-param tools)", () => {
     const tools = [
       { name: "list_regions", description: "List AWS regions", parameters: { type: "object" } },
@@ -418,6 +455,22 @@ describe("convertTools", () => {
       },
       required: ["action"],
       additionalProperties: true,
+    });
+  });
+
+  it("leaves top-level allOf schemas unchanged", () => {
+    const tools = [
+      {
+        name: "conditional",
+        description: "Conditional schema",
+        parameters: {
+          allOf: [{ type: "object", properties: { id: { type: "string" } } }],
+        },
+      },
+    ];
+    const result = convertTools(tools as unknown as Parameters<typeof convertTools>[0]);
+    expect(result[0]?.parameters).toEqual({
+      allOf: [{ type: "object", properties: { id: { type: "string" } } }],
     });
   });
 
@@ -1142,6 +1195,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
     releaseWsSession("sess-store-default");
     releaseWsSession("sess-store-compat");
     releaseWsSession("sess-max-tokens-zero");
+    releaseWsSession("sess-runtime-fallback");
+    releaseWsSession("sess-drop");
     openAIWsStreamTesting.setDepsForTest();
   });
 
@@ -1267,6 +1322,42 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent).not.toHaveProperty("store");
   });
 
+  it("keeps store=false for proxied openai-responses routes when store is still supported", async () => {
+    releaseWsSession("sess-store-proxy");
+    const proxiedModel = {
+      ...modelStub,
+      baseUrl: "https://proxy.example.com/v1",
+    };
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-store-proxy");
+    const stream = streamFn(
+      proxiedModel as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+    );
+
+    const completed = new Promise<void>((res, rej) => {
+      queueMicrotask(async () => {
+        try {
+          await new Promise((r) => setImmediate(r));
+          const manager = MockManager.lastInstance!;
+          manager.simulateEvent({
+            type: "response.completed",
+            response: makeResponseObject("resp_store_proxy", "ok"),
+          });
+          for await (const _ of await resolveStream(stream)) {
+            // consume
+          }
+          res();
+        } catch (e) {
+          rej(e);
+        }
+      });
+    });
+    await completed;
+
+    const sent = MockManager.lastInstance!.sentEvents[0] as Record<string, unknown>;
+    expect(sent.store).toBe(false);
+  });
+
   it("emits an AssistantMessage on response.completed", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-2");
     const stream = streamFn(
@@ -1363,6 +1454,102 @@ describe("createOpenAIWebSocketStreamFn", () => {
     }
   });
 
+  it("falls back to HTTP when WebSocket errors before any output in auto mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "error",
+      message: "temporary upstream glitch",
+      code: "ws_runtime_error",
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+    expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
+  });
+
+  it("falls back to HTTP when OpenAI sends a nested websocket error payload", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-fallback-nested");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const manager = MockManager.lastInstance!;
+    manager.simulateEvent({
+      type: "error",
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        code: "previous_response_not_found",
+        message: "Previous response with id 'resp_abc' not found.",
+        param: "previous_response_id",
+      },
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls.length).toBeGreaterThanOrEqual(1);
+    expect(manager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("http fallback response");
+  });
+
+  it("retries one retryable mid-request close before falling back in auto mode", async () => {
+    const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-runtime-retry");
+    const stream = streamFn(
+      modelStub as Parameters<typeof streamFn>[0],
+      contextStub as Parameters<typeof streamFn>[1],
+      { transport: "auto" } as Parameters<typeof streamFn>[2],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    firstManager.simulateClose(1006, "connection lost");
+
+    await new Promise((r) => setImmediate(r));
+    const secondManager = MockManager.lastInstance!;
+    expect(secondManager).not.toBe(firstManager);
+    expect(secondManager.connectCallCount).toBe(1);
+
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-retried", "retry succeeded"),
+    });
+
+    const events: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }> = [];
+    for await (const ev of await resolveStream(stream)) {
+      events.push(ev as { type?: string; message?: { content?: Array<{ text?: string }> } });
+    }
+
+    expect(streamSimpleCalls).toHaveLength(0);
+    expect(firstManager.closeCallCount).toBeGreaterThanOrEqual(1);
+    expect(events.filter((event) => event.type === "start")).toHaveLength(1);
+    const doneEvent = events.find((event) => event.type === "done");
+    expect(doneEvent?.message?.content?.[0]?.text).toBe("retry succeeded");
+  });
   it("tracks previous_response_id across turns (incremental send)", async () => {
     const sessionId = "sess-incremental";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
@@ -1560,7 +1747,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect((sent.tools ?? []).length).toBeGreaterThan(0);
   });
 
-  it("resets session state and falls back to HTTP when send() throws", async () => {
+  it("falls back to HTTP after the websocket send retry budget is exhausted", async () => {
     const sessionId = "sess-send-fail-reset";
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", sessionId);
 
@@ -1588,8 +1775,8 @@ describe("createOpenAIWebSocketStreamFn", () => {
     });
     expect(hasWsSession(sessionId)).toBe(true);
 
-    // 2. Arm send failure and record pre-call streamSimpleCalls count
-    MockManager.lastInstance!.sendShouldFail = true;
+    // 2. Exhaust both websocket send attempts so auto mode must fall back.
+    MockManager.globalSendFailuresRemaining = 2;
     const callsBefore = streamSimpleCalls.length;
 
     // 3. Second call: send throws → must fall back to HTTP and clear registry
@@ -1601,7 +1788,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       /* consume */
     }
 
-    // Registry cleared after send failure
+    // Registry cleared after retry budget exhaustion + HTTP fallback
     expect(hasWsSession(sessionId)).toBe(false);
     // HTTP fallback invoked
     expect(streamSimpleCalls.length).toBeGreaterThan(callsBefore);
@@ -1863,12 +2050,12 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(sent.tool_choice).toBe("auto");
   });
 
-  it("rejects promise when WebSocket drops mid-request", async () => {
+  it("keeps explicit websocket mode surfacing mid-request drops", async () => {
     const streamFn = createOpenAIWebSocketStreamFn("sk-test", "sess-drop");
     const stream = streamFn(
       modelStub as Parameters<typeof streamFn>[0],
       contextStub as Parameters<typeof streamFn>[1],
-      {} as Parameters<typeof streamFn>[2],
+      { transport: "websocket" } as Parameters<typeof streamFn>[2],
     );
     // Let the send go through, then simulate connection drop before response.completed
     await new Promise<void>((resolve) => {

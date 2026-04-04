@@ -385,6 +385,43 @@ describe("discoverOpenClawPlugins", () => {
     expectCandidateOrder(candidates, ["opik-openclaw"]);
   });
 
+  it("skips dependency and build directories while scanning workspace roots", () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const workspacePluginDir = path.join(workspaceDir, "packages", "workspace-plugin");
+    const nestedNodeModulesDir = path.join(workspaceDir, "node_modules", "openclaw");
+    const nestedDistDir = path.join(workspaceDir, "dist", "extensions", "diffs");
+    mkdirSafe(path.join(workspacePluginDir, "src"));
+    mkdirSafe(path.join(nestedNodeModulesDir, "src"));
+    mkdirSafe(nestedDistDir);
+
+    createPackagePluginWithEntry({
+      packageDir: workspacePluginDir,
+      packageName: "@openclaw/workspace-plugin",
+      pluginId: "workspace-plugin",
+    });
+
+    createPackagePluginWithEntry({
+      packageDir: nestedNodeModulesDir,
+      packageName: "openclaw",
+      pluginId: "node-modules-copy",
+    });
+
+    writePluginManifest({ pluginDir: nestedDistDir, id: "dist-copy" });
+    fs.writeFileSync(
+      path.join(nestedDistDir, "index.js"),
+      "module.exports = { id: 'dist-copy', register() {} };",
+      "utf-8",
+    );
+
+    const { candidates } = discoverOpenClawPlugins({
+      workspaceDir,
+      env: buildDiscoveryEnv(stateDir),
+    });
+
+    expectCandidateOrder(candidates, ["workspace-plugin"]);
+  });
+
   it.each([
     {
       name: "derives unscoped ids for scoped packages",
@@ -699,6 +736,7 @@ describe("discoverOpenClawPlugins", () => {
       const result = discoverOpenClawPlugins({
         env: {
           ...process.env,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
         },

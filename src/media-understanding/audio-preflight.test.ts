@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runAudioTranscriptionMock = vi.hoisted(() => vi.fn());
 
@@ -9,10 +9,12 @@ vi.mock("./audio-transcription-runner.js", () => ({
 let transcribeFirstAudio: typeof import("./audio-preflight.js").transcribeFirstAudio;
 
 describe("transcribeFirstAudio", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    runAudioTranscriptionMock.mockReset();
+  beforeAll(async () => {
     ({ transcribeFirstAudio } = await import("./audio-preflight.js"));
+  });
+
+  beforeEach(() => {
+    runAudioTranscriptionMock.mockReset();
   });
 
   it("runs audio preflight in auto mode when audio config is absent", async () => {

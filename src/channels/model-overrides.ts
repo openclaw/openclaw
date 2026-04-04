@@ -7,6 +7,7 @@ import {
   type ChannelMatchSource,
 } from "./channel-config.js";
 import { normalizeChatType } from "./chat-type.js";
+import { getChannelPlugin } from "./plugins/registry.js";
 import {
   resolveSessionConversation,
   resolveSessionConversationRef,
@@ -57,6 +58,14 @@ function buildChannelCandidates(
     normalizeMessageChannel(params.channel ?? "") ?? params.channel?.trim().toLowerCase();
   const groupId = params.groupId?.trim();
   const sessionConversation = resolveSessionConversationRef(params.parentSessionKey);
+  const parentOverrideFallbacks =
+    (normalizedChannel
+      ? getChannelPlugin(
+          normalizedChannel,
+        )?.conversationBindings?.buildModelOverrideParentCandidates?.({
+          parentConversationId: sessionConversation?.rawId,
+        })
+      : null) ?? [];
   const groupConversationKind =
     normalizeChatType(params.groupChatType ?? undefined) === "channel"
       ? "channel"
@@ -81,6 +90,7 @@ function buildChannelCandidates(
       sessionConversation?.rawId,
       ...(groupConversation?.parentConversationCandidates ?? []),
       ...(sessionConversation?.parentConversationCandidates ?? []),
+      ...parentOverrideFallbacks,
     ),
     parentKeys: buildChannelKeyCandidates(
       groupChannel,

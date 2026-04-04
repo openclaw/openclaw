@@ -7,7 +7,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
+import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -47,6 +47,7 @@ import {
   SILENT_REPLY_TOKEN,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -87,6 +88,142 @@ export type AgentRunLoopResult =
     }
   | { kind: "final"; payload: ReplyPayload };
 
+type FallbackSelectionState = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+>;
+
+const FALLBACK_SELECTION_STATE_KEYS = [
+  "providerOverride",
+  "modelOverride",
+  "authProfileOverride",
+  "authProfileOverrideSource",
+  "authProfileOverrideCompactionCount",
+] as const satisfies ReadonlyArray<keyof FallbackSelectionState>;
+
+function setFallbackSelectionStateField(
+  entry: SessionEntry,
+  key: keyof FallbackSelectionState,
+  value: FallbackSelectionState[keyof FallbackSelectionState],
+): boolean {
+  switch (key) {
+    case "providerOverride":
+      if (entry.providerOverride !== value) {
+        entry.providerOverride = value as SessionEntry["providerOverride"];
+        return true;
+      }
+      return false;
+    case "modelOverride":
+      if (entry.modelOverride !== value) {
+        entry.modelOverride = value as SessionEntry["modelOverride"];
+        return true;
+      }
+      return false;
+    case "authProfileOverride":
+      if (entry.authProfileOverride !== value) {
+        entry.authProfileOverride = value as SessionEntry["authProfileOverride"];
+        return true;
+      }
+      return false;
+    case "authProfileOverrideSource":
+      if (entry.authProfileOverrideSource !== value) {
+        entry.authProfileOverrideSource = value as SessionEntry["authProfileOverrideSource"];
+        return true;
+      }
+      return false;
+    case "authProfileOverrideCompactionCount":
+      if (entry.authProfileOverrideCompactionCount !== value) {
+        entry.authProfileOverrideCompactionCount =
+          value as SessionEntry["authProfileOverrideCompactionCount"];
+        return true;
+      }
+      return false;
+  }
+}
+
+function snapshotFallbackSelectionState(entry: SessionEntry): FallbackSelectionState {
+  return {
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    authProfileOverride: entry.authProfileOverride,
+    authProfileOverrideSource: entry.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+  };
+}
+
+function buildFallbackSelectionState(params: {
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+}): FallbackSelectionState {
+  return {
+    providerOverride: params.provider,
+    modelOverride: params.model,
+    authProfileOverride: params.authProfileId,
+    authProfileOverrideSource: params.authProfileId ? params.authProfileIdSource : undefined,
+    authProfileOverrideCompactionCount: undefined,
+  };
+}
+
+function applyFallbackSelectionState(
+  entry: SessionEntry,
+  nextState: FallbackSelectionState,
+  now = Date.now(),
+): boolean {
+  let updated = false;
+  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
+    const nextValue = nextState[key];
+    if (nextValue === undefined) {
+      if (Object.hasOwn(entry, key)) {
+        delete entry[key];
+        updated = true;
+      }
+      continue;
+    }
+    if (entry[key] !== nextValue) {
+      updated = setFallbackSelectionStateField(entry, key, nextValue) || updated;
+    }
+  }
+  if (updated) {
+    entry.updatedAt = now;
+  }
+  return updated;
+}
+
+function rollbackFallbackSelectionStateIfUnchanged(
+  entry: SessionEntry,
+  expectedState: FallbackSelectionState,
+  previousState: FallbackSelectionState,
+  now = Date.now(),
+): boolean {
+  let updated = false;
+  for (const key of FALLBACK_SELECTION_STATE_KEYS) {
+    if (entry[key] !== expectedState[key]) {
+      continue;
+    }
+    const previousValue = previousState[key];
+    if (previousValue === undefined) {
+      if (Object.hasOwn(entry, key)) {
+        delete entry[key];
+        updated = true;
+      }
+      continue;
+    }
+    if (entry[key] !== previousValue) {
+      updated = setFallbackSelectionStateField(entry, key, previousValue) || updated;
+    }
+  }
+  if (updated) {
+    entry.updatedAt = now;
+  }
+  return updated;
+}
+
 /**
  * Build a human-friendly rate-limit message from a FallbackSummaryError.
  * Includes a countdown when the soonest cooldown expiry is known.
@@ -117,6 +254,23 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
       return reason === "rate_limit" || reason === "overloaded";
     })
   );
+}
+
+function isToolResultTurnMismatchError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("toolresult") &&
+    lower.includes("tooluse") &&
+    lower.includes("exceeds the number") &&
+    lower.includes("previous turn")
+  );
+}
+
+function buildExternalRunFailureText(message: string): string {
+  if (isToolResultTurnMismatchError(message)) {
+    return "⚠️ Session history got out of sync. Please try again, or use /new to start a fresh session.";
+  }
+  return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 }
 
 export async function runAgentTurnWithFallback(params: {
@@ -190,6 +344,74 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
+  const persistFallbackCandidateSelection = async (provider: string, model: string) => {
+    if (
+      !params.sessionKey ||
+      !params.activeSessionStore ||
+      (provider === params.followupRun.run.provider && model === params.followupRun.run.model)
+    ) {
+      return;
+    }
+
+    const activeSessionEntry =
+      params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
+    if (!activeSessionEntry) {
+      return;
+    }
+
+    const previousState = snapshotFallbackSelectionState(activeSessionEntry);
+    const scopedAuthProfile = resolveRunAuthProfile(params.followupRun.run, provider);
+    const nextState = buildFallbackSelectionState({
+      provider,
+      model,
+      authProfileId: scopedAuthProfile.authProfileId,
+      authProfileIdSource: scopedAuthProfile.authProfileIdSource,
+    });
+    if (!applyFallbackSelectionState(activeSessionEntry, nextState)) {
+      return;
+    }
+    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+
+    try {
+      if (params.storePath) {
+        await updateSessionStore(params.storePath, (store) => {
+          const persistedEntry = store[params.sessionKey!];
+          if (!persistedEntry) {
+            return;
+          }
+          applyFallbackSelectionState(persistedEntry, nextState);
+          store[params.sessionKey!] = persistedEntry;
+        });
+      }
+    } catch (error) {
+      rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
+      params.activeSessionStore[params.sessionKey] = activeSessionEntry;
+      throw error;
+    }
+
+    return async () => {
+      const rolledBackInMemory = rollbackFallbackSelectionStateIfUnchanged(
+        activeSessionEntry,
+        nextState,
+        previousState,
+      );
+      if (rolledBackInMemory) {
+        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
+      }
+      if (!params.storePath) {
+        return;
+      }
+      await updateSessionStore(params.storePath, (store) => {
+        const persistedEntry = store[params.sessionKey!];
+        if (!persistedEntry) {
+          return;
+        }
+        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+          store[params.sessionKey!] = persistedEntry;
+        }
+      });
+    };
+  };
 
   while (true) {
     try {
@@ -269,7 +491,7 @@ export async function runAgentTurnWithFallback(params: {
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
-        run: (provider, model, runOptions) => {
+        run: async (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -277,6 +499,17 @@ export async function runAgentTurnWithFallback(params: {
             model,
             thinkLevel: params.followupRun.run.thinkLevel,
           });
+          let rollbackFallbackCandidateSelection: (() => Promise<void>) | undefined;
+          try {
+            rollbackFallbackCandidateSelection = await persistFallbackCandidateSelection(
+              provider,
+              model,
+            );
+          } catch (error) {
+            logVerbose(
+              `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
+            );
+          }
 
           if (isCliProvider(provider, params.followupRun.run.config)) {
             const startedAt = Date.now();
@@ -355,6 +588,15 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
+                if (rollbackFallbackCandidateSelection) {
+                  try {
+                    await rollbackFallbackCandidateSelection();
+                  } catch (rollbackError) {
+                    logVerbose(
+                      `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                    );
+                  }
+                }
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -478,9 +720,14 @@ export async function runAgentTurnWithFallback(params: {
                   if (evt.stream === "compaction") {
                     const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                     if (phase === "start") {
+                      // Keep custom compaction callbacks active, but gate the
+                      // fallback user-facing notice behind explicit opt-in.
+                      const notifyUser =
+                        params.followupRun.run.config.agents?.defaults?.compaction?.notifyUser ===
+                        true;
                       if (params.opts?.onCompactionStart) {
                         await params.opts.onCompactionStart();
-                      } else if (params.opts?.onBlockReply) {
+                      } else if (notifyUser && params.opts?.onBlockReply) {
                         // Send directly via opts.onBlockReply (bypassing the
                         // pipeline) so the notice does not cause final payloads
                         // to be discarded on non-streaming model paths.
@@ -570,6 +817,17 @@ export async function runAgentTurnWithFallback(params: {
               );
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
               return result;
+            } catch (err) {
+              if (rollbackFallbackCandidateSelection) {
+                try {
+                  await rollbackFallbackCandidateSelection();
+                } catch (rollbackError) {
+                  logVerbose(
+                    `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+                  );
+                }
+              }
+              throw err;
             } finally {
               autoCompactionCount += attemptCompactionCount;
             }
@@ -769,7 +1027,9 @@ export async function runAgentTurnWithFallback(params: {
             ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
             : isRoleOrderingError
               ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-              : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+              : shouldSurfaceToControlUi
+                ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                : buildExternalRunFailureText(message);
 
       return {
         kind: "final",

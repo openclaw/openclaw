@@ -115,7 +115,7 @@ export function resolveExecApprovalSessionTarget(params: {
   };
 }
 
-function resolveApprovalRequestSessionBinding(params: {
+function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
 }): ApprovalRequestSessionBinding | null {
@@ -163,6 +163,23 @@ function resolveApprovalRequestStoredSessionTarget(params: {
   });
 }
 
+// Account scoping uses the persisted same-channel binding first. The generic
+// session target only backfills legacy sessions that never stored `origin.*`.
+function resolveApprovalRequestAccountBinding(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  sessionTarget?: ExecApprovalSessionTarget | null;
+}): ApprovalRequestSessionBinding | null {
+  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
+  const channel = normalizeOptionalChannel(
+    sessionBinding?.channel ?? params.sessionTarget?.channel,
+  );
+  const accountId = normalizeOptionalAccountId(
+    sessionBinding?.accountId ?? params.sessionTarget?.accountId,
+  );
+  return channel || accountId ? { channel, accountId } : null;
+}
+
 export function resolveApprovalRequestAccountId(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -181,19 +198,43 @@ export function resolveApprovalRequestAccountId(params: {
     return turnSourceAccountId;
   }
 
-  const sessionTarget = resolveApprovalRequestSessionTarget(params);
-  const sessionBinding = resolveApprovalRequestSessionBinding(params);
-  const sessionChannel = normalizeOptionalChannel(
-    sessionTarget?.channel ?? sessionBinding?.channel,
-  );
+  const sessionBinding = resolveApprovalRequestAccountBinding({
+    ...params,
+    sessionTarget: resolveApprovalRequestSessionTarget(params),
+  });
+  const sessionChannel = sessionBinding?.channel;
   if (expectedChannel && sessionChannel && sessionChannel !== expectedChannel) {
     return null;
   }
 
-  const sessionAccountId = normalizeOptionalAccountId(
-    sessionTarget?.accountId ?? sessionBinding?.accountId,
-  );
-  return sessionAccountId ?? null;
+  return sessionBinding?.accountId ?? null;
+}
+
+export function resolveApprovalRequestChannelAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ApprovalRequestLike;
+  channel: string;
+}): string | null {
+  const expectedChannel = normalizeOptionalChannel(params.channel);
+  if (!expectedChannel) {
+    return null;
+  }
+
+  const turnSourceChannel = normalizeOptionalChannel(params.request.request.turnSourceChannel);
+  if (!turnSourceChannel || turnSourceChannel === expectedChannel) {
+    return resolveApprovalRequestAccountId(params);
+  }
+
+  const sessionBinding = resolveApprovalRequestAccountBinding({
+    ...params,
+    sessionTarget: resolveApprovalRequestStoredSessionTarget(params),
+  });
+  const sessionChannel = sessionBinding?.channel;
+  if (sessionChannel && sessionChannel !== expectedChannel) {
+    return null;
+  }
+
+  return sessionBinding?.accountId ?? null;
 }
 
 export function doesApprovalRequestMatchChannelAccount(params: {
@@ -220,19 +261,16 @@ export function doesApprovalRequestMatchChannelAccount(params: {
     return !expectedAccountId || expectedAccountId === turnSourceAccountId;
   }
 
-  const sessionTarget = resolveApprovalRequestSessionTarget(params);
-  const sessionBinding = resolveApprovalRequestSessionBinding(params);
-  const sessionChannel = normalizeOptionalChannel(
-    sessionTarget?.channel ?? sessionBinding?.channel,
-  );
+  const sessionBinding = resolveApprovalRequestAccountBinding({
+    ...params,
+    sessionTarget: resolveApprovalRequestSessionTarget(params),
+  });
+  const sessionChannel = sessionBinding?.channel;
   if (sessionChannel && sessionChannel !== expectedChannel) {
     return false;
   }
 
-  const sessionAccountId = normalizeOptionalAccountId(
-    sessionTarget?.accountId ?? sessionBinding?.accountId,
-  );
-  const boundAccountId = sessionAccountId;
+  const boundAccountId = sessionBinding?.accountId;
   return !expectedAccountId || !boundAccountId || expectedAccountId === boundAccountId;
 }
 

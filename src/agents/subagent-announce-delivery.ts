@@ -1,4 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -90,6 +91,27 @@ function summarizeDeliveryError(error: unknown): string {
   } catch {
     return "error";
   }
+}
+
+function shouldStripThreadFromAnnounceEntry(
+  normalizedRequester?: DeliveryContext,
+  normalizedEntry?: DeliveryContext,
+): boolean {
+  if (
+    !normalizedRequester?.to ||
+    normalizedRequester.threadId != null ||
+    normalizedEntry?.threadId == null
+  ) {
+    return false;
+  }
+  const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  const plugin = requesterChannel ? getChannelPlugin(requesterChannel) : undefined;
+  return Boolean(
+    plugin?.conversationBindings?.shouldStripThreadFromAnnounceOrigin?.({
+      requester: normalizedRequester,
+      entry: normalizedEntry,
+    }),
+  );
 }
 
 const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -196,9 +218,7 @@ export function resolveAnnounceOrigin(
     );
   }
   const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
+    normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
       ? (() => {
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;

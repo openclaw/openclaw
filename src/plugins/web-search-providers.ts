@@ -1,5 +1,5 @@
 import { listBundledWebSearchProviders as listBundledWebSearchProviderEntries } from "./bundled-web-search.js";
-import { resolveEffectiveEnableState } from "./config-state.js";
+import { resolveEffectivePluginActivationState } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
@@ -26,11 +26,11 @@ export function resolveBundledPluginWebSearchProviders(params: {
     if (onlyPluginIdSet && !onlyPluginIdSet.has(provider.pluginId)) {
       return false;
     }
-    return resolveEffectiveEnableState({
+    return resolveEffectivePluginActivationState({
       id: provider.pluginId,
       origin: "bundled",
       config: normalized,
       rootConfig: config,
-    }).enabled;
+    }).activated;
   });
 }

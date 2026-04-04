@@ -11,10 +11,15 @@ export class CustomEditor extends Editor {
   onCtrlT?: () => void;
   onShiftTab?: () => void;
   onAltEnter?: () => void;
+  onAltUp?: () => void;
 
   handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();
+      return;
+    }
+    if (matchesKey(data, Key.alt("up")) && this.onAltUp) {
+      this.onAltUp();
       return;
     }
     if (matchesKey(data, Key.ctrl("l")) && this.onCtrlL) {

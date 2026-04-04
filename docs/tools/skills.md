@@ -43,6 +43,42 @@ If the same skill name exists in more than one place, the usual precedence
 applies: workspace wins, then project agent skills, then personal agent skills,
 then managed/local, then bundled, then extra dirs.
 
+## Agent skill allowlists
+
+Skill **location** and skill **visibility** are separate controls.
+
+- Location/precedence decides which copy of a same-named skill wins.
+- Agent allowlists decide which visible skills an agent can actually use.
+
+Use `agents.defaults.skills` for a shared baseline, then override per agent with
+`agents.list[].skills`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      skills: ["github", "weather"],
+    },
+    list: [
+      { id: "writer" }, // inherits github, weather
+      { id: "docs", skills: ["docs-search"] }, // replaces defaults
+      { id: "locked-down", skills: [] }, // no skills
+    ],
+  },
+}
+```
+
+Rules:
+
+- Omit `agents.defaults.skills` for unrestricted skills by default.
+- Omit `agents.list[].skills` to inherit `agents.defaults.skills`.
+- Set `agents.list[].skills: []` for no skills.
+- A non-empty `agents.list[].skills` list is the final set for that agent; it
+  does not merge with defaults.
+
+OpenClaw applies the effective agent skill set across prompt building, skill
+slash-command discovery, sandbox sync, and skill snapshots.
+
 ## Plugins + skills
 
 Plugins can ship their own skills by listing `skills` directories in
@@ -266,6 +302,10 @@ This is **scoped to the agent run**, not a global shell environment.
 OpenClaw snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
 
 Skills can also refresh mid-session when the skills watcher is enabled or when a new eligible remote node appears (see below). Think of this as a **hot reload**: the refreshed list is picked up on the next agent turn.
+
+If the effective agent skill allowlist changes for that session, OpenClaw
+refreshes the snapshot so the visible skills stay aligned with the current
+agent.
 
 ## Remote macOS nodes (Linux gateway)
 

@@ -1,6 +1,8 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -175,10 +177,15 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
 
 function buildExecApprovalPromptGuidance(params: { runtimeChannel?: string }) {
   const runtimeChannel = params.runtimeChannel?.trim().toLowerCase();
-  if (runtimeChannel === "discord" || runtimeChannel === "slack" || runtimeChannel === "telegram") {
-    return "When exec returns approval-pending on Discord, Slack, or Telegram, rely on the native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
+  const usesNativeApprovalUi =
+    runtimeChannel === "webchat" ||
+    (runtimeChannel
+      ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
+      : false);
+  if (usesNativeApprovalUi) {
+    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
   }
-  return "When exec returns approval-pending, include the concrete /approve command from tool output (with allow-once|allow-always|deny) as plain chat text for the user, and do not ask for a different or rotated code.";
+  return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
 
 export function buildAgentSystemPrompt(params: {

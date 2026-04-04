@@ -94,6 +94,7 @@ function makeWsClient(params: {
       },
     } as GatewayWsClient["connect"],
     connId: params.connId,
+    usesSharedGatewayAuth: false,
     clientIp: params.clientIp,
     canvasCapability: params.canvasCapability,
     canvasCapabilityExpiresAtMs: params.canvasCapabilityExpiresAtMs,

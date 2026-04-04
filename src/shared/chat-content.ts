@@ -8,8 +8,30 @@ export function extractTextFromChatContent(
 ): string | null {
   const normalizeText = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
-  const coerceText = (value: unknown): string =>
-    typeof value === "string" ? value : value == null ? "" : String(value);
+  const coerceText = (value: unknown): string => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (value == null) {
+      return "";
+    }
+    if (
+      typeof value === "number" ||
+      typeof value === "boolean" ||
+      typeof value === "bigint" ||
+      typeof value === "symbol"
+    ) {
+      return String(value);
+    }
+    if (typeof value === "object") {
+      try {
+        return JSON.stringify(value) ?? "";
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  };
   const sanitize = (text: unknown): string => {
     const raw = coerceText(text);
     const sanitized = opts?.sanitizeText ? opts.sanitizeText(raw) : raw;

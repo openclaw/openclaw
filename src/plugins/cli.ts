@@ -46,20 +46,21 @@ function mergeCliRegistrars(params: {
   runtimeRegistry: PluginRegistry;
   metadataRegistry: PluginRegistry;
 }) {
-  const metadataCommands = new Set(
-    params.metadataRegistry.cliRegistrars.flatMap((entry) => entry.commands),
+  const runtimeCommands = new Set(
+    params.runtimeRegistry.cliRegistrars.flatMap((entry) => entry.commands),
   );
   return [
-    ...params.metadataRegistry.cliRegistrars,
-    ...params.runtimeRegistry.cliRegistrars.filter(
-      (entry) => !entry.commands.some((command) => metadataCommands.has(command)),
+    ...params.runtimeRegistry.cliRegistrars,
+    ...params.metadataRegistry.cliRegistrars.filter(
+      (entry) => !entry.commands.some((command) => runtimeCommands.has(command)),
     ),
   ];
 }
 
 function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const config = cfg ?? loadConfig();
-  const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
+  const autoEnabled = applyPluginAutoEnable({ config, env: env ?? process.env });
+  const resolvedConfig = autoEnabled.config;
   const workspaceDir = resolveAgentWorkspaceDir(
     resolvedConfig,
     resolveDefaultAgentId(resolvedConfig),
@@ -71,7 +72,9 @@ function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessE
     debug: (msg: string) => log.debug(msg),
   };
   return {
+    rawConfig: config,
     config: resolvedConfig,
+    autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     logger,
   };
@@ -87,6 +90,8 @@ async function loadPluginCliMetadataRegistry(
     ...context,
     registry: await loadOpenClawPluginCliRegistry({
       config: context.config,
+      activationSourceConfig: context.rawConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
       workspaceDir: context.workspaceDir,
       env,
       logger: context.logger,
@@ -103,6 +108,8 @@ async function loadPluginCliCommandRegistry(
   const context = resolvePluginCliLoadContext(cfg, env);
   const runtimeRegistry = loadOpenClawPlugins({
     config: context.config,
+    activationSourceConfig: context.rawConfig,
+    autoEnabledReasons: context.autoEnabledReasons,
     workspaceDir: context.workspaceDir,
     env,
     logger: context.logger,
@@ -119,6 +126,8 @@ async function loadPluginCliCommandRegistry(
   try {
     const metadataRegistry = await loadOpenClawPluginCliRegistry({
       config: context.config,
+      activationSourceConfig: context.rawConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
       workspaceDir: context.workspaceDir,
       env,
       logger: context.logger,

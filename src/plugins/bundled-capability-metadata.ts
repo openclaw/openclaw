@@ -7,6 +7,7 @@ export type BundledPluginContractSnapshot = {
   speechProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
+  webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
@@ -25,18 +26,23 @@ function uniqueStrings(values: readonly string[] | undefined): string[] {
   return result;
 }
 
+const BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES = listBundledPluginMetadata({
+  includeChannelConfigs: false,
+  includeSyntheticChannelConfigs: false,
+});
+
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  listBundledPluginMetadata()
-    .map(({ manifest }) => ({
-      pluginId: manifest.id,
-      cliBackendIds: uniqueStrings(manifest.cliBackends),
-      providerIds: uniqueStrings(manifest.providers),
-      speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
-      mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
-      imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
-      webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
-      toolNames: uniqueStrings(manifest.contracts?.tools),
-    }))
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.map(({ manifest }) => ({
+    pluginId: manifest.id,
+    cliBackendIds: uniqueStrings(manifest.cliBackends),
+    providerIds: uniqueStrings(manifest.providers),
+    speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
+    mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
+    imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
+    webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
+    webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders),
+    toolNames: uniqueStrings(manifest.contracts?.tools),
+  }))
     .filter(
       (entry) =>
         entry.cliBackendIds.length > 0 ||
@@ -44,6 +50,7 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.speechProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0 ||
         entry.toolNames.length > 0,
     )
@@ -69,6 +76,8 @@ export const BUNDLED_IMAGE_GENERATION_PLUGIN_IDS = collectPluginIds(
   (entry) => entry.imageGenerationProviderIds,
 );
 
+export const BUNDLED_WEB_FETCH_PLUGIN_IDS = collectPluginIds((entry) => entry.webFetchProviderIds);
+
 export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
   ...new Set(
     BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
@@ -77,6 +86,7 @@ export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
         entry.speechProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
+        entry.webFetchProviderIds.length > 0 ||
         entry.webSearchProviderIds.length > 0,
     ).map((entry) => entry.pluginId),
   ),
@@ -101,22 +111,18 @@ export const BUNDLED_PROVIDER_PLUGIN_ID_ALIASES = Object.fromEntries(
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
-  listBundledPluginMetadata()
-    .flatMap(({ manifest }) =>
-      (manifest.legacyPluginIds ?? []).map(
-        (legacyPluginId) => [legacyPluginId, manifest.id] as const,
-      ),
-    )
-    .toSorted(([left], [right]) => left.localeCompare(right)),
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
+    (manifest.legacyPluginIds ?? []).map(
+      (legacyPluginId) => [legacyPluginId, manifest.id] as const,
+    ),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  listBundledPluginMetadata()
-    .flatMap(({ manifest }) =>
-      (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
-        providerId,
-        manifest.id,
-      ]),
-    )
-    .toSorted(([left], [right]) => left.localeCompare(right)),
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
+    (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
+      providerId,
+      manifest.id,
+    ]),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
 ) as Readonly<Record<string, string>>;

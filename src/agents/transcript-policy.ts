@@ -1,14 +1,8 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveProviderRuntimePlugin } from "../plugins/provider-runtime.js";
+import type { ProviderReplayPolicy, ProviderRuntimeModel } from "../plugins/types.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
-import {
-  isAnthropicProviderFamily,
-  isOpenAiProviderFamily,
-  preservesAnthropicThinkingSignatures,
-  resolveTranscriptToolCallIdMode,
-  shouldDropThinkingBlocksForModel,
-  shouldSanitizeGeminiThoughtSignaturesForModel,
-  supportsOpenAiCompatTurnValidation,
-} from "./provider-capabilities.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -31,99 +25,162 @@ export type TranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
-const OPENAI_MODEL_APIS = new Set([
-  "openai",
-  "openai-completions",
-  "openai-responses",
-  "openai-codex-responses",
-]);
+const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
+  sanitizeMode: "images-only",
+  sanitizeToolCallIds: false,
+  toolCallIdMode: undefined,
+  repairToolUseResultPairing: true,
+  preserveSignatures: false,
+  sanitizeThoughtSignatures: undefined,
+  sanitizeThinkingSignatures: false,
+  dropThinkingBlocks: false,
+  applyGoogleTurnOrdering: false,
+  validateGeminiTurns: false,
+  validateAnthropicTurns: false,
+  allowSyntheticToolResults: false,
+};
 
-function isOpenAiApi(modelApi?: string | null): boolean {
-  if (!modelApi) {
-    return false;
-  }
-  return OPENAI_MODEL_APIS.has(modelApi);
+function isAnthropicApi(modelApi?: string | null): boolean {
+  return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
 }
 
-function isOpenAiProvider(provider?: string | null): boolean {
-  return isOpenAiProviderFamily(provider);
+/**
+ * Provides a narrow replay-policy fallback for providers that do not have an
+ * owning runtime plugin.
+ *
+ * This exists to preserve generic custom-provider behavior. Bundled providers
+ * should express replay ownership through `buildReplayPolicy` instead.
+ */
+function buildUnownedProviderTransportReplayFallback(params: {
+  modelApi?: string | null;
+  modelId?: string | null;
+}): ProviderReplayPolicy | undefined {
+  const isGoogle = isGoogleModelApi(params.modelApi);
+  const isAnthropic = isAnthropicApi(params.modelApi);
+  const isStrictOpenAiCompatible = params.modelApi === "openai-completions";
+  const requiresOpenAiCompatibleToolIdSanitization =
+    params.modelApi === "openai-completions" ||
+    params.modelApi === "openai-responses" ||
+    params.modelApi === "openai-codex-responses" ||
+    params.modelApi === "azure-openai-responses";
+
+  if (
+    !isGoogle &&
+    !isAnthropic &&
+    !isStrictOpenAiCompatible &&
+    !requiresOpenAiCompatibleToolIdSanitization
+  ) {
+    return undefined;
+  }
+
+  const modelId = params.modelId?.toLowerCase() ?? "";
+  return {
+    ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
+    ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
+      ? {
+          sanitizeToolCallIds: true,
+          toolCallIdMode: "strict" as const,
+        }
+      : {}),
+    ...(isAnthropic ? { preserveSignatures: true } : {}),
+    ...(isGoogle
+      ? {
+          sanitizeThoughtSignatures: {
+            allowBase64Only: true,
+            includeCamelCase: true,
+          },
+        }
+      : {}),
+    ...(isAnthropic && modelId.includes("claude") ? { dropThinkingBlocks: true } : {}),
+    ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
+    ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
+    ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
+    ...(isGoogle || isAnthropic ? { allowSyntheticToolResults: true } : {}),
+  };
 }
 
-function isAnthropicApi(modelApi?: string | null, provider?: string | null): boolean {
-  if (modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream") {
-    return true;
+function mergeTranscriptPolicy(
+  policy: ProviderReplayPolicy | undefined,
+  basePolicy: TranscriptPolicy = DEFAULT_TRANSCRIPT_POLICY,
+): TranscriptPolicy {
+  if (!policy) {
+    return basePolicy;
   }
-  // MiniMax now uses openai-completions API, not anthropic-messages
-  return isAnthropicProviderFamily(provider);
+
+  return {
+    ...basePolicy,
+    ...(policy.sanitizeMode != null ? { sanitizeMode: policy.sanitizeMode } : {}),
+    ...(typeof policy.sanitizeToolCallIds === "boolean"
+      ? { sanitizeToolCallIds: policy.sanitizeToolCallIds }
+      : {}),
+    ...(policy.toolCallIdMode ? { toolCallIdMode: policy.toolCallIdMode as ToolCallIdMode } : {}),
+    ...(typeof policy.repairToolUseResultPairing === "boolean"
+      ? { repairToolUseResultPairing: policy.repairToolUseResultPairing }
+      : {}),
+    ...(typeof policy.preserveSignatures === "boolean"
+      ? { preserveSignatures: policy.preserveSignatures }
+      : {}),
+    ...(policy.sanitizeThoughtSignatures
+      ? { sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures }
+      : {}),
+    ...(typeof policy.dropThinkingBlocks === "boolean"
+      ? { dropThinkingBlocks: policy.dropThinkingBlocks }
+      : {}),
+    ...(typeof policy.applyAssistantFirstOrderingFix === "boolean"
+      ? { applyGoogleTurnOrdering: policy.applyAssistantFirstOrderingFix }
+      : {}),
+    ...(typeof policy.validateGeminiTurns === "boolean"
+      ? { validateGeminiTurns: policy.validateGeminiTurns }
+      : {}),
+    ...(typeof policy.validateAnthropicTurns === "boolean"
+      ? { validateAnthropicTurns: policy.validateAnthropicTurns }
+      : {}),
+    ...(typeof policy.allowSyntheticToolResults === "boolean"
+      ? { allowSyntheticToolResults: policy.allowSyntheticToolResults }
+      : {}),
+  };
 }
 
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  model?: ProviderRuntimeModel;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const modelId = params.modelId ?? "";
-  const isGoogle = isGoogleModelApi(params.modelApi);
-  const isAnthropic = isAnthropicApi(params.modelApi, provider);
-  const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
-  const isStrictOpenAiCompatible =
-    params.modelApi === "openai-completions" &&
-    !isOpenAi &&
-    supportsOpenAiCompatTurnValidation(provider);
-  const providerToolCallIdMode = resolveTranscriptToolCallIdMode(provider, modelId);
-  const isMistral = providerToolCallIdMode === "strict9";
-  const shouldSanitizeGeminiThoughtSignaturesForProvider =
-    shouldSanitizeGeminiThoughtSignaturesForModel({
-      provider,
-      modelId,
-    });
-  const requiresOpenAiCompatibleToolIdSanitization =
-    params.modelApi === "openai-completions" ||
-    (!isOpenAi &&
-      (params.modelApi === "openai-responses" ||
-        params.modelApi === "openai-codex-responses" ||
-        params.modelApi === "azure-openai-responses"));
-
-  // Anthropic Claude endpoints can reject replayed `thinking` blocks unless the
-  // original signatures are preserved byte-for-byte. Drop them at send-time to
-  // keep persisted sessions usable across follow-up turns.
-  const dropThinkingBlocks = shouldDropThinkingBlocksForModel({ provider, modelId });
-
-  const needsNonImageSanitize =
-    isGoogle || isAnthropic || isMistral || shouldSanitizeGeminiThoughtSignaturesForProvider;
-
-  const sanitizeToolCallIds =
-    isGoogle || isMistral || isAnthropic || requiresOpenAiCompatibleToolIdSanitization;
-  const toolCallIdMode: ToolCallIdMode | undefined = providerToolCallIdMode
-    ? providerToolCallIdMode
-    : isMistral
-      ? "strict9"
-      : sanitizeToolCallIds
-        ? "strict"
-        : undefined;
-  // All providers need orphaned tool_result repair after history truncation.
-  // OpenAI rejects function_call_output items whose call_id has no matching
-  // function_call in the conversation, so the repair must run universally.
-  const repairToolUseResultPairing = true;
-  const sanitizeThoughtSignatures =
-    shouldSanitizeGeminiThoughtSignaturesForProvider || isGoogle
-      ? { allowBase64Only: true, includeCamelCase: true }
-      : undefined;
-
-  return {
-    sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
-    sanitizeToolCallIds:
-      (!isOpenAi && sanitizeToolCallIds) || requiresOpenAiCompatibleToolIdSanitization,
-    toolCallIdMode,
-    repairToolUseResultPairing,
-    preserveSignatures: isAnthropic && preservesAnthropicThinkingSignatures(provider),
-    sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
-    sanitizeThinkingSignatures: false,
-    dropThinkingBlocks,
-    applyGoogleTurnOrdering: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
-    validateGeminiTurns: !isOpenAi && (isGoogle || isStrictOpenAiCompatible),
-    validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
-    allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
+  const runtimePlugin = provider
+    ? resolveProviderRuntimePlugin({
+        provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      })
+    : undefined;
+  const context = {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    provider,
+    modelId: params.modelId ?? "",
+    modelApi: params.modelApi,
+    model: params.model,
   };
+
+  // Once a provider adopts the replay-policy hook, replay policy should come
+  // from the plugin, not from transport-family defaults in core.
+  const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
+  if (buildReplayPolicy) {
+    const pluginPolicy = buildReplayPolicy(context);
+    return mergeTranscriptPolicy(pluginPolicy ?? undefined);
+  }
+
+  return mergeTranscriptPolicy(
+    buildUnownedProviderTransportReplayFallback({
+      modelApi: params.modelApi,
+      modelId: params.modelId,
+    }),
+  );
 }

@@ -109,6 +109,8 @@ describe("loadDotEnv", () => {
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
             "HTTP_PROXY=http://evil-proxy:8080",
+            "UV_PYTHON=./attacker-python",
+            "uv_python=./attacker-python-lower",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -119,6 +121,8 @@ describe("loadDotEnv", () => {
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
+        delete process.env.UV_PYTHON;
+        delete process.env.uv_python;
 
         loadDotEnv({ quiet: true });
 
@@ -129,6 +133,8 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
+        expect(process.env.UV_PYTHON).toBeUndefined();
+        expect(process.env.uv_python).toBeUndefined();
       });
     });
   });
@@ -236,6 +242,45 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks OPENCLAW_TEST_TAILSCALE_BINARY from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "OPENCLAW_TEST_TAILSCALE_BINARY=/tmp/attacker-tailscale\n",
+        );
+
+        delete process.env.OPENCLAW_TEST_TAILSCALE_BINARY;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_TEST_TAILSCALE_BINARY).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks pinned helper interpreter vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_PINNED_PYTHON=./attacker-python",
+            "OPENCLAW_PINNED_WRITE_PYTHON=./attacker-write-python",
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_PINNED_PYTHON;
+        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_PINNED_PYTHON).toBeUndefined();
+        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBeUndefined();
+      });
+    });
+  });
+
   it("blocks bundled trust-root vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
@@ -266,16 +311,25 @@ describe("loadDotEnv", () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
         await writeEnvFile(
           path.join(stateDir, ".env"),
-          "ANTHROPIC_BASE_URL=https://trusted.example.com/v1\nHTTP_PROXY=http://proxy.test:8080\n",
+          [
+            "ANTHROPIC_BASE_URL=https://trusted.example.com/v1",
+            "HTTP_PROXY=http://proxy.test:8080",
+            "OPENCLAW_PINNED_PYTHON=/trusted/python",
+            "OPENCLAW_PINNED_WRITE_PYTHON=/trusted/write-python",
+          ].join("\n"),
         );
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.HTTP_PROXY;
+        delete process.env.OPENCLAW_PINNED_PYTHON;
+        delete process.env.OPENCLAW_PINNED_WRITE_PYTHON;
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.ANTHROPIC_BASE_URL).toBe("https://trusted.example.com/v1");
         expect(process.env.HTTP_PROXY).toBe("http://proxy.test:8080");
+        expect(process.env.OPENCLAW_PINNED_PYTHON).toBe("/trusted/python");
+        expect(process.env.OPENCLAW_PINNED_WRITE_PYTHON).toBe("/trusted/write-python");
       });
     });
   });
@@ -412,6 +466,8 @@ describe("loadCliDotEnv", () => {
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "NODE_OPTIONS=--require ./evil.js",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
+            "UV_PYTHON=./attacker-python",
+            "uv_python=./attacker-python-lower",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -422,6 +478,8 @@ describe("loadCliDotEnv", () => {
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.NODE_OPTIONS;
         delete process.env.ANTHROPIC_BASE_URL;
+        delete process.env.UV_PYTHON;
+        delete process.env.uv_python;
         delete process.env.BAR;
 
         loadCliDotEnv({ quiet: true });
@@ -433,6 +491,8 @@ describe("loadCliDotEnv", () => {
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.NODE_OPTIONS).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+        expect(process.env.UV_PYTHON).toBeUndefined();
+        expect(process.env.uv_python).toBeUndefined();
       });
     });
   });

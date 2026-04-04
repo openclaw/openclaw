@@ -259,6 +259,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../model-auth.js", () => ({
+    applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
     resolveModelAuthMode: vi.fn(() => "env"),
@@ -329,10 +330,14 @@ export async function loadCompactHooksHarness(): Promise<{
     createOpenClawCodingTools: createOpenClawCodingToolsMock,
   }));
 
-  vi.doMock("./google.js", () => ({
-    logToolSchemasForGoogle: vi.fn(),
+  vi.doMock("./replay-history.js", () => ({
     sanitizeSessionHistory: sanitizeSessionHistoryMock,
-    sanitizeToolsForGoogle: vi.fn(({ tools }: { tools: unknown[] }) => tools),
+    validateReplayTurns: vi.fn(async ({ messages }: { messages: unknown[] }) => messages),
+  }));
+
+  vi.doMock("./tool-schema-runtime.js", () => ({
+    logProviderToolSchemaDiagnostics: vi.fn(),
+    normalizeProviderToolSchemas: vi.fn(({ tools }: { tools: unknown[] }) => tools),
   }));
 
   vi.doMock("./tool-split.js", () => ({

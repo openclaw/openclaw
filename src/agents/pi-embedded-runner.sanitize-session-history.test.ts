@@ -25,18 +25,66 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderCapabilitiesWithPlugin: ({ provider }: { provider?: string }) =>
-    provider === "openrouter"
+  resolveProviderRuntimePlugin: ({ provider }: { provider?: string }) =>
+    provider === "openrouter" || provider === "github-copilot"
       ? {
-          openAiCompatTurnValidation: false,
-          geminiThoughtSignatureSanitization: true,
-          geminiThoughtSignatureModelHints: ["gemini"],
+          buildReplayPolicy: (context?: { modelId?: string | null }) => {
+            const modelId = String(context?.modelId ?? "").toLowerCase();
+            if (provider === "openrouter") {
+              return {
+                applyAssistantFirstOrderingFix: false,
+                validateGeminiTurns: false,
+                validateAnthropicTurns: false,
+                ...(modelId.includes("gemini")
+                  ? {
+                      sanitizeThoughtSignatures: {
+                        allowBase64Only: true,
+                        includeCamelCase: true,
+                      },
+                    }
+                  : {}),
+              };
+            }
+            if (provider === "github-copilot" && modelId.includes("claude")) {
+              return {
+                dropThinkingBlocks: true,
+              };
+            }
+            return undefined;
+          },
         }
-      : provider === "github-copilot"
-        ? {
-            dropThinkingBlockModelHints: ["claude"],
-          }
-        : undefined,
+      : undefined,
+  sanitizeProviderReplayHistoryWithPlugin: vi.fn(
+    async ({
+      provider,
+      context,
+    }: {
+      provider?: string;
+      context: {
+        messages: AgentMessage[];
+        sessionState?: {
+          appendCustomEntry(customType: string, data: unknown): void;
+        };
+      };
+    }) => {
+      if (
+        provider &&
+        provider.startsWith("google") &&
+        context.messages[0]?.role === "assistant" &&
+        context.sessionState
+      ) {
+        context.sessionState.appendCustomEntry("google-turn-ordering-bootstrap", {
+          timestamp: Date.now(),
+        });
+        return [
+          { role: "user", content: "(session bootstrap)" } as AgentMessage,
+          ...context.messages,
+        ];
+      }
+      return context.messages;
+    },
+  ),
+  validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
 }));
 
 let sanitizeSessionHistory: SanitizeSessionHistoryFn;
@@ -221,6 +269,33 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toEqual(mockMessages);
+  });
+
+  it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
+    const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [];
+    const sessionManager = makeInMemorySessionManager(sessionEntries);
+
+    const result = await sanitizeSessionHistory({
+      messages: castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "hello from previous turn" }],
+        },
+      ]),
+      modelApi: "google-generative-ai",
+      provider: "google-vertex",
+      sessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result[0]).toMatchObject({
+      role: "user",
+      content: "(session bootstrap)",
+    });
+    expect(
+      sessionEntries.some((entry) => entry.customType === "google-turn-ordering-bootstrap"),
+    ).toBe(true);
   });
 
   it("passes simple user-only history through for Mistral models", async () => {
@@ -769,17 +844,24 @@ describe("sanitizeSessionHistory", () => {
     ).toBe(false);
   });
 
-  it("drops assistant thinking blocks for github-copilot models", async () => {
+  it("preserves latest assistant thinking blocks for github-copilot models", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages("reasoning_text");
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: "reasoning_text",
+      },
+      { type: "text", text: "hi" },
+    ]);
   });
 
-  it("preserves assistant turn when all content is thinking blocks (github-copilot)", async () => {
+  it("preserves latest assistant turn when all content is thinking blocks (github-copilot)", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -796,13 +878,18 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
 
-    // Assistant turn should be preserved (not dropped) to maintain turn alternation
     expect(result).toHaveLength(3);
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "" }]);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "some reasoning",
+        thinkingSignature: "reasoning_text",
+      },
+    ]);
   });
 
-  it("preserves tool_use blocks when dropping thinking blocks (github-copilot)", async () => {
+  it("preserves thinking blocks alongside tool_use blocks in latest assistant message (github-copilot)", async () => {
     setNonGoogleModelApi();
 
     const messages: AgentMessage[] = [
@@ -820,12 +907,12 @@ describe("sanitizeSessionHistory", () => {
 
     const result = await sanitizeGithubCopilotHistory({ messages });
     const types = getAssistantContentTypes(result);
+    expect(types).toContain("thinking");
     expect(types).toContain("toolCall");
     expect(types).toContain("text");
-    expect(types).not.toContain("thinking");
   });
 
-  it("drops assistant thinking blocks for anthropic replay", async () => {
+  it("preserves latest assistant thinking blocks for anthropic replay", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
@@ -833,10 +920,17 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeAnthropicHistory({ messages });
 
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: "some_sig",
+      },
+      { type: "text", text: "hi" },
+    ]);
   });
 
-  it("drops assistant thinking blocks for amazon-bedrock replay", async () => {
+  it("preserves latest assistant thinking blocks for amazon-bedrock replay", async () => {
     setNonGoogleModelApi();
 
     const messages = makeThinkingAndTextAssistantMessages();
@@ -848,7 +942,14 @@ describe("sanitizeSessionHistory", () => {
     });
 
     const assistant = getAssistantMessage(result);
-    expect(assistant.content).toEqual([{ type: "text", text: "hi" }]);
+    expect(assistant.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "internal",
+        thinkingSignature: "some_sig",
+      },
+      { type: "text", text: "hi" },
+    ]);
   });
 
   it("does not drop thinking blocks for non-claude copilot models", async () => {

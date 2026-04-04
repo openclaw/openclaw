@@ -334,7 +334,7 @@
     },
     {
       "source": "/auth-monitoring",
-      "destination": "/automation/auth-monitoring"
+      "destination": "/gateway/authentication"
     },
     {
       "source": "/camera",
@@ -382,7 +382,7 @@
     },
     {
       "source": "/cron-vs-heartbeat",
-      "destination": "/automation/cron-vs-heartbeat"
+      "destination": "/automation"
     },
     {
       "source": "/dashboard",
@@ -438,7 +438,7 @@
     },
     {
       "source": "/gmail-pubsub",
-      "destination": "/automation/gmail-pubsub"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/grammy",
@@ -618,7 +618,7 @@
     },
     {
       "source": "/poll",
-      "destination": "/automation/poll"
+      "destination": "/cli/message"
     },
     {
       "source": "/presence",
@@ -778,7 +778,7 @@
     },
     {
       "source": "/webhook",
-      "destination": "/automation/webhook"
+      "destination": "/automation/cron-jobs"
     },
     {
       "source": "/whatsapp",
@@ -879,6 +879,34 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/automation/clawflow",
+      "destination": "/automation/taskflow"
+    },
+    {
+      "source": "/automation/poll",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/automation/auth-monitoring",
+      "destination": "/gateway/authentication"
+    },
+    {
+      "source": "/automation/troubleshooting",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/automation/cron-vs-heartbeat",
+      "destination": "/automation"
+    },
+    {
+      "source": "/automation/webhook",
+      "destination": "/automation/cron-jobs"
+    },
+    {
+      "source": "/automation/gmail-pubsub",
+      "destination": "/automation/cron-jobs"
     }
   ],
   "navigation": {
@@ -1114,20 +1142,14 @@
                 ]
               },
               {
-                "group": "Automation",
+                "group": "Automation & Tasks",
                 "pages": [
                   "automation/index",
-                  "automation/hooks",
-                  "automation/standing-orders",
                   "automation/cron-jobs",
-                  "automation/cron-vs-heartbeat",
                   "automation/tasks",
-                  "automation/clawflow",
-                  "automation/troubleshooting",
-                  "automation/webhook",
-                  "automation/gmail-pubsub",
-                  "automation/poll",
-                  "automation/auth-monitoring"
+                  "automation/taskflow",
+                  "automation/standing-orders",
+                  "automation/hooks"
                 ]
               },
               {
@@ -1155,7 +1177,9 @@
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
+                      "tools/ollama-search",
                       "tools/perplexity-search",
+                      "tools/searxng-search",
                       "tools/tavily"
                     ]
                   },
@@ -1226,6 +1250,7 @@
                   "providers/qwen_modelstudio",
                   "providers/qwen",
                   "providers/sglang",
+                  "providers/stepfun",
                   "providers/synthetic",
                   "providers/together",
                   "providers/venice",
@@ -1788,17 +1813,8 @@
                 ]
               },
               {
-                "group": "自动化",
-                "pages": [
-                  "zh-CN/automation/hooks",
-                  "zh-CN/automation/cron-jobs",
-                  "zh-CN/automation/cron-vs-heartbeat",
-                  "zh-CN/automation/troubleshooting",
-                  "zh-CN/automation/webhook",
-                  "zh-CN/automation/gmail-pubsub",
-                  "zh-CN/automation/poll",
-                  "zh-CN/automation/auth-monitoring"
-                ]
+                "group": "自动化与任务",
+                "pages": ["zh-CN/automation/hooks", "zh-CN/automation/cron-jobs"]
               },
               {
                 "group": "媒体与设备",

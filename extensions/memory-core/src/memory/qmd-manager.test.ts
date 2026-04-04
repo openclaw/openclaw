@@ -99,8 +99,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: vi.fn(),
@@ -112,8 +112,10 @@ vi.mock("chokidar", () => ({
   watch: watchMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/file-lock", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/file-lock")>();
+vi.mock("openclaw/plugin-sdk/file-lock", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/file-lock")>(
+    "openclaw/plugin-sdk/file-lock",
+  );
   return {
     ...actual,
     withFileLock: withFileLockMock,
@@ -749,7 +751,10 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
+        const globIdx = args.indexOf("--glob");
+        const maskIdx = args.indexOf("--mask");
+        const pattern =
+          (globIdx !== -1 ? args[globIdx + 1] : maskIdx !== -1 ? args[maskIdx + 1] : "") ?? "";
         const hasConflict = [...legacyCollections.entries()].some(
           ([existingName, info]) =>
             existingName !== name && info.path === pathArg && info.pattern === pattern,
@@ -827,7 +832,10 @@ describe("QmdMemoryManager", () => {
         const child = createMockChild({ autoClose: false });
         const pathArg = args[2] ?? "";
         const name = args[args.indexOf("--name") + 1] ?? "";
-        const pattern = args[args.indexOf("--glob") + 1] ?? args[args.indexOf("--mask") + 1] ?? "";
+        const globIdx = args.indexOf("--glob");
+        const maskIdx = args.indexOf("--mask");
+        const pattern =
+          (globIdx !== -1 ? args[globIdx + 1] : maskIdx !== -1 ? args[maskIdx + 1] : "") ?? "";
         const hasConflict = [...listedCollections.entries()].some(
           ([existingName, info]) =>
             existingName !== name && info.path === pathArg && info.pattern === pattern,
@@ -887,7 +895,7 @@ describe("QmdMemoryManager", () => {
     );
   });
 
-  it("falls back to --mask when qmd collection add rejects --glob", async () => {
+  it("prefers --mask for collection add and falls back to --glob when --mask is rejected", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -909,10 +917,10 @@ describe("QmdMemoryManager", () => {
       }
       if (args[0] === "collection" && args[1] === "add") {
         const child = createMockChild({ autoClose: false });
-        const flag = args.includes("--glob") ? "--glob" : args.includes("--mask") ? "--mask" : "";
+        const flag = args.includes("--mask") ? "--mask" : args.includes("--glob") ? "--glob" : "";
         addFlagCalls.push(flag);
-        if (flag === "--glob") {
-          emitAndClose(child, "stderr", "unknown flag: --glob", 1);
+        if (flag === "--mask") {
+          emitAndClose(child, "stderr", "unknown flag: --mask", 1);
           return child;
         }
         queueMicrotask(() => child.closeWith(0));
@@ -924,7 +932,7 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "full" });
     await manager.close();
 
-    expect(addFlagCalls).toEqual(["--glob", "--mask", "--mask", "--mask"]);
+    expect(addFlagCalls).toEqual(["--mask", "--glob", "--glob", "--glob"]);
     expect(logWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("retrying with legacy compatibility flag"),
     );

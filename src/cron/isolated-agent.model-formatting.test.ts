@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   loadModelCatalogMock,
   getModelRefStatusMock,
+  normalizeProviderIdMock,
   normalizeModelSelectionMock,
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
@@ -10,6 +11,9 @@ const {
 } = vi.hoisted(() => ({
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
+  normalizeProviderIdMock: vi.fn((value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "",
+  ),
   normalizeModelSelectionMock: vi.fn((value: unknown) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
   ),
@@ -24,6 +28,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/model-selection.js", () => ({
   getModelRefStatus: getModelRefStatusMock,
+  normalizeProviderId: normalizeProviderIdMock,
   normalizeModelSelection: normalizeModelSelectionMock,
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
@@ -39,7 +44,6 @@ const DEFAULT_MODEL = "claude-opus-4-5";
 type AgentTurnPayload = {
   kind: "agentTurn";
   message: string;
-  deliver?: boolean;
   model?: string;
 };
 
@@ -105,7 +109,6 @@ function defaultPayload(): AgentTurnPayload {
   return {
     kind: "agentTurn",
     message: DEFAULT_MESSAGE,
-    deliver: false,
   };
 }
 
@@ -273,7 +276,6 @@ describe("cron model formatting and precedence edge cases", () => {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/claude-sonnet-4-5",
-            deliver: false,
           },
           sessionEntry: {
             providerOverride: "openai",
@@ -318,7 +320,6 @@ describe("cron model formatting and precedence edge cases", () => {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
             model: "anthropic/claude-opus-4-5",
-            deliver: false,
           },
           sessionEntry: {
             providerOverride: "openai",

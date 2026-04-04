@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 async function loadToolsHarness(options?: {
   resolveToolsMock?: ReturnType<typeof vi.fn>;
@@ -24,8 +26,10 @@ async function loadToolsHarness(options?: {
   };
 }) {
   vi.resetModules();
-  vi.doMock("../../agents/agent-scope.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
+  vi.doMock("../../agents/agent-scope.js", async () => {
+    const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+      "../../agents/agent-scope.js",
+    );
     return {
       ...actual,
       resolveSessionAgentId: () => "main",
@@ -215,6 +219,63 @@ describe("handleToolsCommand", () => {
     const result = await handleToolsCommand(params, true);
 
     expect(result).toEqual({ shouldContinue: false });
+  });
+
+  it("uses the configured default account when /tools omits AccountId", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "telegram",
+              label: "Telegram",
+              config: {
+                listAccountIds: () => ["default", "work"],
+                defaultAccountId: () => "work",
+                resolveAccount: (_cfg, accountId) => ({ accountId: accountId ?? "work" }),
+              },
+            }),
+          },
+        },
+      ]),
+    );
+
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParams(
+      "/tools",
+      {
+        commands: { text: true },
+        channels: { telegram: { defaultAccount: "work" } },
+      } as OpenClawConfig,
+      undefined,
+      { workspaceDir: "/tmp" },
+    );
+    params.agentId = "main";
+    params.provider = "openai";
+    params.model = "gpt-4.1";
+    params.ctx = {
+      ...params.ctx,
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      AccountId: undefined,
+    };
+    params.command = {
+      ...params.command,
+      channel: "telegram",
+    };
+
+    await handleToolsCommand(params, true);
+
+    expect(resolveToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "work",
+      }),
+    );
   });
 
   it("returns a concise fallback error on effective inventory failures", async () => {

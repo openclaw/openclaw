@@ -22,14 +22,15 @@
  */
 
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import * as piAi from "@mariozechner/pi-ai";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
   AssistantMessageEventStream,
   StopReason,
 } from "@mariozechner/pi-ai";
+import * as piAi from "@mariozechner/pi-ai";
 import {
+  getOpenAIWebSocketErrorDetails,
   OpenAIWebSocketManager,
   type FunctionToolDefinition,
   type OpenAIWebSocketManagerOptions,
@@ -40,8 +41,8 @@ import {
   convertTools,
   planTurnInput,
 } from "./openai-ws-message-conversion.js";
+import { buildOpenAIWebSocketResponseCreatePayload } from "./openai-ws-request.js";
 import { log } from "./pi-embedded-runner/logger.js";
-import { resolveOpenAITextVerbosity } from "./pi-embedded-runner/openai-stream-wrappers.js";
 import {
   buildAssistantMessageWithZeroUsage,
   buildStreamErrorAssistantMessage,
@@ -206,6 +207,31 @@ export interface OpenAIWebSocketStreamOptions {
 
 type WsTransport = "sse" | "websocket" | "auto";
 const WARM_UP_TIMEOUT_MS = 8_000;
+const MAX_AUTO_WS_RUNTIME_RETRIES = 1;
+
+class OpenAIWebSocketRuntimeError extends Error {
+  readonly kind: "disconnect" | "send" | "server";
+  readonly retryable: boolean;
+  readonly closeCode?: number;
+  readonly closeReason?: string;
+
+  constructor(
+    message: string,
+    params: {
+      kind: "disconnect" | "send" | "server";
+      retryable: boolean;
+      closeCode?: number;
+      closeReason?: string;
+    },
+  ) {
+    super(message);
+    this.name = "OpenAIWebSocketRuntimeError";
+    this.kind = params.kind;
+    this.retryable = params.retryable;
+    this.closeCode = params.closeCode;
+    this.closeReason = params.closeReason;
+  }
+}
 
 function resolveWsTransport(options: Parameters<StreamFn>[2]): WsTransport {
   const transport = (options as { transport?: unknown } | undefined)?.transport;
@@ -221,6 +247,65 @@ function resolveWsWarmup(options: Parameters<StreamFn>[2]): boolean {
   return warmup === true;
 }
 
+function resetWsSession(params: { sessionId: string; session: WsSession }): void {
+  try {
+    params.session.manager.close();
+  } catch {
+    /* ignore */
+  }
+  wsRegistry.delete(params.sessionId);
+}
+
+function formatOpenAIWebSocketError(
+  event: Parameters<OpenAIWebSocketManager["onMessage"]>[0] extends (arg: infer T) => void
+    ? Extract<T, { type: "error" }>
+    : never,
+): string {
+  const details = getOpenAIWebSocketErrorDetails(event);
+  const code = details.code ?? "unknown";
+  const message = details.message ?? "Unknown error";
+  const extras = [
+    typeof details.status === "number" ? `status=${details.status}` : null,
+    details.type ? `type=${details.type}` : null,
+    details.param ? `param=${details.param}` : null,
+  ].filter(Boolean);
+  return extras.length > 0
+    ? `${message} (code=${code}; ${extras.join(", ")})`
+    : `${message} (code=${code})`;
+}
+
+function formatOpenAIWebSocketResponseFailure(response: {
+  error?: { code?: string; message?: string };
+  incomplete_details?: { reason?: string };
+}): string {
+  if (response.error) {
+    return `${response.error.code || "unknown"}: ${response.error.message || "no message"}`;
+  }
+  if (response.incomplete_details?.reason) {
+    return `incomplete: ${response.incomplete_details.reason}`;
+  }
+  return "Unknown error (no error details in response)";
+}
+
+function normalizeWsRunError(err: unknown): OpenAIWebSocketRuntimeError {
+  if (err instanceof OpenAIWebSocketRuntimeError) {
+    return err;
+  }
+  return new OpenAIWebSocketRuntimeError(err instanceof Error ? err.message : String(err), {
+    kind: "server",
+    retryable: false,
+  });
+}
+
+function buildRetryableSendError(err: unknown): OpenAIWebSocketRuntimeError {
+  return new OpenAIWebSocketRuntimeError(
+    err instanceof Error ? err.message : `WebSocket send failed: ${String(err)}`,
+    {
+      kind: "send",
+      retryable: true,
+    },
+  );
+}
 async function runWarmUp(params: {
   manager: OpenAIWebSocketManager;
   modelId: string;
@@ -251,11 +336,12 @@ async function runWarmUp(params: {
         resolve();
       } else if (event.type === "response.failed") {
         cleanup();
-        const errMsg = event.response?.error?.message ?? "Response failed";
-        reject(new Error(`warm-up failed: ${errMsg}`));
+        reject(
+          new Error(`warm-up failed: ${formatOpenAIWebSocketResponseFailure(event.response)}`),
+        );
       } else if (event.type === "error") {
         cleanup();
-        reject(new Error(`warm-up error: ${event.message} (code=${event.code})`));
+        reject(new Error(`warm-up error: ${formatOpenAIWebSocketError(event)}`));
       }
     });
 
@@ -303,305 +389,312 @@ export function createOpenAIWebSocketStreamFn(
         return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
       }
 
-      // ── 1. Get or create session state ──────────────────────────────────
-      let session = wsRegistry.get(sessionId);
-
-      if (!session) {
-        const manager = openAIWsStreamDeps.createManager(opts.managerOptions);
-        session = {
-          manager,
-          lastContextLength: 0,
-          everConnected: false,
-          warmUpAttempted: false,
-          broken: false,
-        };
-        wsRegistry.set(sessionId, session);
-      }
-
-      // ── 2. Ensure connection is open ─────────────────────────────────────
-      if (!session.manager.isConnected() && !session.broken) {
-        try {
-          await session.manager.connect(apiKey);
-          session.everConnected = true;
-          log.debug(`[ws-stream] connected for session=${sessionId}`);
-        } catch (connErr) {
-          // Cancel any background reconnect attempts before marking as broken.
-          try {
-            session.manager.close();
-          } catch {
-            /* ignore */
-          }
-          session.broken = true;
-          wsRegistry.delete(sessionId);
-          if (transport === "websocket") {
-            throw connErr instanceof Error ? connErr : new Error(String(connErr));
-          }
-          log.warn(
-            `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
-          );
-          // Fall back to HTTP immediately
-          return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
-        }
-      }
-
-      if (session.broken || !session.manager.isConnected()) {
-        if (transport === "websocket") {
-          throw new Error("WebSocket session disconnected");
-        }
-        log.warn(`[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`);
-        // Clean up stale session to prevent next turn from using stale
-        // previousResponseId / lastContextLength after a mid-request drop.
-        try {
-          session.manager.close();
-        } catch {
-          /* ignore */
-        }
-        wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
-      }
-
       const signal = opts.signal ?? (options as WsOptions | undefined)?.signal;
+      let emittedStart = false;
+      let runtimeRetries = 0;
 
-      if (resolveWsWarmup(options) && !session.warmUpAttempted) {
-        session.warmUpAttempted = true;
-        let warmupFailed = false;
-        try {
-          await runWarmUp({
-            manager: session.manager,
-            modelId: model.id,
-            tools: convertTools(context.tools),
-            instructions: context.systemPrompt ?? undefined,
-            signal,
-          });
-          log.debug(`[ws-stream] warm-up completed for session=${sessionId}`);
-        } catch (warmErr) {
-          if (signal?.aborted) {
-            throw warmErr instanceof Error ? warmErr : new Error(String(warmErr));
-          }
-          warmupFailed = true;
-          log.warn(
-            `[ws-stream] warm-up failed for session=${sessionId}; continuing without warm-up. error=${String(warmErr)}`,
-          );
+      while (true) {
+        let session = wsRegistry.get(sessionId);
+        if (!session) {
+          const manager = openAIWsStreamDeps.createManager(opts.managerOptions);
+          session = {
+            manager,
+            lastContextLength: 0,
+            everConnected: false,
+            warmUpAttempted: false,
+            broken: false,
+          };
+          wsRegistry.set(sessionId, session);
         }
-        if (warmupFailed && !session.manager.isConnected()) {
-          try {
-            session.manager.close();
-          } catch {
-            /* ignore */
-          }
+
+        if (!session.manager.isConnected() && !session.broken) {
           try {
             await session.manager.connect(apiKey);
             session.everConnected = true;
-            log.debug(`[ws-stream] reconnected after warm-up failure for session=${sessionId}`);
-          } catch (reconnectErr) {
+            log.debug(`[ws-stream] connected for session=${sessionId}`);
+          } catch (connErr) {
+            try {
+              session.manager.close();
+            } catch {
+              /* ignore */
+            }
             session.broken = true;
             wsRegistry.delete(sessionId);
             if (transport === "websocket") {
-              throw reconnectErr instanceof Error ? reconnectErr : new Error(String(reconnectErr));
+              throw connErr instanceof Error ? connErr : new Error(String(connErr));
             }
             log.warn(
-              `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
+              `[ws-stream] WebSocket connect failed for session=${sessionId}; falling back to HTTP. error=${String(connErr)}`,
             );
-            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
+            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+              suppressStart: emittedStart,
+            });
           }
         }
-      }
 
-      // ── 3. Compute incremental vs full input ─────────────────────────────
-      const turnInput = planTurnInput({
-        context,
-        model,
-        previousResponseId: session.manager.previousResponseId,
-        lastContextLength: session.lastContextLength,
-      });
-
-      if (turnInput.mode === "incremental_tool_results") {
-        log.debug(
-          `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} tool results) previous_response_id=${turnInput.previousResponseId}`,
-        );
-      } else if (turnInput.mode === "full_context_restart") {
-        // The WebSocket guide requires a fresh full-context turn here: when we
-        // cannot continue the incremental chain, omit previous_response_id.
-        log.debug(
-          `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
-        );
-      } else {
-        log.debug(
-          `[ws-stream] session=${sessionId}: full context send (${turnInput.inputItems.length} items)`,
-        );
-      }
-
-      // ── 4. Build & send response.create ──────────────────────────────────
-      const tools = convertTools(context.tools);
-
-      // Forward generation options that the HTTP path (openai-responses provider) also uses.
-      // Cast to record since SimpleStreamOptions carries openai-specific fields as unknown.
-      const streamOpts = options as
-        | (Record<string, unknown> & {
-            temperature?: number;
-            maxTokens?: number;
-            topP?: number;
-            toolChoice?: unknown;
-            textVerbosity?: string;
-            text_verbosity?: string;
-          })
-        | undefined;
-      const extraParams: Record<string, unknown> = {};
-      if (streamOpts?.temperature !== undefined) {
-        extraParams.temperature = streamOpts.temperature;
-      }
-      if (streamOpts?.maxTokens !== undefined) {
-        extraParams.max_output_tokens = streamOpts.maxTokens;
-      }
-      if (streamOpts?.topP !== undefined) {
-        extraParams.top_p = streamOpts.topP;
-      }
-      if (streamOpts?.toolChoice !== undefined) {
-        extraParams.tool_choice = streamOpts.toolChoice;
-      }
-      if (
-        streamOpts?.reasoningEffort !== "none" &&
-        (streamOpts?.reasoningEffort || streamOpts?.reasoningSummary)
-      ) {
-        const reasoning: { effort?: string; summary?: string } = {};
-        if (streamOpts.reasoningEffort !== undefined) {
-          reasoning.effort = streamOpts.reasoningEffort as string;
+        if (session.broken || !session.manager.isConnected()) {
+          if (transport === "websocket") {
+            throw new Error("WebSocket session disconnected");
+          }
+          log.warn(`[ws-stream] session=${sessionId} broken/disconnected; falling back to HTTP`);
+          resetWsSession({ sessionId, session });
+          return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+            suppressStart: emittedStart,
+          });
         }
-        if (streamOpts.reasoningSummary !== undefined) {
-          reasoning.summary = streamOpts.reasoningSummary as string;
+
+        if (resolveWsWarmup(options) && !session.warmUpAttempted) {
+          session.warmUpAttempted = true;
+          let warmupFailed = false;
+          try {
+            await runWarmUp({
+              manager: session.manager,
+              modelId: model.id,
+              tools: convertTools(context.tools),
+              instructions: context.systemPrompt ?? undefined,
+              signal,
+            });
+            log.debug(`[ws-stream] warm-up completed for session=${sessionId}`);
+          } catch (warmErr) {
+            if (signal?.aborted) {
+              throw warmErr instanceof Error ? warmErr : new Error(String(warmErr));
+            }
+            warmupFailed = true;
+            log.warn(
+              `[ws-stream] warm-up failed for session=${sessionId}; continuing without warm-up. error=${String(warmErr)}`,
+            );
+          }
+          if (warmupFailed && !session.manager.isConnected()) {
+            try {
+              session.manager.close();
+            } catch {
+              /* ignore */
+            }
+            try {
+              await session.manager.connect(apiKey);
+              session.everConnected = true;
+              log.debug(`[ws-stream] reconnected after warm-up failure for session=${sessionId}`);
+            } catch (reconnectErr) {
+              session.broken = true;
+              wsRegistry.delete(sessionId);
+              if (transport === "websocket") {
+                throw reconnectErr instanceof Error
+                  ? reconnectErr
+                  : new Error(String(reconnectErr));
+              }
+              log.warn(
+                `[ws-stream] reconnect after warm-up failed for session=${sessionId}; falling back to HTTP. error=${String(reconnectErr)}`,
+              );
+              return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+                suppressStart: emittedStart,
+              });
+            }
+          }
         }
-        extraParams.reasoning = reasoning;
-      }
-      const textVerbosity = resolveOpenAITextVerbosity(
-        streamOpts as Record<string, unknown> | undefined,
-      );
-      if (textVerbosity !== undefined) {
-        const existingText =
-          extraParams.text && typeof extraParams.text === "object"
-            ? (extraParams.text as Record<string, unknown>)
-            : {};
-        extraParams.text = { ...existingText, verbosity: textVerbosity };
-      }
 
-      // Respect compat.supportsStore — providers like Gemini reject unknown
-      // fields such as `store` with a 400 error.  Fixes #39086.
-      const supportsStore = (model as { compat?: { supportsStore?: boolean } }).compat
-        ?.supportsStore;
-
-      const payload: Record<string, unknown> = {
-        type: "response.create",
-        model: model.id,
-        ...(supportsStore !== false ? { store: false } : {}),
-        input: turnInput.inputItems,
-        instructions: context.systemPrompt ?? undefined,
-        tools: tools.length > 0 ? tools : undefined,
-        ...(turnInput.previousResponseId
-          ? { previous_response_id: turnInput.previousResponseId }
-          : {}),
-        ...extraParams,
-      };
-      const nextPayload = options?.onPayload?.(payload, model);
-      const requestPayload = (nextPayload ?? payload) as Parameters<
-        OpenAIWebSocketManager["send"]
-      >[0];
-
-      try {
-        session.manager.send(requestPayload);
-      } catch (sendErr) {
-        if (transport === "websocket") {
-          throw sendErr instanceof Error ? sendErr : new Error(String(sendErr));
-        }
-        log.warn(
-          `[ws-stream] send failed for session=${sessionId}; falling back to HTTP. error=${String(sendErr)}`,
-        );
-        // Fully reset session state so the next WS turn doesn't use stale
-        // previous_response_id or lastContextLength from before the failure.
-        try {
-          session.manager.close();
-        } catch {
-          /* ignore */
-        }
-        wsRegistry.delete(sessionId);
-        return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal);
-      }
-
-      eventStream.push({
-        type: "start",
-        partial: buildAssistantMessageWithZeroUsage({
+        const turnInput = planTurnInput({
+          context,
           model,
-          content: [],
-          stopReason: "stop",
-        }),
-      });
+          previousResponseId: session.manager.previousResponseId,
+          lastContextLength: session.lastContextLength,
+        });
 
-      // ── 5. Wait for response.completed ───────────────────────────────────
-      const capturedContextLength = context.messages.length;
-
-      await new Promise<void>((resolve, reject) => {
-        // Honour abort signal
-        const abortHandler = () => {
-          cleanup();
-          reject(new Error("aborted"));
-        };
-        if (signal?.aborted) {
-          reject(new Error("aborted"));
-          return;
-        }
-        signal?.addEventListener("abort", abortHandler, { once: true });
-
-        // If the WebSocket drops mid-request, reject so we don't hang forever.
-        const closeHandler = (code: number, reason: string) => {
-          cleanup();
-          reject(
-            new Error(`WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`),
+        if (turnInput.mode === "incremental_tool_results") {
+          log.debug(
+            `[ws-stream] session=${sessionId}: incremental send (${turnInput.inputItems.length} tool results) previous_response_id=${turnInput.previousResponseId}`,
           );
-        };
-        session.manager.on("close", closeHandler);
+        } else if (turnInput.mode === "full_context_restart") {
+          log.debug(
+            `[ws-stream] session=${sessionId}: no new tool results found; sending full context without previous_response_id`,
+          );
+        } else {
+          log.debug(
+            `[ws-stream] session=${sessionId}: full context send (${turnInput.inputItems.length} items)`,
+          );
+        }
 
-        const cleanup = () => {
-          signal?.removeEventListener("abort", abortHandler);
-          session.manager.off("close", closeHandler);
-          unsubscribe();
-        };
+        const payload = buildOpenAIWebSocketResponseCreatePayload({
+          model,
+          context,
+          options: options as WsOptions | undefined,
+          turnInput,
+          tools: convertTools(context.tools),
+        }) as Record<string, unknown>;
+        const nextPayload = options?.onPayload?.(payload, model);
+        const requestPayload = (nextPayload ?? payload) as Parameters<
+          OpenAIWebSocketManager["send"]
+        >[0];
 
-        const unsubscribe = session.manager.onMessage((event) => {
-          if (event.type === "response.completed") {
-            cleanup();
-            // Update session state
-            session.lastContextLength = capturedContextLength;
-            // Build and emit the assistant message
-            const assistantMsg = buildAssistantMessageFromResponse(event.response, {
-              api: model.api,
-              provider: model.provider,
-              id: model.id,
-            });
-            const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
-              assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
-            eventStream.push({ type: "done", reason, message: assistantMsg });
-            resolve();
-          } else if (event.type === "response.failed") {
-            cleanup();
-            const errMsg = event.response?.error?.message ?? "Response failed";
-            reject(new Error(`OpenAI WebSocket response failed: ${errMsg}`));
-          } else if (event.type === "error") {
-            cleanup();
-            reject(new Error(`OpenAI WebSocket error: ${event.message} (code=${event.code})`));
-          } else if (event.type === "response.output_text.delta") {
-            // Stream partial text updates for responsive UI
-            const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
-              model,
-              content: [{ type: "text", text: event.delta }],
-              stopReason: "stop",
-            });
-            eventStream.push({
-              type: "text_delta",
-              contentIndex: 0,
-              delta: event.delta,
-              partial: partialMsg,
+        try {
+          session.manager.send(requestPayload);
+        } catch (sendErr) {
+          const normalizedErr = buildRetryableSendError(sendErr);
+          if (
+            transport !== "websocket" &&
+            !signal?.aborted &&
+            runtimeRetries < MAX_AUTO_WS_RUNTIME_RETRIES
+          ) {
+            runtimeRetries++;
+            log.warn(
+              `[ws-stream] retrying websocket turn after send failure for session=${sessionId} (${runtimeRetries}/${MAX_AUTO_WS_RUNTIME_RETRIES}). error=${normalizedErr.message}`,
+            );
+            resetWsSession({ sessionId, session });
+            continue;
+          }
+          if (transport !== "websocket") {
+            log.warn(
+              `[ws-stream] send failed for session=${sessionId}; falling back to HTTP. error=${normalizedErr.message}`,
+            );
+            resetWsSession({ sessionId, session });
+            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+              suppressStart: emittedStart,
             });
           }
-        });
-      });
+          throw normalizedErr;
+        }
+
+        if (!emittedStart) {
+          eventStream.push({
+            type: "start",
+            partial: buildAssistantMessageWithZeroUsage({
+              model,
+              content: [],
+              stopReason: "stop",
+            }),
+          });
+          emittedStart = true;
+        }
+
+        const capturedContextLength = context.messages.length;
+        let sawWsOutput = false;
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const abortHandler = () => {
+              cleanup();
+              reject(new Error("aborted"));
+            };
+            if (signal?.aborted) {
+              reject(new Error("aborted"));
+              return;
+            }
+            signal?.addEventListener("abort", abortHandler, { once: true });
+
+            const closeHandler = (code: number, reason: string) => {
+              cleanup();
+              const closeInfo = session.manager.lastCloseInfo;
+              reject(
+                new OpenAIWebSocketRuntimeError(
+                  `WebSocket closed mid-request (code=${code}, reason=${reason || "unknown"})`,
+                  {
+                    kind: "disconnect",
+                    retryable: closeInfo?.retryable ?? true,
+                    closeCode: closeInfo?.code ?? code,
+                    closeReason: closeInfo?.reason ?? reason,
+                  },
+                ),
+              );
+            };
+            session.manager.on("close", closeHandler);
+
+            const cleanup = () => {
+              signal?.removeEventListener("abort", abortHandler);
+              session.manager.off("close", closeHandler);
+              unsubscribe();
+            };
+
+            const unsubscribe = session.manager.onMessage((event) => {
+              if (
+                event.type === "response.output_item.added" ||
+                event.type === "response.output_item.done" ||
+                event.type === "response.content_part.added" ||
+                event.type === "response.content_part.done" ||
+                event.type === "response.output_text.delta" ||
+                event.type === "response.output_text.done" ||
+                event.type === "response.function_call_arguments.delta" ||
+                event.type === "response.function_call_arguments.done"
+              ) {
+                sawWsOutput = true;
+              }
+
+              if (event.type === "response.completed") {
+                cleanup();
+                session.lastContextLength = capturedContextLength;
+                const assistantMsg = buildAssistantMessageFromResponse(event.response, {
+                  api: model.api,
+                  provider: model.provider,
+                  id: model.id,
+                });
+                const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
+                  assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
+                eventStream.push({ type: "done", reason, message: assistantMsg });
+                resolve();
+              } else if (event.type === "response.failed") {
+                cleanup();
+                reject(
+                  new OpenAIWebSocketRuntimeError(
+                    `OpenAI WebSocket response failed: ${formatOpenAIWebSocketResponseFailure(event.response)}`,
+                    {
+                      kind: "server",
+                      retryable: false,
+                    },
+                  ),
+                );
+              } else if (event.type === "error") {
+                cleanup();
+                reject(
+                  new OpenAIWebSocketRuntimeError(
+                    `OpenAI WebSocket error: ${formatOpenAIWebSocketError(event)}`,
+                    {
+                      kind: "server",
+                      retryable: false,
+                    },
+                  ),
+                );
+              } else if (event.type === "response.output_text.delta") {
+                const partialMsg: AssistantMessage = buildAssistantMessageWithZeroUsage({
+                  model,
+                  content: [{ type: "text", text: event.delta }],
+                  stopReason: "stop",
+                });
+                eventStream.push({
+                  type: "text_delta",
+                  contentIndex: 0,
+                  delta: event.delta,
+                  partial: partialMsg,
+                });
+              }
+            });
+          });
+          return;
+        } catch (wsRunErr) {
+          const normalizedErr = normalizeWsRunError(wsRunErr);
+          if (
+            transport !== "websocket" &&
+            !signal?.aborted &&
+            normalizedErr.retryable &&
+            !sawWsOutput &&
+            runtimeRetries < MAX_AUTO_WS_RUNTIME_RETRIES
+          ) {
+            runtimeRetries++;
+            log.warn(
+              `[ws-stream] retrying websocket turn after retryable runtime failure for session=${sessionId} (${runtimeRetries}/${MAX_AUTO_WS_RUNTIME_RETRIES}). error=${normalizedErr.message}`,
+            );
+            resetWsSession({ sessionId, session });
+            continue;
+          }
+          if (transport !== "websocket" && !signal?.aborted && !sawWsOutput) {
+            log.warn(
+              `[ws-stream] session=${sessionId} runtime failure before output; falling back to HTTP. error=${normalizedErr.message}`,
+            );
+            resetWsSession({ sessionId, session });
+            return fallbackToHttp(model, context, options, apiKey, eventStream, opts.signal, {
+              suppressStart: true,
+            });
+          }
+          throw normalizedErr;
+        }
+      }
     };
 
     queueMicrotask(() =>
@@ -631,18 +724,22 @@ export function createOpenAIWebSocketStreamFn(
 async function fallbackToHttp(
   model: Parameters<StreamFn>[0],
   context: Parameters<StreamFn>[1],
-  options: Parameters<StreamFn>[2],
+  streamOptions: Parameters<StreamFn>[2],
   apiKey: string,
   eventStream: AssistantMessageEventStreamLike,
   signal?: AbortSignal,
+  fallbackOptions?: { suppressStart?: boolean },
 ): Promise<void> {
   const mergedOptions = {
-    ...options,
+    ...streamOptions,
     apiKey,
     ...(signal ? { signal } : {}),
   };
   const httpStream = openAIWsStreamDeps.streamSimple(model, context, mergedOptions);
   for await (const event of httpStream) {
+    if (fallbackOptions?.suppressStart && event.type === "start") {
+      continue;
+    }
     eventStream.push(event);
   }
 }

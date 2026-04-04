@@ -6,11 +6,20 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { githubCopilotLoginCommand } from "openclaw/plugin-sdk/provider-auth-login";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
+import { wrapCopilotAnthropicStream } from "./stream.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
+
+function buildGithubCopilotReplayPolicy(modelId?: string) {
+  return (modelId?.toLowerCase() ?? "").includes("claude")
+    ? {
+        dropThinkingBlocks: true,
+      }
+    : {};
+}
 
 function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
   githubToken: string;
@@ -144,9 +153,8 @@ export default definePluginEntry({
         },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
-      capabilities: {
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      wrapStreamFn: (ctx) => wrapCopilotAnthropicStream(ctx.streamFn),
+      buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       supportsXHighThinking: ({ modelId }) =>
         COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),
       prepareRuntimeAuth: async (ctx) => {

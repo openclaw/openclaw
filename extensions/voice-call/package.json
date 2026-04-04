@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/voice-call",
-  "version": "2026.4.1",
+  "version": "2026.4.1-beta.1",
   "description": "OpenClaw voice-call plugin",
   "type": "module",
   "dependencies": {
@@ -12,7 +12,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.1"
+    "openclaw": ">=2026.4.1-beta.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -26,7 +26,14 @@
     "install": {
       "minHostVersion": ">=2026.4.1"
     },
+    "compat": {
+      "pluginApi": ">=2026.4.1"
+    },
+    "build": {
+      "openclawVersion": "2026.4.1"
+    },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

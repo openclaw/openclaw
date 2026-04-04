@@ -9,7 +9,12 @@ import type { OpenClawConfig } from "./types.js";
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
 // test exercise the exact code path that caused the bug: AJV injecting
 // defaults during the write-back validation pass.
-const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+const mockLoadPluginManifestRegistry = vi.hoisted(() =>
+  vi.fn(() => ({
+    diagnostics: [],
+    plugins: [],
+  })),
+);
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
@@ -194,6 +199,46 @@ describe("config io write", () => {
       });
     },
   );
+
+  it("keeps writes inside an OPENCLAW_STATE_DIR override even when the real home config exists", async () => {
+    await withSuiteHome(async (home) => {
+      const liveConfigPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(liveConfigPath), { recursive: true });
+      await fs.writeFile(
+        liveConfigPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const overrideDir = path.join(home, "isolated-state");
+      const env = { OPENCLAW_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;
+      const io = createConfigIO({
+        env,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      expect(io.configPath).toBe(path.join(overrideDir, "openclaw.json"));
+
+      await io.writeConfigFile({
+        agents: { list: [{ id: "main", default: true }] },
+        gateway: { mode: "local" },
+        session: { mainKey: "main", store: path.join(overrideDir, "sessions.json") },
+      });
+
+      const livePersisted = JSON.parse(await fs.readFile(liveConfigPath, "utf-8")) as {
+        gateway?: { mode?: unknown; port?: unknown };
+      };
+      expect(livePersisted.gateway).toEqual({ mode: "local", port: 18789 });
+
+      const overridePersisted = JSON.parse(
+        await fs.readFile(path.join(overrideDir, "openclaw.json"), "utf-8"),
+      ) as {
+        session?: { store?: unknown };
+      };
+      expect(overridePersisted.session?.store).toBe(path.join(overrideDir, "sessions.json"));
+    });
+  });
 
   it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
     await withSuiteHome(async (home) => {
@@ -692,6 +737,85 @@ describe("config io write", () => {
       expect(last.watchMode).toBe(true);
       expect(last.watchSession).toBe("watch-session-1");
       expect(last.watchCommand).toBe("gateway --force");
+    });
+  });
+
+  it("accepts unrelated writes when the file still contains legacy nested allow aliases", async () => {
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          channels: {
+            slack: {
+              channels: {
+                ops: {
+                  allow: false,
+                },
+              },
+            },
+            googlechat: {
+              groups: {
+                "spaces/aaa": {
+                  allow: true,
+                },
+              },
+            },
+            discord: {
+              guilds: {
+                "100": {
+                  channels: {
+                    general: {
+                      allow: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const next = structuredClone(snapshot.config);
+      next.gateway = {
+        ...next.gateway,
+        auth: { mode: "token" },
+      };
+
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        channels?: Record<string, unknown>;
+        gateway?: Record<string, unknown>;
+      };
+      expect(persisted.gateway).toEqual({
+        auth: { mode: "token" },
+      });
+      expect(
+        (
+          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
+            ?.channels?.ops as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(false);
+      expect(
+        (
+          (persisted.channels?.googlechat as { groups?: Record<string, unknown> } | undefined)
+            ?.groups?.["spaces/aaa"] as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(true);
+      expect(
+        (
+          (
+            (persisted.channels?.discord as { guilds?: Record<string, unknown> } | undefined)
+              ?.guilds?.["100"] as { channels?: Record<string, unknown> } | undefined
+          )?.channels?.general as Record<string, unknown> | undefined
+        )?.enabled,
+      ).toBe(false);
+      expect(
+        (
+          (persisted.channels?.slack as { channels?: Record<string, unknown> } | undefined)
+            ?.channels?.ops as Record<string, unknown> | undefined
+        )?.allow,
+      ).toBeUndefined();
     });
   });
 });

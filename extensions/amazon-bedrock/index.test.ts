@@ -4,13 +4,14 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { buildPluginApi } from "../../src/plugins/api-builder.js";
 import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
 
+type RegisteredProviderPlugin = ReturnType<typeof registerSingleProviderPlugin>;
+
 /** Register the amazon-bedrock plugin with an optional pluginConfig override. */
-function registerWithConfig(pluginConfig?: Record<string, unknown>): ProviderPlugin {
-  const providers: ProviderPlugin[] = [];
+function registerWithConfig(pluginConfig?: Record<string, unknown>): RegisteredProviderPlugin {
+  const providers: RegisteredProviderPlugin[] = [];
   const noopLogger = { info() {}, warn() {}, error() {}, debug() {} };
   const api = buildPluginApi({
     id: "amazon-bedrock",
@@ -23,7 +24,7 @@ function registerWithConfig(pluginConfig?: Record<string, unknown>): ProviderPlu
     logger: noopLogger,
     resolvePath: (input) => input,
     handlers: {
-      registerProvider(provider: ProviderPlugin) {
+      registerProvider(provider: RegisteredProviderPlugin) {
         providers.push(provider);
       },
     },
@@ -58,7 +59,7 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
  * the payload via the onPayload hook that streamWithPayloadPatch installs.
  */
 function callWrappedStream(
-  provider: ProviderPlugin,
+  provider: RegisteredProviderPlugin,
   modelId: string,
   modelDescriptor: never,
 ): Record<string, unknown> {
@@ -102,6 +103,27 @@ describe("amazon-bedrock provider plugin", () => {
         modelId: "amazon.nova-micro-v1:0",
       } as never),
     ).toBeUndefined();
+  });
+
+  it("owns Anthropic-style replay policy for Claude Bedrock models", () => {
+    const provider = registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "amazon-bedrock",
+        modelApi: "bedrock-converse-stream",
+        modelId: ANTHROPIC_MODEL,
+      } as never),
+    ).toEqual({
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveSignatures: true,
+      repairToolUseResultPairing: true,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+      dropThinkingBlocks: true,
+    });
   });
 
   it("disables prompt caching for non-Anthropic Bedrock models", () => {

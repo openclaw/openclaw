@@ -9,11 +9,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClientOptions } from "ws";
 import type {
   ClientEvent,
+  ErrorEvent,
   OpenAIWebSocketEvent,
   ResponseCompletedEvent,
   ResponseCreateEvent,
 } from "./openai-ws-connection.js";
-import { OpenAIWebSocketManager } from "./openai-ws-connection.js";
+import { getOpenAIWebSocketErrorDetails, OpenAIWebSocketManager } from "./openai-ws-connection.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mock WebSocket (hoisted so vi.mock factory can reference it)
@@ -251,11 +252,48 @@ describe("OpenAIWebSocketManager", () => {
       await connectPromise;
     });
 
+    it("does not add hidden attribution headers on custom websocket endpoints", async () => {
+      const manager = buildManager({
+        url: "wss://proxy.example.com/v1/responses",
+      });
+      const connectPromise = manager.connect("sk-test-key");
+
+      const sock = lastSocket();
+      expect(sock.options).toMatchObject({
+        headers: expect.objectContaining({
+          Authorization: "Bearer sk-test-key",
+          "OpenAI-Beta": "responses-websocket=v1",
+        }),
+      });
+      const headers = sock.options?.headers as Record<string, string>;
+      expect(headers.originator).toBeUndefined();
+      expect(headers.version).toBeUndefined();
+      expect(headers["User-Agent"]).toBeUndefined();
+
+      sock.simulateOpen();
+      await connectPromise;
+    });
+
+    it("rejects insecure websocket TLS overrides", async () => {
+      const manager = buildManager({
+        request: {
+          tls: {
+            insecureSkipVerify: true,
+          },
+        },
+      });
+
+      await expect(manager.connect("sk-test-key")).rejects.toThrow(/insecureskipverify/i);
+      expect(MockWebSocket.lastInstance).toBeNull();
+    });
+
     it("resolves when the connection opens", async () => {
       const manager = buildManager();
       const connectPromise = manager.connect("sk-test");
+      expect(manager.connectionState).toBe("connecting");
       lastSocket().simulateOpen();
       await expect(connectPromise).resolves.toBeUndefined();
+      expect(manager.connectionState).toBe("open");
     });
 
     it("rejects when the initial connection fails (maxRetries=0)", async () => {
@@ -480,6 +518,7 @@ describe("OpenAIWebSocketManager", () => {
     it("is safe to call before connect()", () => {
       const manager = buildManager();
       expect(() => manager.close()).not.toThrow();
+      expect(manager.connectionState).toBe("closed");
     });
   });
 
@@ -497,6 +536,12 @@ describe("OpenAIWebSocketManager", () => {
 
       // Simulate a network drop
       sock1.simulateClose(1006, "Network error");
+      expect(manager.connectionState).toBe("reconnecting");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1006,
+        reason: "Network error",
+        retryable: true,
+      });
 
       // Advance time to trigger first retry (10ms delay)
       await vi.advanceTimersByTimeAsync(15);
@@ -504,6 +549,27 @@ describe("OpenAIWebSocketManager", () => {
       // A new socket should have been created
       expect(MockWebSocket.instances.length).toBeGreaterThan(instancesBefore);
       expect(lastSocket()).not.toBe(sock1);
+    });
+
+    it("does not reconnect on non-retryable close codes", async () => {
+      const manager = buildManager({ backoffDelaysMs: [10, 20] });
+      const p = manager.connect("sk-test");
+      lastSocket().simulateOpen();
+      await p;
+
+      const sock = lastSocket();
+      const instancesBefore = MockWebSocket.instances.length;
+      sock.simulateClose(1008, "policy violation");
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(MockWebSocket.instances.length).toBe(instancesBefore);
+      expect(manager.connectionState).toBe("closed");
+      expect(manager.lastCloseInfo).toEqual({
+        code: 1008,
+        reason: "policy violation",
+        retryable: false,
+      });
     });
 
     it("stops retrying after maxRetries", async () => {
@@ -606,6 +672,7 @@ describe("OpenAIWebSocketManager", () => {
       expect(sent["type"]).toBe("response.create");
       expect(sent["generate"]).toBe(false);
       expect(sent["model"]).toBe("gpt-5.2");
+      expect(sent["input"]).toEqual([]);
       expect(sent["instructions"]).toBe("You are helpful.");
     });
 
@@ -626,6 +693,27 @@ describe("OpenAIWebSocketManager", () => {
   // ─── Error handling ─────────────────────────────────────────────────────────
 
   describe("error handling", () => {
+    it("normalizes nested websocket error payloads", () => {
+      const details = getOpenAIWebSocketErrorDetails({
+        type: "error",
+        status: 400,
+        error: {
+          type: "invalid_request_error",
+          code: "previous_response_not_found",
+          message: "Previous response with id 'resp_abc' not found.",
+          param: "previous_response_id",
+        },
+      } satisfies ErrorEvent);
+
+      expect(details).toEqual({
+        status: 400,
+        type: "invalid_request_error",
+        code: "previous_response_not_found",
+        message: "Previous response with id 'resp_abc' not found.",
+        param: "previous_response_id",
+      });
+    });
+
     it("emits error event on malformed JSON message", async () => {
       const manager = buildManager();
       const sock = await connectManagerAndGetSocket(manager);

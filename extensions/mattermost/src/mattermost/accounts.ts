@@ -74,7 +74,9 @@ export function resolveMattermostAccount(params: {
   accountId?: string | null;
   allowUnresolvedSecretRef?: boolean;
 }): ResolvedMattermostAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
   const merged = mergeMattermostAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;

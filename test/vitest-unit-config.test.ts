@@ -71,4 +71,19 @@ describe("unit vitest config", () => {
     const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.isolate).toBe(false);
   });
+
+  it("keeps acp and ui tests out of the generic unit lane", () => {
+    const unitConfig = createUnitVitestConfig({});
+    expect(unitConfig.test?.exclude).toEqual(
+      expect.arrayContaining(["src/acp/**", "ui/src/ui/**"]),
+    );
+  });
+
+  it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
+    const unitConfig = createUnitVitestConfig({});
+    expect(unitConfig.test?.setupFiles).toEqual([
+      "test/setup.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
+  });
 });

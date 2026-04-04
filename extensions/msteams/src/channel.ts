@@ -30,6 +30,8 @@ import {
 } from "../runtime-api.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
+import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
+import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
@@ -382,6 +384,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }),
       },
       auth: msTeamsApprovalAuth,
+      doctor: {
+        dmAllowFromMode: "topOnly",
+        groupModel: "hybrid",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: true,
+        collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
+      },
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,
@@ -488,7 +497,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 applyResolvedEntry(target, entry);
               });
             } catch (err) {
-              runtime.error?.(`msteams resolve failed: ${String(err)}`);
+              runtime.error?.(`msteams resolve failed: ${formatUnknownError(err)}`);
               markPendingLookupFailed(pending);
             }
           };

@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
+import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -14,15 +16,11 @@ const listTasksForRelatedSessionKeyForOwnerMock = vi.hoisted(() =>
       [] as Array<Record<string, unknown>>,
   ),
 );
-const resolveEnvApiKeyMock = vi.hoisted(
-  () => vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
+const resolveEnvApiKeyMock = vi.hoisted(() =>
+  vi.fn((_provider?: string, _env?: NodeJS.ProcessEnv) => null),
 );
-const resolveUsableCustomProviderApiKeyMock = vi.hoisted(
-  () =>
-    vi.fn(
-      (_params?: { provider?: string }) =>
-        null as { apiKey: string; source: string } | null,
-    ),
+const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
+  vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
 
 const createMockConfig = () => ({
@@ -39,6 +37,7 @@ const createMockConfig = () => ({
 });
 
 let mockConfig: Record<string, unknown> = createMockConfig();
+const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 
 function createScopedSessionStores() {
   return new Map<string, Record<string, unknown>>([
@@ -80,10 +79,9 @@ function installScopedSessionStores(syncUpdates = false) {
   return stores;
 }
 
-async function createSessionsModuleMock(
-  importOriginal: () => Promise<typeof import("../config/sessions.js")>,
-) {
-  const actual = await importOriginal();
+async function createSessionsModuleMock() {
+  const actual =
+    await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
@@ -107,10 +105,10 @@ function createGatewayCallModuleMock() {
   };
 }
 
-async function createGatewaySessionUtilsModuleMock(
-  importOriginal: () => Promise<typeof import("../gateway/session-utils.js")>,
-) {
-  const actual = await importOriginal();
+async function createGatewaySessionUtilsModuleMock() {
+  const actual = await vi.importActual<typeof import("../gateway/session-utils.js")>(
+    "../gateway/session-utils.js",
+  );
   return {
     ...actual,
     loadCombinedSessionStoreForGateway: (cfg: unknown) =>
@@ -118,10 +116,8 @@ async function createGatewaySessionUtilsModuleMock(
   };
 }
 
-async function createConfigModuleMock(
-  importOriginal: () => Promise<typeof import("../config/config.js")>,
-) {
-  const actual = await importOriginal();
+async function createConfigModuleMock() {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => mockConfig,
@@ -182,37 +178,35 @@ vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
+vi.mock("../auto-reply/group-activation.js", () => ({
+  normalizeGroupActivation: (value: unknown) => value ?? "always",
+}));
+vi.mock("../auto-reply/reply/queue.js", () => ({
+  getFollowupQueueDepth: () => 0,
+  resolveQueueSettings: resolveQueueSettingsMock,
+}));
+vi.mock("../auto-reply/status.js", () => ({
+  buildStatusMessage: buildStatusMessageMock,
+}));
+vi.mock("../tasks/task-owner-access.js", () => ({
+  listTasksForRelatedSessionKeyForOwner: (params: {
+    relatedSessionKey: string;
+    callerOwnerKey: string;
+  }) => listTasksForRelatedSessionKeyForOwnerMock(params),
+  buildTaskStatusSnapshotForRelatedSessionKeyForOwner: (params: {
+    relatedSessionKey: string;
+    callerOwnerKey: string;
+  }) =>
+    buildTaskStatusSnapshot(listTasksForRelatedSessionKeyForOwnerMock(params) as TaskRecord[], {
+      now: TASK_STATUS_SNAPSHOT_NOW,
+    }),
+}));
 
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
-async function loadFreshOpenClawToolsForSessionStatusTest() {
-  vi.resetModules();
-  vi.doMock("../config/sessions.js", createSessionsModuleMock);
-  vi.doMock("../gateway/call.js", createGatewayCallModuleMock);
-  vi.doMock("../gateway/session-utils.js", createGatewaySessionUtilsModuleMock);
-  vi.doMock("../config/config.js", createConfigModuleMock);
-  vi.doMock("../agents/model-catalog.js", createModelCatalogModuleMock);
-  vi.doMock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
-  vi.doMock("../agents/model-auth.js", createModelAuthModuleMock);
-  vi.doMock("../infra/provider-usage.js", createProviderUsageModuleMock);
-  vi.doMock("../auto-reply/group-activation.js", () => ({
-    normalizeGroupActivation: (value: unknown) => value ?? "always",
-  }));
-  vi.doMock("../auto-reply/reply/queue.js", () => ({
-    getFollowupQueueDepth: () => 0,
-    resolveQueueSettings: resolveQueueSettingsMock,
-  }));
-  vi.doMock("../auto-reply/status.js", () => ({
-    buildStatusMessage: buildStatusMessageMock,
-  }));
-  vi.doMock("../tasks/task-owner-access.js", () => ({
-    listTasksForRelatedSessionKeyForOwner: (params: {
-      relatedSessionKey: string;
-      callerOwnerKey: string;
-    }) => listTasksForRelatedSessionKeyForOwnerMock(params),
-  }));
+beforeAll(async () => {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
-}
+});
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
   buildStatusMessageMock.mockClear();
@@ -319,9 +313,8 @@ function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: 
 }
 
 describe("session_status tool", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     buildStatusMessageMock.mockClear();
-    await loadFreshOpenClawToolsForSessionStatusTest();
   });
 
   it("returns a status card for the current session", async () => {
@@ -433,6 +426,163 @@ describe("session_status tool", () => {
     expect(text).toContain("acp");
     expect(text).toContain("Summarize inbox backlog");
     expect(text).toContain("Indexing the latest threads");
+  });
+
+  it("hides stale completed task rows from session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-stale",
+        runtime: "cron",
+        requesterSessionKey: "agent:main:main",
+        task: "stale completed task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 15 * 60_000,
+        terminalSummary: "finished long ago",
+      },
+      {
+        taskId: "task-live",
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        task: "live task",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        progressSummary: "still working",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-stale", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 active");
+    expect(text).toContain("live task");
+    expect(text).not.toContain("stale completed task");
+    expect(text).not.toContain("finished long ago");
+  });
+
+  it("shows recent failure context in session_status output when no task is active", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-failed",
+        runtime: "cron",
+        requesterSessionKey: "agent:main:main",
+        task: "failing task",
+        status: "failed",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        error: "permission denied",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-failed", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 recent failure");
+    expect(text).toContain("failing task");
+    expect(text).toContain("permission denied");
+  });
+
+  it("truncates long task titles and details in session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-long",
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        task: "This is a deliberately long task prompt that should never be emitted in full by session_status because it can include internal instructions and file paths that are not appropriate for user-visible task summaries.",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 5_000,
+        progressSummary:
+          "This progress detail is also intentionally long so the session_status tool proves it truncates verbose task context instead of dumping a long internal update into the tool response.",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-truncated", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain(
+      "This is a deliberately long task prompt that should never be emitted in full by…",
+    );
+    expect(text).toContain(
+      "This progress detail is also intentionally long so the session_status tool proves it truncates verbose task context ins…",
+    );
+    expect(text).not.toContain("internal instructions and file paths");
+    expect(text).not.toContain("dumping a long internal update");
+  });
+
+  it("prefers failure context over newer success context in session_status output", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+      },
+    });
+    listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([
+      {
+        taskId: "task-failed",
+        runtime: "cron",
+        requesterSessionKey: "agent:main:main",
+        task: "failing task",
+        status: "failed",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 60_000,
+        endedAt: Date.now() - 30_000,
+        error: "permission denied",
+      },
+      {
+        taskId: "task-succeeded",
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        task: "successful task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+        notifyPolicy: "done_only",
+        createdAt: Date.now() - 10_000,
+        endedAt: Date.now(),
+        terminalSummary: "all done",
+      },
+    ]);
+
+    const tool = createSessionStatusTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("tc-failed-priority", { sessionKey: "agent:main:main" });
+    const firstContent = result.content?.[0];
+    const text = (firstContent as { text: string } | undefined)?.text ?? "";
+
+    expect(text).toContain("📌 Tasks: 1 recent failure");
+    expect(text).toContain("failing task");
+    expect(text).toContain("permission denied");
+    expect(text).not.toContain("successful task");
+    expect(text).not.toContain("all done");
   });
 
   it("resolves a literal current sessionId in session_status", async () => {

@@ -16,6 +16,8 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.GatewayTlsProbeFailure
+import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.*
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
@@ -44,6 +46,7 @@ import java.util.concurrent.atomic.AtomicLong
 class NodeRuntime(
   context: Context,
   val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
 ) {
   data class GatewayConnectAuth(
     val token: String?,
@@ -189,6 +192,7 @@ class NodeRuntime(
   data class GatewayTrustPrompt(
     val endpoint: GatewayEndpoint,
     val fingerprintSha256: String,
+    val auth: GatewayConnectAuth,
   )
 
   private val _isConnected = MutableStateFlow(false)
@@ -341,6 +345,8 @@ class NodeRuntime(
       session = operatorSession,
       supportsChatSubscribe = false,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     ).also { speaker ->
       speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
     }
@@ -412,14 +418,19 @@ class NodeRuntime(
       session = operatorSession,
       supportsChatSubscribe = true,
       isConnected = { operatorConnected },
+      onBeforeSpeak = { micCapture.pauseForTts() },
+      onAfterSpeak = { micCapture.resumeAfterTts() },
     )
   }
 
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
+    // Always push the resolved session key into TalkMode, even when the
+    // state flow value is unchanged, so lazy TalkMode instances do not
+    // stay on the default "main" session key.
+    talkMode.setMainSessionKey(resolvedKey)
     if (_mainSessionKey.value == resolvedKey) return
     _mainSessionKey.value = resolvedKey
-    talkMode.setMainSessionKey(resolvedKey)
     chat.applyMainSessionKey(resolvedKey)
     updateHomeCanvasState()
   }
@@ -828,17 +839,22 @@ class NodeRuntime(
     }
   }
 
-  fun connect(endpoint: GatewayEndpoint) {
+  private fun beginConnect(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+  ) {
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
       // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
-        val fp = probeGatewayTlsFingerprint(endpoint.host, endpoint.port) ?: run {
-          _statusText.value = "Failed: can't read TLS fingerprint"
+        val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
+        val fp = tlsProbe.fingerprintSha256 ?: run {
+          _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
           return@launch
         }
-        _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp)
+        _pendingGatewayTrust.value =
+          GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp, auth = auth)
       }
       return
     }
@@ -847,18 +863,18 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth())
+    connectWithAuth(endpoint = endpoint, auth = auth)
+  }
+
+  fun connect(endpoint: GatewayEndpoint) {
+    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth())
   }
 
   fun connect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
-    connectedEndpoint = endpoint
-    operatorStatusText = "Connecting…"
-    nodeStatusText = "Connecting…"
-    updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
+    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
   }
 
   internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth {
@@ -874,12 +890,21 @@ class NodeRuntime(
     val prompt = _pendingGatewayTrust.value ?: return
     _pendingGatewayTrust.value = null
     prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
-    connect(prompt.endpoint)
+    beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
   }
 
   fun declineGatewayTrustPrompt() {
     _pendingGatewayTrust.value = null
     _statusText.value = "Offline"
+  }
+
+  private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String {
+    return when (failure) {
+      GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
+        "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
+        "Failed: couldn't reach the secure gateway endpoint for this host."
+    }
   }
 
   private fun hasRecordAudioPermission(): Boolean {
@@ -1014,6 +1039,14 @@ class NodeRuntime(
 
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     chat.sendMessage(message = message, thinkingLevel = thinking, attachments = attachments)
+  }
+
+  suspend fun sendChatAwaitAcceptance(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+  ): Boolean {
+    return chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
   }
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {

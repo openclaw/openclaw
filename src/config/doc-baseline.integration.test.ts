@@ -4,53 +4,51 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   type ConfigDocBaseline,
-  renderConfigDocBaselineStatefile,
-  writeConfigDocBaselineStatefile,
+  type ConfigDocBaselineEntry,
+  type ConfigDocBaselineArtifacts,
+  flattenConfigDocBaselineEntries,
+  renderConfigDocBaselineArtifacts,
+  writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
 
 describe("config doc baseline integration", () => {
   const tempRoots: string[] = [];
-  const generatedBaselineJsonPath = path.resolve(
-    process.cwd(),
-    "docs/.generated/config-baseline.json",
-  );
-  const generatedBaselineJsonlPath = path.resolve(
-    process.cwd(),
-    "docs/.generated/config-baseline.jsonl",
-  );
+  const generatedBaselinePaths = {
+    combined: path.resolve(process.cwd(), "docs/.generated/config-baseline.json"),
+    core: path.resolve(process.cwd(), "docs/.generated/config-baseline.core.json"),
+    channel: path.resolve(process.cwd(), "docs/.generated/config-baseline.channel.json"),
+    plugin: path.resolve(process.cwd(), "docs/.generated/config-baseline.plugin.json"),
+  } satisfies Record<keyof ConfigDocBaselineArtifacts, string>;
   let sharedBaselinePromise: Promise<ConfigDocBaseline> | null = null;
   let sharedRenderedPromise: Promise<
-    Awaited<ReturnType<typeof renderConfigDocBaselineStatefile>>
+    Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>
   > | null = null;
-  let sharedGeneratedJsonPromise: Promise<string> | null = null;
-  let sharedGeneratedJsonlPromise: Promise<string> | null = null;
-  let sharedByPathPromise: Promise<Map<string, ConfigDocBaseline["entries"][number]>> | null = null;
+  const sharedGeneratedJsonPromises: Partial<
+    Record<keyof ConfigDocBaselineArtifacts, Promise<string>>
+  > = {};
+  let sharedByPathPromise: Promise<Map<string, ConfigDocBaselineEntry>> | null = null;
 
   function getSharedBaseline() {
     sharedBaselinePromise ??= fs
-      .readFile(generatedBaselineJsonPath, "utf8")
+      .readFile(generatedBaselinePaths.combined, "utf8")
       .then((raw) => JSON.parse(raw) as ConfigDocBaseline);
     return sharedBaselinePromise;
   }
 
   function getSharedRendered() {
-    sharedRenderedPromise ??= renderConfigDocBaselineStatefile(getSharedBaseline());
+    sharedRenderedPromise ??= renderConfigDocBaselineArtifacts(getSharedBaseline());
     return sharedRenderedPromise;
   }
 
-  function getGeneratedJson() {
-    sharedGeneratedJsonPromise ??= fs.readFile(generatedBaselineJsonPath, "utf8");
-    return sharedGeneratedJsonPromise;
-  }
-
-  function getGeneratedJsonl() {
-    sharedGeneratedJsonlPromise ??= fs.readFile(generatedBaselineJsonlPath, "utf8");
-    return sharedGeneratedJsonlPromise;
+  function getGeneratedJson(kind: keyof ConfigDocBaselineArtifacts) {
+    sharedGeneratedJsonPromises[kind] ??= fs.readFile(generatedBaselinePaths[kind], "utf8");
+    return sharedGeneratedJsonPromises[kind];
   }
 
   function getSharedByPath() {
     sharedByPathPromise ??= getSharedBaseline().then(
-      (baseline) => new Map(baseline.entries.map((entry) => [entry.path, entry])),
+      (baseline) =>
+        new Map(flattenConfigDocBaselineEntries(baseline).map((entry) => [entry.path, entry])),
     );
     return sharedByPathPromise;
   }
@@ -65,22 +63,29 @@ describe("config doc baseline integration", () => {
 
   it("is deterministic across repeated runs", async () => {
     const baseline = await getSharedBaseline();
-    const first = await renderConfigDocBaselineStatefile(baseline);
-    const second = await renderConfigDocBaselineStatefile(baseline);
+    const first = await renderConfigDocBaselineArtifacts(baseline);
+    const second = await renderConfigDocBaselineArtifacts(baseline);
 
-    expect(second.json).toBe(first.json);
-    expect(second.jsonl).toBe(first.jsonl);
+    expect(second.json.combined).toBe(first.json.combined);
+    expect(second.json.core).toBe(first.json.core);
+    expect(second.json.channel).toBe(first.json.channel);
+    expect(second.json.plugin).toBe(first.json.plugin);
   });
 
   it("matches the checked-in generated baseline artifacts", async () => {
-    const [rendered, generatedJson, generatedJsonl] = await Promise.all([
-      getSharedRendered(),
-      getGeneratedJson(),
-      getGeneratedJsonl(),
-    ]);
+    const [rendered, generatedCombined, generatedCore, generatedChannel, generatedPlugin] =
+      await Promise.all([
+        getSharedRendered(),
+        getGeneratedJson("combined"),
+        getGeneratedJson("core"),
+        getGeneratedJson("channel"),
+        getGeneratedJson("plugin"),
+      ]);
 
-    expect(rendered.json).toBe(generatedJson);
-    expect(rendered.jsonl).toBe(generatedJsonl);
+    expect(rendered.json.combined).toBe(generatedCombined);
+    expect(rendered.json.core).toBe(generatedCore);
+    expect(rendered.json.channel).toBe(generatedChannel);
+    expect(rendered.json.plugin).toBe(generatedPlugin);
   });
 
   it("includes core, channel, and plugin config metadata", async () => {
@@ -107,6 +112,13 @@ describe("config doc baseline integration", () => {
     expect(tokenEntry?.help).toContain("gateway access");
     expect(tokenEntry?.tags).toContain("auth");
     expect(tokenEntry?.tags).toContain("security");
+  });
+
+  it("omits legacy hooks.internal.handlers from the generated baseline", async () => {
+    const byPath = await getSharedByPath();
+
+    expect(byPath.get("hooks.internal.handlers")).toBeUndefined();
+    expect(byPath.get("hooks.internal.handlers.*.module")).toBeUndefined();
   });
 
   it("uses human-readable channel metadata for top-level channel sections", async () => {
@@ -153,18 +165,22 @@ describe("config doc baseline integration", () => {
     tempRoots.push(tempRoot);
     const rendered = getSharedRendered();
 
-    const initial = await writeConfigDocBaselineStatefile({
+    const initial = await writeConfigDocBaselineArtifacts({
       repoRoot: tempRoot,
-      jsonPath: "docs/.generated/config-baseline.json",
-      statefilePath: "docs/.generated/config-baseline.jsonl",
+      combinedPath: "docs/.generated/config-baseline.json",
+      corePath: "docs/.generated/config-baseline.core.json",
+      channelPath: "docs/.generated/config-baseline.channel.json",
+      pluginPath: "docs/.generated/config-baseline.plugin.json",
       rendered,
     });
     expect(initial.wrote).toBe(true);
 
-    const current = await writeConfigDocBaselineStatefile({
+    const current = await writeConfigDocBaselineArtifacts({
       repoRoot: tempRoot,
-      jsonPath: "docs/.generated/config-baseline.json",
-      statefilePath: "docs/.generated/config-baseline.jsonl",
+      combinedPath: "docs/.generated/config-baseline.json",
+      corePath: "docs/.generated/config-baseline.core.json",
+      channelPath: "docs/.generated/config-baseline.channel.json",
+      pluginPath: "docs/.generated/config-baseline.plugin.json",
       check: true,
       rendered,
     });
@@ -175,16 +191,13 @@ describe("config doc baseline integration", () => {
       '{"generatedBy":"broken","entries":[]}\n',
       "utf8",
     );
-    await fs.writeFile(
-      path.join(tempRoot, "docs/.generated/config-baseline.jsonl"),
-      '{"recordType":"meta","generatedBy":"broken","totalPaths":0}\n',
-      "utf8",
-    );
 
-    const stale = await writeConfigDocBaselineStatefile({
+    const stale = await writeConfigDocBaselineArtifacts({
       repoRoot: tempRoot,
-      jsonPath: "docs/.generated/config-baseline.json",
-      statefilePath: "docs/.generated/config-baseline.jsonl",
+      combinedPath: "docs/.generated/config-baseline.json",
+      corePath: "docs/.generated/config-baseline.core.json",
+      channelPath: "docs/.generated/config-baseline.channel.json",
+      pluginPath: "docs/.generated/config-baseline.plugin.json",
       check: true,
       rendered,
     });

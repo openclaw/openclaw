@@ -11,23 +11,24 @@ import {
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ChannelType } from "discord-api-types/v10";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth";
+import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import {
-  createDiscordFormModal,
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
-  type DiscordComponentEntry,
-  type DiscordModalEntry,
-} from "../components.js";
+} from "../component-custom-id.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolvePinnedMainDmOwnerFromAllowlist,
+  upsertChannelPairingRequest,
+} from "./agent-components-helpers.runtime.js";
 import {
   type DiscordGuildEntryResolved,
   isDiscordGroupAllowedByPolicy,
@@ -139,8 +140,6 @@ export function buildAgentButtonCustomId(componentId: string): string {
 export function buildAgentSelectCustomId(componentId: string): string {
   return `${AGENT_SELECT_KEY}:componentId=${encodeURIComponent(componentId)}`;
 }
-
-const { resolvePinnedMainDmOwnerFromAllowlist } = securityRuntime;
 
 export function resolveAgentComponentRoute(params: {
   ctx: AgentComponentContext;
@@ -514,7 +513,7 @@ async function ensureDmComponentAuthorized(params: {
     return false;
   }
 
-  const storeAllowFrom = await securityRuntime.readStoreAllowFromForDmPolicy({
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "discord",
     accountId: ctx.accountId,
     dmPolicy,
@@ -527,13 +526,14 @@ async function ensureDmComponentAuthorized(params: {
   if (dmPolicy === "pairing") {
     const pairingResult = await createChannelPairingChallengeIssuer({
       channel: "discord",
-      upsertPairingRequest: async ({ id, meta }) =>
-        await conversationRuntime.upsertChannelPairingRequest({
+      upsertPairingRequest: async ({ id, meta }) => {
+        return await upsertChannelPairingRequest({
           channel: "discord",
           id,
           accountId: ctx.accountId,
           meta,
-        }),
+        });
+      },
     })({
       senderId: user.id,
       senderIdLine: `Your Discord user id: ${user.id}`,
