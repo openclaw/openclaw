@@ -558,7 +558,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
       // Preserve HEARTBEAT.md directives (non-task content)
       if (params.heartbeatFileContent) {
         const directives = params.heartbeatFileContent
-          .replace(/^tasks:\n(?:[ \t].*\n)*/m, "")
+          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
           .trim();
         if (directives) {
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
@@ -642,6 +642,25 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const canRelayToUser = Boolean(
+    delivery.channel !== "none" && delivery.to && visibility.showAlerts,
+  );
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
+    cfg,
+    heartbeat,
+    preflight,
+    canRelayToUser,
+    workspaceDir,
+    startedAt,
+    heartbeatFileContent: preflight.heartbeatFileContent,
+  });
+
+  // If no tasks are due, skip heartbeat entirely (including isolated session creation)
+  if (prompt === null) {
+    return { status: "skipped", reason: "no-tasks-due" };
+  }
+
   let runSessionKey = sessionKey;
   let runStorePath = storePath;
   if (useIsolatedSession) {
@@ -725,7 +744,8 @@ export async function runHeartbeatOnce(opts: {
     const current = store[sessionKey];
     // Initialize stub entry on first run when current doesn't exist
     const base = current ?? {
-      sessionId: sessionKey,
+      // Generate valid sessionId - derive from sessionKey without colons
+      sessionId: sessionKey.replace(/:/g, "_"),
       updatedAt: startedAt,
       createdAt: startedAt,
       messageCount: 0,
