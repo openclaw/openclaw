@@ -14,7 +14,7 @@ describe("applyModelDefaults", () => {
             api: "openai-completions",
             models: [
               {
-                id: "gpt-5.2",
+                id: "gpt-5.4",
                 name: "GPT-5.2",
                 reasoning: false,
                 input: ["text"],
@@ -80,7 +80,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": { alias: "Opus" },
+            "anthropic/claude-opus-4-6": { alias: "Opus" },
           },
         },
       },
@@ -88,7 +88,7 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {

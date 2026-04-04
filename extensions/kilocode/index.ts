@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildPassthroughGeminiSanitizingReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
@@ -31,10 +32,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildKilocodeProviderWithDiscovery,
     },
-    capabilities: {
-      geminiThoughtSignatureSanitization: true,
-      geminiThoughtSignatureModelHints: ["gemini"],
-    },
+    buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
     wrapStreamFn: (ctx) => {
       const thinkingLevel =
         ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)

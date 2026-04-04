@@ -46,8 +46,9 @@ Sender labels:
 example
 <<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`;
 
-vi.mock("../session-utils.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../session-utils.js")>();
+vi.mock("../session-utils.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
     loadSessionEntry: (rawKey: string) => ({
@@ -116,8 +117,9 @@ vi.mock("../../sessions/transcript-events.js", () => ({
   ),
 }));
 
-vi.mock("../../media/store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../media/store.js")>();
+vi.mock("../../media/store.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../../media/store.js")>("../../media/store.js");
   return {
     ...original,
     saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string, subdir?: string) => {
@@ -204,6 +206,29 @@ function extractFirstTextBlock(payload: unknown): string | undefined {
   return typeof firstText === "string" ? firstText : undefined;
 }
 
+function createScopedCliClient(
+  scopes: string[],
+  client: Partial<{
+    id: string;
+    mode: string;
+    displayName: string;
+    version: string;
+  }> = {},
+) {
+  const id = client.id ?? "openclaw-cli";
+  return {
+    connect: {
+      scopes,
+      client: {
+        id,
+        mode: client.mode ?? "cli",
+        displayName: client.displayName ?? id,
+        version: client.version ?? "1.0.0",
+      },
+    },
+  };
+}
+
 function createChatContext(): Pick<
   GatewayRequestContext,
   | "broadcast"
@@ -246,6 +271,7 @@ function createChatContext(): Pick<
 }
 
 type ChatContext = ReturnType<typeof createChatContext>;
+type NonStreamingChatSendWaitFor = "broadcast" | "dedupe" | "none";
 
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
@@ -259,6 +285,7 @@ async function runNonStreamingChatSend(params: {
   requestParams?: Record<string, unknown>;
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
+  waitFor?: NonStreamingChatSendWaitFor;
 }) {
   const sendParams: {
     sessionKey: string;
@@ -287,11 +314,17 @@ async function runNonStreamingChatSend(params: {
     context: params.context as GatewayRequestContext,
   });
 
-  const shouldExpectBroadcast = params.expectBroadcast ?? true;
-  if (!shouldExpectBroadcast) {
-    if (params.waitForCompletion === false || params.waitForDedupe === false) {
-      return undefined;
-    }
+  const waitFor =
+    params.waitFor ??
+    (params.waitForCompletion === false || params.waitForDedupe === false
+      ? "none"
+      : params.expectBroadcast === false
+        ? "dedupe"
+        : "broadcast");
+  if (waitFor === "none") {
+    return undefined;
+  }
+  if (waitFor === "dedupe") {
     await waitForAssertion(() => {
       expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
     });
@@ -1201,17 +1234,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-synthetic-origin-admin",
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-          client: {
-            id: "openclaw-cli",
-            mode: "cli",
-            displayName: "openclaw-cli",
-            version: "1.0.0",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.admin"]),
       requestParams: {
         originatingChannel: "slack",
         originatingTo: "D123",
@@ -1243,17 +1266,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-synthetic-origin-reject",
-      client: {
-        connect: {
-          scopes: ["operator.write"],
-          client: {
-            id: "openclaw-cli",
-            mode: "cli",
-            displayName: "openclaw-cli",
-            version: "1.0.0",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.write"]),
       requestParams: {
         originatingChannel: "slack",
         originatingTo: "D123",
@@ -1306,17 +1319,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context,
       respond,
       idempotencyKey: "idem-system-provenance-spoof-reject",
-      client: {
-        connect: {
-          scopes: ["operator.write"],
-          client: {
-            id: "cli",
-            mode: "cli",
-            displayName: "ACP",
-            version: "acp",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.write"], {
+        id: "cli",
+        displayName: "ACP",
+        version: "acp",
+      }),
       requestParams: {
         systemInputProvenance: {
           kind: "external_user",
@@ -1350,17 +1357,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-system-provenance-admin",
       message: "ops update",
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-          client: {
-            id: "custom-operator",
-            mode: "cli",
-            displayName: "custom-operator",
-            version: "1.0.0",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.admin"], {
+        id: "custom-operator",
+      }),
       requestParams: {
         systemInputProvenance: {
           kind: "external_user",
@@ -1387,6 +1386,28 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("ops update");
   });
 
+  it("forwards gateway caller scopes into the dispatch context", async () => {
+    createTranscriptFixture("openclaw-chat-send-gateway-client-scopes-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-gateway-client-scopes",
+      message: "/scopecheck",
+      client: createScopedCliClient(["operator.write", "operator.pairing"]),
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx?.GatewayClientScopes).toEqual([
+      "operator.write",
+      "operator.pairing",
+    ]);
+    expect(mockState.lastDispatchCtx?.CommandBody).toBe("/scopecheck");
+  });
+
   it("injects ACP system provenance into the agent-visible body", async () => {
     createTranscriptFixture("openclaw-chat-send-system-provenance-acp-");
     mockState.finalText = "ok";
@@ -1398,17 +1419,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       respond,
       idempotencyKey: "idem-system-provenance-acp",
       message: "bench update",
-      client: {
-        connect: {
-          scopes: ["operator.admin"],
-          client: {
-            id: "cli",
-            mode: "cli",
-            displayName: "ACP",
-            version: "acp",
-          },
-        },
-      },
+      client: createScopedCliClient(["operator.admin"], {
+        id: "cli",
+        displayName: "ACP",
+        version: "acp",
+      }),
       requestParams: {
         systemInputProvenance: {
           kind: "external_user",

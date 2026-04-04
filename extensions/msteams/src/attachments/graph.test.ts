@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock shared.js to avoid transitive runtime-api imports that pull in uninstalled packages.
 vi.mock("./shared.js", () => ({
@@ -45,6 +45,8 @@ vi.mock("./remote-media.js", () => ({
 }));
 
 import { fetchWithSsrFGuard } from "../../runtime-api.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
+import { safeFetchWithPolicy } from "./shared.js";
 import { downloadMSTeamsGraphMedia } from "./graph.js";
 
 function mockFetchResponse(body: unknown, status = 200) {
@@ -57,6 +59,10 @@ function mockBinaryResponse(data: Uint8Array, status = 200) {
 }
 
 describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("fetches $value endpoint when contentBytes is null but item.id exists", async () => {
     const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
 
@@ -270,5 +276,122 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     const valueCall = fetchCalls.find((u) => u.includes("/$value"));
     expect(valueCall).toBeUndefined();
     expect(result.media.length).toBeGreaterThan(0);
+  });
+
+  it("adds the OpenClaw User-Agent to guarded Graph attachment fetches", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string; init?: RequestInit }) => {
+      const url = params.url;
+      if (url.endsWith("/messages/msg-ua") && !url.includes("hostedContents")) {
+        return {
+          response: mockFetchResponse({ body: {}, attachments: [] }),
+          release: async () => {},
+          finalUrl: params.url,
+        };
+      }
+      if (url.endsWith("/hostedContents")) {
+        return {
+          response: mockFetchResponse({ value: [] }),
+          release: async () => {},
+          finalUrl: params.url,
+        };
+      }
+      if (url.endsWith("/attachments")) {
+        return {
+          response: mockFetchResponse({ value: [] }),
+          release: async () => {},
+          finalUrl: params.url,
+        };
+      }
+      return {
+        response: mockFetchResponse({}, 404),
+        release: async () => {},
+        finalUrl: params.url,
+      };
+    });
+
+    await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-ua",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    const guardCalls = vi.mocked(fetchWithSsrFGuard).mock.calls;
+    for (const [call] of guardCalls) {
+      const headers = call.init?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      expect((headers as Headers).get("Authorization")).toBe("Bearer test-token");
+      expect((headers as Headers).get("User-Agent")).toMatch(
+        /^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/,
+      );
+    }
+  });
+
+  it("adds the OpenClaw User-Agent to Graph shares downloads for reference attachments", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockImplementation(async (params: { url: string }) => {
+      const url = params.url;
+      if (url.endsWith("/messages/msg-share") && !url.includes("hostedContents")) {
+        return {
+          response: mockFetchResponse({
+            body: {},
+            attachments: [
+              {
+                contentType: "reference",
+                contentUrl: "https://tenant.sharepoint.com/file.docx",
+                name: "file.docx",
+              },
+            ],
+          }),
+          release: async () => {},
+          finalUrl: params.url,
+        };
+      }
+      if (url.endsWith("/hostedContents")) {
+        return {
+          response: mockFetchResponse({ value: [] }),
+          release: async () => {},
+          finalUrl: params.url,
+        };
+      }
+      if (url.endsWith("/attachments")) {
+        return {
+          response: mockFetchResponse({ value: [] }),
+          release: async () => {},
+          finalUrl: params.url,
+        };
+      }
+      return {
+        response: mockFetchResponse({}, 404),
+        release: async () => {},
+        finalUrl: params.url,
+      };
+    });
+    vi.mocked(safeFetchWithPolicy).mockResolvedValue(new Response(null, { status: 200 }));
+    vi.mocked(downloadAndStoreMSTeamsRemoteMedia).mockImplementation(async (params) => {
+      if (params.fetchImpl) {
+        await params.fetchImpl(params.url, {});
+      }
+      return {
+        path: "/tmp/file.docx",
+        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        placeholder: "[file]",
+      };
+    });
+
+    await downloadMSTeamsGraphMedia({
+      messageUrl: "https://graph.microsoft.com/v1.0/chats/c/messages/msg-share",
+      tokenProvider: { getAccessToken: vi.fn(async () => "test-token") },
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(safeFetchWithPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestInit: expect.objectContaining({
+          headers: expect.any(Headers),
+        }),
+      }),
+    );
+    const requestInit = vi.mocked(safeFetchWithPolicy).mock.calls[0]?.[0]?.requestInit;
+    const headers = requestInit?.headers as Headers;
+    expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
   });
 });

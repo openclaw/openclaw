@@ -178,6 +178,23 @@ describe("device-pair /pair qr", () => {
     expect(text).not.toContain("```");
   });
 
+  it("rejects qr setup for internal gateway callers without operator.pairing", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "qr",
+        commandBody: "/pair qr",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
+
   it("reissues the bootstrap token if webchat QR rendering fails before falling back", async () => {
     pluginApiMocks.issueDeviceBootstrapToken
       .mockResolvedValueOnce({
@@ -391,6 +408,67 @@ describe("device-pair /pair qr", () => {
 
     expect(pluginApiMocks.clearDeviceBootstrapTokens).toHaveBeenCalledTimes(1);
     expect(result).toEqual({ text: "Invalidated 2 unused setup codes." });
+  });
+
+  it("rejects cleanup for internal gateway callers without operator.pairing", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "cleanup",
+        commandBody: "/pair cleanup",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(pluginApiMocks.clearDeviceBootstrapTokens).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
+});
+
+describe("device-pair /pair default setup code", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pluginApiMocks.issueDeviceBootstrapToken.mockResolvedValue({
+      token: "boot-token",
+      expiresAtMs: Date.now() + 10 * 60_000,
+    });
+  });
+
+  it("rejects setup code issuance for internal gateway callers without operator.pairing", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
+  });
+
+  it("rejects unknown subcommands that fall back to setup code issuance without operator.pairing", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "foo",
+        commandBody: "/pair foo",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ This command requires operator.pairing for internal gateway callers.",
+    });
   });
 });
 

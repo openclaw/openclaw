@@ -2,10 +2,8 @@ import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { waitForever } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
-import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
@@ -26,6 +24,7 @@ import {
   sleepWithAbort,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { loadConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
@@ -51,28 +50,40 @@ type ActiveConnectionRun = {
   backgroundTasks: Set<Promise<unknown>>;
 };
 
-function createActiveConnectionRun(lastInboundAt: number | null): ActiveConnectionRun {
+function createActiveConnectionRun(): ActiveConnectionRun {
   return {
     connectionId: newConnectionId(),
     startedAt: Date.now(),
     heartbeat: null,
     watchdogTimer: null,
-    lastInboundAt,
+    lastInboundAt: null,
     handledMessages: 0,
     unregisterUnhandled: null,
     backgroundTasks: new Set<Promise<unknown>>(),
   };
 }
 
+type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
+
+let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime.js")> | null =
+  null;
+
+function loadReplyResolverRuntime() {
+  replyResolverRuntimePromise ??= import("./reply-resolver.runtime.js");
+  return replyResolverRuntimePromise;
+}
+
 export async function monitorWebChannel(
   verbose: boolean,
   listenerFactory: typeof monitorWebInbox | undefined = monitorWebInbox,
   keepAlive = true,
-  replyResolver: typeof getReplyFromConfig | undefined = getReplyFromConfig,
+  replyResolver?: ReplyResolver,
   runtime: RuntimeEnv = defaultRuntime,
   abortSignal?: AbortSignal,
   tuning: WebMonitorTuning = {},
 ) {
+  const activeReplyResolver =
+    replyResolver ?? (await loadReplyResolverRuntime()).getReplyFromConfig;
   const runId = newConnectionId();
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
@@ -160,7 +171,7 @@ export async function monitorWebChannel(
       break;
     }
 
-    const active = createActiveConnectionRun(status.lastInboundAt ?? status.lastMessageAt ?? null);
+    const active = createActiveConnectionRun();
 
     // Watchdog to detect stuck message processing (e.g., event emitter died).
     // Tuning overrides are test-oriented; production defaults remain unchanged.
@@ -177,7 +188,7 @@ export async function monitorWebChannel(
       groupMemberNames,
       echoTracker,
       backgroundTasks: active.backgroundTasks,
-      replyResolver: replyResolver ?? getReplyFromConfig,
+      replyResolver: activeReplyResolver,
       replyLogger,
       baseMentionConfig,
       account,
@@ -295,10 +306,9 @@ export async function monitorWebChannel(
       }, heartbeatSeconds * 1000);
 
       active.watchdogTimer = setInterval(() => {
-        if (!active.lastInboundAt) {
-          return;
-        }
-        const timeSinceLastMessage = Date.now() - active.lastInboundAt;
+        // A reconnect should get a fresh watchdog window even before the next inbound arrives.
+        const watchdogBaselineAt = active.lastInboundAt ?? active.startedAt;
+        const timeSinceLastMessage = Date.now() - watchdogBaselineAt;
         if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
           return;
         }
@@ -308,7 +318,7 @@ export async function monitorWebChannel(
           {
             connectionId: active.connectionId,
             minutesSinceLastMessage,
-            lastInboundAt: new Date(active.lastInboundAt),
+            lastInboundAt: active.lastInboundAt ? new Date(active.lastInboundAt) : null,
             messagesHandled: active.handledMessages,
           },
           "Message timeout detected - forcing reconnect",

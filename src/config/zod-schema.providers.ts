@@ -1,19 +1,9 @@
 import { z } from "zod";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
-import {
-  BlueBubblesConfigSchema,
-  DiscordConfigSchema,
-  GoogleChatConfigSchema,
-  IMessageConfigSchema,
-  IrcConfigSchema,
-  MSTeamsConfigSchema,
-  SignalConfigSchema,
-  SlackConfigSchema,
-  TelegramConfigSchema,
-} from "./zod-schema.providers-core.js";
-import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 export * from "./zod-schema.providers-core.js";
 export * from "./zod-schema.providers-whatsapp.js";
@@ -23,21 +13,35 @@ const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
 
-const directChannelRuntimeSchemas = new Map<
-  string,
-  { safeParse: (value: unknown) => ReturnType<z.ZodTypeAny["safeParse"]> }
->([
-  ["bluebubbles", { safeParse: (value) => BlueBubblesConfigSchema.safeParse(value) }],
-  ["discord", { safeParse: (value) => DiscordConfigSchema.safeParse(value) }],
-  ["googlechat", { safeParse: (value) => GoogleChatConfigSchema.safeParse(value) }],
-  ["imessage", { safeParse: (value) => IMessageConfigSchema.safeParse(value) }],
-  ["irc", { safeParse: (value) => IrcConfigSchema.safeParse(value) }],
-  ["msteams", { safeParse: (value) => MSTeamsConfigSchema.safeParse(value) }],
-  ["signal", { safeParse: (value) => SignalConfigSchema.safeParse(value) }],
-  ["slack", { safeParse: (value) => SlackConfigSchema.safeParse(value) }],
-  ["telegram", { safeParse: (value) => TelegramConfigSchema.safeParse(value) }],
-  ["whatsapp", { safeParse: (value) => WhatsAppConfigSchema.safeParse(value) }],
-]);
+let directChannelRuntimeSchemasCache: ReadonlyMap<string, ChannelConfigRuntimeSchema> | undefined;
+
+function getDirectChannelRuntimeSchemas(): ReadonlyMap<string, ChannelConfigRuntimeSchema> {
+  if (!directChannelRuntimeSchemasCache) {
+    const runtimeMap = new Map<string, ChannelConfigRuntimeSchema>();
+    for (const entry of listBundledPluginMetadata({
+      includeChannelConfigs: true,
+      includeSyntheticChannelConfigs: true,
+    })) {
+      const channelConfigs = entry.manifest.channelConfigs;
+      if (!channelConfigs) {
+        continue;
+      }
+      for (const [channelId, channelConfig] of Object.entries(channelConfigs)) {
+        if (channelConfig?.runtime && !runtimeMap.has(channelId)) {
+          runtimeMap.set(channelId, channelConfig.runtime);
+        }
+      }
+    }
+    directChannelRuntimeSchemasCache = runtimeMap;
+  }
+  return directChannelRuntimeSchemasCache;
+}
+
+function hasPluginOwnedChannelConfig(
+  value: ChannelsConfig,
+): value is ChannelsConfig & Record<string, unknown> {
+  return Object.keys(value).some((key) => key !== "defaults" && key !== "modelByChannel");
+}
 
 function addLegacyChannelAcpBindingIssues(
   value: unknown,
@@ -75,18 +79,18 @@ function normalizeBundledChannelConfigs(
   value: ChannelsConfig | undefined,
   ctx: z.RefinementCtx,
 ): ChannelsConfig | undefined {
-  if (!value) {
+  if (!value || !hasPluginOwnedChannelConfig(value)) {
     return value;
   }
 
   let next: ChannelsConfig | undefined;
-  for (const [channelId, runtimeSchema] of directChannelRuntimeSchemas) {
+  for (const [channelId, runtimeSchema] of getDirectChannelRuntimeSchemas()) {
     if (!Object.prototype.hasOwnProperty.call(value, channelId)) {
       continue;
     }
     const parsed = runtimeSchema.safeParse(value[channelId]);
     if (!parsed.success) {
-      for (const issue of parsed.error.issues) {
+      for (const issue of parsed.issues) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: issue.message ?? `Invalid channels.${channelId} config.`,

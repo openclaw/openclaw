@@ -13,7 +13,7 @@ describe("resolveModelEntries", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          models: [{ provider: "openai", model: "gpt-5.2" }],
+          models: [{ provider: "openai", model: "gpt-5.4" }],
         },
       },
     };
@@ -38,7 +38,7 @@ describe("resolveModelEntries", () => {
       tools: {
         media: {
           image: {
-            models: [{ provider: "openai", model: "gpt-5.2" }],
+            models: [{ provider: "openai", model: "gpt-5.4" }],
           },
         },
       },

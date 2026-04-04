@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import { describeImageWithModel, describeImagesWithModel } from "./image-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
@@ -14,6 +15,9 @@ function mergeProviderIntoRegistry(
         ...existing,
         ...provider,
         capabilities: provider.capabilities ?? existing.capabilities,
+        defaultModels: provider.defaultModels ?? existing.defaultModels,
+        autoPriority: provider.autoPriority ?? existing.autoPriority,
+        nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
       }
     : provider;
   registry.set(normalizedKey, merged);
@@ -32,6 +36,32 @@ export function buildMediaUnderstandingRegistry(
   })) {
     mergeProviderIntoRegistry(registry, provider);
   }
+  // Auto-register media-understanding for config providers with image-capable models (#51392)
+  const configProviders = cfg?.models?.providers;
+  if (configProviders && typeof configProviders === "object") {
+    for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
+      if (!providerKey?.trim()) {
+        continue;
+      }
+      const normalizedKey = normalizeMediaProviderId(providerKey);
+      if (registry.has(normalizedKey)) {
+        continue;
+      }
+      const models = (providerCfg as { models?: Array<{ input?: string[] }> })?.models ?? [];
+      const hasImageModel = models.some(
+        (m) => Array.isArray(m?.input) && m.input.includes("image"),
+      );
+      if (hasImageModel) {
+        const autoProvider: MediaUnderstandingProvider = {
+          id: normalizedKey,
+          capabilities: ["image"],
+          describeImage: describeImageWithModel,
+          describeImages: describeImagesWithModel,
+        };
+        mergeProviderIntoRegistry(registry, autoProvider);
+      }
+    }
+  }
   if (overrides) {
     for (const [key, provider] of Object.entries(overrides)) {
       const normalizedKey = normalizeMediaProviderId(key);
@@ -41,6 +71,9 @@ export function buildMediaUnderstandingRegistry(
             ...existing,
             ...provider,
             capabilities: provider.capabilities ?? existing.capabilities,
+            defaultModels: provider.defaultModels ?? existing.defaultModels,
+            autoPriority: provider.autoPriority ?? existing.autoPriority,
+            nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
           }
         : provider;
       registry.set(normalizedKey, merged);

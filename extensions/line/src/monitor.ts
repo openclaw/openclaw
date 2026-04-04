@@ -19,6 +19,7 @@ import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -140,7 +141,7 @@ export async function monitorLineProvider(
     abortSignal,
     webhookPath,
   } = opts;
-  const resolvedAccountId = accountId ?? "default";
+  const resolvedAccountId = accountId ?? resolveDefaultLineAccountId(config);
   const token = channelAccessToken.trim();
   const secret = channelSecret.trim();
 

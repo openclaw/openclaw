@@ -25,9 +25,9 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import {
   hasDifferentLiveSessionModelSelection,
-  LiveSessionModelSwitchError,
   consumeLiveSessionModelSwitch,
 } from "../live-model-switch.js";
 import {
@@ -156,6 +156,8 @@ export async function runEmbeddedPiAgent(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
+        modelProviderId: provider,
+        modelId,
         messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,

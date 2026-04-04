@@ -5,7 +5,7 @@ summary: WhatsApp（网页渠道）集成：登录、收件箱、回复、媒体
 title: WhatsApp
 x-i18n:
   generated_at: "2026-02-03T07:46:24Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 44fd88f8e269284999e5a5a52b230edae6e6f978528dd298d6a5603d03c0c38d
   source_path: channels/whatsapp.md

@@ -11,7 +11,7 @@ title: "Moonshot AI"
 
 Moonshot provides the Kimi API with OpenAI-compatible endpoints. Configure the
 provider and set the default model to `moonshot/kimi-k2.5`, or use
-Kimi Coding with `kimi-coding/k2p5`.
+Kimi Coding with `kimi/kimi-code`.
 
 Current Kimi K2 model IDs:
 
@@ -35,7 +35,16 @@ Kimi Coding:
 openclaw onboard --auth-choice kimi-code-api-key
 ```
 
-Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangeable, endpoints differ, and model refs differ (Moonshot uses `moonshot/...`, Kimi Coding uses `kimi-coding/...`).
+Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangeable, endpoints differ, and model refs differ (Moonshot uses `moonshot/...`, Kimi Coding uses `kimi/...`).
+
+Kimi web search uses the Moonshot plugin too:
+
+```bash
+openclaw configure --section web
+```
+
+Choose **Kimi** in the web-search section to store
+`plugins.entries.moonshot.config.webSearch.*`.
 
 ## Config snippet (Moonshot API)
 
@@ -125,9 +134,48 @@ Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangea
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "kimi-coding/k2p5" },
+      model: { primary: "kimi/kimi-code" },
       models: {
-        "kimi-coding/k2p5": { alias: "Kimi K2.5" },
+        "kimi/kimi-code": { alias: "Kimi" },
+      },
+    },
+  },
+}
+```
+
+## Kimi web search
+
+OpenClaw also ships **Kimi** as a `web_search` provider, backed by Moonshot web
+search.
+
+Interactive setup can prompt for:
+
+- the Moonshot API region:
+  - `https://api.moonshot.ai/v1`
+  - `https://api.moonshot.cn/v1`
+- the default Kimi web-search model (defaults to `kimi-k2.5`)
+
+Config lives under `plugins.entries.moonshot.config.webSearch`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      moonshot: {
+        config: {
+          webSearch: {
+            apiKey: "sk-...", // or use KIMI_API_KEY / MOONSHOT_API_KEY
+            baseUrl: "https://api.moonshot.ai/v1",
+            model: "kimi-k2.5",
+          },
+        },
+      },
+    },
+  },
+  tools: {
+    web: {
+      search: {
+        provider: "kimi",
       },
     },
   },
@@ -136,7 +184,9 @@ Note: Moonshot and Kimi Coding are separate providers. Keys are not interchangea
 
 ## Notes
 
-- Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi-coding/<modelId>`.
+- Moonshot model refs use `moonshot/<modelId>`. Kimi Coding model refs use `kimi/<modelId>`.
+- Current Kimi Coding default model ref is `kimi/kimi-code`. Legacy `kimi/k2p5` remains accepted as a compatibility model id.
+- Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.5`.
 - Override pricing and context metadata in `models.providers` if needed.
 - If Moonshot publishes different context limits for a model, adjust
   `contextWindow` accordingly.

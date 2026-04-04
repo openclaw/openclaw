@@ -14,7 +14,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+openclaw onboard --auth-choice openrouter-api-key
 ```
 
 ## Config snippet
@@ -24,7 +24,7 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
   env: { OPENROUTER_API_KEY: "sk-or-..." },
   agents: {
     defaults: {
-      model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
+      model: { primary: "openrouter/auto" },
     },
   },
 }
@@ -33,5 +33,16 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
 ## Notes
 
 - Model refs are `openrouter/<provider>/<model>`.
+- Onboarding defaults to `openrouter/auto`. Switch to a concrete model later with
+  `openclaw models set openrouter/<provider>/<model>`.
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - OpenRouter uses a Bearer token with your API key under the hood.
+- On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also
+  adds OpenRouter's documented app-attribution headers:
+  `HTTP-Referer: https://openclaw.ai`, `X-OpenRouter-Title: OpenClaw`, and
+  `X-OpenRouter-Categories: cli-agent`.
+- If you repoint the OpenRouter provider at some other proxy/base URL, OpenClaw
+  does not inject those OpenRouter-specific headers.
+- OpenRouter still runs through the proxy-style OpenAI-compatible path, so
+  native OpenAI-only request shaping such as `serviceTier`, Responses `store`,
+  OpenAI reasoning-compat payloads, and prompt-cache hints is not forwarded.

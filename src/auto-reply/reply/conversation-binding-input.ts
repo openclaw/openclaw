@@ -1,6 +1,7 @@
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveConversationBindingContext } from "../../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import type { MsgContext } from "../templating.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -27,9 +28,21 @@ function resolveBindingChannel(ctx: BindingMsgContext, commandChannel?: string |
   return normalizeConversationText(raw).toLowerCase();
 }
 
-function resolveBindingAccountId(ctx: BindingMsgContext): string {
-  const accountId = normalizeConversationText(ctx.AccountId);
-  return accountId || "default";
+function resolveBindingAccountId(params: {
+  ctx: BindingMsgContext;
+  cfg: OpenClawConfig;
+  commandChannel?: string | null;
+}): string {
+  const channel = resolveBindingChannel(params.ctx, params.commandChannel);
+  const plugin = getActivePluginChannelRegistry()?.channels.find(
+    (entry) => entry.plugin.id === channel,
+  )?.plugin;
+  const accountId = normalizeConversationText(params.ctx.AccountId);
+  return (
+    accountId ||
+    normalizeConversationText(plugin?.config.defaultAccountId?.(params.cfg)) ||
+    "default"
+  );
 }
 
 function resolveBindingThreadId(threadId: string | number | null | undefined): string | undefined {
@@ -45,10 +58,15 @@ export function resolveConversationBindingContextFromMessage(params: {
   parentSessionKey?: string | null;
   commandTo?: string | null;
 }): ReturnType<typeof resolveConversationBindingContext> {
+  const channel = resolveBindingChannel(params.ctx);
   return resolveConversationBindingContext({
     cfg: params.cfg,
-    channel: resolveBindingChannel(params.ctx),
-    accountId: resolveBindingAccountId(params.ctx),
+    channel,
+    accountId: resolveBindingAccountId({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      commandChannel: channel,
+    }),
     chatType: params.ctx.ChatType,
     threadId: resolveBindingThreadId(params.ctx.MessageThreadId),
     threadParentId: params.ctx.ThreadParentId,
@@ -83,8 +101,12 @@ export function resolveConversationBindingChannelFromMessage(
   return resolveBindingChannel(ctx, commandChannel);
 }
 
-export function resolveConversationBindingAccountIdFromMessage(ctx: BindingMsgContext): string {
-  return resolveBindingAccountId(ctx);
+export function resolveConversationBindingAccountIdFromMessage(params: {
+  ctx: BindingMsgContext;
+  cfg: OpenClawConfig;
+  commandChannel?: string | null;
+}): string {
+  return resolveBindingAccountId(params);
 }
 
 export function resolveConversationBindingThreadIdFromMessage(

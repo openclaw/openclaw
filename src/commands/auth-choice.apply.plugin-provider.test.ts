@@ -215,7 +215,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       config: {
         agents: {
           defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-5" },
+            model: { primary: "anthropic/claude-sonnet-4-6" },
           },
         },
       },

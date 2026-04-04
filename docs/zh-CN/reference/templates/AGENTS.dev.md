@@ -5,7 +5,7 @@ read_when:
 summary: 开发智能体 AGENTS.md（C-3PO）
 x-i18n:
   generated_at: "2026-02-01T21:37:24Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 3bb17ab484f02c6d08546ad4f8356d5c5b0c0e86cc4d03022734109e85dd26dc
   source_path: reference/templates/AGENTS.dev.md

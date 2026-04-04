@@ -1,12 +1,12 @@
 import { loadConfig } from "../config/config.js";
-import { ensureContextEnginesInitialized } from "../context-engine/init.js";
-import { resolveContextEngine } from "../context-engine/registry.js";
+import type { ensureContextEnginesInitialized as ensureContextEnginesInitializedFn } from "../context-engine/init.js";
+import type { resolveContextEngine as resolveContextEngineFn } from "../context-engine/registry.js";
 import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
+import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import * as subagentAnnounceModule from "./subagent-announce.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
@@ -64,35 +64,35 @@ const log = createSubsystemLogger("agents/subagent-registry");
 type SubagentRegistryDeps = {
   callGateway: typeof callGateway;
   captureSubagentCompletionReply: typeof subagentAnnounceModule.captureSubagentCompletionReply;
-  ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
-  ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoaded;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   loadConfig: typeof loadConfig;
   onAgentEvent: typeof onAgentEvent;
   persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
-  resolveContextEngine: typeof resolveContextEngine;
   restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: typeof subagentAnnounceModule.runSubagentAnnounceFlow;
+  ensureContextEnginesInitialized?: typeof ensureContextEnginesInitializedFn;
+  ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
+  resolveContextEngine?: typeof resolveContextEngineFn;
 };
 
 const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   callGateway,
   captureSubagentCompletionReply: (sessionKey) =>
     subagentAnnounceModule.captureSubagentCompletionReply(sessionKey),
-  ensureContextEnginesInitialized,
-  ensureRuntimePluginsLoaded,
   getSubagentRunsSnapshotForRead,
   loadConfig,
   onAgentEvent,
   persistSubagentRunsToDisk,
   resolveAgentTimeoutMs,
-  resolveContextEngine,
   restoreSubagentRunsFromDisk,
   runSubagentAnnounceFlow: (params) => subagentAnnounceModule.runSubagentAnnounceFlow(params),
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
+let subagentRegistryRuntimePromise: Promise<
+  typeof import("./subagent-registry.runtime.js")
+> | null = null;
 
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
@@ -106,6 +106,35 @@ const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
  * subsequent lifecycle `start` / `end` can cancel premature failure announces.
  */
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+
+function loadSubagentRegistryRuntime() {
+  subagentRegistryRuntimePromise ??= import("./subagent-registry.runtime.js");
+  return subagentRegistryRuntimePromise;
+}
+
+async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
+  config: ReturnType<typeof loadConfig>;
+  workspaceDir?: string;
+  allowGatewaySubagentBinding?: boolean;
+}) {
+  const ensureRuntimePluginsLoaded = subagentRegistryDeps.ensureRuntimePluginsLoaded;
+  if (ensureRuntimePluginsLoaded) {
+    ensureRuntimePluginsLoaded(params);
+    return;
+  }
+  const runtime = await loadSubagentRegistryRuntime();
+  runtime.ensureRuntimePluginsLoaded(params);
+}
+
+async function resolveSubagentRegistryContextEngine(cfg: ReturnType<typeof loadConfig>) {
+  const runtime = await loadSubagentRegistryRuntime();
+  const ensureContextEnginesInitialized =
+    subagentRegistryDeps.ensureContextEnginesInitialized ?? runtime.ensureContextEnginesInitialized;
+  const resolveContextEngine =
+    subagentRegistryDeps.resolveContextEngine ?? runtime.resolveContextEngine;
+  ensureContextEnginesInitialized();
+  return await resolveContextEngine(cfg);
+}
 
 function persistSubagentRuns() {
   subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
@@ -181,13 +210,12 @@ async function notifyContextEngineSubagentEnded(params: {
 }) {
   try {
     const cfg = subagentRegistryDeps.loadConfig();
-    subagentRegistryDeps.ensureRuntimePluginsLoaded({
+    await ensureSubagentRegistryPluginRuntimeLoaded({
       config: cfg,
       workspaceDir: params.workspaceDir,
       allowGatewaySubagentBinding: true,
     });
-    subagentRegistryDeps.ensureContextEnginesInitialized();
-    const engine = await subagentRegistryDeps.resolveContextEngine(cfg);
+    const engine = await resolveSubagentRegistryContextEngine(cfg);
     if (!engine.onSubagentEnded) {
       return;
     }
@@ -225,7 +253,7 @@ async function emitSubagentEndedHookForRun(params: {
   accountId?: string;
 }) {
   const cfg = subagentRegistryDeps.loadConfig();
-  subagentRegistryDeps.ensureRuntimePluginsLoaded({
+  await ensureSubagentRegistryPluginRuntimeLoaded({
     config: cfg,
     workspaceDir: params.entry.workspaceDir,
     allowGatewaySubagentBinding: true,
@@ -540,7 +568,11 @@ const subagentRunManager = createSubagentRunManager({
   persist: persistSubagentRuns,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
   loadConfig: () => subagentRegistryDeps.loadConfig(),
-  ensureRuntimePluginsLoaded,
+  ensureRuntimePluginsLoaded: (args: {
+    config: ReturnType<typeof loadConfig>;
+    workspaceDir?: string;
+    allowGatewaySubagentBinding?: boolean;
+  }) => ensureSubagentRegistryPluginRuntimeLoaded(args),
   ensureListener,
   startSweeper,
   stopSweeper,
@@ -597,6 +629,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
+  subagentRegistryRuntimePromise = null;
   resetAnnounceQueuesForTests();
   stopSweeper();
   restoreAttempted = false;

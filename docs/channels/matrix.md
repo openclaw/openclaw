@@ -319,7 +319,9 @@ Verbose restore diagnostics:
 openclaw matrix verify backup restore --verbose
 ```
 
-Delete the current server backup and create a fresh backup baseline:
+Delete the current server backup and create a fresh backup baseline. If the stored
+backup key cannot be loaded cleanly, this reset can also recreate secret storage so
+future cold starts can load the new backup key:
 
 ```bash
 openclaw matrix verify backup reset --yes
@@ -366,8 +368,11 @@ If the homeserver requires interactive auth to upload cross-signing keys, OpenCl
 
 Use `--force-reset-cross-signing` only when you intentionally want to discard the current cross-signing identity and create a new one.
 
-If you intentionally want to discard the current room-key backup and start a new backup baseline for future messages, use `openclaw matrix verify backup reset --yes`.
-Do this only when you accept that unrecoverable old encrypted history will stay unavailable.
+If you intentionally want to discard the current room-key backup and start a new
+backup baseline for future messages, use `openclaw matrix verify backup reset --yes`.
+Do this only when you accept that unrecoverable old encrypted history will stay
+unavailable and that OpenClaw may recreate secret storage if the current backup
+secret cannot be loaded safely.
 
 ### Fresh backup baseline
 
@@ -654,7 +659,7 @@ Matrix can act as an exec approval client for a Matrix account.
 - `channels.matrix.execApprovals.agentFilter`
 - `channels.matrix.execApprovals.sessionFilter`
 
-Matrix becomes an exec approval client when `enabled` is true and at least one approver can be resolved. Approvers must be Matrix user IDs such as `@owner:example.org`.
+Approvers must be Matrix user IDs such as `@owner:example.org`. Matrix auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `channels.matrix.dm.allowFrom`. Set `enabled: false` to disable Matrix as a native approval client explicitly. Approval requests otherwise fall back to other configured approval routes or the exec approval fallback policy.
 
 Delivery rules:
 

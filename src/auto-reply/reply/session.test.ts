@@ -26,11 +26,24 @@ import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
 
 // Perf: session-store locks are exercised elsewhere; most session tests don't need FS lock files.
-vi.mock("../../agents/session-write-lock.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../../agents/session-write-lock.js")>();
+vi.mock("../../agents/session-write-lock.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/session-write-lock.js")>(
+    "../../agents/session-write-lock.js",
+  );
   return {
-    ...original,
-    acquireSessionWriteLock: async () => ({ release: async () => {} }),
+    ...actual,
+    acquireSessionWriteLock: vi.fn(async () => ({ release: async () => {} })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(
+      ({
+        timeoutMs,
+        graceMs = 2 * 60 * 1000,
+        minMs = 5 * 60 * 1000,
+      }: {
+        timeoutMs: number;
+        graceMs?: number;
+        minMs?: number;
+      }) => Math.max(minMs, timeoutMs + graceMs),
+    ),
   };
 });
 
@@ -1447,6 +1460,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
   }
 
   it("supports mention-prefixed Slack reset commands and preserves args", async () => {
+    setMinimalCurrentConversationBindingRegistryForTests();
     const existingSessionId = "existing-session-123";
     const sessionKey = "agent:main:slack:channel:c2";
     const body = "<@U123> /new take notes";
@@ -1464,6 +1478,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
       ctx: {
         Body: body,
         RawBody: body,
+        BodyForCommands: "/new take notes",
         CommandBody: body,
         From: "slack:channel:C1",
         To: "channel:C1",
@@ -1473,6 +1488,7 @@ describe("initSessionState reset triggers in Slack channels", () => {
         Surface: "slack",
         SenderId: "U123",
         SenderName: "Owner",
+        WasMentioned: true,
       },
       cfg,
       commandAuthorized: true,
@@ -2679,5 +2695,31 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.lastTo).toBe("+15555550123");
     expect(result.sessionEntry.deliveryContext?.channel).toBe("whatsapp");
     expect(result.sessionEntry.deliveryContext?.to).toBe("+15555550123");
+  });
+
+  it("uses the configured default account for persisted routing when AccountId is omitted", async () => {
+    const storePath = await createStorePath("default-account-routing-context-");
+    const cfg = {
+      session: { store: storePath },
+      channels: {
+        discord: {
+          defaultAccount: "work",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: "agent:main:discord:channel:24680",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:24680",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastAccountId).toBe("work");
+    expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });

@@ -1,8 +1,9 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
 type DiscordChannelRuntime = {
   messageActions?: typeof import("./channel-actions.js").discordMessageActions;
+  sendMessageDiscord?: typeof import("./send.js").sendMessageDiscord;
 };
 
 export type DiscordRuntime = PluginRuntime & {

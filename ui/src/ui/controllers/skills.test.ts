@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { searchClawHub, type SkillsState } from "./skills.ts";
+import { searchClawHub, setClawHubSearchQuery, type SkillsState } from "./skills.ts";
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn> } {
   const request = vi.fn();
@@ -37,6 +37,21 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn> 
 }
 
 describe("searchClawHub", () => {
+  it("clears stale query state immediately when the input changes", () => {
+    const { state } = createState();
+
+    state.clawhubSearchLoading = true;
+    state.clawhubInstallMessage = { kind: "success", text: "Installed github" };
+
+    setClawHubSearchQuery(state, "github app");
+
+    expect(state.clawhubSearchQuery).toBe("github app");
+    expect(state.clawhubSearchResults).toBeNull();
+    expect(state.clawhubSearchError).toBeNull();
+    expect(state.clawhubSearchLoading).toBe(false);
+    expect(state.clawhubInstallMessage).toBeNull();
+  });
+
   it("clears stale results as soon as a new search starts", async () => {
     const { state, request } = createState();
     type SearchResponse = { results: SkillsState["clawhubSearchResults"] };

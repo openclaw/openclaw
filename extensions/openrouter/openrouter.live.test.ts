@@ -16,7 +16,7 @@ const ModelRegistryCtor = ModelRegistry as unknown as {
   new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
 };
 
-const registerOpenRouterPlugin = () =>
+const registerOpenRouterPlugin = async () =>
   registerProviderPlugin({
     plugin,
     id: "openrouter",
@@ -25,7 +25,7 @@ const registerOpenRouterPlugin = () =>
 
 describeLive("openrouter plugin live", () => {
   it("registers an OpenRouter provider that can complete a live request", async () => {
-    const { providers } = registerOpenRouterPlugin();
+    const { providers } = await registerOpenRouterPlugin();
     const provider = requireRegisteredProvider(providers, "openrouter");
 
     const resolved = provider.resolveDynamicModel?.({

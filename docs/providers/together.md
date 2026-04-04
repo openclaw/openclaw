@@ -13,6 +13,7 @@ The [Together AI](https://together.ai) provides access to leading open-source mo
 - Provider: `together`
 - Auth: `TOGETHER_API_KEY`
 - API: OpenAI-compatible
+- Base URL: `https://api.together.xyz/v1`
 
 ## Quick start
 
@@ -51,16 +52,19 @@ If the Gateway runs as a daemon (launchd/systemd), make sure `TOGETHER_API_KEY`
 is available to that process (for example, in `~/.openclaw/.env` or via
 `env.shellEnv`).
 
-## Available models
+## Built-in catalog
 
-Together AI provides access to many popular open-source models:
+OpenClaw currently ships this bundled Together catalog:
 
-- **GLM 4.7 Fp8** - Default model with 200K context window
-- **Llama 3.3 70B Instruct Turbo** - Fast, efficient instruction following
-- **Llama 4 Scout** - Vision model with image understanding
-- **Llama 4 Maverick** - Advanced vision and reasoning
-- **DeepSeek V3.1** - Powerful coding and reasoning model
-- **DeepSeek R1** - Advanced reasoning model
-- **Kimi K2 Instruct** - High-performance model with 262K context window
+| Model ref                                                    | Name                                   | Input       | Context    | Notes                            |
+| ------------------------------------------------------------ | -------------------------------------- | ----------- | ---------- | -------------------------------- |
+| `together/moonshotai/Kimi-K2.5`                              | Kimi K2.5                              | text, image | 262,144    | Default model; reasoning enabled |
+| `together/zai-org/GLM-4.7`                                   | GLM 4.7 Fp8                            | text        | 202,752    | General-purpose text model       |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`           | Llama 3.3 70B Instruct Turbo           | text        | 131,072    | Fast instruction model           |
+| `together/meta-llama/Llama-4-Scout-17B-16E-Instruct`         | Llama 4 Scout 17B 16E Instruct         | text, image | 10,000,000 | Multimodal                       |
+| `together/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | Llama 4 Maverick 17B 128E Instruct FP8 | text, image | 20,000,000 | Multimodal                       |
+| `together/deepseek-ai/DeepSeek-V3.1`                         | DeepSeek V3.1                          | text        | 131,072    | General text model               |
+| `together/deepseek-ai/DeepSeek-R1`                           | DeepSeek R1                            | text        | 131,072    | Reasoning model                  |
+| `together/moonshotai/Kimi-K2-Instruct-0905`                  | Kimi K2-Instruct 0905                  | text        | 262,144    | Secondary Kimi text model        |
 
-All models support standard chat completions and are OpenAI API compatible.
+The onboarding preset sets `together/moonshotai/Kimi-K2.5` as the default model.

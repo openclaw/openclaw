@@ -20,8 +20,9 @@ afterAll(() => {
   bundledPluginsDirSnapshot.restore();
 });
 
-vi.mock("../infra/shell-env.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return {
     ...mod,
     getShellPathFromLoginShell: vi.fn(() => null),
@@ -30,12 +31,15 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
+  copyPluginToolMeta: vi.fn((_from, to) => to),
   resolvePluginTools: () => [],
   getPluginToolMeta: () => undefined,
 }));
 
-vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+vi.mock("../infra/exec-approvals.js", async () => {
+  const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
+    "../infra/exec-approvals.js",
+  );
   const approvals: ExecApprovalsResolved = {
     path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",

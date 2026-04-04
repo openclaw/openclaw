@@ -5,7 +5,7 @@ summary: 打包脚本生成的 macOS 调试构建的签名步骤
 title: macOS 签名
 x-i18n:
   generated_at: "2026-02-01T21:33:15Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 403b92f9a0ecdb7cb42ec097c684b7a696be3696d6eece747314a4dc90d8797e
   source_path: platforms/mac/signing.md

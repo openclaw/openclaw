@@ -1,1 +1,1 @@
-export { chunkTextForOutbound, type ChannelOutboundAdapter } from "openclaw/plugin-sdk/feishu";
+export { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";

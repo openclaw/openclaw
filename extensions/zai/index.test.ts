@@ -3,8 +3,40 @@ import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-
 import plugin from "./index.js";
 
 describe("zai provider plugin", () => {
-  it("resolves persisted GLM-5 family models with provider-owned metadata", () => {
-    const provider = registerSingleProviderPlugin(plugin);
+  it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "zai",
+        modelApi: "openai-completions",
+        modelId: "glm-5.1",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: true,
+      validateGeminiTurns: true,
+      validateAnthropicTurns: true,
+    });
+
+    expect(
+      provider.buildReplayPolicy?.({
+        provider: "zai",
+        modelApi: "openai-responses",
+        modelId: "glm-5.1",
+      } as never),
+    ).toMatchObject({
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      applyAssistantFirstOrderingFix: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    });
+  });
+
+  it("resolves persisted GLM-5 family models with provider-owned metadata", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
     const template = {
       id: "glm-4.7",
       name: "GLM-4.7",
