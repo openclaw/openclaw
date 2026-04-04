@@ -65,8 +65,10 @@ openclaw doctor
 ## System control (systemd user unit)
 
 OpenClaw installs a systemd **user** service by default. Use a **system**
-service for shared or always-on servers. The full unit example and guidance
-live in the [Gateway runbook](/gateway).
+service for shared or always-on servers. `openclaw gateway install` and
+`openclaw onboard --install-daemon` already render the current canonical unit
+for you; write one by hand only when you need a custom system/service-manager
+setup. The full service guidance lives in the [Gateway runbook](/gateway).
 
 Minimal setup:
 
@@ -82,6 +84,10 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
+TimeoutStartSec=30
+SuccessExitStatus=0 143
+KillMode=control-group
 
 [Install]
 WantedBy=default.target

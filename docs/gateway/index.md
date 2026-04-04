@@ -179,6 +179,27 @@ For persistence after logout, enable lingering:
 sudo loginctl enable-linger <user>
 ```
 
+Manual user-unit example when you need a custom install path:
+
+```ini
+[Unit]
+Description=OpenClaw Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/openclaw gateway --port 18789
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+TimeoutStartSec=30
+SuccessExitStatus=0 143
+KillMode=control-group
+
+[Install]
+WantedBy=default.target
+```
+
   </Tab>
 
   <Tab title="Linux (system service)">
@@ -189,6 +210,10 @@ Use a system unit for multi-user/always-on hosts.
 sudo systemctl daemon-reload
 sudo systemctl enable --now openclaw-gateway[-<profile>].service
 ```
+
+Use the same service body as the user unit, but install it under
+`/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
+`ExecStart=` if your `openclaw` binary lives elsewhere.
 
   </Tab>
 </Tabs>
