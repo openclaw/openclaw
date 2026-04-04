@@ -119,7 +119,7 @@ export async function GET(req: NextRequest) {
 
     for (const browseQuery of browseQueries) {
       try {
-        const skills = await fetchAndNormalize(browseQuery, limit);
+        const skills = dedupeBySlug(await fetchAndNormalize(browseQuery, limit));
 
         if (skills.length > 0 || effectiveQuery) {
           return Response.json({ skills, categories: CATEGORIES });

@@ -54,6 +54,62 @@ describe("skills browse and install APIs", () => {
       );
     });
 
+    it("dedupes duplicate slugs from skills.sh search results", async () => {
+      vi.mocked(global.fetch).mockResolvedValue(
+        new Response(JSON.stringify({
+          skills: [
+            {
+              id: "vercel/next.js/nextjs",
+              skillId: "nextjs",
+              name: "Next.js",
+              installs: 120,
+              source: "vercel/next.js",
+            },
+            {
+              id: "acme/nextjs/nextjs",
+              skillId: "nextjs",
+              name: "Next.js",
+              installs: 12,
+              source: "acme/nextjs",
+            },
+            {
+              id: "vercel/react/react",
+              skillId: "react",
+              name: "React",
+              installs: 200,
+              source: "vercel/react",
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      const { GET } = await import("./browse/route.js");
+      const response = await GET({
+        nextUrl: new URL("http://localhost/api/skills/browse?q=nextjs"),
+      } as never);
+      const json = await response.json();
+
+      expect(json.skills).toEqual([
+        {
+          slug: "nextjs",
+          displayName: "Next.js",
+          summary: "Nextjs skill by vercel",
+          installs: 120,
+          source: "vercel/next.js",
+        },
+        {
+          slug: "react",
+          displayName: "React",
+          summary: "React skill by vercel",
+          installs: 200,
+          source: "vercel/react",
+        },
+      ]);
+    });
+
     it("normalizes skills.sh payload and falls back to a featured query", async () => {
       vi.mocked(global.fetch).mockImplementation(async (input) => {
         const url = String(input);
