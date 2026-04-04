@@ -6,6 +6,7 @@ import {
   resolveXaiResponseTextAndCitations,
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
+export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 
 export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
