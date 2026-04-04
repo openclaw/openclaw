@@ -5,7 +5,7 @@ summary: 用于序列化入站自动回复运行的命令队列设计
 title: 命令队列
 x-i18n:
   generated_at: "2026-02-03T10:05:28Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 2104c24d200fb4f9620e52a19255cd614ababe19d78f3ee42936dc6d0499b73b
   source_path: concepts/queue.md

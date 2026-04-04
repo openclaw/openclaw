@@ -6,7 +6,7 @@ summary: Gateway 网关的浏览器控制 UI（聊天、节点、配置）
 title: 控制 UI
 x-i18n:
   generated_at: "2026-02-03T10:13:20Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: bef105a376fc1a1df44e3e4fb625db1cbcafe2f41e718181c36877b8cbc08816
   source_path: web/control-ui.md

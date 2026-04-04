@@ -6,7 +6,7 @@ summary: Skills 配置 schema 和示例
 title: Skills 配置
 x-i18n:
   generated_at: "2026-02-03T10:10:59Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: e265c93da7856887c11abd92b379349181549e1a02164184d61a8d1f6b2feed5
   source_path: tools/skills-config.md

@@ -84,9 +84,9 @@ Model "provider/model" is not allowed. Use /model to list available models.
 ```json5
 {
   agent: {
-    model: { primary: "anthropic/claude-sonnet-4-5" },
+    model: { primary: "anthropic/claude-sonnet-4-6" },
     models: {
-      "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
+      "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
       "anthropic/claude-opus-4-6": { alias: "Opus" },
     },
   },
@@ -101,7 +101,7 @@ Model "provider/model" is not allowed. Use /model to list available models.
 /model
 /model list
 /model 3
-/model openai/gpt-5.2
+/model openai/gpt-5.4
 /model status
 ```
 

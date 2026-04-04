@@ -7,7 +7,7 @@ summary: 通过 WKWebView + 自定义 URL 方案嵌入的智能体控制 Canvas 
 title: Canvas
 x-i18n:
   generated_at: "2026-02-03T07:52:39Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: e39caa21542e839d9f59ad0bf7ecefb379225ed7e8f00cd59131d188f193bec6
   source_path: platforms/mac/canvas.md

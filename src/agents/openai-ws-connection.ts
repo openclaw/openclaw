@@ -321,7 +321,7 @@ type InternalEvents = {
  *   }
  * });
  *
- * manager.send({ type: "response.create", model: "gpt-5.2", input: [...] });
+ * manager.send({ type: "response.create", model: "gpt-5.4", input: [...] });
  * ```
  */
 export class OpenAIWebSocketManager extends EventEmitter<InternalEvents> {

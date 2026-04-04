@@ -6,7 +6,7 @@ summary: "`openclaw doctor` 的 CLI 参考（健康检查 + 引导式修复）"
 title: doctor
 x-i18n:
   generated_at: "2026-02-03T10:04:15Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 92310aa3f3d111e91a74ce1150359d5d8a8d70a856666d9419e16c60d78209f2
   source_path: cli/doctor.md

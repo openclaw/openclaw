@@ -233,7 +233,7 @@ describe("cacheRetention default behavior", () => {
         { cacheRetention: "long" },
         "amazon-bedrock",
         "openai-completions",
-        "us.anthropic.claude-sonnet-4-5",
+        "us.anthropic.claude-sonnet-4-6",
       ),
     ).toBe("long");
   });

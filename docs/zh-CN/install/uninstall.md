@@ -6,7 +6,7 @@ summary: 完全卸载 OpenClaw（CLI、服务、状态、工作区）
 title: 卸载
 x-i18n:
   generated_at: "2026-02-03T07:50:10Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 6673a755c5e1f90a807dd8ac92a774cff6d1bc97d125c75e8bf72a40e952a777
   source_path: install/uninstall.md

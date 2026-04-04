@@ -281,7 +281,7 @@ function assistantMsg(
     stopReason: toolCalls.length > 0 ? "toolUse" : "stop",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: {},
     timestamp: 0,
   };
@@ -305,7 +305,7 @@ function makeFakeAssistantMessage(text: string) {
     stopReason: "stop" as const,
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: {
       input: 10,
       output: 5,
@@ -348,7 +348,7 @@ function makeResponseObject(
     object: "response",
     created_at: Date.now(),
     status: "completed",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     output,
     usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
   };
@@ -583,7 +583,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -694,7 +694,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -723,7 +723,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -751,7 +751,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -779,7 +779,7 @@ describe("convertMessagesToInputItems", () => {
       stopReason: "stop",
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {},
       timestamp: 0,
     };
@@ -806,7 +806,7 @@ describe("convertMessagesToInputItems", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("buildAssistantMessageFromResponse", () => {
-  const modelInfo = { api: "openai-responses", provider: "openai", id: "gpt-5.2" };
+  const modelInfo = { api: "openai-responses", provider: "openai", id: "gpt-5.4" };
 
   it("extracts text content from a message output item", () => {
     const response = makeResponseObject("resp_1", "Hello from assistant");
@@ -865,7 +865,7 @@ describe("buildAssistantMessageFromResponse", () => {
     const msg = buildAssistantMessageFromResponse(response, modelInfo);
     expect(msg.api).toBe("openai-responses");
     expect(msg.provider).toBe("openai");
-    expect(msg.model).toBe("gpt-5.2");
+    expect(msg.model).toBe("gpt-5.4");
   });
 
   it("handles empty output gracefully", () => {
@@ -891,7 +891,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -923,7 +923,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning.summary",
@@ -950,7 +950,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning.summary",
@@ -986,7 +986,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1007,7 +1007,7 @@ describe("buildAssistantMessageFromResponse", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1083,7 +1083,7 @@ describe("planTurnInput", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -1108,7 +1108,7 @@ describe("planTurnInput", () => {
         buildAssistantMessageFromResponse(turn1Response, {
           api: "openai-responses",
           provider: "openai",
-          id: "gpt-5.2",
+          id: "gpt-5.4",
         }),
       ] as Parameters<typeof convertMessagesToInputItems>[0],
       tools: [],
@@ -1163,7 +1163,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
   const modelStub = {
     api: "openai-responses",
     provider: "openai",
-    id: "gpt-5.2",
+    id: "gpt-5.4",
     contextWindow: 128000,
     maxTokens: 4096,
     reasoning: false,
@@ -1266,7 +1266,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
     expect(manager.sentEvents).toHaveLength(1);
     const sent = manager.sentEvents[0] as { type: string; model: string; input: unknown[] };
     expect(sent.type).toBe("response.create");
-    expect(sent.model).toBe("gpt-5.2");
+    expect(sent.model).toBe("gpt-5.4");
     expect(Array.isArray(sent.input)).toBe(true);
   });
 
@@ -1752,7 +1752,7 @@ describe("createOpenAIWebSocketStreamFn", () => {
       object: "response",
       created_at: Date.now(),
       status: "completed",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       output: [
         {
           type: "reasoning",
@@ -2371,7 +2371,7 @@ describe("releaseWsSession / hasWsSession", () => {
       {
         api: "openai-responses",
         provider: "openai",
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         contextWindow: 128000,
         maxTokens: 4096,
         reasoning: false,
@@ -2407,7 +2407,7 @@ describe("releaseWsSession / hasWsSession", () => {
       {
         api: "openai-responses",
         provider: "openai",
-        id: "gpt-5.2",
+        id: "gpt-5.4",
         contextWindow: 128000,
         maxTokens: 4096,
         reasoning: false,

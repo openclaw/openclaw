@@ -7,7 +7,7 @@ summary: 向多个智能体广播 WhatsApp 消息
 title: 广播群组
 x-i18n:
   generated_at: "2026-02-03T07:43:43Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: eaeb4035912c49413e012177cf0bd28b348130d30d3317674418dca728229b70
   source_path: channels/broadcast-groups.md

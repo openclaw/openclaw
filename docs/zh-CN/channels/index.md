@@ -6,7 +6,7 @@ summary: OpenClaw 可连接的消息平台
 title: 聊天渠道
 x-i18n:
   generated_at: "2026-02-03T07:43:27Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 2632863def6dee97e0fa8b931762f0969174fd4fb22303a00dcd46527fe4a141
   source_path: channels/index.md

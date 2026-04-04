@@ -4,7 +4,7 @@ read_when:
 summary: 用户档案记录
 x-i18n:
   generated_at: "2026-02-01T21:38:04Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 508dfcd4648512df712eaf8ca5d397a925d8035bac5bf2357e44d6f52f9fa9a6
   source_path: reference/templates/USER.md
