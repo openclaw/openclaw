@@ -94,6 +94,20 @@ describe("sendMessage", () => {
     const callArgs = httpsRequest.mock.calls[0];
     expect(callArgs[0]).toBe("https://nas.example.com/incoming");
   });
+
+  it("verifies TLS by default", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+  });
+
+  it("only disables TLS verification when explicitly requested", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: false });
+  });
 });
 
 describe("sendFileUrl", () => {
@@ -113,6 +127,15 @@ describe("sendFileUrl", () => {
       sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
     );
     expect(result).toBe(false);
+  });
+
+  it("verifies TLS by default", async () => {
+    mockSuccessResponse();
+    await settleTimers(
+      sendFileUrl("https://nas.example.com/incoming", "https://example.com/file.png"),
+    );
+    const httpsRequest = vi.mocked(https.request);
+    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
 });
 
@@ -292,5 +315,16 @@ describe("fetchChatUsers", () => {
     );
 
     expect(users).toEqual([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+  });
+
+  it("verifies TLS by default for user_list lookups", async () => {
+    mockUserListResponse([{ user_id: 4, username: "jmn67", nickname: "jmn" }]);
+    const freshUrl =
+      "https://fresh-nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22fresh%22";
+
+    await fetchChatUsers(freshUrl);
+
+    const httpsGet = vi.mocked((https as any).get);
+    expect(httpsGet.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
   });
 });

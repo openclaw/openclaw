@@ -132,8 +132,8 @@ Open: `https://<magicdns>/`
 
 Notes:
 
-- Serve keeps the Gateway loopback-only and authenticates Control UI/WebSocket traffic via Tailscale identity headers (tokenless auth assumes trusted gateway host; HTTP APIs still require token/password).
-- To require token/password instead, set `gateway.auth.allowTailscale: false` or use `gateway.auth.mode: "password"`.
+- Serve keeps the Gateway loopback-only and authenticates Control UI/WebSocket traffic via Tailscale identity headers (tokenless auth assumes trusted gateway host; HTTP APIs do not use those Tailscale headers and instead follow the gateway's normal HTTP auth mode).
+- To require explicit shared-secret credentials instead, set `gateway.auth.allowTailscale: false` and use `gateway.auth.mode: "token"` or `"password"`.
 
 **Option C: Tailnet bind (no Serve)**
 
@@ -198,13 +198,13 @@ htop
 
 All state lives in:
 
-- `~/.openclaw/` — config, credentials, session data
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data
 - `~/.openclaw/workspace/` — workspace (SOUL.md, memory, etc.)
 
 These survive reboots. Back them up periodically:
 
 ```bash
-tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
+openclaw backup create
 ```
 
 ---

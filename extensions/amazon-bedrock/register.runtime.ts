@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { buildAnthropicReplayPolicyForModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
@@ -46,6 +46,9 @@ function createGuardrailWrapStreamFn(
 
 const PROVIDER_ID = "amazon-bedrock";
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
+const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "anthropic-by-model",
+});
 const BEDROCK_CONTEXT_OVERFLOW_PATTERNS = [
   /ValidationException.*(?:input is too long|max input token|input token.*exceed)/i,
   /ValidationException.*(?:exceeds? the (?:maximum|max) (?:number of )?(?:input )?tokens)/i,
@@ -89,7 +92,7 @@ export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promi
       },
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
-    buildReplayPolicy: ({ modelId }) => buildAnthropicReplayPolicyForModel(modelId),
+    ...ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
     wrapStreamFn,
     matchesContextOverflowError: ({ errorMessage }) =>
       BEDROCK_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage)),

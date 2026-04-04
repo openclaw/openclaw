@@ -10,7 +10,8 @@ title: "update"
 
 Safely update OpenClaw and switch between stable/beta/dev channels.
 
-If you installed via **npm/pnpm** (global install, no git metadata), updates happen via the package manager flow in [Updating](/install/updating).
+If you installed via **npm/pnpm/bun** (global install, no git metadata),
+updates happen via the package-manager flow in [Updating](/install/updating).
 
 ## Usage
 
@@ -73,7 +74,9 @@ install method aligned:
 
 - `dev` → ensures a git checkout (default: `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
-- `stable`/`beta` → installs from npm using the matching dist-tag.
+- `stable` → installs from npm using `latest`.
+- `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
+  missing or older than the current stable release.
 
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
@@ -82,7 +85,8 @@ The Gateway core auto-updater (when enabled via config) reuses this same update 
 Channels:
 
 - `stable`: checkout the latest non-beta tag, then build + doctor.
-- `beta`: checkout the latest `-beta` tag, then build + doctor.
+- `beta`: prefer the latest `-beta` tag, but fall back to the latest stable tag
+  when beta is missing or older.
 - `dev`: checkout `main`, then fetch + rebase.
 
 High-level:
@@ -92,7 +96,7 @@ High-level:
 3. Fetches upstream (dev only).
 4. Dev only: preflight lint + TypeScript build in a temp worktree; if the tip fails, walks back up to 10 commits to find the newest clean build.
 5. Rebases onto the selected commit (dev only).
-6. Installs deps (pnpm preferred; npm fallback).
+6. Installs deps (pnpm preferred; npm fallback; bun remains available as a secondary compatibility fallback).
 7. Builds + builds the Control UI.
 8. Runs `openclaw doctor` as the final “safe update” check.
 9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.

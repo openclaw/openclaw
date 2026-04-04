@@ -156,18 +156,22 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     The wizard opens your browser with a clean (non-tokenized) dashboard URL right after onboarding and also prints the link in the summary. Keep that tab open; if it didn't launch, copy/paste the printed URL on the same machine.
   </Accordion>
 
-  <Accordion title="How do I authenticate the dashboard (token) on localhost vs remote?">
+  <Accordion title="How do I authenticate the dashboard on localhost vs remote?">
     **Localhost (same machine):**
 
     - Open `http://127.0.0.1:18789/`.
-    - If it asks for auth, paste the token from `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) into Control UI settings.
-    - Retrieve it from the gateway host: `openclaw config get gateway.auth.token` (or generate one: `openclaw doctor --generate-gateway-token`).
+    - If it asks for shared-secret auth, paste the configured token or password into Control UI settings.
+    - Token source: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
+    - Password source: `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+    - If no shared secret is configured yet, generate a token with `openclaw doctor --generate-gateway-token`.
 
     **Not on localhost:**
 
-    - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no token, assumes trusted gateway host); HTTP APIs still require token/password.
-    - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"`, open `http://<tailscale-ip>:18789/`, paste token in dashboard settings.
-    - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/` and paste the token in Control UI settings.
+    - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy Control UI/WebSocket auth (no pasted shared secret, assumes trusted gateway host); HTTP APIs still require shared-secret auth unless you deliberately use private-ingress `none` or trusted-proxy HTTP auth.
+      Bad concurrent Serve auth attempts from the same client are serialized before the failed-auth limiter records them, so the second bad retry can already show `retry later`.
+    - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"` (or configure password auth), open `http://<tailscale-ip>:18789/`, then paste the matching shared secret in dashboard settings.
+    - **Identity-aware reverse proxy**: keep the Gateway behind a non-loopback trusted proxy, configure `gateway.auth.mode: "trusted-proxy"`, then open the proxy URL.
+    - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`. Shared-secret auth still applies over the tunnel; paste the configured token or password if prompted.
 
     See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth details.
 
@@ -649,6 +653,8 @@ for usage/billing and raise limits as needed.
 
     1. Enable the plugin: `openclaw plugins enable google`
     2. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+    3. Default model after login: `google-gemini-cli/gemini-3.1-pro-preview`
+    4. If requests fail, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host
 
     This stores OAuth tokens in auth profiles on the gateway host. Details: [Model providers](/concepts/model-providers).
 
@@ -1009,7 +1015,7 @@ for usage/billing and raise limits as needed.
     Debug:
 
     ```bash
-    openclaw cron run <jobId> --force
+    openclaw cron run <jobId>
     openclaw cron runs --id <jobId> --limit 50
     ```
 
@@ -1019,15 +1025,24 @@ for usage/billing and raise limits as needed.
 
   <Accordion title="How do I install skills on Linux?">
     Use native `openclaw skills` commands or drop skills into your workspace. The macOS Skills UI isn't available on Linux.
-    Browse skills at [https://clawhub.com](https://clawhub.com).
+    Browse skills at [https://clawhub.ai](https://clawhub.ai).
 
     ```bash
     openclaw skills search "calendar"
+    openclaw skills search --limit 20
     openclaw skills install <skill-slug>
+    openclaw skills install <skill-slug> --version <version>
+    openclaw skills install <skill-slug> --force
     openclaw skills update --all
+    openclaw skills list --eligible
+    openclaw skills check
     ```
 
-    Install the separate `clawhub` CLI only if you want to publish or sync your own skills. For shared installs across agents, put the skill under `~/.openclaw/skills` and use `agents.defaults.skills` or `agents.list[].skills` if you want to narrow which agents can see it.
+    Native `openclaw skills install` writes into the active workspace `skills/`
+    directory. Install the separate `clawhub` CLI only if you want to publish or
+    sync your own skills. For shared installs across agents, put the skill under
+    `~/.openclaw/skills` and use `agents.defaults.skills` or
+    `agents.list[].skills` if you want to narrow which agents can see it.
 
   </Accordion>
 
@@ -1410,9 +1425,10 @@ for usage/billing and raise limits as needed.
     `web_fetch` works without an API key. `web_search` depends on your selected
     provider:
 
-    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, Perplexity, and Tavily require their normal API key setup.
+    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
     - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
     - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
+    - SearXNG is key-free/self-hosted; configure `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl`.
 
     **Recommended:** run `openclaw configure --section web` and choose a provider.
     Environment alternatives:
@@ -1423,7 +1439,9 @@ for usage/billing and raise limits as needed.
     - Gemini: `GEMINI_API_KEY`
     - Grok: `XAI_API_KEY`
     - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+    - MiniMax Search: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`
     - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
+    - SearXNG: `SEARXNG_BASE_URL`
     - Tavily: `TAVILY_API_KEY`
 
     ```json5
@@ -2188,10 +2206,14 @@ for usage/billing and raise limits as needed.
     Fix checklist:
 
     1. Upgrade to a current OpenClaw release (or run from source `main`), then restart the gateway.
-    2. Make sure MiniMax is configured (wizard or JSON), or that a MiniMax API key
-       exists in env/auth profiles so the provider can be injected.
-    3. Use the exact model id (case-sensitive): `minimax/MiniMax-M2.7` or
-       `minimax/MiniMax-M2.7-highspeed`.
+    2. Make sure MiniMax is configured (wizard or JSON), or that MiniMax auth
+       exists in env/auth profiles so the matching provider can be injected
+       (`MINIMAX_API_KEY` for `minimax`, `MINIMAX_OAUTH_TOKEN` or stored MiniMax
+       OAuth for `minimax-portal`).
+    3. Use the exact model id (case-sensitive) for your auth path:
+       `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed` for API-key
+       setup, or `minimax-portal/MiniMax-M2.7` /
+       `minimax-portal/MiniMax-M2.7-highspeed` for OAuth setup.
     4. Run:
 
        ```bash
@@ -2501,7 +2523,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
   </Accordion>
 
   <Accordion title="How do I run OpenClaw in remote mode (client connects to a Gateway elsewhere)?">
-    Set `gateway.mode: "remote"` and point to a remote WebSocket URL, optionally with a token/password:
+    Set `gateway.mode: "remote"` and point to a remote WebSocket URL, optionally with shared-secret remote credentials:
 
     ```json5
     {
@@ -2520,24 +2542,28 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
     - `openclaw gateway` only starts when `gateway.mode` is `local` (or you pass the override flag).
     - The macOS app watches the config file and switches modes live when these values change.
+    - `gateway.remote.token` / `.password` are client-side remote credentials only; they do not enable local gateway auth by themselves.
 
   </Accordion>
 
   <Accordion title='The Control UI says "unauthorized" (or keeps reconnecting). What now?'>
-    Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not sending the matching token/password.
+    Your gateway auth path and the UI's auth method do not match.
 
     Facts (from code):
 
     - The Control UI keeps the token in `sessionStorage` for the current browser tab session and selected gateway URL, so same-tab refreshes keep working without restoring long-lived localStorage token persistence.
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
+    - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
+    - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
 
     Fix:
 
     - Fastest: `openclaw dashboard` (prints + copies the dashboard URL, tries to open; shows SSH hint if headless).
     - If you don't have a token yet: `openclaw doctor --generate-gateway-token`.
     - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
-    - Set `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`) on the gateway host.
-    - In the Control UI settings, paste the same token.
+    - Shared-secret mode: set `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, then paste the matching secret in Control UI settings.
+    - Tailscale Serve mode: make sure `gateway.auth.allowTailscale` is enabled and you are opening the Serve URL, not a raw loopback/tailnet URL that bypasses Tailscale identity headers.
+    - Trusted-proxy mode: make sure you are coming through the configured non-loopback identity-aware proxy, not a same-host loopback proxy or raw gateway URL.
     - If mismatch persists after the one retry, rotate/re-approve the paired device token:
       - `openclaw devices list`
       - `openclaw devices rotate --device <id> --role operator`

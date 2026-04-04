@@ -20,7 +20,7 @@ Local mode (default) walks you through:
 - Workspace location and bootstrap files
 - Gateway settings (port, bind, auth, tailscale)
 - Channels and providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost plugin, Signal)
-- Daemon install (LaunchAgent or systemd user unit)
+- Daemon install (LaunchAgent, systemd user unit, or native Windows Scheduled Task with Startup-folder fallback)
 - Health check
 - Skills setup
 
@@ -79,6 +79,9 @@ It does not install or modify anything on the remote host.
     - Linux and Windows via WSL2: systemd user unit
       - Wizard attempts `loginctl enable-linger <user>` so gateway stays up after logout.
       - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
+    - Native Windows: Scheduled Task first
+      - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
+      - Scheduled Tasks remain preferred because they provide better supervisor status.
     - Runtime selection: Node (recommended; required for WhatsApp and Telegram). Bun is not recommended.
   </Step>
   <Step title="Health check">
@@ -87,7 +90,7 @@ It does not install or modify anything on the remote host.
   </Step>
   <Step title="Skills">
     - Reads available skills and checks requirements.
-    - Lets you choose node manager: npm or pnpm (bun not recommended).
+    - Lets you choose node manager: npm, pnpm, or bun.
     - Installs optional dependencies (some use Homebrew on macOS).
   </Step>
   <Step title="Finish">
@@ -141,8 +144,10 @@ What you set:
   </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.
-    Reused Codex CLI credentials stay managed by Codex CLI; OpenClaw re-reads
-    that source on expiry instead of rotating the copied refresh token itself.
+    Reused Codex CLI credentials stay managed by Codex CLI; on expiry OpenClaw
+    re-reads that source first and, when the provider can refresh it, writes
+    the refreshed credential back to Codex storage instead of taking ownership
+    itself.
   </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
@@ -175,7 +180,8 @@ What you set:
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
   <Accordion title="MiniMax">
-    Config is auto-written. Hosted default is `MiniMax-M2.7`.
+    Config is auto-written. Hosted default is `MiniMax-M2.7`; API-key setup uses
+    `minimax/...`, and OAuth setup uses `minimax-portal/...`.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="StepFun">
@@ -220,6 +226,12 @@ What you set:
 Model behavior:
 
 - Pick default model from detected options, or enter provider and model manually.
+- When onboarding starts from a provider auth choice, the model picker prefers
+  that provider automatically. For Volcengine and BytePlus, the same preference
+  also matches their coding-plan variants (`volcengine-plan/*`,
+  `byteplus-plan/*`).
+- If that preferred-provider filter would be empty, the picker falls back to
+  the full catalog instead of showing no models.
 - Wizard runs a model check and warns if the configured model is unknown or missing auth.
 
 Credential and profile paths:
@@ -269,6 +281,8 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.matrix.*`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack, Discord, Matrix, Microsoft Teams) when you opt in during prompts (names resolve to IDs when possible)
 - `skills.install.nodeManager`
+  - The `setup --node-manager` flag accepts `npm`, `pnpm`, or `bun`.
+  - Manual config can still set `skills.install.nodeManager: "yarn"` later.
 - `wizard.lastRunAt`
 - `wizard.lastRunVersion`
 - `wizard.lastRunCommit`

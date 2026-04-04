@@ -254,18 +254,18 @@ openclaw models list --json
 - Defaults:
   - Model: `claude-cli/claude-sonnet-4-6`
   - Command: `claude`
-  - Args: `["-p","--output-format","json","--permission-mode","bypassPermissions"]`
+  - Args: `["-p","--output-format","stream-json","--include-partial-messages","--verbose","--permission-mode","bypassPermissions"]`
 - Overrides (optional):
   - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-opus-4-6"`
   - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.4"`
   - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
+  - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","stream-json","--include-partial-messages","--verbose","--permission-mode","bypassPermissions"]'`
   - `OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'`
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt).
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
-- `OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude Code CLI MCP config enabled (default disables MCP config with a temporary empty file).
+- `OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude Code CLI MCP config enabled (default injects a temporary strict empty `--mcp-config` so ambient/global MCP servers stay disabled during the smoke).
 
 Example:
 
@@ -286,6 +286,7 @@ Notes:
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user, because Claude CLI rejects `bypassPermissions` when invoked as root.
 - For `claude-cli`, it installs the Linux `@anthropic-ai/claude-code` package into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
+- For `claude-cli`, the live smoke injects a strict empty MCP config unless you set `OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0`.
 - It copies `~/.claude` into the container when available, but on machines where Claude auth is backed by `ANTHROPIC_API_KEY`, it also preserves `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_OLD` for the child Claude CLI via `OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV`.
 
 ## Live: ACP bind smoke (`/acp spawn ... --bind here`)

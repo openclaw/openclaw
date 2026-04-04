@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { z } from "openclaw/plugin-sdk/zod";
 import { AcpxPluginConfigSchema } from "./config-schema.js";
 import type {
   AcpxPluginConfig,
@@ -10,7 +11,6 @@ import type {
   AcpxMcpServer,
   ResolvedAcpxPluginConfig,
 } from "./config-schema.js";
-import type { z } from "openclaw/plugin-sdk/zod";
 export {
   ACPX_NON_INTERACTIVE_POLICIES,
   ACPX_PERMISSION_MODES,

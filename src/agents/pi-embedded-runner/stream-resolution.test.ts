@@ -2,6 +2,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeEmbeddedAgentStreamStrategy,
+  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
 
@@ -65,6 +66,21 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
+  it("prefers the resolved run api key over a later authStorage lookup", async () => {
+    const authStorage = {
+      getApiKey: vi.fn(async () => "storage-key"),
+    };
+
+    await expect(
+      resolveEmbeddedAgentApiKey({
+        provider: "openai",
+        resolvedApiKey: "resolved-key",
+        authStorage,
+      }),
+    ).resolves.toBe("resolved-key");
+    expect(authStorage.getApiKey).not.toHaveBeenCalled();
+  });
+
   it("still routes supported streamSimple fallbacks through boundary-aware transports", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
@@ -93,5 +109,33 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     });
 
     expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("injects the resolved run api key into provider-owned stream functions", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const authStorage = {
+      getApiKey: vi.fn(async () => "storage-key"),
+    };
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-completions",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+      resolvedApiKey: "resolved-key",
+      authStorage,
+    });
+
+    await expect(
+      streamFn({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {}),
+    ).resolves.toMatchObject({
+      apiKey: "resolved-key",
+    });
+    expect(authStorage.getApiKey).not.toHaveBeenCalled();
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 });

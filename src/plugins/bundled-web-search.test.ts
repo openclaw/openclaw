@@ -68,6 +68,13 @@ describe("bundled web search helpers", () => {
     vi.mocked(loadBundledCapabilityRuntimeRegistry).mockReturnValue({
       webSearchProviders: [
         {
+          pluginId: "minimax",
+          provider: createMockedBundledWebSearchProvider({
+            pluginId: "minimax",
+            providerId: "minimax",
+          }),
+        },
+        {
           pluginId: "xai",
           provider: createMockedBundledWebSearchProvider({
             pluginId: "xai",
@@ -116,15 +123,18 @@ describe("bundled web search helpers", () => {
 
   it("maps bundled provider ids back to their owning plugins", () => {
     expect(resolveBundledWebSearchPluginId(" gemini ")).toBe("google");
+    expect(resolveBundledWebSearchPluginId(" minimax ")).toBe("minimax");
     expect(resolveBundledWebSearchPluginId("missing")).toBeUndefined();
   });
 
   it("loads bundled provider entries through the capability runtime registry once", () => {
     expect(listBundledWebSearchProviders()).toEqual([
+      expect.objectContaining({ pluginId: "minimax", id: "minimax" }),
       expect.objectContaining({ pluginId: "xai", id: "grok" }),
       expect.objectContaining({ pluginId: "google", id: "gemini" }),
     ]);
     expect(listBundledWebSearchProviders()).toEqual([
+      expect.objectContaining({ pluginId: "minimax", id: "minimax" }),
       expect.objectContaining({ pluginId: "xai", id: "grok" }),
       expect.objectContaining({ pluginId: "google", id: "gemini" }),
     ]);

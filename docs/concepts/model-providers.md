@@ -99,30 +99,43 @@ Current bundled examples:
   endpoint fetching, cache-TTL/provider-family metadata, and auth-aware global
   config defaults
 - `amazon-bedrock`: provider-owned context-overflow matching and failover
-  reason classification for Bedrock-specific throttle/not-ready errors
+  reason classification for Bedrock-specific throttle/not-ready errors, plus
+  Claude-only replay-policy guards on Anthropic traffic
+- `anthropic-vertex`: Claude-only replay-policy guards on Anthropic-message
+  traffic
 - `openrouter`: pass-through model ids, request wrappers, provider capability
-  hints, and cache-TTL policy
+  hints, Gemini thought-signature sanitation on proxy Gemini traffic, proxy
+  reasoning injection through the `openrouter-thinking` stream family, and
+  cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
   Claude-thinking transcript hints, runtime token exchange, and usage endpoint
   fetching
 - `openai`: GPT-5.4 forward-compat fallback, direct OpenAI transport
   normalization, Codex-aware missing-auth hints, Spark suppression, synthetic
-  OpenAI/Codex catalog rows, thinking/live-model policy, and
-  provider-family metadata
-- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also owns auth-profile token
-  formatting, usage-token parsing, and quota endpoint fetching for usage
-  surfaces
+  OpenAI/Codex catalog rows, thinking/live-model policy, usage-token alias
+  normalization (`input` / `output` and `prompt` / `completion` families), the
+  shared `openai-responses-defaults` stream family for native OpenAI/Codex
+  wrappers, and provider-family metadata
+- `google` and `google-gemini-cli`: Gemini 3.1 forward-compat fallback,
+  native Gemini replay validation, bootstrap replay sanitation, tagged
+  reasoning-output mode, and modern-model matching; Gemini CLI OAuth also owns
+  auth-profile token formatting, usage-token parsing, and quota endpoint
+  fetching for usage surfaces
 - `moonshot`: shared transport, plugin-owned thinking payload normalization
 - `kilocode`: shared transport, plugin-owned request headers, reasoning payload
-  normalization, Gemini transcript hints, and cache-TTL policy
+  normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
+  policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
   policy, binary-thinking/live-model policy, and usage auth + quota fetching
-- `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
+- `mistral`: plugin-owned capability metadata
+- `opencode` and `opencode-go`: plugin-owned capability metadata plus
+  proxy-Gemini thought-signature sanitation
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
   `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
+- `minimax`: plugin-owned catalogs, hybrid Anthropic/OpenAI replay-policy
+  selection, and usage auth/snapshot logic
+- `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
 `openai-codex`.
@@ -256,6 +269,9 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3-flash-preview`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
+- Direct Gemini runs also accept `agents.defaults.models["google/<model>"].params.cachedContent`
+  (or legacy `cached_content`) to forward a provider-native
+  `cachedContents/...` handle; Gemini cache hits surface as OpenClaw `cacheRead`
 
 ### Google Vertex and Gemini CLI
 
@@ -265,8 +281,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Gemini CLI OAuth is shipped as part of the bundled `google` plugin.
   - Enable: `openclaw plugins enable google`
   - Login: `openclaw models auth login --provider google-gemini-cli --set-default`
+  - Default model: `google-gemini-cli/gemini-3.1-pro-preview`
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
+  - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
+  - Gemini CLI JSON replies are parsed from `response`; usage falls back to
+    `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
 
 ### Z.AI (GLM)
 
@@ -305,13 +325,16 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 - Example model: `openrouter/auto`
 - OpenClaw applies OpenRouter's documented app-attribution headers only when
   the request actually targets `openrouter.ai`
+- OpenRouter-specific Anthropic `cache_control` markers are likewise gated to
+  verified OpenRouter routes, not arbitrary proxy URLs
 - OpenRouter remains on the proxy-style OpenAI-compatible path, so native
   OpenAI-only request shaping (`serviceTier`, Responses `store`,
   prompt-cache hints, OpenAI reasoning-compat payloads) is not forwarded
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/kilo/auto`
-- MiniMax: `minimax` (`MINIMAX_API_KEY`)
-- Example model: `minimax/MiniMax-M2.7`
+- MiniMax: `minimax` (API key) and `minimax-portal` (OAuth)
+- Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or `MINIMAX_API_KEY` for `minimax-portal`
+- Example model: `minimax/MiniMax-M2.7` or `minimax-portal/MiniMax-M2.7`
 - MiniMax onboarding/API-key setup writes explicit M2.7 model definitions with
   `input: ["text", "image"]`; the bundled provider catalog keeps the chat refs
   text-only until that provider config is materialized
@@ -439,6 +462,11 @@ Volcano Engine (火山引擎) provides access to Doubao and other models in Chin
 Onboarding defaults to the coding surface, but the general `volcengine/*`
 catalog is registered at the same time.
 
+In onboarding/configure model pickers, the Volcengine auth choice prefers both
+`volcengine/*` and `volcengine-plan/*` rows. If those models are not loaded yet,
+OpenClaw falls back to the unfiltered catalog instead of showing an empty
+provider-scoped picker.
+
 Available models:
 
 - `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
@@ -474,6 +502,11 @@ BytePlus ARK provides access to the same models as Volcano Engine for internatio
 
 Onboarding defaults to the coding surface, but the general `byteplus/*`
 catalog is registered at the same time.
+
+In onboarding/configure model pickers, the BytePlus auth choice prefers both
+`byteplus/*` and `byteplus-plan/*` rows. If those models are not loaded yet,
+OpenClaw falls back to the unfiltered catalog instead of showing an empty
+provider-scoped picker.
 
 Available models:
 
@@ -525,9 +558,21 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 - MiniMax OAuth (CN): `--auth-choice minimax-cn-oauth`
 - MiniMax API key (Global): `--auth-choice minimax-global-api`
 - MiniMax API key (CN): `--auth-choice minimax-cn-api`
-- Auth: `MINIMAX_API_KEY`
+- Auth: `MINIMAX_API_KEY` for `minimax`; `MINIMAX_OAUTH_TOKEN` or
+  `MINIMAX_API_KEY` for `minimax-portal`
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
+
+On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by
+default unless you explicitly set it, and `/fast on` rewrites
+`MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
+
+Plugin-owned capability split:
+
+- Text/chat defaults stay on `minimax/MiniMax-M2.7`
+- Image generation is `minimax/image-01` or `minimax-portal/image-01`
+- Image understanding is plugin-owned `MiniMax-VL-01` on both MiniMax auth paths
+- Web search stays on provider id `minimax`
 
 ### Ollama
 

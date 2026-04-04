@@ -1,15 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  composeProviderStreamWrappers,
-  createToolStreamWrapper,
-} from "openclaw/plugin-sdk/provider-stream";
-import {
-  jsonResult,
-  readProviderEnvValue,
-} from "openclaw/plugin-sdk/provider-web-search";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
 import {
   applyXaiModelCompat,
   normalizeXaiModelId,
@@ -20,21 +13,22 @@ import {
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
-  createXaiFastModeWrapper,
-  createXaiToolCallArgumentDecodingWrapper,
-  createXaiToolPayloadCompatibilityWrapper,
+  wrapXaiProviderStream,
 } from "./stream.js";
-import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
+const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "openai-compatible",
+});
 
 function hasResolvableXaiApiKey(config: unknown): boolean {
   return Boolean(
     resolveFallbackXaiAuth(config as OpenClawConfig | undefined)?.apiKey ||
-      readProviderEnvValue(["XAI_API_KEY"]),
+    readProviderEnvValue(["XAI_API_KEY"]),
   );
 }
 
@@ -200,7 +194,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildXaiProvider,
     },
-    buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
+    ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     prepareExtraParams: (ctx) => {
       const extraParams = ctx.extraParams;
       if (extraParams && extraParams.tool_stream !== undefined) {
@@ -211,19 +205,7 @@ export default defineSingleProviderPluginEntry({
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) => {
-      const extraParams = ctx.extraParams;
-      const fastMode = extraParams?.fastMode;
-      const toolStreamEnabled = extraParams?.tool_stream !== false;
-      return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
-        let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
-        if (typeof fastMode === "boolean") {
-          wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
-        }
-        wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
-        return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
-      });
-    },
+    wrapStreamFn: (ctx) => wrapXaiProviderStream(ctx),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
