@@ -114,6 +114,75 @@ describe("prompt cache observability", () => {
     ).toBeNull();
   });
 
+  it("treats reordered tool lists as the same diagnostics tool set", () => {
+    beginPromptCacheObservation({
+      sessionId: "session-1",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      toolNames: ["read", "write"],
+    });
+    completePromptCacheObservation({
+      sessionId: "session-1",
+      usage: { cacheRead: 8_000 },
+    });
+
+    const second = beginPromptCacheObservation({
+      sessionId: "session-1",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      toolNames: ["write", "read"],
+    });
+
+    expect(second.changes).toBeNull();
+  });
+
+  it("evicts old tracker entries when the tracker map grows past the soft cap", () => {
+    beginPromptCacheObservation({
+      sessionId: "session-0",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      toolNames: ["read"],
+    });
+    completePromptCacheObservation({
+      sessionId: "session-0",
+      usage: { cacheRead: 8_000 },
+    });
+
+    for (let index = 1; index <= 513; index += 1) {
+      beginPromptCacheObservation({
+        sessionId: `session-${index}`,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        streamStrategy: "boundary-aware:openai-responses",
+        systemPrompt: `stable system ${index}`,
+        toolNames: ["read"],
+      });
+    }
+
+    const restarted = beginPromptCacheObservation({
+      sessionId: "session-0",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      streamStrategy: "boundary-aware:openai-responses",
+      systemPrompt: "stable system",
+      toolNames: ["read"],
+    });
+
+    expect(restarted.previousCacheRead).toBeNull();
+    expect(restarted.changes).toBeNull();
+  });
+
   it("ignores missing usage and preserves the previous cache-read baseline", () => {
     beginPromptCacheObservation({
       sessionId: "session-1",

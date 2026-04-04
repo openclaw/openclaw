@@ -113,6 +113,8 @@ function buildRunnerSessionPaths(sessionId: string) {
 
 function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | undefined {
   const candidate = (model as { baseUrl?: unknown }).baseUrl;
+  return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
+}
 
 async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
   if (!liveCacheTraceFile) {
@@ -136,10 +138,6 @@ async function expectCacheTraceStages(
   for (const stage of requiredStages) {
     expect(stages.has(stage)).toBe(true);
   }
-}
-
-function resolveProviderBaseUrl(fixture: LiveResolvedModel): string | undefined {
-  return resolveProviderBaseUrl(fixture.model);
 }
 
 function resolveDefaultProviderBaseUrl(model: LiveResolvedModel["model"]): string {

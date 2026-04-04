@@ -46,6 +46,7 @@ type PromptCacheTracker = {
 };
 
 const trackers = new Map<string, PromptCacheTracker>();
+const MAX_TRACKERS = 512;
 
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
@@ -56,6 +57,24 @@ function digestText(value: string): string {
 
 function buildTrackerKey(params: { sessionKey?: string; sessionId: string }): string {
   return params.sessionKey?.trim() || params.sessionId;
+}
+
+function buildToolDigest(toolNames: string[]): string {
+  // Treat diagnostics as set-stable here: order changes alone should not look
+  // like a real cache break when the same tool set is still present.
+  return digestText(JSON.stringify([...toolNames].toSorted()));
+}
+
+function setTracker(key: string, tracker: PromptCacheTracker): void {
+  if (trackers.has(key)) {
+    trackers.delete(key);
+  } else if (trackers.size >= MAX_TRACKERS) {
+    const oldestKey = trackers.keys().next().value;
+    if (typeof oldestKey === "string") {
+      trackers.delete(oldestKey);
+    }
+  }
+  trackers.set(key, tracker);
 }
 
 function diffSnapshots(
@@ -137,13 +156,13 @@ export function beginPromptCacheObservation(params: {
     streamStrategy: params.streamStrategy,
     transport: params.transport,
     systemPromptDigest: digestText(params.systemPrompt),
-    toolDigest: digestText(JSON.stringify(params.toolNames)),
+    toolDigest: buildToolDigest(params.toolNames),
     toolCount: params.toolNames.length,
     toolNames: [...params.toolNames],
   };
   const previous = trackers.get(key);
   const changes = previous ? diffSnapshots(previous.snapshot, snapshot) : null;
-  trackers.set(key, {
+  setTracker(key, {
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     pendingChanges: changes,
