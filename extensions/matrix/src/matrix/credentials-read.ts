@@ -21,6 +21,16 @@ export type MatrixStoredCredentials = {
   lastUsedAt?: string;
 };
 
+type MatrixCredentialsFileLoadResult =
+  | {
+      kind: "loaded";
+      source: "current" | "legacy";
+      credentials: MatrixStoredCredentials | null;
+    }
+  | {
+      kind: "missing";
+    };
+
 function resolveStateDir(env: NodeJS.ProcessEnv): string {
   try {
     return getMatrixRuntime().state.resolveStateDir(env, os.homedir);
@@ -36,7 +46,7 @@ function resolveStateDir(env: NodeJS.ProcessEnv): string {
   }
 }
 
-function resolveLegacyMatrixCredentialsPath(env: NodeJS.ProcessEnv): string | null {
+function resolveLegacyMatrixCredentialsPath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveMatrixCredentialsDir(env), "credentials.json");
 }
 
@@ -76,17 +86,14 @@ function parseMatrixCredentialsFile(filePath: string): MatrixStoredCredentials |
   return parsed as MatrixStoredCredentials;
 }
 
-function loadMatrixCredentialsFile(filePath: string):
-  | {
-      kind: "loaded";
-      credentials: MatrixStoredCredentials | null;
-    }
-  | {
-      kind: "missing";
-    } {
+function loadMatrixCredentialsFile(
+  filePath: string,
+  source: "current" | "legacy",
+): MatrixCredentialsFileLoadResult {
   try {
     return {
       kind: "loaded",
+      source,
       credentials: parseMatrixCredentialsFile(filePath),
     };
   } catch (error) {
@@ -97,16 +104,15 @@ function loadMatrixCredentialsFile(filePath: string):
   }
 }
 
-function loadLegacyMatrixCredentialsWithCurrentRetry(params: {
+function loadLegacyMatrixCredentialsWithCurrentFallback(params: {
   legacyPath: string;
-  credPath: string;
-}): MatrixStoredCredentials | null {
-  const legacy = loadMatrixCredentialsFile(params.legacyPath);
+  currentPath: string;
+}): MatrixCredentialsFileLoadResult {
+  const legacy = loadMatrixCredentialsFile(params.legacyPath, "legacy");
   if (legacy.kind === "loaded") {
-    return legacy.credentials;
+    return legacy;
   }
-  const current = loadMatrixCredentialsFile(params.credPath);
-  return current.kind === "loaded" ? current.credentials : null;
+  return loadMatrixCredentialsFile(params.currentPath, "current");
 }
 
 export function resolveMatrixCredentialsDir(
@@ -129,9 +135,9 @@ export function loadMatrixCredentials(
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string | null,
 ): MatrixStoredCredentials | null {
-  const credPath = resolveMatrixCredentialsPath(env, accountId);
+  const currentPath = resolveMatrixCredentialsPath(env, accountId);
   try {
-    const current = loadMatrixCredentialsFile(credPath);
+    const current = loadMatrixCredentialsFile(currentPath, "current");
     if (current.kind === "loaded") {
       return current.credentials;
     }
@@ -141,19 +147,24 @@ export function loadMatrixCredentials(
       return null;
     }
 
-    const parsed = loadLegacyMatrixCredentialsWithCurrentRetry({ legacyPath, credPath });
-    if (!parsed) {
+    const loaded = loadLegacyMatrixCredentialsWithCurrentFallback({
+      legacyPath,
+      currentPath,
+    });
+    if (loaded.kind !== "loaded" || !loaded.credentials) {
       return null;
     }
 
-    try {
-      fs.mkdirSync(path.dirname(credPath), { recursive: true });
-      fs.renameSync(legacyPath, credPath);
-    } catch {
-      // Keep returning the legacy credentials even if migration fails.
+    if (loaded.source === "legacy") {
+      try {
+        fs.mkdirSync(path.dirname(currentPath), { recursive: true });
+        fs.renameSync(legacyPath, currentPath);
+      } catch {
+        // Keep returning the legacy credentials even if migration fails.
+      }
     }
 
-    return parsed;
+    return loaded.credentials;
   } catch {
     return null;
   }
