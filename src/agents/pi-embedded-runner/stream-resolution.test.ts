@@ -35,6 +35,20 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
     ).toBe("boundary-aware:openai-responses");
   });
 
+  it("describes default Codex fallback shaping", () => {
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: undefined,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "openai-codex-responses",
+          provider: "openai-codex",
+          id: "codex-mini-latest",
+        } as never,
+      }),
+    ).toBe("boundary-aware:openai-codex-responses");
+  });
+
   it("keeps custom session streams labeled as custom", () => {
     expect(
       describeEmbeddedAgentStreamStrategy({
@@ -60,6 +74,21 @@ describe("resolveEmbeddedAgentStreamFn", () => {
         api: "openai-responses",
         provider: "openai",
         id: "gpt-5.4",
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
+  it("routes Codex responses fallbacks through boundary-aware transports", () => {
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "codex-mini-latest",
       } as never,
     });
 

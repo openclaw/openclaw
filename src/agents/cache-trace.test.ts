@@ -69,6 +69,49 @@ describe("createCacheTrace", () => {
     expect(event.system).toBe("");
   });
 
+  it("records stream context from systemPrompt when wrapping stream functions", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+            includeSystem: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const wrapped = trace?.wrapStreamFn(((model, context, options) => ({
+      model,
+      context,
+      options,
+    })) as never);
+
+    wrapped?.(
+      {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+      } as never,
+      {
+        systemPrompt: "system prompt text",
+        messages: [],
+      } as never,
+      {},
+    );
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.stage).toBe("stream:context");
+    expect(event.system).toBe("system prompt text");
+    expect(event.systemDigest).toBeTypeOf("string");
+  });
+
   it("respects env overrides for enablement", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({
