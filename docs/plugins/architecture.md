@@ -1035,6 +1035,9 @@ authoring plugins:
   `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
   `<plugin-package-root>/index.js` is the bundled plugin entry,
   and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
+- Facade-loaded public entry points prefer the active runtime config snapshot
+  when one exists, then fall back to the resolved config file on disk when
+  OpenClaw is not yet serving a runtime snapshot.
 - No bundled channel-branded public subpaths remain. Channel-specific helper and
   runtime seams live under `<plugin-package-root>/api.js` and `<plugin-package-root>/runtime-api.js`;
   the public SDK contract is the generic shared primitives instead.
