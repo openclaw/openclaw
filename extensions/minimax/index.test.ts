@@ -1,6 +1,16 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import { MINIMAX_API_BASE_URL } from "./model-definitions.js";
+
+vi.mock("./oauth.runtime.js", () => ({
+  loginMiniMaxPortalOAuth: vi.fn(async () => ({
+    access: "minimax-oauth-access-token",
+    refresh: "minimax-oauth-refresh-token",
+    expires: Date.now() + 60_000,
+    resourceUrl: MINIMAX_API_BASE_URL,
+  })),
+}));
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -175,5 +185,49 @@ describe("minimax provider hooks", () => {
 
     expect(resolveOAuthToken).toHaveBeenCalledWith({ provider: "minimax-portal" });
     expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
+  });
+
+  it("writes the MiniMax portal catalog into the OAuth config patch", async () => {
+    const registeredProviders: Array<Record<string, unknown>> = [];
+    minimaxPlugin.register({
+      registerProvider(provider: Record<string, unknown>) {
+        registeredProviders.push(provider);
+      },
+      registerMediaUnderstandingProvider() {},
+      registerImageGenerationProvider() {},
+      registerSpeechProvider() {},
+      registerWebSearchProvider() {},
+    } as never);
+
+    const portalProvider = registeredProviders.find((provider) => provider.id === "minimax-portal") as {
+      auth: Array<{ id: string; run: (ctx: unknown) => Promise<unknown> }>;
+    };
+    const oauthMethod = portalProvider.auth.find((method) => method.id === "oauth");
+    expect(oauthMethod).toBeDefined();
+
+    const result = (await oauthMethod?.run({
+      prompter: {
+        progress() {
+          return { stop() {} };
+        },
+        note: vi.fn(async () => undefined),
+      },
+      openUrl: vi.fn(async () => undefined),
+    } as never)) as {
+      configPatch?: {
+        models?: {
+          providers?: Record<string, { baseUrl?: string; api?: string; authHeader?: boolean; models?: Array<{ id: string }> }>;
+        };
+      };
+    };
+
+    const portalConfig = result.configPatch?.models?.providers?.["minimax-portal"];
+    expect(portalConfig).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      api: "anthropic-messages",
+      authHeader: true,
+    });
+    expect(portalConfig?.models?.length).toBeGreaterThan(0);
+    expect(portalConfig?.models?.some((model) => model.id === "MiniMax-M2.7")).toBe(true);
   });
 });

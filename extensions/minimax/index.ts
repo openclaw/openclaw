@@ -73,6 +73,16 @@ function buildPortalProviderCatalog(params: { baseUrl: string; apiKey: string })
   };
 }
 
+function buildPortalProviderConfigPatch(baseUrl: string) {
+  const provider = buildMinimaxPortalProvider();
+  return {
+    baseUrl,
+    api: provider.api,
+    authHeader: provider.authHeader,
+    models: provider.models,
+  };
+}
+
 function resolveApiCatalog(ctx: ProviderCatalogContext) {
   const apiKey = ctx.resolveProviderApiKey(API_PROVIDER_ID).apiKey;
   if (!apiKey) {
@@ -143,10 +153,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         configPatch: {
           models: {
             providers: {
-              [PORTAL_PROVIDER_ID]: {
-                baseUrl,
-                models: [],
-              },
+              [PORTAL_PROVIDER_ID]: buildPortalProviderConfigPatch(baseUrl),
             },
           },
           agents: {
