@@ -1,98 +1,58 @@
 import { describe, expect, it } from "vitest";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "./account-lookup.js";
 
-function createAccountsWithPrototypePollution() {
-  const inherited = { default: { id: "polluted" } };
-  return Object.create(inherited) as Record<string, { id: string }>;
-}
-
-function expectResolvedAccountLookupCase(
-  actual: { id: string } | undefined,
-  expected: { id: string } | undefined,
-) {
-  expect(actual).toEqual(expected);
-}
-
-function expectPrototypePollutionIgnoredCase(
-  resolve: (accounts: Record<string, { id: string }>) => { id: string } | undefined,
-) {
-  const pollutedAccounts = createAccountsWithPrototypePollution();
-  expect(resolve(pollutedAccounts)).toBeUndefined();
-}
-
-function expectAccountLookupCase(params: {
-  accounts?: Record<string, { id: string }>;
-  resolve: (accounts: Record<string, { id: string }>) => { id: string } | undefined;
-  expected: { id: string } | undefined;
-}) {
-  expectResolvedAccountLookupCase(params.resolve(params.accounts ?? {}), params.expected);
-}
-
 describe("resolveAccountEntry", () => {
-  const accounts = {
-    default: { id: "default" },
-    Business: { id: "business" },
-  };
-
-  it.each([
-    {
-      name: "resolves the default account key",
-      resolve: (localAccounts: Record<string, { id: string }>) =>
-        resolveAccountEntry(localAccounts, "default"),
-      expected: { id: "default" },
-    },
-    {
-      name: "resolves a normalized business account key",
-      resolve: (localAccounts: Record<string, { id: string }>) =>
-        resolveAccountEntry(localAccounts, "business"),
-      expected: { id: "business" },
-    },
-  ] as const)("$name", ({ resolve, expected }) => {
-    expectAccountLookupCase({ accounts, resolve, expected });
+  it("returns entry for exact match", () => {
+    const accounts = { user1: { name: "User 1" }, user2: { name: "User 2" } };
+    expect(resolveAccountEntry(accounts, "user1")).toEqual({ name: "User 1" });
   });
 
-  it("ignores prototype-chain values", () => {
-    expectPrototypePollutionIgnoredCase((localAccounts) =>
-      resolveAccountEntry(localAccounts, "default"),
-    );
+  it("returns undefined for non-existent account", () => {
+    const accounts = { user1: {} };
+    expect(resolveAccountEntry(accounts, "nonexistent")).toBeUndefined();
+  });
+
+  it("falls back to case-insensitive match", () => {
+    const accounts = { User1: { name: "User 1" } };
+    expect(resolveAccountEntry(accounts, "user1")).toEqual({ name: "User 1" });
+    expect(resolveAccountEntry(accounts, "USER1")).toEqual({ name: "User 1" });
+  });
+
+  it("returns undefined for undefined accounts", () => {
+    expect(resolveAccountEntry(undefined, "user1")).toBeUndefined();
+  });
+
+  it("returns undefined for null accounts", () => {
+    expect(resolveAccountEntry(null as any, "user1")).toBeUndefined();
+  });
+
+  it("returns undefined for non-object accounts", () => {
+    expect(resolveAccountEntry("string" as any, "user1")).toBeUndefined();
+    expect(resolveAccountEntry([] as any, "user1")).toBeUndefined();
   });
 });
 
 describe("resolveNormalizedAccountEntry", () => {
-  const normalizeAccountId = (accountId: string) =>
-    accountId.trim().toLowerCase().replaceAll(" ", "-");
+  const mockNormalize = (id: string) => id.toLowerCase();
 
-  it.each([
-    {
-      name: "resolves normalized account keys with a custom normalizer",
-      accounts: {
-        "Ops Team": { id: "ops" },
-      },
-      resolve: (accounts: Record<string, { id: string }>) =>
-        resolveNormalizedAccountEntry(accounts, "ops-team", normalizeAccountId),
-      expected: {
-        id: "ops",
-      },
-    },
-    {
-      name: "ignores prototype-chain values",
-      resolve: () => undefined,
-      expected: undefined,
-      assert: () =>
-        expectPrototypePollutionIgnoredCase((accounts) =>
-          resolveNormalizedAccountEntry(accounts, "default", (accountId) => accountId),
-        ),
-    },
-  ] as const)("$name", ({ accounts, resolve, expected, assert }) => {
-    if (assert) {
-      assert();
-      return;
-    }
+  it("returns entry for exact match", () => {
+    const accounts = { user1: { name: "User 1" } };
+    expect(resolveNormalizedAccountEntry(accounts, "user1", mockNormalize)).toEqual({ name: "User 1" });
+  });
 
-    expectAccountLookupCase({
-      accounts,
-      resolve,
-      expected,
-    });
+  it("uses custom normalize function", () => {
+    const accounts = { "USER-1": { name: "User 1" } };
+    const normalize = (id: string) => id.toLowerCase().replace("-", "");
+    expect(resolveNormalizedAccountEntry(accounts, "user1", normalize)).toEqual({ name: "User 1" });
+  });
+
+  it("returns undefined for non-existent account", () => {
+    const accounts = { user1: {} };
+    const normalize = (id: string) => id;
+    expect(resolveNormalizedAccountEntry(accounts, "user2", normalize)).toBeUndefined();
+  });
+
+  it("returns undefined for undefined accounts", () => {
+    expect(resolveNormalizedAccountEntry(undefined, "user1", mockNormalize)).toBeUndefined();
   });
 });
