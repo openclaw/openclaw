@@ -1,3 +1,4 @@
+import { stripModelSpecialTokens } from "../../agents/pi-embedded-utils.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
@@ -43,5 +44,6 @@ function stripRelevantMemoriesTags(text: string): string {
 
 export function stripAssistantInternalScaffolding(text: string): string {
   const withoutReasoning = stripReasoningTagsFromText(text, { mode: "preserve", trim: "start" });
-  return stripRelevantMemoriesTags(withoutReasoning).trimStart();
+  const withoutMemories = stripRelevantMemoriesTags(withoutReasoning);
+  return stripModelSpecialTokens(withoutMemories).trimStart();
 }
