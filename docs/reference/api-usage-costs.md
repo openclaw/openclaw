@@ -61,8 +61,9 @@ OpenClaw can pick up credentials from:
 
 - **Auth profiles** (per-agent, stored in `auth-profiles.json`).
 - **Environment variables** (e.g. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
-- **Config** (`models.providers.*.apiKey`, `tools.web.search.*`, `tools.web.fetch.firecrawl.*`,
-  `memorySearch.*`, `talk.providers.*.apiKey`).
+- **Config** (`models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`,
+  `plugins.entries.firecrawl.config.webFetch.apiKey`, `memorySearch.*`,
+  `talk.providers.*.apiKey`).
 - **Skills** (`skills.entries.<name>.apiKey`) which may export keys to the skill process env.
 
 ## Features that can spend keys
@@ -149,7 +150,7 @@ See [Web tools](/tools/web).
 
 `web_fetch` can call **Firecrawl** when an API key is present:
 
-- `FIRECRAWL_API_KEY` or `tools.web.fetch.firecrawl.apiKey`
+- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webFetch.apiKey`
 
 If Firecrawl isn’t configured, the tool falls back to direct fetch + readability (no paid API).
 

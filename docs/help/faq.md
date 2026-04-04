@@ -1549,29 +1549,32 @@ for usage/billing and raise limits as needed.
             },
           },
         },
-      },
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            provider: "brave",
-            maxResults: 5,
-          },
-          fetch: {
-            enabled: true,
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+              maxResults: 5,
+            },
+            fetch: {
+              enabled: true,
+              provider: "firecrawl", // optional; omit for auto-detect
+            },
           },
         },
-      },
     }
     ```
 
     Provider-specific web-search config now lives under `plugins.entries.<plugin>.config.webSearch.*`.
     Legacy `tools.web.search.*` provider paths still load temporarily for compatibility, but they should not be used for new configs.
+    Firecrawl web-fetch fallback config lives under `plugins.entries.firecrawl.config.webFetch.*`.
 
     Notes:
 
     - If you use allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
     - `web_fetch` is enabled by default (unless explicitly disabled).
+    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. Today the bundled provider is Firecrawl.
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 
     Docs: [Web tools](/tools/web).
