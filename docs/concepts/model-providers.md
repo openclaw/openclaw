@@ -557,6 +557,10 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
+On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by
+default unless you explicitly set it, and `/fast on` rewrites
+`MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
+
 ### Ollama
 
 Ollama ships as a bundled provider plugin and uses Ollama's native API:

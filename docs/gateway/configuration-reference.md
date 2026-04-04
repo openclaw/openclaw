@@ -2455,6 +2455,10 @@ Set `MINIMAX_API_KEY`. Shortcuts:
 `openclaw onboard --auth-choice minimax-global-api` or
 `openclaw onboard --auth-choice minimax-cn-api`.
 The model catalog now defaults to M2.7 only.
+On the Anthropic-compatible streaming path, OpenClaw disables MiniMax thinking
+by default unless you explicitly set `thinking` yourself. `/fast on` or
+`params.fastMode: true` rewrites `MiniMax-M2.7` to
+`MiniMax-M2.7-highspeed`.
 
 </Accordion>
 

@@ -143,6 +143,12 @@ openclaw onboard --auth-choice minimax-cn-api
 }
 ```
 
+On the Anthropic-compatible streaming path, OpenClaw now disables MiniMax
+thinking by default unless you explicitly set `thinking` yourself. MiniMax's
+streaming endpoint emits `reasoning_content` in OpenAI-style delta chunks
+instead of native Anthropic thinking blocks, which can leak internal reasoning
+into visible output if left enabled implicitly.
+
 ### MiniMax M2.7 as fallback (example)
 
 **Best for:** keep your strongest latest-generation model as primary, fail over to MiniMax M2.7.
@@ -196,6 +202,11 @@ Current MiniMax auth choices in the wizard/CLI:
 - Model refs are `minimax/<model>`.
 - Default chat model: `MiniMax-M2.7`
 - Alternate chat model: `MiniMax-M2.7-highspeed`
+- On `api: "anthropic-messages"`, OpenClaw injects
+  `thinking: { type: "disabled" }` unless thinking is already explicitly set in
+  params/config.
+- `/fast on` or `params.fastMode: true` rewrites `MiniMax-M2.7` to
+  `MiniMax-M2.7-highspeed` on the Anthropic-compatible stream path.
 - Onboarding and direct API-key setup write explicit model definitions with
   `input: ["text", "image"]` for both M2.7 variants
 - The bundled provider catalog currently exposes the chat refs as text-only
