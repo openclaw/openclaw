@@ -166,6 +166,48 @@ describe("subagent-announce-queue", () => {
     expect(sender.prompts).toEqual(["subagent completed", "subagent completed"]);
   });
 
+  it("does not duplicate internal events when collect render fallback emits a summary", async () => {
+    vi.useFakeTimers();
+    const send = vi.fn(async () => {});
+    const renderDeferredBatch = await import("../utils/deferred-render.js");
+    const renderSpy = vi.spyOn(renderDeferredBatch, "renderDeferredBatch");
+    renderSpy.mockImplementationOnce(() => {
+      throw new Error("bad display payload");
+    });
+
+    enqueueAnnounce({
+      key: "announce:test:render-fallback-summary-events",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "worker trigger one" },
+        display: { visibility: "user-visible", text: "queued item one", summaryLine: "queued one" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+        internalEvents: [{ type: "task_completion" } as never],
+      },
+      settings: { mode: "collect", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
+    });
+    enqueueAnnounce({
+      key: "announce:test:render-fallback-summary-events",
+      item: {
+        execution: { visibility: "internal", agentPrompt: "worker trigger two" },
+        display: { visibility: "user-visible", text: "queued item two", summaryLine: "queued two" },
+        enqueuedAt: Date.now(),
+        sessionKey: "agent:main:telegram:dm:u1",
+      },
+      settings: { mode: "collect", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
+    });
+
+    await vi.runAllTimersAsync();
+
+    expect(send).toHaveBeenCalled();
+    const summarySend = getSentItem(send, 0);
+    expect(summarySend.display.text).toContain("[Queue overflow]");
+    expect((summarySend as { internalEvents?: unknown[] }).internalEvents).toBeUndefined();
+    renderSpy.mockRestore();
+  });
+
   it("preserves queue summary state across failed summary delivery retries", async () => {
     const sender = createRetryingSend();
 

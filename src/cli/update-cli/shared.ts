@@ -8,6 +8,7 @@ import { normalizePackageTagInput } from "../../infra/package-tag.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
+import type { PackageManager } from "../../infra/update-check.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
@@ -16,7 +17,6 @@ import {
   type CommandRunner,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
-import type { PackageManager } from "../../infra/update-check.js";
 import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-runner.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -258,12 +258,41 @@ export async function resolveGlobalManager(params: {
       params.preferredManager === "pnpm" ||
       params.preferredManager === "bun"
     ) {
-      return params.preferredManager;
+      const preferredAvailable = await isPreferredGlobalManagerAvailable(
+        runCommand,
+        params.preferredManager,
+        params.timeoutMs,
+      );
+      if (preferredAvailable) {
+        return params.preferredManager;
+      }
     }
   }
 
   const byPresence = await detectGlobalInstallManagerByPresence(runCommand, params.timeoutMs);
   return byPresence ?? "npm";
+}
+
+async function isPreferredGlobalManagerAvailable(
+  runCommand: CommandRunner,
+  manager: GlobalInstallManager,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (manager === "bun") {
+    return await pathExists(
+      path.join(os.homedir(), ".bun", "install", "global", "node_modules", DEFAULT_PACKAGE_NAME),
+    );
+  }
+  try {
+    const res = await runCommand([manager, "root", "-g"], { timeoutMs });
+    if (res.code !== 0) {
+      return false;
+    }
+    const root = res.stdout.trim();
+    return !!root && (await pathExists(path.join(root, DEFAULT_PACKAGE_NAME)));
+  } catch {
+    return false;
+  }
 }
 
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {

@@ -269,7 +269,7 @@ function scheduleAnnounceDrain(key: string) {
                 ...summaryTarget,
                 execution: { visibility: "internal", agentPrompt: summary },
                 display: { visibility: "user-visible", text: summary },
-                internalEvents: summaryTarget.internalEvents,
+                internalEvents: undefined,
               });
               clearAnnounceSummaryState(queue);
             }
