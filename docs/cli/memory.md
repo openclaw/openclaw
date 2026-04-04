@@ -66,7 +66,7 @@ openclaw memory index --agent main --verbose
 
 - Ranks short-term candidates from `memory/YYYY-MM-DD.md` using weighted recall signals (`frequency`, `relevance`, `query diversity`, `recency`).
 - Uses recall events captured when `memory_search` returns daily-memory hits.
-- Optional auto-dreaming mode: when `plugins.entries.memory-core.config.shortTermPromotion.dreaming.enabled=true`, `memory-core` auto-manages a nightly cron job that triggers promotion in the background (no manual `openclaw cron add` required).
+- Optional auto-dreaming mode: when `plugins.entries.memory-core.config.dreaming.mode` is `core`, `deep`, or `rem`, `memory-core` auto-manages a cron job that triggers promotion in the background (no manual `openclaw cron add` required).
 - `--agent <id>`: scope to a single agent (default: the default agent).
 - `--limit <n>`: max candidates to return/apply.
 - `--min-score <n>`: minimum weighted promotion score.
@@ -81,17 +81,17 @@ openclaw memory index --agent main --verbose
 Dreaming is the overnight reflection pass for memory. It is called "dreaming" because the system revisits what was recalled during the day and decides what is worth keeping long-term.
 
 - It is opt-in and disabled by default.
-- Enable it with `plugins.entries.memory-core.config.shortTermPromotion.dreaming.enabled=true`.
-- When enabled, `memory-core` automatically creates and maintains a managed nightly cron job.
-- Set `shortTermPromotion.dreaming.limit` to `0` if you want dreaming enabled but automatic promotion effectively paused.
+- Enable it with `plugins.entries.memory-core.config.dreaming.mode`.
+- When enabled, `memory-core` automatically creates and maintains a managed cron job.
+- Set `dreaming.limit` to `0` if you want dreaming enabled but automatic promotion effectively paused.
 - Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, and temporal recency (recent recalls decay over time).
 - Promotion into `MEMORY.md` only happens when quality thresholds are met, so long-term memory stays high signal instead of collecting one-off details.
 
-Default promotion thresholds:
+Default mode presets:
 
-- `minScore=0.75`
-- `minRecallCount=3`
-- `minUniqueQueries=2`
+- `core`: daily at `0 3 * * *`, `minScore=0.75`, `minRecallCount=3`, `minUniqueQueries=2`
+- `deep`: every 12 hours (`0 */12 * * *`), `minScore=0.8`, `minRecallCount=3`, `minUniqueQueries=3`
+- `rem`: every 6 hours (`0 */6 * * *`), `minScore=0.85`, `minRecallCount=4`, `minUniqueQueries=3`
 
 Example:
 
@@ -101,10 +101,8 @@ Example:
     "entries": {
       "memory-core": {
         "config": {
-          "shortTermPromotion": {
-            "dreaming": {
-              "enabled": true
-            }
+          "dreaming": {
+            "mode": "core"
           }
         }
       }
@@ -119,4 +117,4 @@ Notes:
 - `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Dreaming schedule defaults to `0 3 * * *`; override with `plugins.entries.memory-core.config.shortTermPromotion.dreaming.cron`, `timezone`, `limit`, `minScore`, `minRecallCount`, and `minUniqueQueries`.
+- Dreaming cadence defaults to each mode's preset schedule. Override cadence with `plugins.entries.memory-core.config.dreaming.frequency` (`core|deep|rem`) and fine-tune with `timezone`, `limit`, `minScore`, `minRecallCount`, and `minUniqueQueries`.

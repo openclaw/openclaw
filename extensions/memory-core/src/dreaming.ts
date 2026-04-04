@@ -15,6 +15,44 @@ const DEFAULT_DREAMING_LIMIT = 10;
 const DEFAULT_DREAMING_MIN_SCORE = DEFAULT_PROMOTION_MIN_SCORE;
 const DEFAULT_DREAMING_MIN_RECALL_COUNT = DEFAULT_PROMOTION_MIN_RECALL_COUNT;
 const DEFAULT_DREAMING_MIN_UNIQUE_QUERIES = DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES;
+const DEFAULT_DREAMING_MODE = "off";
+const DEFAULT_DREAMING_PRESET = "core";
+
+type DreamingPreset = "core" | "deep" | "rem";
+type DreamingMode = DreamingPreset | "off";
+
+const DREAMING_PRESET_DEFAULTS: Record<
+  DreamingPreset,
+  {
+    cron: string;
+    limit: number;
+    minScore: number;
+    minRecallCount: number;
+    minUniqueQueries: number;
+  }
+> = {
+  core: {
+    cron: DEFAULT_DREAMING_CRON_EXPR,
+    limit: DEFAULT_DREAMING_LIMIT,
+    minScore: DEFAULT_DREAMING_MIN_SCORE,
+    minRecallCount: DEFAULT_DREAMING_MIN_RECALL_COUNT,
+    minUniqueQueries: DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+  },
+  deep: {
+    cron: "0 */12 * * *",
+    limit: DEFAULT_DREAMING_LIMIT,
+    minScore: 0.8,
+    minRecallCount: 3,
+    minUniqueQueries: 3,
+  },
+  rem: {
+    cron: "0 */6 * * *",
+    limit: DEFAULT_DREAMING_LIMIT,
+    minScore: 0.85,
+    minRecallCount: 4,
+    minUniqueQueries: 3,
+  },
+};
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 
@@ -96,6 +134,27 @@ function normalizeTrimmedString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeDreamingPreset(value: unknown): DreamingPreset | undefined {
+  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  if (normalized === "core" || normalized === "deep" || normalized === "rem") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeDreamingMode(value: unknown): DreamingMode {
+  const normalized = normalizeTrimmedString(value)?.toLowerCase();
+  if (
+    normalized === "off" ||
+    normalized === "core" ||
+    normalized === "deep" ||
+    normalized === "rem"
+  ) {
+    return normalized;
+  }
+  return DEFAULT_DREAMING_MODE;
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
@@ -263,22 +322,26 @@ export function resolveShortTermPromotionDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
 }): ShortTermPromotionDreamingConfig {
-  const shortTermPromotion = asRecord(params.pluginConfig?.shortTermPromotion);
-  const dreaming = asRecord(shortTermPromotion?.dreaming);
+  const dreaming = asRecord(params.pluginConfig?.dreaming);
+  const mode = normalizeDreamingMode(dreaming?.mode);
+  const enabled = mode !== "off";
+  const thresholdPreset: DreamingPreset = mode === "off" ? DEFAULT_DREAMING_PRESET : mode;
+  const frequencyPreset = normalizeDreamingPreset(dreaming?.frequency) ?? thresholdPreset;
+  const thresholdDefaults = DREAMING_PRESET_DEFAULTS[thresholdPreset];
+  const frequencyDefaults = DREAMING_PRESET_DEFAULTS[frequencyPreset];
 
-  const enabled = dreaming?.enabled === true;
-  const cron = normalizeTrimmedString(dreaming?.cron) ?? DEFAULT_DREAMING_CRON_EXPR;
+  const cron = frequencyDefaults.cron;
   const timezone =
     normalizeTrimmedString(dreaming?.timezone) ?? resolveTimezoneFallback(params.cfg);
-  const limit = normalizeNonNegativeInt(dreaming?.limit, DEFAULT_DREAMING_LIMIT);
-  const minScore = normalizeScore(dreaming?.minScore, DEFAULT_DREAMING_MIN_SCORE);
+  const limit = normalizeNonNegativeInt(dreaming?.limit, thresholdDefaults.limit);
+  const minScore = normalizeScore(dreaming?.minScore, thresholdDefaults.minScore);
   const minRecallCount = normalizeNonNegativeInt(
     dreaming?.minRecallCount,
-    DEFAULT_DREAMING_MIN_RECALL_COUNT,
+    thresholdDefaults.minRecallCount,
   );
   const minUniqueQueries = normalizeNonNegativeInt(
     dreaming?.minUniqueQueries,
-    DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+    thresholdDefaults.minUniqueQueries,
   );
 
   return {
@@ -446,10 +509,13 @@ export const __testing = {
     MANAGED_DREAMING_CRON_NAME,
     MANAGED_DREAMING_CRON_TAG,
     DREAMING_SYSTEM_EVENT_TEXT,
+    DEFAULT_DREAMING_MODE,
+    DEFAULT_DREAMING_PRESET,
     DEFAULT_DREAMING_CRON_EXPR,
     DEFAULT_DREAMING_LIMIT,
     DEFAULT_DREAMING_MIN_SCORE,
     DEFAULT_DREAMING_MIN_RECALL_COUNT,
     DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+    DREAMING_PRESET_DEFAULTS,
   },
 };

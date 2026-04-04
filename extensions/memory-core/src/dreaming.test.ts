@@ -120,22 +120,20 @@ describe("short-term dreaming config", () => {
   it("reads explicit dreaming config values", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
-        shortTermPromotion: {
-          dreaming: {
-            enabled: true,
-            cron: "15 2 * * *",
-            timezone: "UTC",
-            limit: 7,
-            minScore: 0.4,
-            minRecallCount: 2,
-            minUniqueQueries: 3,
-          },
+        dreaming: {
+          mode: "deep",
+          frequency: "rem",
+          timezone: "UTC",
+          limit: 7,
+          minScore: 0.4,
+          minRecallCount: 2,
+          minUniqueQueries: 3,
         },
       },
     });
     expect(resolved).toEqual({
       enabled: true,
-      cron: "15 2 * * *",
+      cron: constants.DREAMING_PRESET_DEFAULTS.rem.cron,
       timezone: "UTC",
       limit: 7,
       minScore: 0.4,
@@ -147,11 +145,9 @@ describe("short-term dreaming config", () => {
   it("accepts limit=0 as an explicit no-op promotion cap", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
-        shortTermPromotion: {
-          dreaming: {
-            enabled: true,
-            limit: 0,
-          },
+        dreaming: {
+          mode: "core",
+          limit: 0,
         },
       },
     });
@@ -161,22 +157,31 @@ describe("short-term dreaming config", () => {
   it("falls back to defaults when thresholds are negative", () => {
     const resolved = resolveShortTermPromotionDreamingConfig({
       pluginConfig: {
-        shortTermPromotion: {
-          dreaming: {
-            enabled: true,
-            minScore: -0.2,
-            minRecallCount: -2,
-            minUniqueQueries: -4,
-          },
+        dreaming: {
+          mode: "rem",
+          minScore: -0.2,
+          minRecallCount: -2,
+          minUniqueQueries: -4,
         },
       },
     });
     expect(resolved).toMatchObject({
       enabled: true,
-      minScore: constants.DEFAULT_DREAMING_MIN_SCORE,
-      minRecallCount: constants.DEFAULT_DREAMING_MIN_RECALL_COUNT,
-      minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
+      minScore: constants.DREAMING_PRESET_DEFAULTS.rem.minScore,
+      minRecallCount: constants.DREAMING_PRESET_DEFAULTS.rem.minRecallCount,
+      minUniqueQueries: constants.DREAMING_PRESET_DEFAULTS.rem.minUniqueQueries,
     });
+  });
+
+  it("keeps dreaming disabled when mode is off", () => {
+    const resolved = resolveShortTermPromotionDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          mode: "off",
+        },
+      },
+    });
+    expect(resolved.enabled).toBe(false);
   });
 });
 

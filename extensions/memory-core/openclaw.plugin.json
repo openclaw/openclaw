@@ -2,36 +2,37 @@
   "id": "memory-core",
   "kind": "memory",
   "uiHints": {
-    "shortTermPromotion.dreaming.enabled": {
-      "label": "Enable Dreaming Promotion",
-      "help": "Automatically schedule nightly short-term to long-term memory promotion."
+    "dreaming.mode": {
+      "label": "Dreaming Mode",
+      "placeholder": "core",
+      "help": "Select dreaming mode: off, core, deep, or rem."
     },
-    "shortTermPromotion.dreaming.cron": {
-      "label": "Dreaming Cron",
-      "placeholder": "0 3 * * *",
-      "help": "Cron expression for the managed dreaming job."
+    "dreaming.frequency": {
+      "label": "Dreaming Frequency",
+      "placeholder": "core",
+      "help": "Optional cadence override: core, deep, or rem."
     },
-    "shortTermPromotion.dreaming.timezone": {
+    "dreaming.timezone": {
       "label": "Dreaming Timezone",
       "placeholder": "America/Los_Angeles",
       "help": "IANA timezone for the managed dreaming cron schedule."
     },
-    "shortTermPromotion.dreaming.limit": {
+    "dreaming.limit": {
       "label": "Promotion Limit",
       "placeholder": "10",
       "help": "Maximum short-term candidates promoted per dreaming run (set to 0 to skip promotions)."
     },
-    "shortTermPromotion.dreaming.minScore": {
+    "dreaming.minScore": {
       "label": "Promotion Min Score",
       "placeholder": "0.75",
       "help": "Minimum weighted rank required for automatic promotion."
     },
-    "shortTermPromotion.dreaming.minRecallCount": {
+    "dreaming.minRecallCount": {
       "label": "Promotion Min Recalls",
       "placeholder": "3",
       "help": "Minimum recall count required for automatic promotion."
     },
-    "shortTermPromotion.dreaming.minUniqueQueries": {
+    "dreaming.minUniqueQueries": {
       "label": "Promotion Min Queries",
       "placeholder": "2",
       "help": "Minimum unique query count required for automatic promotion."
@@ -41,43 +42,40 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "shortTermPromotion": {
+      "dreaming": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "dreaming": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "enabled": {
-                "type": "boolean"
-              },
-              "cron": {
-                "type": "string"
-              },
-              "timezone": {
-                "type": "string"
-              },
-              "limit": {
-                "type": "number",
-                "minimum": 0
-              },
-              "minScore": {
-                "type": "number",
-                "minimum": 0,
-                "maximum": 1
-              },
-              "minRecallCount": {
-                "type": "number",
-                "minimum": 0
-              },
-              "minUniqueQueries": {
-                "type": "number",
-                "minimum": 0
-              }
-            }
+          "mode": {
+            "type": "string",
+            "enum": ["off", "core", "deep", "rem"]
+          },
+          "frequency": {
+            "type": "string",
+            "enum": ["core", "deep", "rem"]
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minScore": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "minRecallCount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "minUniqueQueries": {
+            "type": "number",
+            "minimum": 0
           }
-        }
+        },
+        "required": ["mode"]
       }
     }
   }
