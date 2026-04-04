@@ -800,17 +800,8 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('google-vertex') does not return GOOGLE_CLOUD_API_KEY when the env var is unset", async () => {
-    await withEnvAsync(
-      {
-        GOOGLE_CLOUD_API_KEY: undefined,
-      },
-      async () => {
-        const resolved = resolveEnvApiKey("google-vertex");
-        if (resolved) {
-          expect(resolved.source).not.toContain("GOOGLE_CLOUD_API_KEY");
-        }
-      },
-    );
+  it("resolveEnvApiKey('google-vertex') does not return GOOGLE_CLOUD_API_KEY when the env var is unset", () => {
+    const resolved = resolveEnvApiKey("google-vertex", {} as NodeJS.ProcessEnv);
+    expect(resolved).toBeNull();
   });
 });
