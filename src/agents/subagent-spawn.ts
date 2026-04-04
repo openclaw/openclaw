@@ -649,24 +649,11 @@ export async function spawnSubagentDirect(
       // sessions_spawn.fsPolicy provides a default spawn-time tightening.
       // Per-call params.fsPolicy may tighten further but must not replace configured ceilings.
       workspaceOnly:
+        requesterFsCeiling?.workspaceOnly === true ||
         subagentFs?.workspaceOnly === true ||
         sessionsSpawnFs?.workspaceOnly === true ||
         params.fsPolicy?.workspaceOnly === true,
-      allowedPaths: (() => {
-        const lists = [
-          subagentFs?.allowedPaths,
-          sessionsSpawnFs?.allowedPaths,
-          params.fsPolicy?.allowedPaths,
-        ].filter((value): value is string[] => Array.isArray(value));
-        if (lists.length === 0) {
-          return undefined;
-        }
-        const intersect = (a: string[], b: string[]) => {
-          const bSet = new Set(b);
-          return a.filter((item) => bSet.has(item));
-        };
-        return lists.reduce((acc, list) => intersect(acc, list));
-      })(),
+      allowedPaths: undefined,
       denyPaths:
         subagentFs?.denyPaths ||
         sessionsSpawnFs?.denyPaths ||

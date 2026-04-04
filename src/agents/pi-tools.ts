@@ -1,4 +1,8 @@
-import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
+import {
+  codingTools,
+  createReadTool,
+  readTool,
+} from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
@@ -44,10 +48,17 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
-import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import {
+  cleanToolSchemaForGemini,
+  normalizeToolParameters,
+} from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
-import { createToolFsPolicy, resolveToolFsConfig, type ToolFsPolicy } from "./tool-fs-policy.js";
+import {
+  createToolFsPolicy,
+  resolveToolFsConfig,
+  type ToolFsPolicy,
+} from "./tool-fs-policy.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -65,15 +76,21 @@ function isOpenAIProvider(provider?: string) {
   return normalized === "openai" || normalized === "openai-codex";
 }
 
-const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
+const TOOL_DENY_BY_MESSAGE_PROVIDER: Readonly<
+  Record<string, readonly string[]>
+> = {
   voice: ["tts"],
 };
-const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>> = {
+const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<
+  Record<string, readonly string[]>
+> = {
   node: ["canvas", "image", "pdf", "tts", "web_fetch", "web_search"],
 };
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
-function normalizeMessageProvider(messageProvider?: string): string | undefined {
+function normalizeMessageProvider(
+  messageProvider?: string,
+): string | undefined {
   const normalized = messageProvider?.trim().toLowerCase();
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
@@ -133,7 +150,10 @@ function applyDeferredFollowupToolDescriptions(
     if (tool.name === "exec") {
       return {
         ...tool,
-        description: describeExecTool({ agentId: params?.agentId, hasCronTool }),
+        description: describeExecTool({
+          agentId: params?.agentId,
+          hasCronTool,
+        }),
       };
     }
     if (tool.name === "process") {
@@ -151,7 +171,9 @@ function isApplyPatchAllowedForModel(params: {
   modelId?: string;
   allowModels?: string[];
 }) {
-  const allowModels = Array.isArray(params.allowModels) ? params.allowModels : [];
+  const allowModels = Array.isArray(params.allowModels)
+    ? params.allowModels
+    : [];
   if (allowModels.length === 0) {
     return true;
   }
@@ -178,7 +200,9 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const cfg = params.cfg;
   const globalExec = cfg?.tools?.exec;
   const agentExec =
-    cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
+    cfg && params.agentId
+      ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec
+      : undefined;
   return {
     host: agentExec?.host ?? globalExec?.host,
     security: agentExec?.security ?? globalExec?.security,
@@ -186,8 +210,10 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
-    strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
-    safeBinTrustedDirs: agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
+    strictInlineEval:
+      agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
+    safeBinTrustedDirs:
+      agentExec?.safeBinTrustedDirs ?? globalExec?.safeBinTrustedDirs,
     safeBinProfiles: resolveMergedSafeBinProfileFixtures({
       global: globalExec,
       local: agentExec,
@@ -199,7 +225,8 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     cleanupMs: agentExec?.cleanupMs ?? globalExec?.cleanupMs,
     notifyOnExit: agentExec?.notifyOnExit ?? globalExec?.notifyOnExit,
     notifyOnExitEmptySuccess:
-      agentExec?.notifyOnExitEmptySuccess ?? globalExec?.notifyOnExitEmptySuccess,
+      agentExec?.notifyOnExitEmptySuccess ??
+      globalExec?.notifyOnExitEmptySuccess,
     applyPatch: agentExec?.applyPatch ?? globalExec?.applyPatch,
   };
 }
@@ -327,9 +354,13 @@ export function createOpenClawCodingTools(options?: {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
-    throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
+    throw new Error(
+      "memoryFlushWritePath required for memory-triggered tool runs",
+    );
   }
-  const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
+  const memoryFlushWritePath = isMemoryFlushRun
+    ? options.memoryFlushWritePath
+    : undefined;
   const {
     agentId,
     globalPolicy,
@@ -368,7 +399,10 @@ export function createOpenClawCodingTools(options?: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+    profilePolicy,
+    profileAlsoAllow,
+  );
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
@@ -376,7 +410,9 @@ export function createOpenClawCodingTools(options?: {
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey =
-    options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
+    options?.exec?.scopeKey ??
+    options?.sessionKey ??
+    (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey)
@@ -413,7 +449,8 @@ export function createOpenClawCodingTools(options?: {
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  const applyPatchWorkspaceOnly =
+    workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
     applyPatchConfig?.enabled !== false &&
     isOpenAIProvider(options?.modelProvider) &&
@@ -459,7 +496,9 @@ export function createOpenClawCodingTools(options?: {
       });
       return [
         shouldWrapFsTools
-          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy })
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+              policy: fsPolicy,
+            })
           : wrapped,
       ];
     }
@@ -470,10 +509,14 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, {
+        workspaceOnly,
+      });
       return [
         shouldWrapFsTools
-          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy })
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+              policy: fsPolicy,
+            })
           : wrapped,
       ];
     }
@@ -481,10 +524,14 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+      const wrapped = createHostWorkspaceEditTool(workspaceRoot, {
+        workspaceOnly,
+      });
       return [
         shouldWrapFsTools
-          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, { policy: fsPolicy })
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+              policy: fsPolicy,
+            })
           : wrapped,
       ];
     }
@@ -500,9 +547,12 @@ export function createOpenClawCodingTools(options?: {
     node: options?.exec?.node ?? execConfig.node,
     pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
     safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
-    strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
-    safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
-    safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
+    strictInlineEval:
+      options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
+    safeBinTrustedDirs:
+      options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
+    safeBinProfiles:
+      options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
     agentId,
     cwd: workspaceRoot,
     allowBackground,
@@ -515,10 +565,12 @@ export function createOpenClawCodingTools(options?: {
     backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
     timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
     approvalRunningNoticeMs:
-      options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
+      options?.exec?.approvalRunningNoticeMs ??
+      execConfig.approvalRunningNoticeMs,
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
     notifyOnExitEmptySuccess:
-      options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
+      options?.exec?.notifyOnExitEmptySuccess ??
+      execConfig.notifyOnExitEmptySuccess,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,
@@ -544,13 +596,18 @@ export function createOpenClawCodingTools(options?: {
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
+          fsPolicy,
         });
   const applyPatchToolWrapped =
     applyPatchTool && shouldWrapFsTools
-      ? wrapToolWorkspaceRootGuardWithOptions(applyPatchTool as unknown as AnyAgentTool, sandboxRoot ?? workspaceRoot, {
-          containerWorkdir: sandbox?.containerWorkdir,
-          policy: fsPolicy,
-        })
+      ? wrapToolWorkspaceRootGuardWithOptions(
+          applyPatchTool as unknown as AnyAgentTool,
+          sandboxRoot ?? workspaceRoot,
+          {
+            containerWorkdir: sandbox?.containerWorkdir,
+            policy: fsPolicy,
+          },
+        )
       : applyPatchTool;
   const tools: AnyAgentTool[] = [
     ...base,
@@ -559,28 +616,42 @@ export function createOpenClawCodingTools(options?: {
         ? [
             shouldWrapFsTools
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedEditTool({
+                    root: sandboxRoot,
+                    bridge: sandboxFsBridge!,
+                  }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                     policy: fsPolicy,
                   },
                 )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedEditTool({
+                  root: sandboxRoot,
+                  bridge: sandboxFsBridge!,
+                }),
             shouldWrapFsTools
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedWriteTool({
+                    root: sandboxRoot,
+                    bridge: sandboxFsBridge!,
+                  }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                     policy: fsPolicy,
                   },
                 )
-              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedWriteTool({
+                  root: sandboxRoot,
+                  bridge: sandboxFsBridge!,
+                }),
           ]
         : []
       : []),
-    ...(applyPatchToolWrapped ? [applyPatchToolWrapped as unknown as AnyAgentTool] : []),
+    ...(applyPatchToolWrapped
+      ? [applyPatchToolWrapped as unknown as AnyAgentTool]
+      : []),
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).
@@ -659,17 +730,23 @@ export function createOpenClawCodingTools(options?: {
     toolsForMemoryFlush,
     options?.messageProvider,
   );
-  const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
-    config: options?.config,
-    modelProvider: options?.modelProvider,
-    modelApi: options?.modelApi,
-    modelId: options?.modelId,
-    agentDir: options?.agentDir,
-    modelCompat: options?.modelCompat,
-  });
+  const toolsForModelProvider = applyModelProviderToolPolicy(
+    toolsForMessageProvider,
+    {
+      config: options?.config,
+      modelProvider: options?.modelProvider,
+      modelApi: options?.modelApi,
+      modelId: options?.modelId,
+      agentDir: options?.agentDir,
+      modelCompat: options?.modelCompat,
+    },
+  );
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(
+    toolsForModelProvider,
+    senderIsOwner,
+  );
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -681,7 +758,8 @@ export function createOpenClawCodingTools(options?: {
         profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
         providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
         providerProfile,
-        providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
+        providerProfileUnavailableCoreWarningAllowlist:
+          providerProfilePolicy?.allow,
         globalPolicy,
         globalProviderPolicy,
         agentPolicy,
@@ -709,15 +787,21 @@ export function createOpenClawCodingTools(options?: {
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,
-      loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: options?.config,
+        agentId,
+      }),
     }),
   );
   const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    ? withHooks.map((tool) =>
+        wrapToolWithAbortSignal(tool, options.abortSignal),
+      )
     : withHooks;
-  const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
-    agentId,
-  });
+  const withDeferredFollowupDescriptions =
+    applyDeferredFollowupToolDescriptions(withAbort, {
+      agentId,
+    });
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names

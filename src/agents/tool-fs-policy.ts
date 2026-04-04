@@ -92,20 +92,48 @@ function intersectAll(
   // - Else fall back to exact-token intersection.
   const isSubsetByPrefixHeuristic = (a: string[], b: string[]) => {
     const normalize = (p: string) => p.replace(/\\/g, "/").trim();
+
+    // Heuristic: if a broader pattern looks like "<prefix>/**" treat it as a directory allow.
     const asPrefix = (p: string) => {
       const n = normalize(p);
       return n.endsWith("/**") ? n.slice(0, -3) : null;
     };
+
+    // Heuristic: consider "src/**/*.ts" as a broader pattern for "src/api/**/*.ts".
+    // This is conservative: we only treat it as a subset if the narrower starts with the
+    // same prefix up to the first globstar segment.
+    const asGlobstarPrefix = (p: string) => {
+      const n = normalize(p);
+      const idx = n.indexOf("**");
+      if (idx === -1) {
+        return null;
+      }
+      // prefix up to the directory boundary before the globstar.
+      const cut = n.lastIndexOf("/", idx);
+      if (cut === -1) {
+        return null;
+      }
+      return n.slice(0, cut);
+    };
+
     return b.every((bp) => {
       const bNorm = normalize(bp);
       return a.some((ap) => {
-        if (ap === bp) {
+        const aNorm = normalize(ap);
+        if (aNorm === bNorm) {
           return true;
         }
-        const aPrefix = asPrefix(ap);
+
+        const aPrefix = asPrefix(aNorm);
         if (aPrefix) {
           return bNorm === aPrefix || bNorm.startsWith(aPrefix + "/");
         }
+
+        const aGlobstarPrefix = asGlobstarPrefix(aNorm);
+        if (aGlobstarPrefix) {
+          return bNorm.startsWith(aGlobstarPrefix + "/");
+        }
+
         return false;
       });
     });

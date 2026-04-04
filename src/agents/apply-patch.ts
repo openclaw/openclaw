@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { checkPathGuardStrict } from "../security/path-guard.js";
 import {
   openBoundaryFile,
   type BoundaryFileOpenResult,
@@ -100,11 +101,13 @@ export function createApplyPatchTool(
     cwd?: string;
     sandbox?: SandboxApplyPatchConfig;
     workspaceOnly?: boolean;
+    fsPolicy?: ToolFsPolicy;
   } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
   const workspaceOnly = options.workspaceOnly !== false;
+  const fsPolicy = options.fsPolicy;
 
   return {
     name: "apply_patch",
@@ -128,7 +131,7 @@ export function createApplyPatchTool(
         cwd,
         sandbox,
         workspaceOnly,
-        fsPolicy: { workspaceOnly },
+        fsPolicy: fsPolicy ?? { workspaceOnly },
         signal,
       });
 
@@ -369,39 +372,10 @@ async function resolvePatchPath(
     : resolvePathFromInput(filePath, options.cwd);
 
   // Apply per-tool filesystem policy (PathGuard) to patch targets.
+  // Delegate to the canonical enforcement layer so apply_patch matches the same
+  // semantics as read/write/edit and local media loaders.
   if (options.fsPolicy) {
-    const relative = toRelativeSandboxPath(options.cwd, resolved, {
-      allowRoot: true,
-    });
-    const { default: micromatch } = await import("micromatch");
-
-    if (
-      options.fsPolicy.workspaceOnly &&
-      (relative.startsWith("../") || relative === "..")
-    ) {
-      throw new Error(
-        `apply_patch: path "${filePath}" is outside workspace root.`,
-      );
-    }
-    if (options.fsPolicy.denyPaths && options.fsPolicy.denyPaths.length > 0) {
-      if (micromatch.isMatch(relative, options.fsPolicy.denyPaths)) {
-        throw new Error(
-          `apply_patch: path "${relative}" is denied by fsPolicy.`,
-        );
-      }
-    }
-    if (options.fsPolicy.allowedPaths !== undefined) {
-      if (options.fsPolicy.allowedPaths.length === 0) {
-        throw new Error(
-          `apply_patch: filesystem access denied by fsPolicy (empty allowlist).`,
-        );
-      }
-      if (!micromatch.isMatch(relative, options.fsPolicy.allowedPaths)) {
-        throw new Error(
-          `apply_patch: path "${relative}" is not allowed by fsPolicy.`,
-        );
-      }
-    }
+    await checkPathGuardStrict(resolved, options.fsPolicy, options.cwd);
   }
 
   return {
