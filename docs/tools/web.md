@@ -271,6 +271,9 @@ show the `x_search` prompt.
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
   rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
+  Gemini, Grok, and Kimi return one synthesized answer with citations. They
+  accept `count` for shared-tool compatibility, but it does not change the
+  grounded answer shape.
   Firecrawl and Tavily only support `query` and `count` through `web_search`
   -- use their dedicated tools for advanced options.
 </Warning>

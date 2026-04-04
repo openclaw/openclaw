@@ -83,7 +83,11 @@ similar to Gemini and Grok's grounded response approach.
 
 ## Supported parameters
 
-Kimi search supports the standard `query` and `count` parameters.
+Kimi search supports `query`.
+
+`count` is accepted for shared `web_search` compatibility, but Kimi still
+returns one synthesized answer with citations rather than an N-result list.
+
 Provider-specific filters are not currently supported.
 
 ## Related
