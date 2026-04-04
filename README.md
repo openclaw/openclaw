@@ -1,4 +1,4 @@
-# 🦞 OpenClaw — Personal AI Assistant
+# 🦞 OpenClaw — Self-Hosted AI Assistant, MCP Gateway, and Multi-Channel Bot Runtime
 
 <p align="center">
     <picture>
@@ -18,10 +18,20 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WebChat). It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+**OpenClaw** is a _self-hosted personal AI assistant_, _MCP-compatible gateway_, and _multi-channel bot runtime_ you run on your own devices.
+It connects Model Context Protocol (MCP) tools, browser automation, and the channels you already use: WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, BlueBubbles, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, and WebChat. It can speak and listen on macOS, iOS, and Android, route multi-agent workflows, and render a live Canvas you control.
 
-If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
+If you are looking for a self-hosted AI assistant, a Discord AI bot runtime, a Telegram or WhatsApp AI gateway, a browser automation control plane, or a local-first multi-agent assistant, this is what OpenClaw is built for.
+
+## Popular use cases
+
+- Run a self-hosted AI assistant on your own Mac, Linux box, or homelab gateway.
+- Turn Discord, Telegram, Slack, WhatsApp, or iMessage into a persistent AI bot inbox.
+- Connect browser automation, Canvas, nodes, and MCP tools to one long-running gateway.
+- Route different channels, users, and groups to different agents and workspaces.
+- Use VeriClaw for evidence-first correction, anti-hallucination triage, verification, and delivery integrity.
+
+Start here: [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Onboarding Wizard](https://docs.openclaw.ai/start/wizard) · [Docs](https://docs.openclaw.ai) · [Discord](https://discord.gg/clawd)
 
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
