@@ -230,7 +230,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        currentStreamFn: undefined,
+        currentStreamFn: expect.any(Function),
         sessionId: "session-1",
       }),
     );

@@ -81,13 +81,13 @@ const wsRegistry = new Map<string, WsSession>();
 
 type OpenAIWsStreamDeps = {
   createManager: (options?: OpenAIWebSocketManagerOptions) => OpenAIWebSocketManager;
-  createHttpFallbackStreamFn: (model: Parameters<StreamFn>[0]) => StreamFn | undefined;
+  createHttpFallbackStreamFn: (model: ProviderRuntimeModel) => StreamFn | undefined;
   streamSimple: typeof piAi.streamSimple;
 };
 
 const defaultOpenAIWsStreamDeps: OpenAIWsStreamDeps = {
   createManager: (options) => new OpenAIWebSocketManager(options),
-  createHttpFallbackStreamFn: (model) => createBoundaryAwareStreamFnForModel(model as never),
+  createHttpFallbackStreamFn: (model) => createBoundaryAwareStreamFnForModel(model),
   streamSimple: (...args) => piAi.streamSimple(...args),
 };
 
@@ -961,7 +961,8 @@ async function fallbackToHttp(
     ...(signal ? { signal } : {}),
   };
   const httpStreamFn =
-    openAIWsStreamDeps.createHttpFallbackStreamFn(model) ?? openAIWsStreamDeps.streamSimple;
+    openAIWsStreamDeps.createHttpFallbackStreamFn(model as ProviderRuntimeModel) ??
+    openAIWsStreamDeps.streamSimple;
   const httpStream = httpStreamFn(model, context, mergedOptions);
   for await (const event of httpStream) {
     if (fallbackOptions?.suppressStart && event.type === "start") {

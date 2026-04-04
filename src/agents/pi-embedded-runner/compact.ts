@@ -109,7 +109,10 @@ import { buildModelAliasLines, resolveModelAsync } from "./model.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import { resolveEmbeddedAgentStreamFn } from "./stream-resolution.js";
+import {
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+} from "./stream-resolution.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
 import {
@@ -769,7 +772,7 @@ export async function compactEmbeddedPiSessionDirect(
       // Compaction builds the same embedded system prompt, so it must flow
       // through the same transport/payload shaping stack as normal turns.
       session.agent.streamFn = resolveEmbeddedAgentStreamFn({
-        currentStreamFn: undefined,
+        currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session }),
         providerStreamFn,
         shouldUseWebSocketTransport,
         wsApiKey,
