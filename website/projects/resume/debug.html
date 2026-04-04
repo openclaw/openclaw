@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Teaching Section</title>
+    <!-- Test production auto-deploy 2025-11-10 (protection disabled) -->
+</head>
+<body>
+    <div id="debug-output"></div>
+    <div id="teaching-list"></div>
+
+    <script>
+        const debugDiv = document.getElementById('debug-output');
+        let currentLang = 'zh-TW';
+
+        debugDiv.innerHTML = '<p>開始載入 data.json...</p>';
+
+        fetch('data.json')
+            .then(response => {
+                debugDiv.innerHTML += '<p>✅ data.json 回應成功</p>';
+                return response.json();
+            })
+            .then(data => {
+                debugDiv.innerHTML += '<p>✅ JSON 解析成功</p>';
+
+                if (data['zh-TW']) {
+                    debugDiv.innerHTML += '<p>✅ zh-TW 資料存在</p>';
+                } else {
+                    debugDiv.innerHTML += '<p>❌ 找不到 zh-TW 資料</p>';
+                    return;
+                }
+
+                if (data['zh-TW'].teaching) {
+                    debugDiv.innerHTML += '<p>✅ teaching 資料存在</p>';
+                    debugDiv.innerHTML += '<p>Teaching stats: ' + JSON.stringify(data['zh-TW'].teaching.stats) + '</p>';
+                } else {
+                    debugDiv.innerHTML += '<p>❌ 找不到 teaching 資料</p>';
+                    return;
+                }
+
+                // 嘗試渲染
+                const teachingData = data['zh-TW'].teaching;
+                let teachingHTML = '';
+
+                if (teachingData.stats) {
+                    const statsLabels = ['年經驗', '培訓學員', '教學時數', '合作機構'];
+                    teachingHTML += '<div><h3>教學統計</h3>';
+                    teachingHTML += `<p>${teachingData.stats.years} ${statsLabels[0]}</p>`;
+                    teachingHTML += `<p>${teachingData.stats.students} ${statsLabels[1]}</p>`;
+                    teachingHTML += `<p>${teachingData.stats.hours} ${statsLabels[2]}</p>`;
+                    teachingHTML += `<p>${teachingData.stats.institutions} ${statsLabels[3]}</p>`;
+                    teachingHTML += '</div>';
+                }
+
+                if (teachingData.certifications) {
+                    teachingHTML += '<div><h3>官方認證</h3>';
+                    teachingData.certifications.forEach(cert => {
+                        teachingHTML += `<p><strong>${cert.title}</strong> - ${cert.organization}</p>`;
+                    });
+                    teachingHTML += '</div>';
+                }
+
+                document.getElementById('teaching-list').innerHTML = teachingHTML;
+                debugDiv.innerHTML += '<p>✅ 教學內容已渲染</p>';
+            })
+            .catch(error => {
+                debugDiv.innerHTML += '<p>❌ 錯誤: ' + error.message + '</p>';
+                console.error('Error:', error);
+            });
+    </script>
+</body>
+</html>

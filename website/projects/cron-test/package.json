@@ -1,0 +1,15 @@
+{
+  "name": "cron-test",
+  "version": "1.0.0",
+  "description": "ThinkerCafe Cron Job Test Project",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "keywords": ["cron", "vercel", "test"],
+  "author": "Cruz Tang <cruz@thinker-cafe.com>",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {}
+}

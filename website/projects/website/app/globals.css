@@ -1,0 +1,334 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Updated color system for enhanced dark mode with tech aesthetic */
+  --background: oklch(0.98 0 0); /* Near white for subtle warmth */
+  --foreground: oklch(0.15 0 0); /* Deep charcoal for text */
+  --card: oklch(0.99 0 0); /* Pure white cards */
+  --card-foreground: oklch(0.25 0 0); /* Dark gray text on cards */
+  --popover: oklch(0.99 0 0);
+  --popover-foreground: oklch(0.15 0 0);
+  --primary: oklch(0.68 0.15 41); /* Orange brand color */
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.45 0.05 220); /* Cool blue-gray for tech feel */
+  --secondary-foreground: oklch(1 0 0);
+  --muted: oklch(0.96 0 0); /* Light muted background */
+  --muted-foreground: oklch(0.45 0 0); /* Medium gray text */
+  --accent: oklch(0.68 0.15 41); /* Orange accent */
+  --accent-foreground: oklch(1 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.9 0 0); /* Subtle borders */
+  --input: oklch(0.99 0 0);
+  --ring: oklch(0.68 0.15 41 / 0.3); /* Orange focus ring */
+  --chart-1: oklch(0.68 0.15 41);
+  --chart-2: oklch(0.45 0.05 220);
+  --chart-3: oklch(0.15 0 0);
+  --chart-4: oklch(0.96 0 0);
+  --chart-5: oklch(0.45 0 0);
+  --radius: 0.75rem; /* Slightly more rounded for modern feel */
+  --sidebar: oklch(0.99 0 0);
+  --sidebar-foreground: oklch(0.15 0 0);
+  --sidebar-primary: oklch(0.99 0 0);
+  --sidebar-primary-foreground: oklch(0.15 0 0);
+  --sidebar-accent: oklch(0.68 0.15 41);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(0.9 0 0);
+  --sidebar-ring: oklch(0.68 0.15 41 / 0.3);
+  --font-space-grotesk: "Space Grotesk", sans-serif;
+  --font-dm-sans: "DM Sans", sans-serif;
+}
+
+.dark {
+  /* Enhanced dark mode colors inspired by Cursor, Next.js, and Kater AI */
+  --background: oklch(0.08 0 0); /* Deep black background */
+  --foreground: oklch(0.95 0 0); /* Near white text */
+  --card: oklch(0.12 0 0); /* Dark card background */
+  --card-foreground: oklch(0.9 0 0); /* Light text on cards */
+  --popover: oklch(0.1 0 0); /* Darker popover */
+  --popover-foreground: oklch(0.95 0 0);
+  --primary: oklch(0.68 0.15 41); /* Keep orange brand consistent */
+  --primary-foreground: oklch(0.08 0 0); /* Dark text on orange */
+  --secondary: oklch(0.2 0.02 240); /* Dark blue-gray for tech aesthetic */
+  --secondary-foreground: oklch(0.95 0 0);
+  --muted: oklch(0.15 0 0); /* Dark muted background */
+  --muted-foreground: oklch(0.65 0 0); /* Medium light gray */
+  --accent: oklch(0.68 0.15 41); /* Orange accent */
+  --accent-foreground: oklch(0.08 0 0);
+  --destructive: oklch(0.55 0.2 25); /* Darker red for dark mode */
+  --destructive-foreground: oklch(0.95 0 0);
+  --border: oklch(0.18 0 0); /* Subtle dark borders */
+  --input: oklch(0.12 0 0); /* Dark input background */
+  --ring: oklch(0.68 0.15 41 / 0.4); /* Orange focus ring */
+  --chart-1: oklch(0.68 0.15 41);
+  --chart-2: oklch(0.2 0.02 240);
+  --chart-3: oklch(0.95 0 0);
+  --chart-4: oklch(0.15 0 0);
+  --chart-5: oklch(0.65 0 0);
+  --sidebar: oklch(0.1 0 0); /* Darker sidebar */
+  --sidebar-foreground: oklch(0.95 0 0);
+  --sidebar-primary: oklch(0.12 0 0);
+  --sidebar-primary-foreground: oklch(0.95 0 0);
+  --sidebar-accent: oklch(0.18 0 0);
+  --sidebar-accent-foreground: oklch(0.95 0 0);
+  --sidebar-border: oklch(0.18 0 0);
+  --sidebar-ring: oklch(0.25 0 0);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  /* Added font family variables for design system */
+  --font-heading: var(--font-space-grotesk);
+  --font-body: var(--font-dm-sans);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer utilities {
+  /* Fade in animations */
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slide-in-left {
+    from {
+      opacity: 0;
+      transform: translateX(-30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes slide-in-right {
+    from {
+      opacity: 0;
+      transform: translateX(30px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translate(-50%, -50%) translateY(0px);
+    }
+    50% {
+      transform: translate(-50%, -50%) translateY(-10px);
+    }
+  }
+
+  @keyframes glow {
+    0%,
+    100% {
+      box-shadow: 0 0 5px var(--primary), 0 0 10px var(--primary), 0 0 15px var(--primary);
+    }
+    50% {
+      box-shadow: 0 0 10px var(--primary), 0 0 20px var(--primary), 0 0 30px var(--primary);
+    }
+  }
+
+  /* Added floating particles animation for background effects */
+  @keyframes float-particles {
+    0%,
+    100% {
+      transform: translateY(0px) translateX(0px);
+      opacity: 0.3;
+    }
+    25% {
+      transform: translateY(-20px) translateX(10px);
+      opacity: 0.6;
+    }
+    50% {
+      transform: translateY(-10px) translateX(-15px);
+      opacity: 0.8;
+    }
+    75% {
+      transform: translateY(-30px) translateX(5px);
+      opacity: 0.4;
+    }
+  }
+
+@keyframes gradient-move {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+
+
+
+@keyframes glow {
+  from {
+    text-shadow: 0 0 0px rgba(255, 165, 0, 0.4),
+                 0 0 0px rgba(255, 0, 120, 0.3);
+  }
+  to {
+    text-shadow: 0 0 100px rgb(255, 255, 255),
+                 0 0 50px rgb(255, 0, 0);
+  }
+}
+
+
+ .bg-gradient-animate {
+    background-size: 200% 200%;
+    animation: gradient-move 3s ease-in-out infinite;
+  }
+
+
+
+  /* Animation classes */
+  .animate-fade-in {
+    animation: fade-in 0.6s ease-out forwards;
+  }
+
+  .animate-slide-in-left {
+    animation: slide-in-left 0.8s ease-out forwards;
+  }
+
+  .animate-slide-in-right {
+    animation: slide-in-right 0.8s ease-out forwards;
+  }
+
+  .animate-scale-in {
+    animation: scale-in 0.6s ease-out forwards;
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+
+  .animate-glow {
+    animation: glow 2.5s ease-in-out infinite alternate;
+  }
+
+  /* Added floating particles animation class */
+  .animate-float-particles {
+    animation: float-particles 8s ease-in-out infinite;
+  }
+
+  /* Delay classes */
+  .animate-delay-100 {
+    animation-delay: 0.1s;
+  }
+
+  .animate-delay-200 {
+    animation-delay: 0.2s;
+  }
+
+  .animate-delay-300 {
+    animation-delay: 0.3s;
+  }
+
+  /* Hover effects */
+  .hover-lift {
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+  }
+
+  .hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+
+  .dark .hover-lift:hover {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .hover-glow {
+    transition: box-shadow 0.3s ease-in-out;
+  }
+
+  .hover-glow:hover {
+    box-shadow: 0 0 20px var(--primary);
+  }
+
+  /* Added 3D perspective utilities for box opening effects */
+  .perspective-1000 {
+    perspective: 1000px;
+  }
+
+  .rotateX-8 {
+    transform: rotateX(8deg);
+  }
+
+  .rotateX-12 {
+    transform: rotateX(12deg);
+  }
+
+  .translateZ--50 {
+    transform: translateZ(-50px);
+  }
+
+  /* Smooth transitions for all interactive elements */
+  .transition-smooth {
+    transition: all 0.2s ease-in-out;
+  }
+}

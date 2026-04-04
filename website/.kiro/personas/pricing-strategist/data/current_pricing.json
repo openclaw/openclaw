@@ -1,0 +1,48 @@
+{
+  "course_id": 1,
+  "zh_name": "Personal OS 1.0：加分制教育 × 尊重式照護｜創始會員資格",
+  "single_price": 39800,
+  "single_price_early": 0,
+  "group_price": 0,
+  "group_price_early": 0
+}
+{
+  "course_id": 6,
+  "zh_name": "人生駭客手冊 (11 門課)",
+  "single_price": 45000,
+  "single_price_early": 10000,
+  "group_price": 0,
+  "group_price_early": 0
+}
+{
+  "course_id": 5,
+  "zh_name": "AI 溝通術 - 90 分鐘掌握AI Prompt 工程技巧",
+  "single_price": 2500,
+  "single_price_early": 990,
+  "group_price": 1480,
+  "group_price_early": 590
+}
+{
+  "course_id": 4,
+  "zh_name": "視覺駭客 - 90 分鐘建構你的 AI 生圖工具",
+  "single_price": 4500,
+  "single_price_early": 3200,
+  "group_price": 1800,
+  "group_price_early": 1280
+}
+{
+  "course_id": 3,
+  "zh_name": "系統駭客 - 90 分鐘用 AI 幫你寫文案",
+  "single_price": 6000,
+  "single_price_early": 1680,
+  "group_price": 2400,
+  "group_price_early": 4800
+}
+{
+  "course_id": 2,
+  "zh_name": "文本偵察術：90 分鐘學會用 AI 分析文章",
+  "single_price": 6000,
+  "single_price_early": 4200,
+  "group_price": 2400,
+  "group_price_early": 1680
+}

@@ -1,0 +1,22 @@
+{
+  "feature_name": "curator-personas-memory-system-reads-course-data-f",
+  "created_at": "2025-11-02T06:45:16.609Z",
+  "updated_at": "2025-11-02T07:02:04.210Z",
+  "language": "en",
+  "phase": "requirements-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": false
+    },
+    "design": {
+      "generated": false,
+      "approved": false
+    },
+    "tasks": {
+      "generated": false,
+      "approved": false
+    }
+  },
+  "ready_for_implementation": false
+}

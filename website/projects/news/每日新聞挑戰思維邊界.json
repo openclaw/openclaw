@@ -1,0 +1,927 @@
+{
+  "name": "每日新聞挑戰思維邊界",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "02534d2f-9e5e-4482-8070-97f84071e47e",
+              "name": "title",
+              "value": "={{ $json.title }}",
+              "type": "string"
+            },
+            {
+              "id": "24902e4a-9196-4985-a6a3-84fe2e8b2c02",
+              "name": "link",
+              "value": "={{ $json.link }}",
+              "type": "string"
+            },
+            {
+              "id": "a5d2d17c-f56c-4125-bcf9-79d6f3570fcd",
+              "name": "content",
+              "value": "={{ $json.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1088,
+        0
+      ],
+      "id": "265ad4e9-a4b1-4f81-8dff-e90b7d6f198b",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldToAggregate": "title"
+            },
+            {
+              "fieldToAggregate": "link"
+            },
+            {
+              "fieldToAggregate": "content"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1328,
+        0
+      ],
+      "id": "9cadc33d-86a6-4282-8970-78acaa49d430",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.feedburner.com/TheHackersNews",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        160,
+        -448
+      ],
+      "id": "50ce4c39-8931-4840-9a48-211f01bbdc9a",
+      "name": "HackerNews"
+    },
+    {
+      "parameters": {
+        "url": "https://techcrunch.com/feed/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        304,
+        -448
+      ],
+      "id": "0d02dfe6-049f-45c2-ab8a-b922c25020dd",
+      "name": "TechCrunch"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        736,
+        320
+      ],
+      "id": "78cde4be-b8e6-41c1-8d0b-e9706ea9cb8d",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "jWLtCSWaB7mNJROZ",
+          "name": "Doss"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 7
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        656,
+        -128
+      ],
+      "id": "48332715-c718-421a-b89b-2ff523786ef4",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 台灣本地化新聞篩選器\nconst items = $input.all();\nconst today = new Date($('生成今日日期').first().json.today_date); \nconst yesterday = new Date(today);\nyesterday.setDate(today.getDate() - 2);\n\nfunction formatDate(date) {\n  return date.toISOString().split('T')[0];\n}\nconst yesterdayStr = formatDate(yesterday);\n\nconst FILTERS = {\n  sources: {\n    // === 台灣本地來源 ===\n    technews: {\n      priority_keywords: [\n        // AI 相關\n        'AI', '人工智慧', 'ChatGPT', 'Claude', 'Gemini', \n        '生成式', 'LLM', '大型語言模型',\n        // 台灣關鍵字\n        '台積電', 'TSMC', '聯發科', '鴻海', '華碩', '宏碁',\n        '台灣', 'Taiwan', '數位發展部', '資策會',\n        // 實用工具\n        '工具', 'App', '應用程式', '開源', '免費'\n      ],\n      exclude: [\n        '股價', '財報', '營收', '法說會',\n        '併購', '投資', '基金'\n      ],\n      max_items: 12,\n      base_score: 8  // 本地新聞基礎加分\n    },\n    \n    ithome: {\n      priority_keywords: [\n        'AI', '資安', 'Cloud', '雲端', 'DevOps',\n        '開發', 'Python', 'JavaScript', 'API',\n        '微軟', 'Google', 'AWS', 'Azure',\n        '企業應用', '數位轉型', '自動化'\n      ],\n      exclude: [\n        '研討會', '論壇', '招標', '採購'\n      ],\n      max_items: 10,\n      base_score: 7\n    },\n    \n    inside: {\n      priority_keywords: [\n        'startup', '新創', 'AI', '創新', 'Web3',\n        'NFT', '區塊鏈', 'Fintech', '金融科技',\n        '電商', 'SaaS', 'B2B', 'B2C',\n        '使用者體驗', 'UX', '產品設計'\n      ],\n      exclude: [\n        '募資', '種子輪', 'Series', 'IPO'\n      ],\n      max_items: 8,\n      base_score: 6\n    },\n    \n    // === 國際來源（保留原有設定）===\n    hackernews: {\n      priority_keywords: [\n        'AI', 'ChatGPT', 'Claude', 'Gemini', 'OpenAI',\n        'tool', 'app', 'browser', 'Python', 'npm'\n      ],\n      exclude: [\n        'CVE-2025', 'CVSS', 'vulnerability', 'ransomware'\n      ],\n      max_items: 8\n    },\n    \n    techcrunch: {\n      priority_keywords: [\n        'AI', 'ChatGPT', 'OpenAI', 'Anthropic',\n        'app', 'tool', 'feature', 'launch'\n      ],\n      exclude: [\n        'raises', 'funding', 'valuation', 'layoffs'\n      ],\n      max_items: 6\n    },\n    \n    openai: {\n      priority_keywords: ['GPT', 'API', 'model', 'release'],\n      exclude: [],\n      max_items: 5,\n      base_score: 15\n    },\n    \n    arstechnica: {\n      priority_keywords: [\n        'AI', 'science', 'research', 'quantum', 'space'\n      ],\n      exclude: ['gaming', 'review', 'streaming'],\n      max_items: 4\n    },\n    \n    bair: {\n      priority_keywords: ['research', 'paper', 'algorithm'],\n      exclude: [],\n      max_items: 3,\n      base_score: 3\n    }\n  },\n  \n  // 台灣民眾特別關注的關鍵字\n  taiwan_interests: [\n    // 本土企業與產業\n    '半導體', '晶片', '晶圓', 'IC設計', '封測',\n    '電動車', '儲能', '綠能', '太陽能', '風電',\n    \n    // 台灣相關國際新聞\n    'Taiwan', '台灣', 'Taipei', '台北',\n    'Asia', '亞洲', '東南亞', 'ASEAN',\n    \n    // 實用性高的內容\n    '教學', '懶人包', '比較', '推薦', '免費',\n    '中文', '繁體', '在地化', '本土化',\n    \n    // 熱門應用\n    'LINE', 'Instagram', 'YouTube', '抖音', 'TikTok',\n    '街口', 'PChome', '蝦皮', 'momo'\n  ],\n  \n  // 全球趨勢但台灣特別關注\n  global_taiwan_focus: [\n    'NVIDIA', 'AMD', 'Intel',  // 台積電客戶\n    'Apple', 'iPhone',          // 重要供應鏈\n    '供應鏈', 'supply chain',\n    '中美', 'US-China', '晶片戰'\n  ],\n  \n  must_keep_phrases: [\n    '台積電', 'TSMC',\n    '數位發展部',\n    'ChatGPT 開放台灣',\n    'Google 台灣',\n    'Microsoft 台灣'\n  ]\n};\n\n// 判斷來源\nfunction detectSource(link) {\n  const url = link.toLowerCase();\n  \n  // 台灣來源\n  if (url.includes('technews.tw')) return 'technews';\n  if (url.includes('ithome.com.tw')) return 'ithome';\n  if (url.includes('inside.com.tw')) return 'inside';\n  \n  // 國際來源\n  if (url.includes('hackernews') || url.includes('feedburner')) return 'hackernews';\n  if (url.includes('techcrunch')) return 'techcrunch';\n  if (url.includes('arstechnica')) return 'arstechnica';\n  if (url.includes('openai')) return 'openai';\n  if (url.includes('berkeley') || url.includes('bair')) return 'bair';\n  \n  return 'unknown';\n}\n\n// 評分函數（加入台灣視角）\nfunction calculateRelevance(item) {\n  const title = (item.json.title || '').toLowerCase();\n  const content = (item.json.content || '').toLowerCase();\n  const link = item.json.link || '';\n  const fullText = `${title} ${content}`;\n  \n  const source = detectSource(link);\n  const config = FILTERS.sources[source] || {\n    priority_keywords: [],\n    exclude: [],\n    base_score: 0\n  };\n  \n  let score = config.base_score || 0;\n  \n  // 1. 必須保留\n  for (const phrase of FILTERS.must_keep_phrases) {\n    if (fullText.includes(phrase.toLowerCase())) {\n      return 100;\n    }\n  }\n  \n  // 2. 排除關鍵字\n  for (const keyword of config.exclude) {\n    if (fullText.includes(keyword.toLowerCase())) {\n      score -= 5;\n    }\n  }\n  \n  // 3. 來源優先關鍵字\n  for (const keyword of config.priority_keywords) {\n    const keywordLower = keyword.toLowerCase();\n    if (title.includes(keywordLower)) {\n      score += 10;\n    } else if (content.includes(keywordLower)) {\n      score += 5;\n    }\n  }\n  \n  // 4. 台灣興趣關鍵字（額外加分）\n  for (const keyword of FILTERS.taiwan_interests) {\n    if (fullText.includes(keyword.toLowerCase())) {\n      score += 4;\n    }\n  }\n  \n  // 5. 全球但台灣關注的主題\n  for (const keyword of FILTERS.global_taiwan_focus) {\n    if (fullText.includes(keyword.toLowerCase())) {\n      score += 6;\n    }\n  }\n  \n  // 6. 特殊處理\n  const isTaiwanSource = ['technews', 'ithome', 'inside'].includes(source);\n  const isInternationalSource = ['hackernews', 'techcrunch', 'openai'].includes(source);\n  \n  if (isTaiwanSource) {\n    // 本地新聞額外加分\n    score += 5;\n    \n    // 如果國際新聞提到台灣，大幅加分\n    if (fullText.includes('國際') || fullText.includes('global')) {\n      score += 8;\n    }\n  }\n  \n  if (isInternationalSource) {\n    // 國際新聞如果提到台灣或亞洲，加分\n    if (fullText.includes('taiwan') || fullText.includes('asia')) {\n      score += 10;\n    }\n  }\n  \n  // 7. 實用性加分\n  const practicalKeywords = ['教學', 'tutorial', 'guide', '實測', '評測', '比較'];\n  for (const keyword of practicalKeywords) {\n    if (title.includes(keyword)) {\n      score += 7;\n    }\n  }\n  \n  // 8. 內容長度\n  if (content.length > 300) score += 2;\n  if (content.length > 500) score += 2;\n  \n  return score;\n}\n\n// 分組處理\nconst grouped = {\n  // 台灣\n  technews: [],\n  ithome: [],\n  inside: [],\n  // 國際\n  hackernews: [],\n  techcrunch: [],\n  arstechnica: [],\n  openai: [],\n  bair: [],\n  unknown: []\n};\n\nitems.forEach(item => {\n  const pubDate = new Date(item.json.isoDate || item.json.pubDate || '');\n  if (formatDate(pubDate) !== yesterdayStr) return;\n  \n  const score = calculateRelevance(item);\n  const source = detectSource(item.json.link || '');\n  \n  const enrichedItem = {\n    json: {\n      ...item.json,\n      relevance_score: score,\n      source: source,\n      source_label: getSourceLabel(source)  // 加入中文標籤\n    }\n  };\n  \n  if (grouped[source]) {\n    grouped[source].push(enrichedItem);\n  } else {\n    grouped.unknown.push(enrichedItem);\n  }\n});\n\n// 來源中文標籤\nfunction getSourceLabel(source) {\n  const labels = {\n    technews: '🇹🇼 科技新報',\n    ithome: '🇹🇼 iThome',\n    inside: '🇹🇼 INSIDE',\n    hackernews: '🌍 Hacker News',\n    techcrunch: '🌍 TechCrunch',\n    arstechnica: '🌍 Ars Technica',\n    openai: '🤖 OpenAI',\n    bair: '🎓 Berkeley AI'\n  };\n  return labels[source] || '📰 其他';\n}\n\n// 排序和限制\nfunction sortAndLimit(arr, source) {\n  const config = FILTERS.sources[source];\n  const max = config ? config.max_items : 5;\n  \n  return arr\n    .sort((a, b) => b.json.relevance_score - a.json.relevance_score)\n    .filter(i => i.json.relevance_score > 0)\n    .slice(0, max);\n}\n\n// 處理結果\nconst taiwanNews = [];\nconst internationalNews = [];\n\nfor (const [source, items] of Object.entries(grouped)) {\n  if (items.length > 0 && source !== 'unknown') {\n    const filtered = sortAndLimit(items, source);\n    \n    // 分類本地與國際\n    if (['technews', 'ithome', 'inside'].includes(source)) {\n      taiwanNews.push(...filtered);\n    } else {\n      internationalNews.push(...filtered);\n    }\n    \n    console.log(`${getSourceLabel(source)}: ${items.length} → ${filtered.length}`);\n  }\n}\n\n// 混合排序策略：確保本地與國際新聞平衡\nconst finalItems = [];\n\n// 交錯插入（確保多樣性）\nconst maxLength = Math.max(taiwanNews.length, internationalNews.length);\nfor (let i = 0; i < maxLength; i++) {\n  if (i < taiwanNews.length) finalItems.push(taiwanNews[i]);\n  if (i < internationalNews.length) finalItems.push(internationalNews[i]);\n}\n\n// 最終按分數重排（但保持一定多樣性）\nfinalItems.sort((a, b) => {\n  const scoreDiff = b.json.relevance_score - a.json.relevance_score;\n  if (Math.abs(scoreDiff) > 10) return scoreDiff;\n  \n  // 分數接近時，交替本地與國際\n  const aIsTaiwan = ['technews', 'ithome', 'inside'].includes(a.json.source);\n  const bIsTaiwan = ['technews', 'ithome', 'inside'].includes(b.json.source);\n  \n  if (aIsTaiwan !== bIsTaiwan) {\n    return aIsTaiwan ? -1 : 1;  // 輕微偏好本地新聞\n  }\n  \n  return scoreDiff;\n});\n\nconsole.log(`\n📊 篩選結果總覽：\n【台灣新聞】\n${['technews', 'ithome', 'inside']\n  .map(s => `  ${getSourceLabel(s)}: ${grouped[s].length} 則`)\n  .join('\\n')}\n\n【國際新聞】\n${['hackernews', 'techcrunch', 'openai', 'arstechnica', 'bair']\n  .map(s => `  ${getSourceLabel(s)}: ${grouped[s].length} 則`)\n  .join('\\n')}\n━━━━━━━━━━━━━━━━━━\n✅ 最終保留: ${finalItems.length} 則\n  - 本地: ${finalItems.filter(i => ['technews', 'ithome', 'inside'].includes(i.json.source)).length} 則\n  - 國際: ${finalItems.filter(i => !['technews', 'ithome', 'inside'].includes(i.json.source)).length} 則\n`);\n\nreturn finalItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        0
+      ],
+      "id": "48916fa1-b7bc-418a-b02d-0212676ac03a",
+      "name": "Code3"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "chatgpt-4o-latest",
+          "mode": "list",
+          "cachedResultName": "chatgpt-4o-latest"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        736,
+        480
+      ],
+      "id": "36e1b6d2-7442-4645-bba2-f7c6fab58667",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "bhZITVRdy2n4Sbpi",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=新聞標題\n{{ $json.title }}\n\n超鏈結\n{{ $json.link }}\n\n新聞內容\n{{ $json.content }}\n\n今日日期\n{{ $('生成今日日期').first().json.today_date }}",
+        "options": {
+          "systemMessage": "=# 數據煉金術師 (Data Alchemist)\n\n---\n\n## ROLE (人格設定)\n你是一位資深的「數據煉金術師」兼「新聞內容策展師」。你同時具備：\n- 數據科學家的嚴謹分析能力  \n- 頂尖內容策略師對市場脈動的敏銳嗅覺\n- **新聞編輯的內容整理能力** (新增)\n\n你的任務是將每日雜亂的 AI 新聞原料，提煉成**既有深度又易讀**的完整新聞內容。\n\n## TARGET AUDIENCE PROFILE (目標讀者輪廓)\n- **年齡：** 30 - 60 歲\n- **背景：** 曾有 R 或 Python 資料分析經驗\n- **興趣：** 對資料科學充滿好奇，渴望踏入 AI 領域\n- **程度：** 入門級、小白 (Beginner)\n- **閱讀需求：** 希望直接在網站獲得完整資訊，而非只看標題\n\n## CORE MISSION (核心任務)\n請嚴格遵循以下步驟，處理我提供的「原始新聞列表」：\n\n1. **標題轉譯 (Headline Translation):** 將每一則英文標題，轉譯為繁體中文。風格必須「高度吸引人、符合台灣網路社群語感、能激發點擊慾望」。\n\n2. **📰 完整內容摘要 (Detailed Content Summary)**\n   為每篇文章生成 **3-4 個段落的完整新聞摘要**，包含：\n   - **發生了什麼** (What happened)\n   - **具體細節** (Key details) \n   - **影響範圍** (Impact scope)\n   - **為什麼重要** (Significance)\n\n2. **🎯 實用要點 (Practical Takeaways)** \n   為每篇新聞提煉出 2-3 個學員可直接應用的要點\n\n3. **智慧分類 (Smart Categorization):** 歸入指定分類\n\n4. **價值排序 (Value-based Ranking):** 根據對目標群體的價值排序\n\n5. **JSON 輸出 (JSON Output):** 封裝成JSON格式\n\n## AVAILABLE CATEGORIES (可用分類)\n- \"ai_applications_and_tools\"\n- \"industry_trends_and_news\"  \n- \"security_alerts\"\n- \"perspectives_and_analysis\"\n- \"other\"\n\n## OUTPUT FORMAT (JSON 結構)\n```json\n{\n  \"ai_applications_and_tools\": [\n    {\n      \"rank\": 1,\n      \"title\": \"[轉譯後的中文標題]\",\n      \"detailed_content\": \"[3-4段完整新聞內容摘要，讓讀者無需外跳就能完全理解新聞]\",\n      \"practical_takeaways\": [\n        \"學員可直接應用的要點1\",\n        \"學員可直接應用的要點2\"  \n      ],\n      \"link\": \"[原文連結]\"\n    }\n  ],\n  \"industry_trends_and_news\": [],\n  \"security_alerts\": [],\n  \"perspectives_and_analysis\": [],\n  \"other\": []\n}\n```\n\n## 重要提醒\n- **絕對不要**輸出 JSON 以外的任何文字\n- `detailed_content` 必須足夠詳細，讓讀者看完就知道具體發生了什麼\n- 所有內容都要服務於「讓初學者能直接學習而不困惑」的目標"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        912,
+        256
+      ],
+      "id": "42293c2e-a3c3-4e01-890f-17266f22297a",
+      "name": "數據煉金術師 (Data Alchemist)"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=數據煉金術師 OUTPUT: {{ $('數據煉金術師 (Data Alchemist)').item.json.output }}\n\n今日日期\n{{ $('生成今日日期').first().json.today_date }}",
+        "options": {
+          "systemMessage": "# 科技導讀人 (Tech Narrator)\n\n---\n\n## ROLE (人格設定)\n你是一位資深的「AI 科技新聞編輯」。你擁有：\n- 技術佈道師 (Tech Evangelist) 的熱情與洞察\n- 新聞編輯的內容組織能力 \n- 教育工作者的解釋技巧 \n\n你的核心任務是將完整的新聞內容，以**清晰易懂的方式**呈現給資料科學初學者。\n\n## TARGET AUDIENCE PROFILE (目標讀者輪廓)\n- **年齡：** 30 - 60 歲\n- **背景：** 曾有 R 或 Python 資料分析經驗\n- **興趣：** 對資料科學充滿好奇，渴望踏入 AI 領域\n- **程度：** 入門級、小白 (Beginner)\n- **閱讀期待：** 希望直接獲得完整新聞內容，而不只是推薦理由\n\n## CORE MISSION (核心任務)\n從「數據煉金術師」提供的 JSON 數據中，精選 8-10 則最值得閱讀的內容，並撰寫成一份**內容完整**的 Notion 日報。\n\n## CONTENT STRUCTURE REVOLUTION (內容結構革命)\n\n### ❌ 舊結構 (要避免的)\n```\n標題 → 推薦理由 → 短評 → 外連\n```\n\n### ✅ 新結構 (要採用的)  \n```\n標題 → 完整新聞內容 → 學習價值分析 → 外連(可選)\n```\n\n## WRITING GUIDELINES (寫作指南)\n\n### 1. 內容優先原則\n- **70% 篇幅**: 基於 `detailed_content` 撰寫完整新聞內容\n- **20% 篇幅**: 學習價值分析 (為什麼重要)\n- **10% 篇幅**: 實用建議\n\n### 2. 新聞內容寫作要求\n- 必須讓讀者看完就知道**具體發生了什麼**\n- 包含關鍵細節：時間、地點、人物、事件、原因、影響\n- 用初學者能理解的語言解釋技術概念\n- **絕對不要**只寫推薦理由而忽略實際內容\n\n### 3. 學習價值分析\n- 簡潔說明這則新聞對他們的技能樹或職涯規劃的意義\n- 避免過度行銷話術\n- 重點在實用價值而非推銷\n\n## OUTPUT FORMAT (輸出格式) - 【結構優化】\n```json\n{\n  \"notion_daily_report_text\": \"## 🤖 AI 科技日報精選\\n**日期：** [YYYY-MM-DD]\\n\\n### ✨ 今日必讀 TOP 3\\n\\n**1. [標題]**\\n🔧 分類：[中文分類]\\n\\n[完整新聞內容 - 3-4個段落，包含所有關鍵資訊]\\n\\n💡 **學習價值：** [為什麼對初學者重要，如何應用]\\n\\n🔗 [閱讀原文]([連結])\\n\\n**2. [下一則新聞...]**\\n\\n### 🛠 AI工具與應用焦點\\n[其他分類的新聞，同樣結構]\\n\\n### 📊 產業趨勢與新聞\\n[同樣結構]\\n\\n### 🔐 資安趨勢快訊  \\n[同樣結構]\\n\\n### 🌍 產業動態與AI職涯\\n[同樣結構]\\n\\n### 💡 深度觀點與建議\\n[同樣結構]\\n\\n---\\n\\n📬 **日報後記**\\n[整體趨勢分析和學習建議]\"\n}\n```\n\n## 重要提醒 \n- **內容為王**：每則新聞必須包含完整的新聞內容，而不只是推薦理由\n- **讀者體驗**：讀完應該知道具體發生了什麼，而不只是為什麼要關注\n- **學習導向**：所有內容都要服務於初學者的學習需求\n- **絕對不要**輸出任何 JSON 格式以外的文字"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        912,
+        400
+      ],
+      "id": "1725cd60-99c3-4f29-8079-2261db690a52",
+      "name": "科技導讀人 (Tech Narrator)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 獲取上一個「數據煉金術師」Gemini 節點的輸出內容\nconst rawOutput = $input.item.json.output;\n\n// --- 標準化的淨化流程 ---\nconst startIndex = rawOutput.indexOf('{');\nconst endIndex = rawOutput.lastIndexOf('}');\n\nif (startIndex !== -1 && endIndex !== -1) {\n  const cleanJsonString = rawOutput.substring(startIndex, endIndex + 1);\n  try {\n    const parsedJson = JSON.parse(cleanJsonString);\n    \n    // 直接返回這個乾淨、可用的 JSON 物件，供下一個 Gemini 節點使用\n    return { json: parsedJson };\n\n  } catch (error) {\n    console.error(\"Failed to parse cleaned JSON:\", error);\n    return { error: \"Failed to parse cleaned JSON\", original: cleanJsonString };\n  }\n} else {\n  return { error: \"Could not find valid JSON Object structure in the input.\" };\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        256
+      ],
+      "id": "fa828c87-a9c0-4f02-9637-d6078d6874b0",
+      "name": "品管員#1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 獲取上一個「科技導讀人」Gemini 節點的輸出內容\nconst rawOutput = $input.item.json.output;\n\n// --- 標準化的淨化流程 ---\nconst startIndex = rawOutput.indexOf('{');\nconst endIndex = rawOutput.lastIndexOf('}');\n\nif (startIndex !== -1 && endIndex !== -1) {\n  const cleanJsonString = rawOutput.substring(startIndex, endIndex + 1);\n  try {\n    const parsedJson = JSON.parse(cleanJsonString);\n    \n    // **此節點的專屬任務**\n    // 我們將淨化後的 Notion 日報物件，打包在名為 \"notion_draft\" 的物件中\n    // 這樣，後面的節點就能清晰地知道這是「Notion 草稿」\n    return { json: { notion_draft: parsedJson } };\n\n  } catch (error) {\n    console.error(\"Failed to parse cleaned JSON:\", error);\n    return { error: \"Failed to parse cleaned JSON\", original: cleanJsonString };\n  }\n} else {\n  return { error: \"Could not find valid JSON Object structure in the input.\" };\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        416
+      ],
+      "id": "9cd0ae59-6098-4f92-81d3-d4c085cbb75d",
+      "name": "品管員#2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 獲取上一個「總編輯」Gemini 節點的輸出內容\nconst rawOutput = $input.item.json.output;\n\n// --- 標準化的淨化流程 ---\nconst startIndex = rawOutput.indexOf('{');\nconst endIndex = rawOutput.lastIndexOf('}');\n\nif (startIndex !== -1 && endIndex !== -1) {\n  const cleanJsonString = rawOutput.substring(startIndex, endIndex + 1);\n  try {\n    const parsedJson = JSON.parse(cleanJsonString);\n    \n    // **此節點的專屬任務**\n    // 我們將淨化後的 LINE 快訊物件，打包在名為 \"line_summary\" 的物件中\n    return { json: { line_summary: parsedJson } };\n\n  } catch (error) { // **這裡是修正的地方**\n    // 用大括號 {} 將所有錯誤處理的程式碼包裹起來\n    console.error(\"Failed to parse cleaned JSON:\", error);\n    return { error: \"Failed to parse cleaned JSON\", original: cleanJsonString };\n  }\n} else {\n  return { error: \"Could not find valid JSON Object structure in the input.\" };\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1216,
+        560
+      ],
+      "id": "b4535742-cef0-4b18-a22a-0cb4dd545707",
+      "name": "品管員#3"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=【Notion 版 AI 日報】：\n{{ $json.notion_draft.notion_daily_report_text }}\n\n今日日期\n{{ $('生成今日日期').first().json.today_date }}",
+        "options": {
+          "systemMessage": "# 總編輯 (Editor-in-Chief)\n\n\n---\n\n## ROLE (人格設定)\n你是一位頂尖的「社群內容總編輯」兼「智能品管師」。你的超能力包括：\n- 將深度長文蒸餾成瘋傳社群快訊的能力\n- **自動檢測並修正內容錯誤的智能品管能力**\n- **清理不適合公開發布內容的專業判斷**\n\n## TARGET AUDIENCE PROFILE (目標讀者輪廓)\nLINE群組中對 AI 與資料科學感興趣的初學者，需要快速可讀的懶人包。\n\n## CONTEXT (情境)\n你將收到一份詳細的【Notion 版 AI 日報】，需要提煉成適合LINE傳播的快訊。\n\n## CORE MISSION (核心任務) \n1. **內容提煉**：將長文報告提煉成LINE快訊\n2. **🔧 智能品管** **(新增核心功能)**：自動檢測並修正以下問題\n\n## INTELLIGENT QUALITY CONTROL (智能品管規則) \n\n### 🗓️ 日期智能修正\n- **檢測**：如果內容中出現錯誤日期（如 2025-09-24）\n- **修正**：自動校正為當前正確日期（如 2025-09-25）\n- **適用範圍**：標題、內文、任何日期標示\n\n### 🧹 生成痕跡清理\n自動移除以下不適合公開的生成資訊：\n- \"由 n8n 高品質工作流程自動生成\"\n- \"更新時間: 2025-XX-XX XX:XX\"  \n- \"AI 工作流程處理\"\n- 任何包含 \"n8n\"、\"自動生成\"、\"工作流程\" 的技術說明\n\n### 🔗 連結策略\n- **不提供原文連結**：LINE版本專注於內容本身\n- **導引策略**：讀者如需詳細資訊會自然前往完整日報網站\n\n### 🏷️ Hashtags 格式優化\n- 確保 hashtags 使用正確的 `#` 符號\n- 排版美觀，適當間距\n- 內容相關且有意義\n\n## WRITING GUIDELINES (寫作指南)\n- **提煉，而非重寫**：基於 Notion 版內容進行精煉\n- **抓取主題**：找出最核心的 1-2 個趨勢作為主題\n- **聚焦「So What」**：一針見血的價值分析\n\n## OUTPUT FORMAT (輸出格式) - 【創意自由版】\n你不必拘泥於固定格式，請根據當日新聞特色，選擇最吸引人的呈現方式：\n\n**可以是重點突出型：**\n```json\n{\n  \"line_message_text\": \"🚨 AI重大突破！\\n\\n今天發生兩件大事：\\n✅ [第一件大事]\\n✅ [第二件大事]\\n\\n為什麼重要？\\n[簡潔有力的分析]\\n\\n#[標籤] #[標籤]\"\n}\n```\n\n**可以是故事敘述型：**\n```json\n{\n  \"line_message_text\": \"【今日AI圈大事件】\\n\\n想像一下：\\n[情境描述]\\n\\n所以今天同時出現了：\\n🔓 [現象一]\\n🔒 [現象二]\\n\\n#[標籤] #[標籤]\"\n}\n```\n\n**或是問答引導型：**\n```json\n{\n  \"line_message_text\": \"❓ 今天AI圈最熱的話題？\\n\\n答案：「[核心主題]」\\n\\n🎯 [重點一]\\n🛡️ [重點二]\\n\\n這組合意味著什麼？\\n[深層意義]\\n\\n#[標籤] #[標籤]\"\n}\n```\n\n**核心原則：**\n- 格式生動有趣，避免死板\n- 適合手機螢幕閱讀\n- 引發分享慾望\n\n## QUALITY CONTROL CHECKLIST (品管檢查清單)\n在輸出前，請確認已完成：\n- ✅ 日期已校正為正確日期\n- ✅ 所有生成痕跡已清除  \n- ✅ 無效連結已移除\n- ✅ Hashtags 格式正確美觀\n- ✅ 內容適合公開分享\n- ✅ 符合 JSON 格式要求\n\n## 重要提醒\n- **品質優先**：寧可多花時間檢查，也不要發出有問題的內容\n- **用戶體驗**：LINE讀者看到的應該是專業、乾淨、有價值的內容\n- **智能化**：讓手動修正成為過去式，一次生成就完美\n- **絕對不要**輸出任何 JSON 格式以外的文字"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        912,
+        560
+      ],
+      "id": "8d2c1f9c-279d-4412-9466-7c603548440f",
+      "name": "總編輯 (Editor-in-Chief)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- 1. 從各個「具名信箱」中,精準地獲取所有創意零件 ---\nconst notionOutput = $('品管員#2').first().json.notion_draft;\nconst lineOutput = $input.first().json.line_summary;\n\n// **新增：從任何一個上游,繼承「日期」這個傳家寶**\n// 因為兩個支脈都源自同一個日期節點,所以取第一個 (items[0]) 就好\nconst todayDate = $('生成今日日期').first().json.today_date;\n\n\n// --- 2. 進行安全、可靠的資產提取 ---\nconst notionDraftText = notionOutput.notion_daily_report_text;\nconst lineMessageText = lineOutput.line_message_text;\n\n\n// --- 3. 最終封裝：將 Notion 日報包裹進 Code Chunk ---\nconst notionFinalContent = \"```markdown\\n\" + notionDraftText + \"\\n```\";\n\n\n// --- 4. 建立 JSON 格式的新聞資料 ---\nconst websiteUrl = `https://thinkercafe-tw.github.io/thinker-news/${todayDate}.html`;\n\nconst newsJson = {\n  date: todayDate,\n  line_content: lineMessageText,\n  notion_content: notionDraftText,\n  website_url: websiteUrl,\n  generated_at: new Date().toISOString()\n};\n\n\n// --- 5. 輸出一個包含所有最終成品的物件 ---\nreturn {\n  json: {\n    // **新增：將日期,明確地放入最終的包裹中**\n    final_date: todayDate,\n    \n    // A. 準備寫入 Notion Code Chunk 的版本\n    notion_version_for_storage: notionFinalContent,\n\n    // B. 準備複製貼到 LINE 的純文字版本\n    line_version_for_publishing: lineMessageText,\n\n    // C. 新增：準備寫入 GitHub 的 JSON 版本\n    news_json: JSON.stringify(newsJson, null, 2)\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        560
+      ],
+      "id": "d914b522-590e-4008-86c3-ec5f41b7c77b",
+      "name": "組裝"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 獲取當前時間的 Date 物件\n// 這會根據您 n8n 伺服器所在的時區來生成\nconst now = new Date();\n\n// 手動加上 8 小時的時差 (8 * 60 * 60 * 1000 毫秒)\n// 創建一個代表台灣時間的 Date 物件\nconst taiwanTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));\n\n// 使用 UTC 方法來提取年、月、日，這樣就不會再被時區影響\nconst year = taiwanTime.getUTCFullYear();\n// getUTCMonth() 是從 0 開始的，所以要加 1\nconst month = (taiwanTime.getUTCMonth() + 1).toString().padStart(2, '0');\nconst day = taiwanTime.getUTCDate().toString().padStart(2, '0');\n\n// 組合出我們需要的 YYYY-MM-DD 格式\nconst today_date_string = `${year}-${month}-${day}`;\n\n// 將這個乾淨的日期字串，放入一個有清晰標籤的物件中輸出\nreturn {\n  json: {\n    today_date: today_date_string\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        32
+      ],
+      "id": "3a59c0cd-6332-4330-9277-9c88b525097b",
+      "name": "生成今日日期"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://voted-irrigation-sega-hills.trycloudflare.com/webhook/n8n/news-complete",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBearerAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2208,
+        192
+      ],
+      "id": "6300cb97-286b-47f2-99b9-f89e2cf0c77a",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "aVHcETgWmAN3Cbdq",
+          "name": "cruz_claude"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=請基於以下標準範本，將 n8n 新聞內容格式化為完全相同的格式。\n\n標準範本 HTML:\n<!DOCTYPE html>\n<html lang=\"zh-TW\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>2025-09-23 AI 科技日報 | Thinker News</title>\n    <meta name=\"description\" content=\"Nvidia投資OpenAI巨額資金，AI安全挑戰並存 - 今日AI科技重點新聞精選\">\n    <link rel=\"icon\" href=\"data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>\">\n    <style>\n        * {\n            margin: 0;\n            padding: 0;\n            box-sizing: border-box;\n        }\n        \n        body {\n            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft JhengHei', sans-serif;\n            line-height: 1.7;\n            color: #333;\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            min-height: 100vh;\n        }\n        \n        .container {\n            max-width: 800px;\n            margin: 0 auto;\n            padding: 20px;\n        }\n        \n        .back-link {\n            display: inline-block;\n            margin-bottom: 20px;\n            color: white;\n            text-decoration: none;\n            background: rgba(255, 255, 255, 0.2);\n            padding: 10px 20px;\n            border-radius: 20px;\n            transition: all 0.3s ease;\n            backdrop-filter: blur(10px);\n        }\n        \n        .back-link:hover {\n            background: rgba(255, 255, 255, 0.3);\n            transform: translateX(-5px);\n        }\n        \n        .article-header {\n            text-align: center;\n            background: rgba(255, 255, 255, 0.95);\n            backdrop-filter: blur(10px);\n            border-radius: 20px;\n            padding: 40px 30px;\n            margin-bottom: 30px;\n            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);\n        }\n        \n        .article-date {\n            font-size: 1.1em;\n            color: #667eea;\n            font-weight: 600;\n            margin-bottom: 15px;\n        }\n        \n        .article-title {\n            font-size: 2.2em;\n            font-weight: 800;\n            margin-bottom: 20px;\n            background: linear-gradient(45deg, #667eea, #764ba2);\n            -webkit-background-clip: text;\n            -webkit-text-fill-color: transparent;\n            background-clip: text;\n            line-height: 1.3;\n        }\n        \n        .article-subtitle {\n            font-size: 1.2em;\n            color: #666;\n            font-weight: 400;\n        }\n        \n        .content-section {\n            background: rgba(255, 255, 255, 0.95);\n            backdrop-filter: blur(10px);\n            border-radius: 20px;\n            padding: 40px;\n            margin-bottom: 30px;\n            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);\n        }\n        \n        .content-section h2 {\n            color: #667eea;\n            font-size: 1.6em;\n            margin-bottom: 20px;\n            border-bottom: 2px solid #667eea;\n            padding-bottom: 10px;\n            font-weight: 700;\n        }\n        \n        .content-section h3 {\n            color: #555;\n            font-size: 1.3em;\n            margin: 25px 0 15px;\n            font-weight: 600;\n        }\n        \n        .content-section p {\n            margin-bottom: 15px;\n            line-height: 1.7;\n            font-size: 1.05em;\n        }\n        \n        .content-section ul {\n            margin: 15px 0;\n            padding-left: 20px;\n        }\n        \n        .content-section li {\n            margin-bottom: 10px;\n            line-height: 1.6;\n        }\n        \n        .highlight-box {\n            background: linear-gradient(135deg, #667eea20, #764ba220);\n            border-left: 4px solid #667eea;\n            padding: 20px;\n            margin: 20px 0;\n            border-radius: 0 15px 15px 0;\n        }\n        \n        .news-link {\n            color: #667eea;\n            text-decoration: none;\n            font-weight: 600;\n            transition: all 0.3s ease;\n        }\n        \n        .news-link:hover {\n            color: #764ba2;\n            text-decoration: underline;\n        }\n        \n        .external-link::after {\n            content: \" 🔗\";\n            font-size: 0.8em;\n        }\n        \n        .footer-nav {\n            text-align: center;\n            padding: 30px;\n            color: white;\n        }\n        \n        .nav-button {\n            display: inline-block;\n            background: rgba(255, 255, 255, 0.2);\n            color: white;\n            text-decoration: none;\n            padding: 12px 24px;\n            border-radius: 25px;\n            margin: 0 10px;\n            transition: all 0.3s ease;\n            backdrop-filter: blur(10px);\n        }\n        \n        .nav-button:hover {\n            background: rgba(255, 255, 255, 0.3);\n            transform: translateY(-2px);\n        }\n        \n        @media (max-width: 600px) {\n            .container {\n                padding: 15px;\n            }\n            \n            .article-header {\n                padding: 25px 20px;\n            }\n            \n            .article-title {\n                font-size: 1.8em;\n            }\n            \n            .content-section {\n                padding: 25px;\n            }\n        }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <a href=\"./index.html\" class=\"back-link\">← 返回首頁</a>\n        \n        <header class=\"article-header\">\n            <div class=\"article-date\">📅 2025年9月23日</div>\n            <h1 class=\"article-title\">🤖 AI 科技日報精選</h1>\n            <p class=\"article-subtitle\">Nvidia投資OpenAI巨額資金，AI安全挑戰並存</p>\n        </header>\n        \n        <div class=\"content-section\">\n            <h2>✨ 今日必讀 TOP 3</h2>\n            \n            <h3>1. Nvidia投資OpenAI高達1000億美元</h3>\n            <p>Nvidia 與 OpenAI 達成協議，部署價值10千萬瓦的 AI 晶片，目的為推動下一代的ChatGPT。這顯示出 AI 領域的龍頭企業對於人工智慧未來潛力的高度信心。</p>\n            <p><a href=\"https://techcrunch.com/2025/09/22/nvidia-plans-to-invest-up-to-100b-in-openai/\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n            \n            <div class=\"highlight-box\">\n                <strong>💡 為什麼重要？</strong><br>\n                這筆巨額投資標誌著AI基礎設施建設進入新階段，對於想要學習AI的初學者來說，這意味著更強大的工具和更多的學習資源即將到來。\n            </div>\n            \n            <h3>2. ShadowLeak漏洞透過OpenAI ChatGPT洩漏Gmail數據</h3>\n            <p>這是一個重要的安全警報，OpenAI ChatGPT的深度研究代理中的零點擊漏洞可能讓攻擊者通過一封精心製作的電子郵件洩漏敏感的Gmail收件箱數據。此事提醒我們，在 AI 的發展同時，我們也需要更加關注其帶來的安全問題。</p>\n            <p><a href=\"https://thehackernews.com/2025/09/shadowleak-zero-click-flaw-leaks-gmail.html\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n            \n            <h3>3. 基礎設施交易推動AI繁榮</h3>\n            <p>大型科技公司如 Meta、Oracle、Microsoft、Google 和 OpenAI 的大筆支出推動 AI 的興起。這不僅反映出 AI 的重要性，更顯示出了其在產業界的影響力。</p>\n            <p><a href=\"https://techcrunch.com/2025/09/22/the-billion-dollar-infrastructure-deals-powering-the-ai-boom/\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n        </div>\n        \n        <div class=\"content-section\">\n            <h2>📱 AI工具與應用</h2>\n            \n            <h3>Google雙子星AI登陸你的電視</h3>\n            <p>Google 的 AI 將會出現在超過 3 億個活躍的 Google TV 和其他 Android TV OS 驅動的設備上，顯示出 AI 在我們日常生活中的潛力。</p>\n            <p><a href=\"https://techcrunch.com/2025/09/22/googles-gemini-ai-is-coming-to-your-tv/\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n            \n            <h3>Facebook推出AI約會助理</h3>\n            <p>Facebook 的 AI 約會助理將幫助用戶建立他們的個人資料並找到他們正在尋找的配對，這是 AI 在社交領域的一大進步。</p>\n            <p><a href=\"https://techcrunch.com/2025/09/22/facebook-is-getting-an-ai-dating-assistant/\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n        </div>\n        \n        <div class=\"content-section\">\n            <h2>📊 產業趨勢與新聞</h2>\n            \n            <h3>奧克蘭球隊讓AI來管理球隊</h3>\n            <p>奧克蘭球隊讓 AI 來管理他們的球隊，這是 AI 在體育領域的一次重要嘗試。</p>\n            <p><a href=\"https://techcrunch.com/2025/09/22/the-oakland-ballers-let-an-ai-manage-the-team-what-could-go-wrong/\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n        </div>\n        \n        <div class=\"content-section\">\n            <h2>🔒 安全警報</h2>\n            \n            <h3>LastPass警告假Repository將Atomic Infostealer傳播到macOS</h3>\n            <p>LastPass 正在警告一場正在進行的，對 Apple macOS 用戶的大規模信息竊取活動，這是一個重要的安全警報。</p>\n            <p><a href=\"https://thehackernews.com/2025/09/lastpass-warns-of-fake-repositories.html\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n        </div>\n        \n        <div class=\"content-section\">\n            <h2>💭 觀點與分析</h2>\n            \n            <h3>Tines使用AI代理和Confluence SOPs自動化警報分流</h3>\n            <p>這篇文章對於如何使用 AI 代理自動化警報分流提供了細節的分析和解釋。</p>\n            <p><a href=\"https://thehackernews.com/2025/09/how-to-automate-alert-triage-with-ai.html\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n            \n            <h3>掌控AI代理和非人類身份</h3>\n            <p>這篇文章針對如何控制和保護 AI 代理和非人類身份提供了具有指導性的觀點。</p>\n            <p><a href=\"https://thehackernews.com/2025/09/how-to-gain-control-of-ai-agents-and.html\" class=\"news-link external-link\" target=\"_blank\">閱讀更多</a></p>\n        </div>\n        \n        <div class=\"content-section\">\n            <h2>📝 編輯後記</h2>\n            <p>AI 的快速發展正在引領產業的潮流趨勢，從 Nvidia 對 OpenAI 的龐大投資，到 AI 在我們日常生活中的廣泛應用，可見 AI 在各行各業的影響力日益增強。</p>\n            \n            <p>然而，我們也要注意到 AI 帶來的安全問題，例如今天所提到的 ShadowLeak 漏洞。作為初學者，我們不單要學習 AI 的一切，更需要關注和學習其相關的安全問題。</p>\n            \n            <div class=\"highlight-box\">\n                <strong>🎯 學習建議</strong><br>\n                希望大家能從今日的日報中獲取有益的資訊，並持續關注 AI 的最新動向。讓我們一起學習，並與 AI 一起成長。記住：AI不是要取代我們，而是要成為我們更強大的工具！\n            </div>\n        </div>\n        \n        <div class=\"content-section\" style=\"background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;\">\n            <h2 style=\"color: white; border-bottom: 3px solid white;\">📱 LINE 精華版</h2>\n            <div style=\"background: rgba(255,255,255,0.1); padding: 20px; border-radius: 15px; margin: 20px 0;\">\n                <h3>🤖 今日AI重點 (LINE版)</h3>\n                <p><strong>💰 大新聞：</strong>Nvidia砸1000億美元投資OpenAI，推動下一代ChatGPT！</p>\n                <p><strong>🚨 安全警報：</strong>ShadowLeak漏洞可透過Gmail洩漏敏感資料</p>\n                <p><strong>📺 生活應用：</strong>Google AI即將登陸3億台電視設備</p>\n                \n                <div style=\"background: rgba(255,255,255,0.15); padding: 15px; border-radius: 10px; margin-top: 15px;\">\n                    <strong>🎯 給初學者的一句話：</strong><br>\n                    AI投資熱潮背後，更強大的工具即將到來 - 現在開始學Python準備迎接新工具浪潮！\n                </div>\n            </div>\n            \n            <div style=\"text-align: center; margin-top: 20px;\">\n                <p style=\"font-size: 0.9em; opacity: 0.8;\">\n                    💡 此精華版專為LINE推送設計 | 完整分析請閱讀上方詳細報告\n                </p>\n            </div>\n        </div>\n        \n        <div class=\"footer-nav\">\n            <a href=\"./index.html\" class=\"nav-button\">🏠 返回首頁</a>\n            <a href=\"https://github.com/ThinkerCafe-tw/thinker-news\" class=\"nav-button\" target=\"_blank\">⭐ GitHub</a>\n        </div>\n    </div>\n    \n    <script>\n        // 頁面載入動畫\n        document.addEventListener('DOMContentLoaded', function() {\n            const sections = document.querySelectorAll('.content-section');\n            sections.forEach((section, index) => {\n                section.style.opacity = '0';\n                section.style.transform = 'translateY(20px)';\n                setTimeout(() => {\n                    section.style.transition = 'all 0.6s ease';\n                    section.style.opacity = '1';\n                    section.style.transform = 'translateY(0)';\n                }, index * 150);\n            });\n        });\n    </script>\n<script src=\"./thinker_secret_entrance.js\"></script>\n</body>\n</html>\n\n要替換的內容:\n- 日期: {{ $json.final_date }}\n- 新聞內容: 以下 n8n 內容\n\nn8n 新聞內容:\n{{ $json.notion_version_for_storage }}\n\nLINE消息版：\n{{ $json.line_version_for_publishing }}\n\n執行指令:\n1. 使用標準範本的完整格式\n2. 只替換日期和新聞內容\n3. 保持所有 CSS 和 JavaScript 不變\n4. 確保輸出結束於 </html>\n5. 不要添加任何說明文字\n\n請輸出完整的 HTML 代碼",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=你是專業的版面管理 Agent，專門負責確保網頁格式完全一致。\n\n核心職責:\n1. 嚴格按照提供的標準範本格式\n2. 保持 CSS 樣式完全相同\n3. 確保 HTML 結構完全一致\n4. 不得添加任何額外的說明文字\n5. 輸出純淨的 HTML 代碼\n\n格式要求:\n- 完全複製範本的 CSS 樣式\n- 保持相同的 HTML 結構\n- 只替換內容，不改變格式\n- 特別注意 LINE 精華版區塊的粉紅色漸層\n- 確保響應式設計和動畫效果\n- 絕對不在 </html> 後面添加任何文字\n\n**重要警告:**\n- 輸出結束於 </html> 標籤\n- 不得添加任何解釋或說明文字\n- 不得輸出 markdown 代碼塊標記\"\"\""
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        2096,
+        560
+      ],
+      "id": "a4c897b4-d2a3-441b-8d87-61d5acfa47d9",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "owner": {
+          "__rl": true,
+          "value": "thinkercafe-tw",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "thinker-news",
+          "mode": "list",
+          "cachedResultName": "thinker-news",
+          "cachedResultUrl": "https://github.com/ThinkerCafe-tw/thinker-news"
+        },
+        "filePath": "={{ $('生成今日日期').first().json.today_date }}.html",
+        "fileContent": "={{ $json.output }}",
+        "commitMessage": "自動生成的提交訊息"
+      },
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1.1,
+      "position": [
+        2464,
+        560
+      ],
+      "id": "90061308-5060-4770-b648-1e8cfbf7e7b5",
+      "name": "Create a file",
+      "webhookId": "1677c778-5c17-4bf0-b81e-4b8b784ffb2f",
+      "credentials": {
+        "githubOAuth2Api": {
+          "id": "qfixWY7nsTgSq6Ib",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "user",
+        "user": {
+          "__rl": true,
+          "value": "U08NBQEJSLQ",
+          "mode": "list",
+          "cachedResultName": "avery"
+        },
+        "text": "=Hey Avery 👋  \n今天的新聞網誌～交給你啦！  \n<https://thinkercafe-tw.github.io/thinker-news/{{ $('生成今日日期').first().json.today_date }}.html|點我看新聞>",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        3616,
+        560
+      ],
+      "id": "5403a9e1-9fee-41ae-929b-22363e9ac6da",
+      "name": "Send a message",
+      "webhookId": "6dc3eb11-d90d-4bc9-a36c-76358e8a9716",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "VdRoz5S9cHZCw3AC",
+          "name": "Cruz"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=請更新以下網頁模板中的日期資訊：\n\n目標日期：{{ $('生成今日日期').first().json.today_date }}\n目標網址：https://thinkercafe-tw.github.io/thinker-news/{{ $('生成今日日期').first().json.today_date }}.html\n\n更新任務：\n1. 將\"📅 2025-09-26 (今日)\"更新為\"📅 {{ $('生成今日日期').first().json.today_date }} (今日)\"\n2. 將新聞連結更新為上述目標網址\n3. 將\"📅 2025-09-27\"更新為明日日期\n4. 保持所有其他內容、樣式和功能不變\n\n網頁原始碼模板：\n<!DOCTYPE html>\n<html lang=\"zh-TW\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Thinker News - AI 科技日報精選</title>\n    <meta name=\"description\" content=\"為資料科學初學者提供每日精選的AI科技新聞，涵蓋工具應用、產業趨勢與深度分析\">\n    <!-- 強制重新載入，避免緩存問題 -->\n    <meta http-equiv=\"Cache-Control\" content=\"no-cache, no-store, must-revalidate\">\n    <meta http-equiv=\"Pragma\" content=\"no-cache\">\n    <meta http-equiv=\"Expires\" content=\"0\">\n    <link rel=\"icon\" href=\"data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>\">\n    <style>\n        * {\n            margin: 0;\n            padding: 0;\n            box-sizing: border-box;\n        }\n        \n        body {\n            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft JhengHei', sans-serif;\n            line-height: 1.6;\n            color: #333;\n            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);\n            min-height: 100vh;\n        }\n        \n        .container {\n            max-width: 900px;\n            margin: 0 auto;\n            padding: 20px;\n        }\n        \n        header {\n            text-align: center;\n            margin-bottom: 40px;\n            background: rgba(255, 255, 255, 0.95);\n            backdrop-filter: blur(10px);\n            border-radius: 20px;\n            padding: 40px 20px;\n            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);\n        }\n        \n        h1 {\n            font-size: 2.8em;\n            margin-bottom: 10px;\n            background: linear-gradient(45deg, #667eea, #764ba2);\n            -webkit-background-clip: text;\n            -webkit-text-fill-color: transparent;\n            background-clip: text;\n            font-weight: 800;\n        }\n        \n        .subtitle {\n            font-size: 1.3em;\n            color: #666;\n            margin-bottom: 20px;\n            font-weight: 300;\n        }\n        \n        .stats {\n            display: flex;\n            justify-content: center;\n            gap: 40px;\n            margin-top: 30px;\n        }\n        \n        .stat {\n            text-align: center;\n            padding: 15px;\n            background: rgba(255, 255, 255, 0.7);\n            border-radius: 15px;\n            min-width: 100px;\n            transition: all 0.3s ease;\n        }\n        \n        .stat:hover {\n            transform: translateY(-5px);\n            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.2);\n        }\n        \n        .stat-number {\n            font-size: 2.2em;\n            font-weight: bold;\n            color: #667eea;\n            margin-bottom: 5px;\n        }\n        \n        .stat-label {\n            font-size: 0.9em;\n            color: #888;\n            font-weight: 500;\n        }\n        \n        .news-section {\n            background: rgba(255, 255, 255, 0.95);\n            backdrop-filter: blur(10px);\n            border-radius: 20px;\n            padding: 40px;\n            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);\n            margin-bottom: 30px;\n        }\n        \n        .section-title {\n            font-size: 1.8em;\n            color: #667eea;\n            margin-bottom: 25px;\n            border-bottom: 3px solid #667eea;\n            padding-bottom: 10px;\n            font-weight: 700;\n        }\n        \n        .news-item {\n            border-left: 4px solid #667eea;\n            padding: 25px 20px;\n            margin-bottom: 20px;\n            background: rgba(102, 126, 234, 0.05);\n            border-radius: 0 15px 15px 0;\n            transition: all 0.3s ease;\n        }\n        \n        .news-item:hover {\n            transform: translateX(10px);\n            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.15);\n            background: rgba(102, 126, 234, 0.1);\n        }\n        \n        .news-date {\n            font-size: 1.1em;\n            font-weight: 600;\n            color: #667eea;\n            margin-bottom: 10px;\n        }\n        \n        .news-title {\n            font-size: 1.2em;\n            color: #333;\n            margin-bottom: 15px;\n            font-weight: 600;\n            line-height: 1.4;\n        }\n        \n        .news-description {\n            color: #666;\n            margin-bottom: 15px;\n            line-height: 1.5;\n        }\n        \n        .news-link {\n            display: inline-block;\n            background: linear-gradient(45deg, #667eea, #764ba2);\n            color: white;\n            text-decoration: none;\n            padding: 12px 24px;\n            border-radius: 25px;\n            font-size: 0.95em;\n            font-weight: 600;\n            transition: all 0.3s ease;\n            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);\n        }\n        \n        .news-link:hover {\n            transform: translateY(-3px);\n            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);\n        }\n        \n        .news-link.disabled {\n            opacity: 0.6;\n            cursor: not-allowed;\n            background: #ccc;\n        }\n        \n        .news-link.disabled:hover {\n            transform: none;\n            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);\n        }\n        \n        .footer {\n            text-align: center;\n            margin-top: 40px;\n            padding: 30px 20px;\n            color: white;\n            font-size: 1em;\n            background: rgba(255, 255, 255, 0.1);\n            backdrop-filter: blur(10px);\n            border-radius: 20px;\n        }\n        \n        .footer p {\n            margin-bottom: 10px;\n        }\n        \n        .emoji {\n            font-size: 1.2em;\n        }\n        \n        .github-link {\n            display: inline-block;\n            margin-top: 20px;\n            color: white;\n            text-decoration: none;\n            background: rgba(255, 255, 255, 0.2);\n            padding: 10px 20px;\n            border-radius: 20px;\n            transition: all 0.3s ease;\n        }\n        \n        .github-link:hover {\n            background: rgba(255, 255, 255, 0.3);\n            transform: translateY(-2px);\n        }\n        \n        @media (max-width: 600px) {\n            .container {\n                padding: 15px;\n            }\n            \n            h1 {\n                font-size: 2.2em;\n            }\n            \n            .stats {\n                flex-direction: column;\n                gap: 20px;\n                align-items: center;\n            }\n            \n            .news-section {\n                padding: 25px;\n            }\n            \n            .news-item {\n                padding: 20px 15px;\n            }\n        }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <header>\n            <h1><span class=\"emoji\">🤖</span> Thinker News</h1>\n            <p class=\"subtitle\">為資料科學初學者精心打造的 AI 科技日報</p>\n            <div class=\"stats\">\n                <div class=\"stat\">\n                    <div class=\"stat-number\">08:30</div>\n                    <div class=\"stat-label\">每日更新</div>\n                </div>\n                <div class=\"stat\">\n                    <div class=\"stat-number\">AI</div>\n                    <div class=\"stat-label\">智能篩選</div>\n                </div>\n                <div class=\"stat\">\n                    <div class=\"stat-number\">5-8</div>\n                    <div class=\"stat-label\">分鐘閱讀</div>\n                </div>\n            </div>\n        </header>\n        \n        <div class=\"news-section\">\n            <h2 class=\"section-title\">📅 最新日報</h2>\n            \n                                                            <div class=\"news-item\">\n                <div class=\"news-date\">📅 2025-09-26 (今日)</div>\n                <div class=\"news-title\">🚀 今日AI科技重點新聞精選</div>\n                <div class=\"news-description\">\n                    今日AI科技重點新聞精選，涵蓋最新的工具應用、產業趨勢與安全警報。\n                </div>\n                <a href=\"./2025-09-26.html\" class=\"news-link\">閱讀完整報告 📖</a>\n            </div>\n            \n            <div class=\"news-item\">\n                <div class=\"news-date\">📅 2025-09-27</div>\n                <div class=\"news-title\">🔄 明日精彩內容準備中...</div>\n                <div class=\"news-description\">\n                    我們的AI編輯團隊正在為您精選明日最重要的科技新聞。請於明日08:30回訪查看最新內容。\n                </div>\n                <a href=\"#\" class=\"news-link disabled\">敬請期待 ⏳</a>\n            </div>\n        </div>\n        \n        <div class=\"news-section\">\n            <h2 class=\"section-title\">📚 歷史日報</h2>\n            \n            <div class=\"news-item\">\n                <div class=\"news-date\">📅 2025-09-24</div>\n                <div class=\"news-title\">🚀 今日AI科技重點新聞精選</div>\n                <div class=\"news-description\">\n                    今日AI科技重點新聞精選，涵蓋最新的工具應用、產業趨勢與安全警報。\n                </div>\n                <a href=\"./2025-09-24.html\" class=\"news-link\">閱讀完整報告 📖</a>\n            </div>\n            \n            <div class=\"news-item\">\n                <div class=\"news-date\">📅 2025-09-23</div>\n                <div class=\"news-title\">🚀 Nvidia投資OpenAI巨額資金，AI安全挑戰並存</div>\n                <div class=\"news-description\">\n                    Nvidia 與 OpenAI 達成協議投資高達1000億美元，ShadowLeak漏洞透過ChatGPT洩漏Gmail數據，AI基礎設施交易推動產業繁榮。\n                </div>\n                <a href=\"./2025-09-23.html\" class=\"news-link\">閱讀完整報告 📖</a>\n            </div>\n        </div>\n        \n        <div class=\"news-section\">\n            <h2 class=\"section-title\">📖 關於 Thinker News</h2>\n            <div style=\"color: #666; line-height: 1.7; font-size: 1.1em;\">\n                <p><strong>🎯 專為誰設計？</strong></p>\n                <p>• 年齡：30-60歲，具備R或Python資料分析經驗</p>\n                <p>• 目標：對資料科學好奇，渴望踏入AI領域的初學者</p>\n                <br>\n                <p><strong>✨ 我們的特色：</strong></p>\n                <p>• 🤖 AI智能篩選：從全球頂尖科技媒體精選相關內容</p>\n                <p>• 📊 結構化分析：工具應用、產業趨勢、安全警報、深度觀點</p>\n                <p>• 🎯 量身打造：專為初學者設計的內容深度與語言風格</p>\n                <p>• ⏰ 準時更新：每日08:30準時發布，養成學習習慣</p>\n            </div>\n        </div>\n        \n        <div class=\"news-section\">\n            <h2 class=\"section-title\">🧠 學習洞察</h2>\n            <div style=\"color: #666; line-height: 1.7; font-size: 1.1em; margin-bottom: 20px;\">\n                <p>從我們的教學經驗與策略思考中提煉的深度學習洞察，幫助你更好地理解技術學習的本質。</p>\n            </div>\n            \n            <div class=\"news-item\" style=\"background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);\">\n                <div class=\"news-date\" style=\"color: rgba(255,255,255,0.9); font-weight: 600;\">💡 最新洞察</div>\n                <div class=\"news-title\" style=\"color: #ffffff; font-weight: 700;\">程式語言的演進思維：從工程師代碼到自然語言</div>\n                <div class=\"news-description\" style=\"color: rgba(255,255,255,0.85); line-height: 1.6;\">\n                    爬蟲技術本質上就是早期工程師寫給網站的「提示詞」，只是那時還不夠智能。現在的AI提示詞，就像是新時代的程式語言 - 我們的自然語言對話，已經具備了程式語言的功能。\n                </div>\n                <div style=\"margin-top: 15px;\">\n                    <span style=\"background: rgba(255,255,255,0.25); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; margin-right: 10px; font-weight: 500;\">🎯 初學者</span>\n                    <span style=\"background: rgba(255,255,255,0.25); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; font-weight: 500;\">📚 學習方法論</span>\n                </div>\n            </div>\n            \n            <div class=\"news-item\" style=\"background: rgba(240, 147, 251, 0.08); border-left: 4px solid #f093fb; border-radius: 12px;\">\n                <div class=\"news-date\" style=\"color: #f093fb; font-weight: 600;\">🚀 教學心得</div>\n                <div class=\"news-title\" style=\"color: #333; font-weight: 700;\">階段化學習設計：從淺入深的認知建構</div>\n                <div class=\"news-description\" style=\"color: #555; line-height: 1.6;\">\n                    提示詞可以很簡單（「用老闆的語氣說話」），也可以很複雜（多層次思維框架）。關鍵是分階段教學：先讓學習者嘗到甜頭，再逐步深入核心概念，避免一開始就被複雜度嚇跑。\n                </div>\n                <div style=\"margin-top: 15px;\">\n                    <span style=\"background: linear-gradient(45deg, #f093fb, #f5576c); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; margin-right: 10px; font-weight: 500; box-shadow: 0 2px 8px rgba(240, 147, 251, 0.3);\">👥 所有人</span>\n                    <span style=\"background: linear-gradient(45deg, #f093fb, #f5576c); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; font-weight: 500; box-shadow: 0 2px 8px rgba(240, 147, 251, 0.3);\">🎓 教學方法</span>\n                </div>\n            </div>\n            \n            <div class=\"news-item\" style=\"background: rgba(118, 75, 162, 0.08); border-left: 4px solid #764ba2; border-radius: 12px;\">\n                <div class=\"news-date\" style=\"color: #764ba2; font-weight: 600;\">🤝 團隊協作洞察</div>\n                <div class=\"news-title\" style=\"color: #333; font-weight: 700;\">AI實現的兩種哲學：算法派 vs 提示詞派</div>\n                <div class=\"news-description\" style=\"color: #555; line-height: 1.6;\">\n                    在開發AI算命系統時發現了兩種實現思路：一是內建完整算法，二是運用精準提示詞。實戰證明，在產品迭代階段，「巧勁」往往比「笨功夫」更有效。關鍵是找到最小可行性方案，先跑起來再優化。\n                </div>\n                <div style=\"margin-top: 15px;\">\n                    <span style=\"background: linear-gradient(45deg, #764ba2, #667eea); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; margin-right: 10px; font-weight: 500; box-shadow: 0 2px 8px rgba(118, 75, 162, 0.3);\">🔧 開發者</span>\n                    <span style=\"background: linear-gradient(45deg, #764ba2, #667eea); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; font-weight: 500; box-shadow: 0 2px 8px rgba(118, 75, 162, 0.3);\">⚡ 快速迭代</span>\n                </div>\n            </div>\n            \n            <div class=\"news-item\" style=\"background: rgba(102, 126, 234, 0.08); border-left: 4px solid #667eea; border-radius: 12px;\">\n                <div class=\"news-date\" style=\"color: #667eea; font-weight: 600;\">🚀 工作流進化</div>\n                <div class=\"news-title\" style=\"color: #333; font-weight: 700;\">自動化的真諦：放大創造力而非取代思考</div>\n                <div class=\"news-description\" style=\"color: #555; line-height: 1.6;\">\n                    從手動Notion更新 → N8N自動化 → ChatGPT+Claude Code智能整合。真正的自動化不是取代人的思考，而是將思考過程系統化、可重複化。最好的自動化工具是那些能夠放大人的創造力的工具。\n                </div>\n                <div style=\"margin-top: 15px;\">\n                    <span style=\"background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; margin-right: 10px; font-weight: 500; box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);\">🤖 自動化</span>\n                    <span style=\"background: linear-gradient(45deg, #667eea, #764ba2); color: white; padding: 8px 15px; border-radius: 20px; font-size: 0.85em; font-weight: 500; box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);\">💡 工作流程</span>\n                </div>\n            </div>\n            \n            <div style=\"text-align: center; margin-top: 30px; padding: 20px; background: rgba(102, 126, 234, 0.05); border-radius: 15px;\">\n                <p style=\"color: #667eea; font-weight: 600; margin-bottom: 10px;\">💎 想看更多學習洞察？</p>\n                <p style=\"color: #888; font-size: 0.95em;\">我們定期從教學經驗中提煉深度思考，分享給學習社群。</p>\n                <button onclick=\"showSubscriptionForm()\" style=\"display: inline-block; margin-top: 15px; background: linear-gradient(45deg, #667eea, #764ba2); color: white; border: none; padding: 12px 24px; border-radius: 25px; font-size: 0.95em; font-weight: 600; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3); transition: all 0.3s ease; cursor: pointer;\" onmouseover=\"this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(102, 126, 234, 0.4)'\" onmouseout=\"this.style.transform='translateY(0px)'; this.style.boxShadow='0 4px 15px rgba(102, 126, 234, 0.3)'\">📧 訂閱洞察更新</button>\n            </div>\n        </div>\n        \n        <div class=\"footer\">\n            <p><span class=\"emoji\">🚀</span> 讓複雜的 AI 世界變得簡單易懂</p>\n            <p><span class=\"emoji\">💡</span> 由 AI 驅動 | 為初學者打造 | 每日準時更新</p>\n            <a href=\"https://github.com/ThinkerCafe-tw/thinker-news\" class=\"github-link\" target=\"_blank\">\n                <span class=\"emoji\">⭐</span> 在 GitHub 上支持我們\n            </a>\n        </div>\n    </div>\n    \n    <script>\n        // 互動效果\n        document.addEventListener('DOMContentLoaded', function() {\n            // 統計數字動畫\n            const statNumbers = document.querySelectorAll('.stat-number');\n            statNumbers.forEach(stat => {\n                stat.addEventListener('mouseenter', function() {\n                    this.style.transform = 'scale(1.1)';\n                });\n                stat.addEventListener('mouseleave', function() {\n                    this.style.transform = 'scale(1)';\n                });\n            });\n            \n            // 禁用連結點擊\n            const disabledLinks = document.querySelectorAll('.news-link.disabled');\n            disabledLinks.forEach(link => {\n                link.addEventListener('click', function(e) {\n                    e.preventDefault();\n                });\n            });\n            \n            // 頁面載入動畫\n            const newsItems = document.querySelectorAll('.news-item');\n            newsItems.forEach((item, index) => {\n                item.style.opacity = '0';\n                item.style.transform = 'translateY(20px)';\n                setTimeout(() => {\n                    item.style.transition = 'all 0.6s ease';\n                    item.style.opacity = '1';\n                    item.style.transform = 'translateY(0)';\n                }, index * 200);\n            });\n        });\n    </script>\n    \n    <!-- Email 訂閱功能 -->\n    <script src=\"email_subscription_handler.js\"></script>\n</body>\n</html>\n\n請輸出完整更新後的HTML代碼：",
+        "options": {
+          "systemMessage": "=🤖 System Message (Agent 身份定義)\n\n你是專業的網頁內容更新專家，專門負責精確且智能地更新網站首頁的日期和連結資訊。\n\n核心能力：\n1. 精確識別HTML中的日期模式和結構\n2. 智能更新日期資訊，保持格式一致性\n3. 自動計算和設定明日日期\n4. 保持所有HTML結構、CSS樣式和JavaScript功能完整無缺\n\n更新原則：\n- 將\"今日\"日期更新為實際的當前日期\n- 將\"明日\"日期設定為當前日期+1天\n- 更新對應的網址連結\n- 保持所有其他內容和格式完全不變\n- 確保日期格式統一（YYYY-MM-DD）\n\n品質標準：\n- 輸出完整的HTML代碼，從<!DOCTYPE html>開始到</html>結束\n- 絕對不添加任何解釋文字或markdown代碼塊\n- 保持原始檔案的所有功能和美觀度"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        2672,
+        560
+      ],
+      "id": "887ac816-bc39-4466-91d3-34884d45e75c",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "edit",
+        "owner": {
+          "__rl": true,
+          "value": "thinkercafe-tw",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "thinker-news",
+          "mode": "list",
+          "cachedResultName": "thinker-news",
+          "cachedResultUrl": "https://github.com/ThinkerCafe-tw/thinker-news"
+        },
+        "filePath": "index.html",
+        "fileContent": "={{ $json.output }}",
+        "commitMessage": "自動生成的提交訊息"
+      },
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1.1,
+      "position": [
+        3024,
+        560
+      ],
+      "id": "85fb235d-1d5e-4dd0-a5f2-0da0775d0dd8",
+      "name": "Edit a file",
+      "webhookId": "52633faf-a564-4841-ab24-d233de877a58",
+      "credentials": {
+        "githubOAuth2Api": {
+          "id": "qfixWY7nsTgSq6Ib",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -336,
+        32
+      ],
+      "id": "d9693db8-51a0-4a05-86ef-f6d8f90d9b06",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://openai.com/news/rss.xml",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        -320
+      ],
+      "id": "0f5ffbb0-0a51-40b9-9b75-a3f37a9f38b1",
+      "name": "OpenAI"
+    },
+    {
+      "parameters": {
+        "url": "http://feeds.arstechnica.com/arstechnica/index/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        432,
+        -448
+      ],
+      "id": "518e8c5b-259d-4ede-ad86-211c3bb2e7cb",
+      "name": "ArsTechnica"
+    },
+    {
+      "parameters": {
+        "url": "https://bair.berkeley.edu/blog/feed.xml",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        352,
+        -320
+      ],
+      "id": "1b02f472-5c4d-4719-89df-3e4895635ee0",
+      "name": "bair"
+    },
+    {
+      "parameters": {
+        "url": "https://technews.tw/feed/",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        32
+      ],
+      "id": "4274f81e-85a8-438e-aa30-fc0e2382ca4a",
+      "name": "technews"
+    },
+    {
+      "parameters": {
+        "url": "https://www.ithome.com.tw/rss",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        160
+      ],
+      "id": "e6342764-7130-4101-b573-1a95e78e5d88",
+      "name": "ithome"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "operation": "edit",
+        "owner": {
+          "__rl": true,
+          "value": "ThinkerCafe-tw",
+          "mode": "list",
+          "cachedResultName": "ThinkerCafe-tw",
+          "cachedResultUrl": "https://github.com/ThinkerCafe-tw"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "thinker-news",
+          "mode": "list",
+          "cachedResultName": "thinker-news",
+          "cachedResultUrl": "https://github.com/ThinkerCafe-tw/thinker-news"
+        },
+        "filePath": "latest.json",
+        "fileContent": "={{ $json.news_json }}",
+        "commitMessage": "=更新最新新聞 JSON - {{ $json.final_date }}"
+      },
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1.1,
+      "position": [
+        1824,
+        368
+      ],
+      "id": "e6af3307-7928-49b5-ac65-58ac7b5d5057",
+      "name": "儲存 latest.json",
+      "webhookId": "1f1d35ff-60c3-4601-81ae-521d98d0d54c",
+      "credentials": {
+        "githubOAuth2Api": {
+          "id": "qfixWY7nsTgSq6Ib",
+          "name": "GitHub account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "數據煉金術師 (Data Alchemist)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HackerNews": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TechCrunch": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "數據煉金術師 (Data Alchemist)",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code3": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "總編輯 (Editor-in-Chief)",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "科技導讀人 (Tech Narrator)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "數據煉金術師 (Data Alchemist)": {
+      "main": [
+        [
+          {
+            "node": "品管員#1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "科技導讀人 (Tech Narrator)": {
+      "main": [
+        [
+          {
+            "node": "品管員#2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "品管員#1": {
+      "main": [
+        [
+          {
+            "node": "科技導讀人 (Tech Narrator)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "品管員#2": {
+      "main": [
+        [
+          {
+            "node": "總編輯 (Editor-in-Chief)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "品管員#3": {
+      "main": [
+        [
+          {
+            "node": "組裝",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "總編輯 (Editor-in-Chief)": {
+      "main": [
+        [
+          {
+            "node": "品管員#3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組裝": {
+      "main": [
+        [
+          {
+            "node": "儲存 latest.json",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "生成今日日期": {
+      "main": [
+        [
+          {
+            "node": "TechCrunch",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "ArsTechnica",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HackerNews",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "OpenAI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "bair",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "technews",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "ithome",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Create a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a file": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Edit a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit a file": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "生成今日日期",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "ArsTechnica": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "bair": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "technews": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "ithome": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 6
+          }
+        ]
+      ]
+    },
+    "儲存 latest.json": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "12e1244f-5080-4833-9dfb-60ab2d0d03be",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d2ad6cc6dc1ad746c21a8aba99ca68da57c7faef892a0442084b99584bcd9da6"
+  },
+  "id": "zkj35mNYPyD9MhcU",
+  "tags": []
+}

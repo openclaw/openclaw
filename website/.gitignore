@@ -1,0 +1,58 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules/
+**/node_modules/
+/.pnp
+.pnp.js
+
+# next.js
+.next/
+**/.next/
+out/
+**/out/
+
+# production
+build/
+**/build/
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env*
+**/.env*
+!**/.env.example
+
+# vercel
+.vercel
+**/.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# OS
+.DS_Store
+*.swp
+.env*.local
+
+# macOS Icon files
+Icon
+Icon?
+
+# Credential-related JSON files
+*credential*.json
+*service-account*.json
+*private-key*.json
+*secret*.json
+google-service-account*.json
+
+# Allow specific JSON files
+# (All other JSON files are now tracked by default)
+
+# Ignore backup directories
+*.backup*/

@@ -1,0 +1,513 @@
+/* ===== AI 禮包系統 - 共用樣式 ===== */
+
+/* 基礎重置 */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Noto Sans TC', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    padding: 20px;
+    color: #333;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.card {
+    background: white;
+    border-radius: 20px;
+    padding: 40px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    margin-bottom: 20px;
+}
+
+/* 標題樣式 */
+h1 {
+    font-size: 2.5em;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+h2 {
+    font-size: 1.8em;
+    margin-bottom: 15px;
+    color: #667eea;
+}
+
+h3 {
+    font-size: 1.3em;
+    color: #667eea;
+    margin-bottom: 15px;
+}
+
+.subtitle {
+    font-size: 1.2em;
+    color: #666;
+    margin-bottom: 30px;
+    line-height: 1.6;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ===== 驗證頁面 ===== */
+.verify-box {
+    text-align: center;
+}
+
+.verify-box input {
+    width: 100%;
+    padding: 15px;
+    font-size: 1.2em;
+    border: 2px solid #ddd;
+    border-radius: 10px;
+    margin: 20px 0;
+    text-align: center;
+    letter-spacing: 3px;
+}
+
+.verify-box input:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+/* ===== 按鈕樣式 ===== */
+.btn {
+    display: inline-block;
+    padding: 15px 40px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 50px;
+    font-size: 1.1em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    text-decoration: none;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+}
+
+.btn:active {
+    transform: translateY(0);
+}
+
+.btn-cta {
+    background: white;
+    color: #667eea;
+    padding: 18px 50px;
+    font-size: 1.2em;
+    margin-top: 20px;
+}
+
+/* ===== 禮包卡片 ===== */
+.gift-cards {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+    margin-top: 30px;
+}
+
+.gift-card {
+    border: 3px solid #eee;
+    border-radius: 15px;
+    padding: 30px;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+}
+
+.gift-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+
+.gift-card:hover {
+    border-color: #667eea;
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+}
+
+.gift-card:hover::before {
+    opacity: 0.05;
+}
+
+.gift-card h3 {
+    font-size: 1.5em;
+    margin-bottom: 10px;
+    color: #333;
+    position: relative;
+    z-index: 1;
+}
+
+.gift-card .target {
+    color: #888;
+    font-size: 0.9em;
+    margin-bottom: 15px;
+    position: relative;
+    z-index: 1;
+}
+
+.gift-card .preview {
+    color: #666;
+    line-height: 1.6;
+    position: relative;
+    z-index: 1;
+}
+
+.gift-card .icon {
+    font-size: 3em;
+    margin-bottom: 10px;
+    position: relative;
+    z-index: 1;
+}
+
+/* ===== 進度條 ===== */
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #eee;
+    border-radius: 10px;
+    margin: 30px 0;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    transition: width 0.5s ease;
+    border-radius: 10px;
+}
+
+.progress-text {
+    text-align: center;
+    color: #888;
+    margin-top: 10px;
+    font-size: 0.9em;
+}
+
+/* ===== 提示詞生成器 ===== */
+.prompt-step {
+    margin: 30px 0;
+}
+
+.prompt-step .scenario {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    border-left: 4px solid #667eea;
+}
+
+/* ===== 表單輸入 ===== */
+.input-group {
+    margin: 20px 0;
+}
+
+.input-group label {
+    display: block;
+    margin-bottom: 10px;
+    color: #666;
+    font-weight: 500;
+}
+
+.input-group input,
+.input-group textarea,
+.input-group select {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 1em;
+    font-family: inherit;
+    transition: border-color 0.2s;
+}
+
+.input-group textarea {
+    min-height: 100px;
+    resize: vertical;
+}
+
+.input-group input:focus,
+.input-group textarea:focus,
+.input-group select:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+/* 下拉選單 (Phase 1 新增) */
+select {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 1em;
+    font-family: inherit;
+    background: white;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+
+select:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+select:hover {
+    border-color: #aaa;
+}
+
+/* 自訂輸入框（當選擇「其他」時顯示） */
+.custom-input {
+    margin-top: 10px;
+}
+
+/* 範本按鈕 (Phase 1 新增) */
+.template-btn {
+    padding: 8px 16px;
+    background: #f8f9fa;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 0.9em;
+    cursor: pointer;
+    margin-right: 8px;
+    margin-bottom: 8px;
+    transition: all 0.2s;
+    display: inline-block;
+}
+
+.template-btn:hover {
+    background: white;
+    border-color: #667eea;
+    color: #667eea;
+}
+
+.template-btn:active {
+    transform: scale(0.98);
+}
+
+/* ===== 提示詞結果顯示 ===== */
+.prompt-result {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 10px;
+    margin: 20px 0;
+    border: 2px solid #667eea;
+    position: relative;
+}
+
+.prompt-result pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'Monaco', 'Courier New', monospace;
+    font-size: 0.95em;
+    line-height: 1.6;
+    color: #333;
+    margin-top: 40px;
+}
+
+.copy-btn {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    padding: 8px 20px;
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background 0.2s;
+}
+
+.copy-btn:hover {
+    background: #5568d3;
+}
+
+.copy-btn.copied {
+    background: #4caf50;
+}
+
+/* ===== Email 收集 ===== */
+.email-gate {
+    text-align: center;
+    padding: 40px 20px;
+    background: #f8f9fa;
+    border-radius: 15px;
+    margin: 30px 0;
+}
+
+.email-gate input[type="email"] {
+    width: 100%;
+    max-width: 400px;
+    padding: 15px;
+    font-size: 1.1em;
+    border: 2px solid #ddd;
+    border-radius: 10px;
+    margin: 20px auto;
+    display: block;
+}
+
+.email-gate input[type="email"]:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+/* ===== 完成頁面 ===== */
+.completion {
+    text-align: center;
+}
+
+.completion .icon {
+    font-size: 5em;
+    margin: 20px 0;
+}
+
+.cta-box {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 30px;
+    border-radius: 15px;
+    margin: 30px 0;
+}
+
+.cta-box h3 {
+    color: white;
+    margin-bottom: 15px;
+}
+
+.cta-box .price {
+    font-size: 2em;
+    font-weight: bold;
+    margin: 15px 0;
+}
+
+.cta-box .original-price {
+    text-decoration: line-through;
+    opacity: 0.7;
+    font-size: 0.8em;
+}
+
+/* ===== 提示訊息 ===== */
+.hint {
+    background: #fff3cd;
+    border-left: 4px solid #ffc107;
+    padding: 15px;
+    border-radius: 5px;
+    margin: 20px 0;
+    color: #856404;
+}
+
+/* ===== 錯誤訊息 ===== */
+.error {
+    color: #dc3545;
+    text-align: center;
+    margin-top: 10px;
+    font-size: 0.9em;
+}
+
+/* ===== 動畫 ===== */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.fade-in {
+    animation: fadeIn 0.5s ease;
+}
+
+/* ===== 響應式設計 ===== */
+@media (max-width: 768px) {
+    .card {
+        padding: 25px;
+    }
+
+    h1 {
+        font-size: 2em;
+    }
+
+    h2 {
+        font-size: 1.5em;
+    }
+
+    .btn {
+        padding: 12px 30px;
+        font-size: 1em;
+    }
+
+    .gift-card {
+        padding: 20px;
+    }
+
+    .gift-card .icon {
+        font-size: 2.5em;
+    }
+
+    .prompt-result pre {
+        font-size: 0.85em;
+    }
+}
+
+/* ===== 小螢幕優化 ===== */
+@media (max-width: 480px) {
+    body {
+        padding: 10px;
+    }
+
+    .card {
+        padding: 20px;
+        border-radius: 15px;
+    }
+
+    h1 {
+        font-size: 1.8em;
+    }
+
+    .subtitle {
+        font-size: 1em;
+    }
+
+    .btn {
+        padding: 12px 25px;
+        font-size: 0.95em;
+    }
+
+    .copy-btn {
+        position: static;
+        display: block;
+        width: 100%;
+        margin-bottom: 10px;
+    }
+
+    .prompt-result pre {
+        margin-top: 10px;
+    }
+}

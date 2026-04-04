@@ -1,0 +1,250 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Curator Memory Schema",
+  "description": "Curator 人格的記憶檔案結構定義",
+  "type": "object",
+  "required": ["version", "courses", "highlight_index_mapping"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "記憶檔案版本號"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "記憶檔案的後設資料",
+      "properties": {
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "建立時間（ISO 8601）"
+        },
+        "last_updated": {
+          "type": "string",
+          "format": "date-time",
+          "description": "最後更新時間（ISO 8601）"
+        },
+        "ttl": {
+          "type": "object",
+          "description": "各類資料的 Time-To-Live（秒）",
+          "properties": {
+            "courses": {
+              "type": "number",
+              "description": "課程資料的 TTL（預設 3600 秒 = 1 小時）"
+            },
+            "pricing": {
+              "type": "number",
+              "description": "定價資料的 TTL（預設 1800 秒 = 30 分鐘）"
+            },
+            "images": {
+              "type": "number",
+              "description": "圖片資料的 TTL（預設 86400 秒 = 24 小時）"
+            }
+          }
+        }
+      }
+    },
+    "courses": {
+      "type": "array",
+      "description": "所有課程資料",
+      "items": {
+        "type": "object",
+        "required": ["course_id", "notion_page_id", "zh_name", "pricing"],
+        "properties": {
+          "course_id": {
+            "type": "number",
+            "description": "⚠️ 課程 ID（注意：欄位名稱是 course_id，不是 id）"
+          },
+          "notion_page_id": {
+            "type": "string",
+            "description": "Notion 頁面 ID（UUID 格式，帶連字號）",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "zh_name": {
+            "type": "string",
+            "description": "課程中文名稱"
+          },
+          "en_name": {
+            "type": "string",
+            "description": "課程英文名稱"
+          },
+          "zh_description": {
+            "type": "string",
+            "description": "課程中文描述"
+          },
+          "en_description": {
+            "type": "string",
+            "description": "課程英文描述"
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "資料抓取時間"
+          },
+          "pricing": {
+            "type": "object",
+            "description": "課程定價資料",
+            "required": [
+              "single_price",
+              "single_price_early",
+              "group_price",
+              "group_price_early"
+            ],
+            "properties": {
+              "single_price": {
+                "type": "number",
+                "description": "一對一原價（TWD）",
+                "minimum": 0
+              },
+              "single_price_early": {
+                "type": "number",
+                "description": "一對一早鳥價（TWD）",
+                "minimum": 0
+              },
+              "group_price": {
+                "type": "number",
+                "description": "團班原價（TWD）",
+                "minimum": 0
+              },
+              "group_price_early": {
+                "type": "number",
+                "description": "團班早鳥價（TWD）",
+                "minimum": 0
+              },
+              "currency": {
+                "type": "string",
+                "description": "貨幣單位",
+                "default": "TWD"
+              },
+              "last_updated": {
+                "type": "string",
+                "format": "date",
+                "description": "價格最後更新日期"
+              },
+              "fetched_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "價格抓取時間"
+              }
+            }
+          },
+          "images": {
+            "type": "object",
+            "description": "課程圖片資料",
+            "properties": {
+              "main_image": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "主圖 URL"
+                  },
+                  "fetched_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "content_video": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "影片 URL"
+                  },
+                  "fetched_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "highlights": {
+                "type": "array",
+                "description": "Highlight 卡片圖片（6 個）",
+                "maxItems": 6,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "highlight_number": {
+                      "type": "number",
+                      "description": "Highlight 編號（1-6）",
+                      "minimum": 1,
+                      "maximum": 6
+                    },
+                    "title": {
+                      "type": "string",
+                      "description": "Highlight 標題"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Highlight 描述"
+                    },
+                    "image": {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        },
+                        "fetched_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "highlight_index_mapping": {
+      "type": "object",
+      "description": "課程在 HighlightCard 中的 index 對照表",
+      "required": ["note", "last_verified", "mapping"],
+      "properties": {
+        "note": {
+          "type": "string",
+          "description": "對照表說明"
+        },
+        "last_verified": {
+          "type": "string",
+          "format": "date",
+          "description": "最後驗證日期"
+        },
+        "explanation": {
+          "type": "string",
+          "description": "Index 對照邏輯說明"
+        },
+        "mapping": {
+          "type": "object",
+          "description": "以 course_id（字串）為 key 的對照表",
+          "patternProperties": {
+            "^[0-9]+$": {
+              "type": "object",
+              "required": ["index", "verified"],
+              "properties": {
+                "index": {
+                  "type": ["number", "null"],
+                  "description": "在 HighlightCard 中的 index（0-based），null 表示尚未驗證",
+                  "minimum": 0
+                },
+                "verified": {
+                  "type": "boolean",
+                  "description": "是否已驗證"
+                },
+                "note": {
+                  "type": "string",
+                  "description": "備註說明"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

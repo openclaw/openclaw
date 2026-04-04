@@ -1,0 +1,5 @@
+{
+  "date": "2026-03-30",
+  "content": "# Morning Brief 2026-03-30\n\n# ☀️ 無極晨報 — 2026.03.30\n\n**台北 🌫 19°C，微涼有霧。**\n\n---\n\n**⚠️ P0 基礎設施警報未解除**\n\nTelethon Bridge（杜甫/Andrew）離線超過 5 天，全局監測癱瘓，7+ P1 異常無法上報。OpenClaw Gateway 資源告急：CPU 142.8%、磁盤 75.2%，級聯崩潰風險高。\n\n**立即需要：**\n1. 重啟 Telethon Bridge（`:18790` / `:18795`）\n2. 清理 Gateway 磁盤，查 CPU 飆升根因\n3. 確認 morning_brief 任務狀態（已連續失敗 12 天）\n\n> 基礎設施不通，所有巡檢形同虛設。這是唯一優先級。\n\n---\n\n**待辦提醒**\n\n| 狀態 | 項目 |\n|------|------|\n| 🔴 逾期 | Win 要 P0 召回效果數據（原限 2/24） |\n| 🟡 進行中 | Genesis Kernel 落地、bita 客服群修復 |\n| 🟡 進行中 | LoLo Care Phase 5、Chat-as-OS widget 擴充 |\n\n---\n\n**一句話：橋斷了，先修橋。**",
+  "source": "morning-brief"
+}
