@@ -12,6 +12,7 @@ on:
       - "**/*.mdx"
       - ".agents/**"
       - "skills/**"
+      - "website/**"
   workflow_dispatch:
     inputs:
       tag:
