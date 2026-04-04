@@ -318,32 +318,36 @@ API key auth, and dynamic model resolution.
       | # | Hook | When to use |
       | --- | --- | --- |
       | 1 | `catalog` | Model catalog or base URL defaults |
-      | 2 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | 3 | `prepareDynamicModel` | Async metadata fetch before resolving |
-      | 4 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 5 | `capabilities` | Transcript/tooling metadata (data, not callable) |
-      | 6 | `prepareExtraParams` | Default request params |
-      | 7 | `wrapStreamFn` | Custom headers/body wrappers |
-      | 8 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 9 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 10 | `formatApiKey` | Custom runtime token shape |
-      | 11 | `refreshOAuth` | Custom OAuth refresh |
-      | 12 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 13 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 14 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 15 | `suppressBuiltInModel` | Hide stale upstream rows |
-      | 16 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 17 | `isBinaryThinking` | Binary thinking on/off |
-      | 18 | `supportsXHighThinking` | `xhigh` reasoning support |
-      | 19 | `resolveDefaultThinkingLevel` | Default `/think` policy |
-      | 20 | `isModernModelRef` | Live/smoke model matching |
-      | 21 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 22 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 23 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 24 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
-      | 25 | `buildReplayPolicy` | Custom transcript policy (e.g. thinking-block stripping) |
-      | 26 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 27 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 2 | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
+      | 3 | `normalizeConfig` | Normalize `models.providers.<id>` config |
+      | 4 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
+      | 5 | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | 6 | `normalizeResolvedModel` | Transport rewrites before the runner |
+      | 7 | `capabilities` | Transcript/tooling metadata (data, not callable) |
+      | 8 | `prepareExtraParams` | Default request params |
+      | 9 | `wrapStreamFn` | Custom headers/body wrappers |
+      | 10 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 11 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 12 | `formatApiKey` | Custom runtime token shape |
+      | 13 | `refreshOAuth` | Custom OAuth refresh |
+      | 14 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 15 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 16 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 17 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 18 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 19 | `suppressBuiltInModel` | Hide stale upstream rows |
+      | 20 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 21 | `isBinaryThinking` | Binary thinking on/off |
+      | 22 | `supportsXHighThinking` | `xhigh` reasoning support |
+      | 23 | `resolveDefaultThinkingLevel` | Default `/think` policy |
+      | 24 | `isModernModelRef` | Live/smoke model matching |
+      | 25 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 26 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 27 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 28 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 29 | `buildReplayPolicy` | Custom transcript policy (e.g. thinking-block stripping) |
+      | 30 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 31 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
 
       For detailed descriptions and real-world examples, see
       [Internals: Provider Runtime Hooks](/plugins/architecture#provider-runtime-hooks).

@@ -28,14 +28,14 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
-  `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`,
-  `refreshOAuth`, `buildAuthDoctorHint`,
-  `isCacheTtlEligible`, `buildMissingAuthMessage`,
-  `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`,
-  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
-  `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot`.
+  `normalizeConfig`, `resolveDynamicModel`, `prepareDynamicModel`,
+  `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
+  `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
+  `matchesContextOverflowError`, `classifyFailoverReason`,
+  `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
+  `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
+  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  `prepareRuntimeAuth`, `resolveUsageAuth`, and `fetchUsageSnapshot`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
@@ -53,6 +53,7 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
@@ -67,6 +68,10 @@ Typical split:
   refreshers are not enough
 - `buildAuthDoctorHint`: provider appends repair guidance when OAuth refresh
   fails
+- `matchesContextOverflowError`: provider recognizes provider-specific
+  context-window overflow errors that generic heuristics would miss
+- `classifyFailoverReason`: provider maps provider-specific raw transport/API
+  errors to failover reasons such as rate limit or overload
 - `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
 - `buildMissingAuthMessage`: provider replaces the generic auth-store error
   with a provider-specific recovery hint
@@ -78,6 +83,8 @@ Typical split:
 - `supportsXHighThinking`: provider opts selected models into `xhigh`
 - `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
   model family
+- `applyConfigDefaults`: provider applies provider-specific global defaults
+  during config materialization based on auth mode, env, or model family
 - `isModernModelRef`: provider owns live/smoke preferred-model matching
 - `prepareRuntimeAuth`: provider turns a configured credential into a short
   lived runtime token
@@ -89,7 +96,10 @@ Typical split:
 Current bundled examples:
 
 - `anthropic`: Claude 4.6 forward-compat fallback, auth repair hints, usage
-  endpoint fetching, and cache-TTL/provider-family metadata
+  endpoint fetching, cache-TTL/provider-family metadata, and auth-aware global
+  config defaults
+- `amazon-bedrock`: provider-owned context-overflow matching and failover
+  reason classification for Bedrock-specific throttle/not-ready errors
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, and cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
