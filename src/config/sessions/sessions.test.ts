@@ -446,6 +446,14 @@ describe("evaluateSessionFreshness — adaptive mode (AND logic)", () => {
     expect(result.fresh).toBe(false);
   });
 
+  it("resets when session was active after boundary but has since gone idle", () => {
+    // P1 scenario: updatedAt is 10 min after boundary (staleDaily=false for daily mode)
+    // but now is 3 h later — idle window exceeded. adaptive should still reset.
+    const updatedAt = boundary + 10 * 60_000;
+    const result = evaluateSessionFreshness({ updatedAt, now, policy: adaptivePolicy });
+    expect(result.fresh).toBe(false);
+  });
+
   it("stays fresh when daily boundary passed but session is NOT idle", () => {
     // updatedAt 30 min ago — boundary passed but idle window not exceeded
     const updatedAt = now - 30 * 60_000;
