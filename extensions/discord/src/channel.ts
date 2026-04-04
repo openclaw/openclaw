@@ -35,6 +35,16 @@ import {
 } from "./accounts.js";
 import { getDiscordApprovalCapability } from "./approval-native.js";
 import { discordMessageActions as discordMessageActionsImpl } from "./channel-actions.js";
+import {
+  buildTokenChannelStatusSummary,
+  type ChannelPlugin,
+  DEFAULT_ACCOUNT_ID,
+  getChatChannelMeta,
+  PAIRING_APPROVED_MESSAGE,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromCredentialStatuses,
+  type OpenClawConfig,
+} from "./channel-api.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -52,16 +62,6 @@ import {
 } from "./normalize.js";
 import { resolveDiscordOutboundSessionRoute } from "./outbound-session-route.js";
 import type { DiscordProbe } from "./probe.js";
-import {
-  buildTokenChannelStatusSummary,
-  type ChannelPlugin,
-  DEFAULT_ACCOUNT_ID,
-  getChatChannelMeta,
-  PAIRING_APPROVED_MESSAGE,
-  projectCredentialSnapshotFields,
-  resolveConfiguredFromCredentialStatuses,
-  type OpenClawConfig,
-} from "./runtime-api.js";
 import { getDiscordRuntime } from "./runtime.js";
 import { collectDiscordSecurityAuditFindings } from "./security-audit.js";
 import { normalizeExplicitDiscordSessionKey } from "./session-key-normalization.js";
@@ -125,7 +125,9 @@ function loadDiscordCarbonModule() {
   return discordCarbonModuleCache;
 }
 
-const meta = getChatChannelMeta("discord");
+const meta = {
+  ...getChatChannelMeta("discord"),
+};
 const REQUIRED_DISCORD_PERMISSIONS = ["ViewChannel", "SendMessages"] as const;
 const DISCORD_ACCOUNT_STARTUP_STAGGER_MS = 10_000;
 
