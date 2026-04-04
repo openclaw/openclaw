@@ -528,6 +528,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.model": "Compaction Model Override",
   "agents.defaults.compaction.truncateAfterCompaction": "Truncate After Compaction",
   "agents.defaults.compaction.notifyUser": "Compaction Notify User",
+  "agents.defaults.compaction.proactiveThresholdRatio": "Proactive Compaction Threshold",
+  "agents.defaults.compaction.recentMessagesToKeep": "Messages to Keep During Compaction",
+  "agents.defaults.subagents.operatingPrinciples": "Subagent Operating Principles",
+  "agents.defaults.subagents.maxFailureAttempts": "Subagent Max Failure Attempts",
+
   "agents.defaults.compaction.memoryFlush": "Compaction Memory Flush",
   "agents.defaults.compaction.memoryFlush.enabled": "Compaction Memory Flush Enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":

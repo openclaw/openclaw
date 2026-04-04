@@ -1,5 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+import type { SubagentOperatingPrinciple } from "../config/types.agent-defaults.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -72,6 +73,15 @@ export function buildSubagentSystemPrompt(params: {
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
   maxSpawnDepth?: number;
+  /**
+   * Operating principles to inject into the system prompt.
+   * Valid entries: "context_first", "local_before_external", "act_verify_report",
+   * "failure_recovery", "stay_focused", "complete_the_loop", "trust_push", "recover_compacted".
+   * Default: all enabled.
+   */
+  operatingPrinciples?: SubagentOperatingPrinciple[];
+  /** Max failure attempts before escalation (default: 3). */
+  maxFailureAttempts?: number;
 }) {
   const taskText =
     typeof params.task === "string" && params.task.trim()
@@ -85,6 +95,17 @@ export function buildSubagentSystemPrompt(params: {
   const acpEnabled = params.acpEnabled !== false;
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
+  const maxAttempts = params.maxFailureAttempts ?? 3;
+  const principles = params.operatingPrinciples ?? [
+    "context_first",
+    "local_before_external",
+    "act_verify_report",
+    "failure_recovery",
+    "stay_focused",
+    "complete_the_loop",
+    "trust_push",
+    "recover_compacted",
+  ];
 
   const lines = [
     "# Subagent Context",
@@ -93,20 +114,79 @@ export function buildSubagentSystemPrompt(params: {
     "",
     "## Your Role",
     `- You were created to handle: ${taskText}`,
-    "- Complete this task. That's your entire purpose.",
+    "- **Do the work**, not just plan or report. If the task says 'fix X', fix it. If it says 'create Y', create it. Do not stop at describing what you would do.",
     `- You are NOT the ${parentLabel}. Don't try to be.`,
     "",
-    "## Rules",
-    "1. **Stay focused** - Do your assigned task, nothing else",
-    `2. **Complete the task** - Your final message will be automatically reported to the ${parentLabel}`,
-    "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
-    "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
-    "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
-    "6. **Recover from compacted/truncated tool output** - If you see `[compacted: tool output removed to free context]` or `[truncated: output exceeded context limit]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
-    "",
+  ];
+
+  // Build "How to Work" section dynamically based on enabled principles
+  const howToWorkLines: string[] = ["## How to Work"];
+  let step = 1;
+
+  if (principles.includes("context_first")) {
+    howToWorkLines.push(
+      `${step}. **Context first** - Before acting, read the relevant files and check the current state. Your first tool calls must be reads/searches, not writes/creates. Do not act on assumptions.`,
+    );
+    step++;
+  }
+
+  if (principles.includes("local_before_external")) {
+    howToWorkLines.push(
+      `${step}. **Local before external** - Check workspace files and memory before using web search. Never web-search for something that could be in the workspace.`,
+    );
+    step++;
+  }
+
+  if (principles.includes("act_verify_report")) {
+    howToWorkLines.push(
+      `${step}. **Act, verify, report** - After completing an action, verify the result with a separate check (read the file back, run a test, confirm the output). Never report success without verifying it.`,
+    );
+    step++;
+  }
+
+  if (principles.includes("failure_recovery")) {
+    howToWorkLines.push(
+      `${step}. **Failure recovery** - When something fails: (1) read the error, (2) state what assumption was wrong, (3) try a targeted fix. Maximum ${maxAttempts} attempts before escalating with a description of what was tried.`,
+    );
+    step++;
+  }
+
+  if (principles.includes("stay_focused")) {
+    howToWorkLines.push(
+      `${step}. **Stay focused** - Do your assigned task, nothing else. No side quests, no heartbeats, no proactive actions.`,
+    );
+    step++;
+  }
+
+  if (principles.includes("complete_the_loop")) {
+    howToWorkLines.push(
+      `${step}. **Complete the loop** - Keep working until the task is done and verified. Do not stop to ask for permission or report partial progress unless you are genuinely stuck after ${maxAttempts} failed attempts.`,
+    );
+    step++;
+  }
+
+  if (principles.includes("trust_push")) {
+    howToWorkLines.push(
+      `${step}. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.`,
+    );
+    step++;
+  }
+
+  if (principles.includes("recover_compacted")) {
+    howToWorkLines.push(
+      `${step}. **Recover from compacted/truncated tool output** - If you see \`[compacted: tool output removed to free context]\` or \`[truncated: output exceeded context limit]\`, re-read only what you need using smaller chunks (\`read\` with offset/limit, or targeted \`rg\`/\`head\`/\`tail\`) instead of full-file \`cat\`.`,
+    );
+    step++;
+  }
+
+  if (howToWorkLines.length > 1) {
+    lines.push(...howToWorkLines, "");
+  }
+
+  lines.push(
     "## Output Format",
-    "When complete, your final response should include:",
-    `- What you accomplished or found`,
+    `Your final message will be automatically reported to the ${parentLabel}. Include:`,
+    `- What you accomplished (concrete results, not intentions)`,
     `- Any relevant details the ${parentLabel} should know`,
     "- Keep it concise but informative",
     "",
@@ -117,7 +197,7 @@ export function buildSubagentSystemPrompt(params: {
     `- NO pretending to be the ${parentLabel}`,
     `- Only use the \`message\` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the ${parentLabel} deliver it`,
     "",
-  ];
+  );
 
   if (canSpawn) {
     lines.push(

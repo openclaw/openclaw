@@ -144,6 +144,9 @@ export const AgentDefaultsSchema = z
           .strict()
           .optional(),
         notifyUser: z.boolean().optional(),
+        truncateAfterCompaction: z.boolean().optional(),
+        proactiveThresholdRatio: z.number().min(0).max(0.95).optional(),
+        recentMessagesToKeep: z.number().int().min(3).max(50).optional(),
       })
       .strict()
       .optional(),
@@ -210,6 +213,21 @@ export const AgentDefaultsSchema = z
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
         requireAgentId: z.boolean().optional(),
+        operatingPrinciples: z
+          .array(
+            z.enum([
+              "context_first",
+              "local_before_external",
+              "act_verify_report",
+              "failure_recovery",
+              "stay_focused",
+              "complete_the_loop",
+              "trust_push",
+              "recover_compacted",
+            ]),
+          )
+          .optional(),
+        maxFailureAttempts: z.number().int().min(1).max(10).optional(),
       })
       .strict()
       .optional(),

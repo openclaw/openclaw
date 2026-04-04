@@ -635,6 +635,8 @@ export async function spawnSubagentDirect(
     acpEnabled: cfg.acp?.enabled !== false && !childRuntime.sandboxed,
     childDepth,
     maxSpawnDepth,
+    operatingPrinciples: cfg.agents?.defaults?.subagents?.operatingPrinciples,
+    maxFailureAttempts: cfg.agents?.defaults?.subagents?.maxFailureAttempts,
   });
 
   let retainOnSessionKeep = false;
