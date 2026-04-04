@@ -282,6 +282,8 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   approved scope set for that token. This preserves read/probe/status access
   that was already granted and avoids silently collapsing reconnects to a
   narrower implicit admin-only scope.
+- Normal connect auth precedence is explicit shared token/password first, then
+  explicit `deviceToken`, then stored per-device token, then bootstrap token.
 - Additional `hello-ok.auth.deviceTokens` entries are bootstrap handoff tokens.
   Persist them only when the connect used bootstrap auth on a trusted transport
   such as `wss://` or loopback/local pairing.

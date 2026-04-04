@@ -77,6 +77,7 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
 
 - Ensure the gateway is reachable (local: `openclaw status`; remote: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`).
 - For `AUTH_TOKEN_MISMATCH`, clients may do one trusted retry with a cached device token when the gateway returns retry hints. That cached-token retry reuses the token's cached approved scopes; explicit `deviceToken` / explicit `scopes` callers keep their requested scope set. If auth still fails after that retry, resolve token drift manually.
+- Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
 - On the async Tailscale Serve Control UI path, failed attempts for the same
   `{scope, ip}` are serialized before the failed-auth limiter records them, so
   the second concurrent bad retry can already show `retry later`.

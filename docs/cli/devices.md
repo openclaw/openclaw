@@ -146,6 +146,11 @@ openclaw devices approve <requestId>
 
 5. Retry client connection with the current shared token/password.
 
+Notes:
+
+- Normal reconnect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
+- Trusted `AUTH_TOKEN_MISMATCH` recovery can temporarily send both the shared token and the stored device token together for the one bounded retry.
+
 Related:
 
 - [Dashboard auth troubleshooting](/web/dashboard#if-you-see-unauthorized-1008)
