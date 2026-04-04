@@ -43,8 +43,8 @@ enum WideAreaGatewayDiscovery {
         guard let statusJson = context.tailscaleStatus(),
               !collectTailnetIPv4s(statusJson: statusJson).isEmpty,
               let discovery = loadWideAreaPtrRecords(
-            remaining: remaining,
-            dig: context.dig)
+                  remaining: remaining,
+                  dig: context.dig)
         else { return [] }
 
         let domainTrimmed = discovery.domainTrimmed

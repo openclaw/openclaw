@@ -7,6 +7,16 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function getString(obj: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = obj?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function getNumber(obj: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = obj?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
 function mergeProviderConfig(
   providersValue: unknown,
   providerId: string,
@@ -33,28 +43,29 @@ export function normalizeVoiceCallLegacyConfigInput(value: unknown): Record<stri
   const streaming = asObject(raw.streaming);
 
   const legacyStreamingOpenAICompat: Record<string, unknown> = {};
-  if (typeof streaming?.openaiApiKey === "string") {
-    legacyStreamingOpenAICompat.apiKey = streaming.openaiApiKey;
+  const streamingOpenAIApiKey = getString(streaming, "openaiApiKey");
+  if (streamingOpenAIApiKey) {
+    legacyStreamingOpenAICompat.apiKey = streamingOpenAIApiKey;
   }
-  if (typeof streaming?.sttModel === "string") {
-    legacyStreamingOpenAICompat.model = streaming.sttModel;
+  const streamingSttModel = getString(streaming, "sttModel");
+  if (streamingSttModel) {
+    legacyStreamingOpenAICompat.model = streamingSttModel;
   }
-  if (typeof streaming?.silenceDurationMs === "number") {
-    legacyStreamingOpenAICompat.silenceDurationMs = streaming.silenceDurationMs;
+  const streamingSilenceDurationMs = getNumber(streaming, "silenceDurationMs");
+  if (streamingSilenceDurationMs !== undefined) {
+    legacyStreamingOpenAICompat.silenceDurationMs = streamingSilenceDurationMs;
   }
-  if (typeof streaming?.vadThreshold === "number") {
-    legacyStreamingOpenAICompat.vadThreshold = streaming.vadThreshold;
+  const streamingVadThreshold = getNumber(streaming, "vadThreshold");
+  if (streamingVadThreshold !== undefined) {
+    legacyStreamingOpenAICompat.vadThreshold = streamingVadThreshold;
   }
+  const streamingProvider = getString(streaming, "provider");
+  const legacyStreamingProvider = getString(streaming, "sttProvider");
 
-  const normalizedStreaming = streaming
+  const normalizedStreaming: Record<string, unknown> | undefined = streaming
     ? {
         ...streaming,
-        provider:
-          typeof streaming.provider === "string"
-            ? streaming.provider
-            : typeof streaming.sttProvider === "string"
-              ? streaming.sttProvider
-              : undefined,
+        provider: streamingProvider ?? legacyStreamingProvider,
         providers: mergeProviderConfig(streaming.providers, "openai", legacyStreamingOpenAICompat),
       }
     : undefined;
