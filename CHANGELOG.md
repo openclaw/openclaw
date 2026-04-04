@@ -122,6 +122,7 @@ Docs: https://docs.openclaw.ai
 - Cron: suppress exact `NO_REPLY` sentinel direct-delivery payloads, keep silent direct replies from falling back into duplicate main-summary sends, and treat structured `deleteAfterRun` silent replies the same as text silent replies. (#45737) Thanks @openperf.
 - Cron: keep exact silent-token detection case-insensitive again so mixed-case `NO_REPLY` outputs still stay silent in text and direct delivery paths. Thanks @obviyus.
 - Core/approvals: share approval-not-found fallback classification through the narrow `plugin-sdk/error-runtime` seam so core `/approve` and Telegram stay aligned without widening `plugin-sdk/infra-runtime`. (#60932) Thanks @gumadeiras.
+- Gateway/file handling: wrap extracted uploaded text and text-like attachment content as untrusted external content before forwarding it to models, reducing prompt-injection risk from user-supplied files. (#60277) Thanks @hxy91819.
 
 ## 2026.4.2
 

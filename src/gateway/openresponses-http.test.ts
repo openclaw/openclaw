@@ -466,7 +466,41 @@ describe("OpenResponses HTTP API (e2e)", () => {
         (optsInputFile as { extraSystemPrompt?: string } | undefined)?.extraSystemPrompt ?? "";
       expect(inputFileMessage).toBe("read this");
       expect(inputFilePrompt).toContain('<file name="hello.txt">');
+      expect(inputFilePrompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      expect(inputFilePrompt).toContain("Source: External");
       await ensureResponseConsumed(resInputFile);
+
+      mockAgentOnce([{ text: "ok" }]);
+      const resInputFileWhitespace = await postResponses(port, {
+        model: "openclaw",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "read this" },
+              {
+                type: "input_file",
+                source: {
+                  type: "base64",
+                  media_type: "text/plain",
+                  data: Buffer.from("  hello  ").toString("base64"),
+                  filename: "spaces.txt",
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(resInputFileWhitespace.status).toBe(200);
+      const optsInputFileWhitespace = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      const inputFileWhitespacePrompt =
+        (optsInputFileWhitespace as { extraSystemPrompt?: string } | undefined)
+          ?.extraSystemPrompt ?? "";
+      expect(inputFileWhitespacePrompt).toContain('<file name="spaces.txt">');
+      expect(inputFileWhitespacePrompt).toContain("\n  hello  \n");
+      expect(inputFileWhitespacePrompt).toContain('<<<EXTERNAL_UNTRUSTED_CONTENT id="');
+      await ensureResponseConsumed(resInputFileWhitespace);
 
       mockAgentOnce([{ text: "ok" }]);
       const resInputFileInjection = await postResponses(port, {

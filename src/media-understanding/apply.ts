@@ -9,6 +9,7 @@ import {
   normalizeMimeType,
   resolveInputFileLimits,
 } from "../media/input-files.js";
+import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
@@ -100,6 +101,13 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
     return suffix;
   }
   return `${base}\n\n${suffix}`.trim();
+}
+
+function wrapUntrustedAttachmentContent(content: string): string {
+  return wrapExternalContent(content, {
+    source: "unknown",
+    includeWarning: false,
+  });
 }
 
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
@@ -426,7 +434,7 @@ async function extractFileBlocks(params: {
       continue;
     }
     const text = extracted?.text?.trim() ?? "";
-    let blockText = text;
+    let blockText = text ? wrapUntrustedAttachmentContent(text) : "";
     if (!blockText) {
       if (extracted?.images && extracted.images.length > 0) {
         blockText = "[PDF content rendered to images; images not forwarded to model]";
