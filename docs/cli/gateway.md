@@ -262,10 +262,10 @@ Wide-Area discovery records include (TXT):
 - `role` (gateway role hint)
 - `transport` (transport hint, e.g. `gateway`)
 - `gatewayPort` (WebSocket port, usually `18789`)
-- `sshPort` (SSH port; defaults to `22` if not present)
+- `sshPort` (optional; clients default SSH targets to `22` when it is absent)
 - `tailnetDns` (MagicDNS hostname, when available)
 - `gatewayTls` / `gatewayTlsSha256` (TLS enabled + cert fingerprint)
-- `cliPath` (optional hint for remote installs)
+- `cliPath` (remote-install hint written to the wide-area zone)
 
 ### `gateway discover`
 
@@ -290,3 +290,6 @@ Notes:
 - The CLI scans `local.` plus the configured wide-area domain when one is enabled.
 - `wsUrl` in JSON output is derived from the resolved service endpoint, not from TXT-only
   hints such as `lanHost` or `tailnetDns`.
+- On `local.` mDNS, `sshPort` and `cliPath` are only broadcast when
+  `discovery.mdns.mode` is `full`. Wide-area DNS-SD still writes `cliPath`; `sshPort`
+  stays optional there too.

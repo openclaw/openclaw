@@ -66,13 +66,13 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   - `transport=gateway`
   - `displayName=<friendly name>` (operator-configured display name)
   - `lanHost=<hostname>.local`
-  - `sshPort=22` (or whatever is advertised)
   - `gatewayPort=18789` (Gateway WS + HTTP)
   - `gatewayTls=1` (only when TLS is enabled)
   - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
   - `canvasPort=<port>` (canvas host port; currently the same as `gatewayPort` when the canvas host is enabled)
-  - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
+  - `sshPort=<port>` (mDNS full mode only; wide-area DNS-SD may omit it, in which case SSH defaults stay at `22`)
+  - `cliPath=<path>` (mDNS full mode only; wide-area DNS-SD still writes it as a remote-install hint)
 
 Security notes:
 
@@ -85,7 +85,7 @@ Disable/override:
 
 - `OPENCLAW_DISABLE_BONJOUR=1` disables advertising.
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
-- `OPENCLAW_SSH_PORT` overrides the SSH port advertised in TXT (defaults to 22).
+- `OPENCLAW_SSH_PORT` overrides the SSH port advertised when `sshPort` is emitted.
 - `OPENCLAW_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
 - `OPENCLAW_CLI_PATH` overrides the advertised CLI path.
 

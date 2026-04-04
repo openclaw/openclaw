@@ -96,10 +96,10 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `gatewayTls=1` (only when TLS is enabled)
 - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
 - `canvasPort=<port>` (only when the canvas host is enabled; currently the same as `gatewayPort`)
-- `sshPort=<port>` (defaults to 22 when not overridden)
 - `transport=gateway`
-- `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint)
 - `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
+- `sshPort=<port>` (mDNS full mode only; wide-area DNS-SD may omit it)
+- `cliPath=<path>` (mDNS full mode only; wide-area DNS-SD still writes it as a remote-install hint)
 
 Security notes:
 
@@ -169,7 +169,7 @@ sequences (e.g. spaces become `\032`).
 
 - `OPENCLAW_DISABLE_BONJOUR=1` disables advertising (legacy: `OPENCLAW_DISABLE_BONJOUR`).
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
-- `OPENCLAW_SSH_PORT` overrides the SSH port advertised in TXT (legacy: `OPENCLAW_SSH_PORT`).
+- `OPENCLAW_SSH_PORT` overrides the SSH port when `sshPort` is advertised (legacy: `OPENCLAW_SSH_PORT`).
 - `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT (legacy: `OPENCLAW_TAILNET_DNS`).
 - `OPENCLAW_CLI_PATH` overrides the advertised CLI path (legacy: `OPENCLAW_CLI_PATH`).
 
