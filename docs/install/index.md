@@ -51,6 +51,18 @@ For all flags and CI/automation options, see [Installer internals](/install/inst
 
 ## Alternative install methods
 
+### Local prefix installer (`install-cli.sh`)
+
+Use this when you want OpenClaw and Node kept under a local prefix such as
+`~/.openclaw`, without depending on a system-wide Node install:
+
+```bash
+curl -fsSL https://openclaw.ai/install-cli.sh | bash
+```
+
+It supports npm installs by default, plus git-checkout installs under the same
+prefix flow. Full reference: [Installer internals](/install/installer#install-clish).
+
 ### npm or pnpm
 
 If you already manage Node yourself:
