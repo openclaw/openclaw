@@ -115,7 +115,17 @@ vi.mock("../cli/deps.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
+  loadConfig: () => ({
+    agents: {
+      defaults: {
+        models: {
+          "anthropic/claude": {},
+          "openai/claude": {},
+          "openai/gpt-5.4": {},
+        },
+      },
+    },
+  }),
   readConfigFileSnapshotForWrite: async () => ({
     snapshot: { valid: false },
   }),
@@ -227,9 +237,9 @@ vi.mock("./model-catalog.js", () => ({
 
 vi.mock("./model-selection.js", () => ({
   buildAllowedModelSet: () => ({
-    allowedKeys: new Set<string>(),
+    allowedKeys: new Set<string>(["anthropic/claude", "openai/claude", "openai/gpt-5.4"]),
     allowedCatalog: [],
-    allowAny: true,
+    allowAny: false,
   }),
   modelKey: (p: string, m: string) => `${p}/${m}`,
   normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
