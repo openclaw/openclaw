@@ -48,6 +48,49 @@ x-i18n:
 - `uiHints`（对象）：用于 UI 渲染的配置字段标签/占位符/敏感标志。
 - `version`（字符串）：插件版本（仅供参考）。
 
+## 带 bundled skills 与运维友好配置的示例
+
+当插件会随包一起分发 `skills/` 目录，并且希望配置界面显示更清晰的字段标签时，可以使用下面这种形式：
+
+```json
+{
+  "id": "security-guard",
+  "name": "Security Guard",
+  "description": "Lightweight prompt-injection and dangerous-command guardrails.",
+  "version": "0.2.0",
+  "skills": ["./skills"],
+  "uiHints": {
+    "monitorOnly": {
+      "label": "Monitor only",
+      "help": "Audit risky activity without blocking calls."
+    },
+    "auditLogPath": {
+      "label": "Audit log path",
+      "placeholder": "~/.openclaw/logs/security-guard.audit.jsonl"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "monitorOnly": {
+        "type": "boolean",
+        "default": false
+      },
+      "auditLogPath": {
+        "type": "string"
+      }
+    }
+  }
+}
+```
+
+说明：
+
+- `skills` 路径相对于插件根目录解析。
+- `uiHints` 用来优化配置编辑器或 setup surface 的显示体验，但不替代 `configSchema`。
+- `version` 只是展示性元数据；升级与 pinning 仍以实际安装包状态为准。
+
 ## JSON Schema 要求
 
 - **每个插件都必须提供 JSON Schema**，即使不接受任何配置也是如此。

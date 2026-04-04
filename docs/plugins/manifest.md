@@ -123,6 +123,51 @@ Those belong in your plugin code and `package.json`.
 }
 ```
 
+## Example with bundled skills and operator-friendly config
+
+Use this shape when a plugin ships its own `skills/` directory and wants config
+surfaces to render clean labels in setup or Control UI:
+
+```json
+{
+  "id": "security-guard",
+  "name": "Security Guard",
+  "description": "Lightweight prompt-injection and dangerous-command guardrails.",
+  "version": "0.2.0",
+  "skills": ["./skills"],
+  "uiHints": {
+    "monitorOnly": {
+      "label": "Monitor only",
+      "help": "Audit risky activity without blocking calls."
+    },
+    "auditLogPath": {
+      "label": "Audit log path",
+      "placeholder": "~/.openclaw/logs/security-guard.audit.jsonl"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "monitorOnly": {
+        "type": "boolean",
+        "default": false
+      },
+      "auditLogPath": {
+        "type": "string"
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `skills` paths are relative to the plugin root.
+- `uiHints` improves config editors, but does not replace `configSchema`.
+- `version` is informational metadata; package updates and pinning still follow
+  the installed package state.
+
 ## Top-level field reference
 
 | Field                 | Required | Type                             | What it means                                                                                                                |
