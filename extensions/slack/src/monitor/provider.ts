@@ -228,7 +228,6 @@ function formatSlackUserResolved(entry: SlackUserResolution): string {
     extra: entry.note ? [entry.note] : [],
   });
 }
-
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const cfg = opts.config ?? loadConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
