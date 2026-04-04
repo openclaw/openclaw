@@ -820,6 +820,8 @@ Examples:
 
 Run one agent turn via the Gateway (or `--local` embedded).
 
+Pass at least one session selector: `--to`, `--session-id`, or `--agent`.
+
 Required:
 
 - `-m, --message <text>`
@@ -840,9 +842,16 @@ Options:
 - `--json`
 - `--timeout <seconds>`
 
+Notes:
+
+- Gateway mode falls back to the embedded agent when the Gateway request fails.
+- `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not routing.
+
 ### `agents`
 
 Manage isolated agents (workspaces + auth + routing).
+
+Running `openclaw agents` with no subcommand is equivalent to `openclaw agents list`.
 
 #### `agents list`
 
@@ -867,6 +876,7 @@ Options:
 - `--json`
 
 Binding specs use `channel[:accountId]`. When `accountId` is omitted, OpenClaw may resolve account scope via channel defaults/plugin hooks; otherwise it is a channel binding without explicit account scope.
+Passing any explicit add flags switches the command into the non-interactive path. `main` is reserved and cannot be used as the new agent id.
 
 #### `agents bindings`
 
@@ -883,7 +893,7 @@ Add routing bindings for an agent.
 
 Options:
 
-- `--agent <id>`
+- `--agent <id>` (defaults to the current default agent)
 - `--bind <channel[:accountId]>` (repeatable)
 - `--json`
 
@@ -893,10 +903,12 @@ Remove routing bindings for an agent.
 
 Options:
 
-- `--agent <id>`
+- `--agent <id>` (defaults to the current default agent)
 - `--bind <channel[:accountId]>` (repeatable)
 - `--all`
 - `--json`
+
+Use either `--all` or `--bind`, not both.
 
 #### `agents delete <id>`
 
@@ -906,6 +918,11 @@ Options:
 
 - `--force`
 - `--json`
+
+Notes:
+
+- `main` cannot be deleted.
+- Without `--force`, interactive confirmation is required.
 
 #### `agents set-identity`
 
@@ -922,6 +939,11 @@ Options:
 - `--emoji <emoji>`
 - `--avatar <value>`
 - `--json`
+
+Notes:
+
+- `--agent` or `--workspace` can be used to select the target agent.
+- When no explicit identity fields are provided, the command reads `IDENTITY.md`.
 
 ### `acp`
 
