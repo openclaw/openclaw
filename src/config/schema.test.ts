@@ -351,6 +351,10 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("agents.list.0.identity.avatar");
     expect(lookup?.hintPath).toBe("agents.list.*.identity.avatar");
     expect(lookup?.hint?.help).toContain("workspace-relative path");
+    expect(lookup?.schema).toMatchObject({
+      title: "Identity Avatar",
+      description: expect.stringContaining("Agent avatar"),
+    });
   });
 
   it("normalizes bracketed lookup paths", () => {

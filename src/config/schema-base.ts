@@ -96,7 +96,7 @@ function applyFieldDocumentation(
           prefixes.flatMap((prefix) => {
             const arrayPath = prefix ? `${prefix}[]` : "[]";
             const wildcardAlias = prefix ? `${prefix}.*` : "*";
-            return wildcardAlias === arrayPath ? [arrayPath] : [arrayPath, wildcardAlias];
+            return wildcardAlias === arrayPath ? [arrayPath] : [wildcardAlias, arrayPath];
           }),
         ),
       );

@@ -5963,9 +5963,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     avatar: {
                       type: "string",
-                      title: "Agent Avatar",
+                      title: "Identity Avatar",
                       description:
-                        "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+                        "Agent avatar (workspace-relative path, http(s) URL, or data URI).",
                     },
                   },
                   additionalProperties: false,
