@@ -102,12 +102,17 @@ bounded role entries in `deviceTokens`:
       {
         "deviceToken": "…",
         "role": "operator",
-        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
       }
     ]
   }
 }
 ```
+
+For the built-in node/operator bootstrap flow, the primary node token stays
+`scopes: []` and any handed-off operator token stays bounded to the bootstrap
+operator allowlist (`operator.approvals`, `operator.read`,
+`operator.talk.secrets`, `operator.write`).
 
 ### Node example
 
@@ -168,10 +173,26 @@ Common scopes:
 - `operator.admin`
 - `operator.approvals`
 - `operator.pairing`
+- `operator.talk.secrets`
+
+`talk.config` with `includeSecrets: true` requires `operator.talk.secrets`
+(or `operator.admin`).
+
+Plugin-registered gateway RPC methods may request their own operator scope, but
+reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,
+`update.*`) always resolve to `operator.admin`.
 
 Method scope is only the first gate. Some slash commands reached through
 `chat.send` apply stricter command-level checks on top. For example, persistent
 `/config set` and `/config unset` writes require `operator.admin`.
+
+`node.pair.approve` also has an extra approval-time scope check on top of the
+base method scope:
+
+- commandless requests: `operator.pairing`
+- requests with non-exec node commands: `operator.pairing` + `operator.write`
+- requests that include `system.run`, `system.run.prepare`, or `system.which`:
+  `operator.pairing` + `operator.admin`
 
 ### Caps/commands/permissions (node)
 
@@ -208,12 +229,34 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
     caller-supplied auth or delivery context.
   - The response is session-scoped and reflects what the active conversation can use right now,
     including core, plugin, and channel tools.
+- Operators may call `skills.status` (`operator.read`) to fetch the visible
+  skill inventory for an agent.
+  - `agentId` is optional; omit it to read the default agent workspace.
+  - The response includes eligibility, missing requirements, config checks, and
+    sanitized install options without exposing raw secret values.
+- Operators may call `skills.search` and `skills.detail` (`operator.read`) for
+  ClawHub discovery metadata.
+- Operators may call `skills.install` (`operator.admin`) in two modes:
+  - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
+    skill folder into the default agent workspace `skills/` directory.
+  - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+    runs a declared `metadata.openclaw.install` action on the gateway host.
+- Operators may call `skills.update` (`operator.admin`) in two modes:
+  - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
+    the default agent workspace.
+  - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
+    `apiKey`, and `env`.
 
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
 - Operator clients resolve by calling `exec.approval.resolve` (requires `operator.approvals` scope).
 - For `host=node`, `exec.approval.request` must include `systemRunPlan` (canonical `argv`/`cwd`/`rawCommand`/session metadata). Requests missing `systemRunPlan` are rejected.
+- After approval, forwarded `node.invoke system.run` calls reuse that canonical
+  `systemRunPlan` as the authoritative command/cwd/session context.
+- If a caller mutates `command`, `rawCommand`, `cwd`, `agentId`, or
+  `sessionKey` between prepare and the final approved `system.run` forward, the
+  gateway rejects the run instead of trusting the mutated payload.
 
 ## Agent delivery fallback
 
@@ -239,11 +282,29 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   persisted by the client for future connects.
 - Clients should persist the primary `hello-ok.auth.deviceToken` after any
   successful connect.
+- Reconnecting with that **stored** device token should also reuse the stored
+  approved scope set for that token. This preserves read/probe/status access
+  that was already granted and avoids silently collapsing reconnects to a
+  narrower implicit admin-only scope.
+- Normal connect auth precedence is explicit shared token/password first, then
+  explicit `deviceToken`, then stored per-device token, then bootstrap token.
 - Additional `hello-ok.auth.deviceTokens` entries are bootstrap handoff tokens.
   Persist them only when the connect used bootstrap auth on a trusted transport
   such as `wss://` or loopback/local pairing.
+- If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
+  caller-requested scope set remains authoritative; cached scopes are only
+  reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
+- Token issuance/rotation stays bounded to the approved role set recorded in
+  that device's pairing entry; rotating a token cannot expand the device into a
+  role that pairing approval never granted.
+- For paired-device token sessions, device management is self-scoped unless the
+  caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
+  only their **own** device entry.
+- `device.token.rotate` also checks the requested operator scope set against the
+  caller's current session scopes. Non-admin callers cannot rotate a token into
+  a broader operator scope set than they already hold.
 - Auth failures include `error.details.code` plus recovery hints:
   - `error.details.canRetryWithDeviceToken` (boolean)
   - `error.details.recommendedNextStep` (`retry_with_device_token`, `update_auth_configuration`, `update_auth_credentials`, `wait_then_retry`, `review_auth_configuration`)
@@ -263,6 +324,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - All WS clients must include `device` identity during `connect` (operator + node).
   Control UI can omit it only in these modes:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
+  - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
 - All connections must sign the server-provided `connect.challenge` nonce.
 

@@ -36,12 +36,12 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 ## Supported providers
 
-| Provider | Default model                    | Edit support            | API key                              |
-| -------- | -------------------------------- | ----------------------- | ------------------------------------ |
-| OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)    | `OPENAI_API_KEY`                     |
-| Google   | `gemini-3.1-flash-image-preview` | Yes                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
-| fal      | `fal-ai/flux/dev`                | Yes                     | `FAL_KEY`                            |
-| MiniMax  | `image-01`                       | Yes (subject reference) | `MINIMAX_API_KEY`                    |
+| Provider | Default model                    | Edit support            | API key                                               |
+| -------- | -------------------------------- | ----------------------- | ----------------------------------------------------- |
+| OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)    | `OPENAI_API_KEY`                                      |
+| Google   | `gemini-3.1-flash-image-preview` | Yes                     | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| fal      | `fal-ai/flux/dev`                | Yes                     | `FAL_KEY`                                             |
+| MiniMax  | `image-01`                       | Yes (subject reference) | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -116,6 +116,11 @@ OpenAI, Google, fal, and MiniMax support editing reference images. Pass a refere
 ```
 
 OpenAI and Google support up to 5 reference images via the `images` parameter. fal and MiniMax support 1.
+
+MiniMax image generation is available through both bundled MiniMax auth paths:
+
+- `minimax/image-01` for API-key setups
+- `minimax-portal/image-01` for OAuth setups
 
 ## Provider capabilities
 

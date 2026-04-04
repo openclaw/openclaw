@@ -26,6 +26,10 @@ openclaw update --tag main
 openclaw update --dry-run   # preview without applying
 ```
 
+`--channel beta` prefers beta, but the runtime falls back to stable/latest when
+the beta tag is missing or older than the latest stable release. Use `--tag beta`
+if you want the raw npm beta dist-tag for a one-off package update.
+
 See [Development channels](/install/development-channels) for channel semantics.
 
 ## Alternative: re-run the installer
@@ -36,7 +40,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 Add `--no-onboard` to skip onboarding. For source installs, pass `--install-method git --no-onboard`.
 
-## Alternative: manual npm or pnpm
+## Alternative: manual npm, pnpm, or bun
 
 ```bash
 npm i -g openclaw@latest
@@ -44,6 +48,10 @@ npm i -g openclaw@latest
 
 ```bash
 pnpm add -g openclaw@latest
+```
+
+```bash
+bun add -g openclaw@latest
 ```
 
 ## Auto-updater

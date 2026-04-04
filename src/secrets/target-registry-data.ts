@@ -422,6 +422,17 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInConfigure: true,
     includeInAudit: true,
   },
+  {
+    id: "plugins.entries.minimax.config.webSearch.apiKey",
+    targetType: "plugins.entries.minimax.config.webSearch.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "plugins.entries.minimax.config.webSearch.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
 ];
 
 const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [

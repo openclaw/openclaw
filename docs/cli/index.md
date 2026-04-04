@@ -356,7 +356,7 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 
 - `openclaw security audit` — audit config + local state for common security foot-guns.
 - `openclaw security audit --deep` — best-effort live Gateway probe.
-- `openclaw security audit --fix` — tighten safe defaults and chmod state/config.
+- `openclaw security audit --fix` — tighten safe defaults and state/config permissions.
 
 ## Secrets
 
@@ -546,7 +546,7 @@ Options:
 - `--skip-ui`
 - `--cloudflare-ai-gateway-account-id <id>`
 - `--cloudflare-ai-gateway-gateway-id <id>`
-- `--node-manager <npm|pnpm|bun>` (pnpm recommended; bun not recommended for Gateway runtime)
+- `--node-manager <npm|pnpm|bun>` (setup/onboarding node manager for skills; pnpm recommended, bun also supported)
 - `--json`
 
 ### `configure`
@@ -673,7 +673,7 @@ Subcommands:
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
-  - When adding a non-default account to a channel still using single-account top-level config, OpenClaw moves account-scoped values into `channels.<channel>.accounts.default` before writing the new account.
+  - When adding a non-default account to a channel still using single-account top-level config, OpenClaw promotes account-scoped values into the channel account map before writing the new account. Most channels use `accounts.default`; Matrix can preserve an existing matching named/default target instead.
   - Non-interactive `channels add` does not auto-create/upgrade bindings; channel-only bindings continue to match the default account.
 - `channels remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `channels login`: interactive channel login (WhatsApp Web only).
@@ -770,11 +770,18 @@ List and inspect available skills plus readiness info.
 Subcommands:
 
 - `skills search [query...]`: search ClawHub skills.
+- `skills search --limit <n> --json`: cap search results or emit machine-readable output.
 - `skills install <slug>`: install a skill from ClawHub into the active workspace.
+- `skills install <slug> --version <version>`: install a specific ClawHub version.
+- `skills install <slug> --force`: overwrite an existing workspace skill folder.
 - `skills update <slug|--all>`: update tracked ClawHub skills.
 - `skills list`: list skills (default when no subcommand).
+- `skills list --json`: emit machine-readable skill inventory.
+- `skills list --verbose`: include missing requirements in the table.
 - `skills info <name>`: show details for one skill.
+- `skills info <name> --json`: emit machine-readable details.
 - `skills check`: summary of ready vs missing requirements.
+- `skills check --json`: emit machine-readable readiness output.
 
 Options:
 
@@ -817,6 +824,9 @@ Notes:
 
 - `devices list` and `devices approve` can fall back to local pairing files on local loopback when direct pairing scope is unavailable.
 - `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
+- Stored-token reconnects reuse the token's cached approved scopes; explicit
+  `devices rotate --scope ...` updates that stored scope set for future
+  cached-token reconnects.
 - `devices rotate` and `devices revoke` return JSON payloads.
 
 ### `qr`
@@ -838,6 +848,9 @@ Notes:
 
 - `--token` and `--password` are mutually exclusive.
 - The setup code carries a short-lived bootstrap token, not the shared gateway token/password.
+- Built-in bootstrap handoff keeps the primary node token at `scopes: []`.
+- Any handed-off operator bootstrap token stays bounded to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`.
+- `--remote` can use `gateway.remote.url` or the active Tailscale Serve/Funnel URL.
 - After scanning, approve the request with `openclaw devices list` / `openclaw devices approve <requestId>`.
 
 ### `clawbot`
@@ -1197,6 +1210,7 @@ Options:
 Notes:
 
 - Overview includes Gateway + node host service status when available.
+- `--usage` prints normalized provider usage windows as `X% left`.
 
 ### Usage tracking
 
@@ -1211,8 +1225,10 @@ Surfaces:
 Notes:
 
 - Data comes directly from provider usage endpoints (no estimates).
-- Providers: Anthropic, GitHub Copilot, OpenAI Codex OAuth, plus Gemini CLI via the bundled `google` plugin and Antigravity where configured.
-- If no matching credentials exist, usage is hidden.
+- Human-readable output is normalized to `X% left` across providers.
+- Providers with current usage windows: Anthropic, GitHub Copilot, Gemini CLI, OpenAI Codex, MiniMax, Xiaomi, and z.ai.
+- MiniMax note: raw `usage_percent` / `usagePercent` means remaining quota, so OpenClaw inverts it before display; count-based fields still win when present. `model_remains` responses prefer the chat-model entry, derive the window label from timestamps when needed, and include the model name in the plan label.
+- Usage auth comes from provider-specific hooks when available; otherwise OpenClaw falls back to matching OAuth/API-key credentials from auth profiles, env, or config. If none resolve, usage is hidden.
 - Details: see [Usage tracking](/concepts/usage-tracking).
 
 ### `health`
@@ -1627,6 +1643,12 @@ Subcommands:
 - `cron run <id> [--due]`
 
 All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
+
+`cron add|edit --model ...` uses that selected allowed model for the job. If
+the model is not allowed, cron warns and falls back to the job's agent/default
+model selection instead. Configured fallback chains still apply, but a plain
+model override with no explicit per-job fallback list no longer appends the
+agent primary as a hidden extra retry target.
 
 ## Node host
 

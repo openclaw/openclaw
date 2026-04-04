@@ -120,6 +120,10 @@ If you have both an OAuth profile and an API key profile for the same provider, 
 
 When a profile fails due to auth/rate‑limit errors (or a timeout that looks
 like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
+That rate-limit bucket is broader than plain `429`: it also includes provider
+messages such as `Too many concurrent requests`, `ThrottlingException`,
+`throttled`, `resource exhausted`, and periodic usage-window limits such as
+`weekly/monthly limit reached`.
 Format/invalid‑request errors (for example Cloud Code Assist tool call ID
 validation failures) are treated as failover‑worthy and use the same cooldowns.
 OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`,
@@ -150,6 +154,16 @@ State is stored in `auth-profiles.json` under `usageStats`:
 ## Billing disables
 
 Billing/credit failures (for example “insufficient credits” / “credit balance too low”) are treated as failover‑worthy, but they’re usually not transient. Instead of a short cooldown, OpenClaw marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.
+
+Not every billing-shaped response is `402`, and not every HTTP `402` lands
+here. OpenClaw keeps explicit billing text in the billing lane even when a
+provider returns `401` or `403` instead (for example OpenRouter `403 Key limit
+exceeded`). Meanwhile temporary `402` usage-window and
+organization/workspace spend-limit errors are classified as `rate_limit` when
+the message looks retryable (for example `weekly usage limit exhausted`, `daily
+limit reached, resets tomorrow`, or `organization spending limit exceeded`).
+Those stay on the short cooldown/failover path instead of the long
+billing-disable path.
 
 State is stored in `auth-profiles.json`:
 
@@ -223,6 +237,8 @@ Model fallback does not continue on:
 
 - explicit aborts that are not timeout/failover-shaped
 - context overflow errors that should stay inside compaction/retry logic
+  (for example `request_too_large`, `INVALID_ARGUMENT: input exceeds the maximum
+number of tokens`, or `The input is too long for the model`)
 - a final unknown error when there are no candidates left
 
 ### Cooldown skip vs probe behavior
@@ -248,6 +264,10 @@ parts of the same session entry.
 
 That means fallback retries have to coordinate with live model switching:
 
+- Only explicit user-driven model changes mark a pending live switch. That
+  includes `/model`, `session_status(model=...)`, and `sessions.patch`.
+- System-driven model changes such as fallback rotation, heartbeat overrides,
+  or compaction never mark a pending live switch on their own.
 - Before a fallback retry starts, the reply runner persists the selected
   fallback override fields to the session entry.
 - Live-session reconciliation prefers persisted session overrides over stale

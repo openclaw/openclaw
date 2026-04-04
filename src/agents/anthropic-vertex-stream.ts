@@ -4,7 +4,7 @@ import { streamAnthropic, type AnthropicOptions, type Model } from "@mariozechne
 import {
   resolveAnthropicVertexClientRegion,
   resolveAnthropicVertexProjectId,
-} from "../plugin-sdk/anthropic-vertex.js";
+} from "../../extensions/anthropic-vertex/api.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
@@ -48,12 +48,20 @@ function createAnthropicVertexOnPayload(params: {
     enableCacheControl: true,
   });
 
-  return async (payload, model) => {
+  function applyPolicy(payload: unknown): unknown {
     if (payload && typeof payload === "object" && !Array.isArray(payload)) {
       applyAnthropicPayloadPolicyToParams(payload as Record<string, unknown>, policy);
     }
-    const nextPayload = await params.onPayload?.(payload, model);
-    return nextPayload ?? payload;
+    return payload;
+  }
+
+  return async (payload, model) => {
+    const shapedPayload = applyPolicy(payload);
+    const nextPayload = await params.onPayload?.(shapedPayload, model);
+    if (nextPayload === undefined || nextPayload === shapedPayload) {
+      return shapedPayload;
+    }
+    return applyPolicy(nextPayload);
   };
 }
 

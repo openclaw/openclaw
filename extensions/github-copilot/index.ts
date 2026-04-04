@@ -26,7 +26,7 @@ export default definePluginEntry({
       PROVIDER_ID,
       resolveCopilotApiToken,
       resolveCopilotForwardCompatModel,
-      wrapCopilotAnthropicStream,
+      wrapCopilotProviderStream,
     } = await import("./register.runtime.js");
 
     function resolveFirstGithubToken(params: { agentDir?: string; env: NodeJS.ProcessEnv }): {
@@ -162,7 +162,7 @@ export default definePluginEntry({
         },
       },
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
-      wrapStreamFn: (ctx) => wrapCopilotAnthropicStream(ctx.streamFn),
+      wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       supportsXHighThinking: ({ modelId }) =>
         COPILOT_XHIGH_MODEL_IDS.includes(modelId.trim().toLowerCase() as never),

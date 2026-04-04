@@ -2,7 +2,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
 import { buildKimiCodingProvider } from "./provider-catalog.js";
-import { createKimiToolCallMarkupWrapper } from "./stream.js";
+import { wrapKimiProviderStream } from "./stream.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
@@ -87,7 +87,7 @@ export default definePluginEntry({
         },
       },
       buildReplayPolicy: () => buildKimiReplayPolicy(),
-      wrapStreamFn: (ctx) => createKimiToolCallMarkupWrapper(ctx.streamFn),
+      wrapStreamFn: wrapKimiProviderStream,
     });
   },
 });

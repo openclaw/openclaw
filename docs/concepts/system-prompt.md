@@ -96,7 +96,8 @@ user timezone is known. To keep the prompt cache-stable, it now only includes
 the **time zone** (no dynamic clock or time format).
 
 Use `session_status` when the agent needs the current time; the status card
-includes a timestamp line.
+includes a timestamp line. The same tool can optionally set a per-session model
+override (`model=default` clears it).
 
 Configure with:
 
@@ -134,6 +135,6 @@ This keeps the base prompt small while still enabling targeted skill usage.
 When available, the system prompt includes a **Documentation** section that points to the
 local OpenClaw docs directory (either `docs/` in the repo workspace or the bundled npm
 package docs) and also notes the public mirror, source repo, community Discord, and
-ClawHub ([https://clawhub.com](https://clawhub.com)) for skills discovery. The prompt instructs the model to consult local docs first
+ClawHub ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. The prompt instructs the model to consult local docs first
 for OpenClaw behavior, commands, configuration, or architecture, and to run
 `openclaw status` itself when possible (asking the user only when it lacks access).

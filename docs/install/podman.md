@@ -158,7 +158,9 @@ The launch script and Quadlet bind-mount host state into the container:
 - `OPENCLAW_CONFIG_DIR` -> `/home/node/.openclaw`
 - `OPENCLAW_WORKSPACE_DIR` -> `/home/node/.openclaw/workspace`
 
-By default those are host directories, not anonymous container state, so config and workspace survive container replacement.
+By default those are host directories, not anonymous container state, so
+`openclaw.json`, per-agent `auth-profiles.json`, channel/provider state,
+sessions, and workspace survive container replacement.
 The Podman setup also seeds `gateway.controlUi.allowedOrigins` for `127.0.0.1` and `localhost` on the published gateway port so the local dashboard works with the container's non-loopback bind.
 
 Useful env vars for the manual launcher:

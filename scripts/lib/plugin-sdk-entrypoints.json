@@ -19,6 +19,8 @@
   "approval-reply-runtime",
   "approval-runtime",
   "config-runtime",
+  "telegram-command-config",
+  "config-schema",
   "reply-runtime",
   "reply-dispatch-runtime",
   "reply-reference",

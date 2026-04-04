@@ -179,7 +179,7 @@ survive container replacement.
 That mounted config directory is where OpenClaw keeps:
 
 - `openclaw.json` for behavior config
-- `auth-profiles.json` for stored provider OAuth/API-key auth
+- `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
 For full persistence details on VM deployments, see

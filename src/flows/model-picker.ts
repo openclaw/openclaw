@@ -215,9 +215,7 @@ async function maybeFilterModelsByProvider(params: {
   const providerIds = Array.from(new Set(params.models.map((entry) => entry.provider))).toSorted(
     (a, b) => a.localeCompare(b),
   );
-  const hasPreferredProvider = params.preferredProvider
-    ? providerIds.includes(params.preferredProvider)
-    : false;
+  const hasPreferredProvider = !!params.preferredProvider;
   const shouldPromptProvider =
     !hasPreferredProvider &&
     providerIds.length > 1 &&
@@ -233,9 +231,12 @@ async function maybeFilterModelsByProvider(params: {
     }
   }
   if (hasPreferredProvider && params.preferredProvider) {
-    next = next.filter((entry) =>
+    const filtered = next.filter((entry) =>
       matchesPreferredProvider(entry.provider, params.preferredProvider!),
     );
+    if (filtered.length > 0) {
+      next = filtered;
+    }
   }
   return next;
 }
@@ -451,7 +452,7 @@ export async function promptDefaultModel(
     allowKeep &&
     hasPreferredProvider &&
     preferredProvider &&
-    resolved.provider !== preferredProvider
+    !matchesPreferredProvider(resolved.provider, preferredProvider)
   ) {
     const firstModel = filteredModels[0];
     if (firstModel) {

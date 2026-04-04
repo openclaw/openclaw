@@ -26,7 +26,14 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveModelDisplayName, resolveModelDisplayRef } from "./model-selection-display.js";
 import { abortEmbeddedPiRun } from "./pi-embedded.js";
+import {
+  readLatestAssistantReplySnapshot,
+  waitForAgentRunAndReadUpdatedAssistantReply,
+} from "./run-wait.js";
 import { resolveStoredSubagentCapabilities } from "./subagent-capabilities.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
+import { countPendingDescendantRunsFromRuns } from "./subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import {
   clearSubagentRunSteerRestart,
   countPendingDescendantRuns,
@@ -39,12 +46,7 @@ import {
   replaceSubagentRunAfterSteer,
   type SubagentRunRecord,
 } from "./subagent-registry.js";
-import {
-  extractAssistantText,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-  stripToolMessages,
-} from "./tools/sessions-helpers.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
@@ -161,30 +163,70 @@ export function resolveSubagentController(params: {
 }
 
 export function listControlledSubagentRuns(controllerSessionKey: string): SubagentRunRecord[] {
-  const filtered: SubagentRunRecord[] = [];
-  for (const entry of sortSubagentRuns(listSubagentRunsForController(controllerSessionKey))) {
-    const latest = getLatestSubagentRunByChildSessionKey(entry.childSessionKey);
-    const latestControllerSessionKey =
-      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-    if (
-      !latest ||
-      latest.runId !== entry.runId ||
-      latestControllerSessionKey !== controllerSessionKey
-    ) {
-      continue;
-    }
-    filtered.push(entry);
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
   }
-  return filtered;
+
+  const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+  const latestByChildSessionKey = buildLatestSubagentRunIndex(snapshot).latestByChildSessionKey;
+  const filtered = Array.from(latestByChildSessionKey.values()).filter((entry) => {
+    const latestControllerSessionKey =
+      entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
+    return latestControllerSessionKey === key;
+  });
+  return sortSubagentRuns(filtered);
 }
 
-export function createPendingDescendantCounter() {
+function buildLatestSubagentRunIndex(runs: Map<string, SubagentRunRecord>) {
+  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  for (const entry of runs.values()) {
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey) {
+      continue;
+    }
+    const existing = latestByChildSessionKey.get(childSessionKey);
+    if (!existing || entry.createdAt > existing.createdAt) {
+      latestByChildSessionKey.set(childSessionKey, entry);
+    }
+  }
+
+  const childSessionsByController = new Map<string, string[]>();
+  for (const [childSessionKey, entry] of latestByChildSessionKey.entries()) {
+    const controllerSessionKey =
+      entry.controllerSessionKey?.trim() || entry.requesterSessionKey?.trim();
+    if (!controllerSessionKey) {
+      continue;
+    }
+    const existing = childSessionsByController.get(controllerSessionKey);
+    if (existing) {
+      existing.push(childSessionKey);
+      continue;
+    }
+    childSessionsByController.set(controllerSessionKey, [childSessionKey]);
+  }
+  for (const childSessions of childSessionsByController.values()) {
+    childSessions.sort();
+  }
+
+  return {
+    latestByChildSessionKey,
+    childSessionsByController,
+  };
+}
+
+export function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
   const pendingDescendantCache = new Map<string, number>();
   return (sessionKey: string) => {
     if (pendingDescendantCache.has(sessionKey)) {
       return pendingDescendantCache.get(sessionKey) ?? 0;
     }
-    const pending = Math.max(0, countPendingDescendantRuns(sessionKey));
+    const pending = Math.max(
+      0,
+      runsSnapshot
+        ? countPendingDescendantRunsFromRuns(runsSnapshot, sessionKey)
+        : countPendingDescendantRuns(sessionKey),
+    );
     pendingDescendantCache.set(sessionKey, pending);
     return pending;
   };
@@ -195,27 +237,6 @@ export function isActiveSubagentRun(
   pendingDescendantCount: (sessionKey: string) => number,
 ) {
   return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
-}
-
-function resolveLatestAssistantReplySnapshot(messages: unknown[]): {
-  text?: string;
-  fingerprint?: string;
-} {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    const text = extractAssistantText(message);
-    if (!text) {
-      continue;
-    }
-    let fingerprint: string | undefined;
-    try {
-      fingerprint = JSON.stringify(message);
-    } catch {
-      fingerprint = text;
-    }
-    return { text, fingerprint };
-  }
-  return {};
 }
 
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
@@ -297,7 +318,9 @@ export function buildSubagentList(params: {
     dedupedRuns.push(entry);
   }
   const cache = new Map<string, Record<string, SessionEntry>>();
-  const pendingDescendantCount = createPendingDescendantCounter();
+  const snapshot = getSubagentRunsSnapshotForRead(subagentRuns);
+  const { childSessionsByController } = buildLatestSubagentRunIndex(snapshot);
+  const pendingDescendantCount = createPendingDescendantCounter(snapshot);
   let index = 1;
   const buildListEntry = (entry: SubagentRunRecord, runtimeMs: number) => {
     const sessionEntry = resolveSessionEntryForKey({
@@ -311,19 +334,7 @@ export function buildSubagentList(params: {
     const status = resolveRunStatus(entry, {
       pendingDescendants,
     });
-    const childSessions = Array.from(
-      new Set(
-        listSubagentRunsForController(entry.childSessionKey)
-          .map((run) => run.childSessionKey?.trim())
-          .filter((childSessionKey): childSessionKey is string => Boolean(childSessionKey))
-          .filter((childSessionKey) => {
-            const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
-            const latestControllerSessionKey =
-              latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
-            return latestControllerSessionKey === entry.childSessionKey;
-          }),
-      ),
-    );
+    const childSessions = childSessionsByController.get(entry.childSessionKey) ?? [];
     const runtime = formatDurationCompact(runtimeMs) ?? "n/a";
     const label = truncateLine(resolveSubagentLabel(entry), 48);
     const task = truncateLine(entry.task.trim(), params.taskMaxChars ?? 72);
@@ -880,13 +891,11 @@ export async function sendControlledSubagentMessage(params: {
   const idempotencyKey = crypto.randomUUID();
   let runId: string = idempotencyKey;
   try {
-    const historyBefore = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
-      method: "chat.history",
-      params: { sessionKey: targetSessionKey, limit: SUBAGENT_REPLY_HISTORY_LIMIT },
+    const baselineReply = await readLatestAssistantReplySnapshot({
+      sessionKey: targetSessionKey,
+      limit: SUBAGENT_REPLY_HISTORY_LIMIT,
+      callGateway: subagentControlDeps.callGateway,
     });
-    const baselineReply = resolveLatestAssistantReplySnapshot(
-      stripToolMessages(Array.isArray(historyBefore?.messages) ? historyBefore.messages : []),
-    );
 
     const response = await subagentControlDeps.callGateway<{ runId: string }>({
       method: "agent",
@@ -907,32 +916,25 @@ export async function sendControlledSubagentMessage(params: {
       runId = responseRunId;
     }
 
-    const waitMs = 30_000;
-    const wait = await subagentControlDeps.callGateway<{ status?: string; error?: string }>({
-      method: "agent.wait",
-      params: { runId, timeoutMs: waitMs },
-      timeoutMs: waitMs + 2_000,
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId,
+      sessionKey: targetSessionKey,
+      timeoutMs: 30_000,
+      limit: SUBAGENT_REPLY_HISTORY_LIMIT,
+      baseline: baselineReply,
+      callGateway: subagentControlDeps.callGateway,
     });
-    if (wait?.status === "timeout") {
+    if (result.status === "timeout") {
       return { status: "timeout" as const, runId };
     }
-    if (wait?.status === "error") {
-      const waitError = typeof wait.error === "string" ? wait.error : "unknown error";
-      return { status: "error" as const, runId, error: waitError };
+    if (result.status === "error") {
+      return {
+        status: "error" as const,
+        runId,
+        error: result.error ?? "unknown error",
+      };
     }
-
-    const history = await subagentControlDeps.callGateway<{ messages: Array<unknown> }>({
-      method: "chat.history",
-      params: { sessionKey: targetSessionKey, limit: SUBAGENT_REPLY_HISTORY_LIMIT },
-    });
-    const latestReply = resolveLatestAssistantReplySnapshot(
-      stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
-    );
-    const replyText =
-      latestReply.text && latestReply.fingerprint !== baselineReply.fingerprint
-        ? latestReply.text
-        : undefined;
-    return { status: "ok" as const, runId, replyText };
+    return { status: "ok" as const, runId, replyText: result.replyText };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     return { status: "error" as const, runId, error };

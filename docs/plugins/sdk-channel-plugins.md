@@ -69,6 +69,69 @@ Most channel plugins do not need approval-specific code.
 - Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
 - `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
 
+For hot channel entrypoints, prefer the narrower runtime subpaths when you only
+need one part of that family:
+
+- `openclaw/plugin-sdk/approval-auth-runtime`
+- `openclaw/plugin-sdk/approval-client-runtime`
+- `openclaw/plugin-sdk/approval-delivery-runtime`
+- `openclaw/plugin-sdk/approval-native-runtime`
+- `openclaw/plugin-sdk/approval-reply-runtime`
+
+Likewise, prefer `openclaw/plugin-sdk/setup-runtime`,
+`openclaw/plugin-sdk/setup-adapter-runtime`,
+`openclaw/plugin-sdk/reply-runtime`,
+`openclaw/plugin-sdk/reply-dispatch-runtime`,
+`openclaw/plugin-sdk/reply-reference`, and
+`openclaw/plugin-sdk/reply-chunking` when you do not need the broader umbrella
+surface.
+
+For setup specifically:
+
+- `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
+  lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, and the
+  delegated setup-proxy builders
+- `openclaw/plugin-sdk/setup-adapter-runtime` is the narrow env-aware adapter
+  seam for `createEnvPatchedAccountSetupAdapter`
+- `openclaw/plugin-sdk/channel-setup` covers the optional-install setup
+  builders plus a few setup-safe primitives:
+  `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`,
+  `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
+  `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
+  `splitSetupEntries`
+- use the broader `openclaw/plugin-sdk/setup` seam only when you also need the
+  heavier shared setup/config helpers such as
+  `moveSingleAccountChannelSectionToDefaultAccount(...)`
+
+If your channel only wants to advertise "install this plugin first" in setup
+surfaces, prefer `createOptionalChannelSetupSurface(...)`. The generated
+adapter/wizard fail closed on config writes and finalization, and they reuse
+the same install-required message across validation, finalize, and docs-link
+copy.
+
+For other hot channel paths, prefer the narrow helpers over broader legacy
+surfaces:
+
+- `openclaw/plugin-sdk/account-core`,
+  `openclaw/plugin-sdk/account-id`,
+  `openclaw/plugin-sdk/account-resolution`, and
+  `openclaw/plugin-sdk/account-helpers` for multi-account config and
+  default-account fallback
+- `openclaw/plugin-sdk/inbound-envelope` and
+  `openclaw/plugin-sdk/inbound-reply-dispatch` for inbound route/envelope and
+  record-and-dispatch wiring
+- `openclaw/plugin-sdk/messaging-targets` for target parsing/matching
+- `openclaw/plugin-sdk/outbound-media` and
+  `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
+  identity/send delegates
+- `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
+  and adapter registration
+- `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media
+  payload field layout is still required
+- `openclaw/plugin-sdk/telegram-command-config` for Telegram custom-command
+  normalization, duplicate/conflict validation, and a fallback-stable command
+  config contract
+
 Auth-only channels can usually stop at the default path: core handles approvals and the plugin just exposes outbound/auth capabilities. Native approval channels such as Matrix, Slack, Telegram, and custom chat transports should use the shared native helpers instead of rolling their own approval lifecycle.
 
 ## Walkthrough
@@ -77,7 +140,8 @@ Auth-only channels can usually stop at the default path: core handles approvals 
   <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     Create the standard plugin files. The `channel` field in `package.json` is
-    what makes this a channel plugin:
+    what makes this a channel plugin. For the full package-metadata surface,
+    see [Plugin Setup and Config](/plugins/sdk-setup#openclawchannel):
 
     <CodeGroup>
     ```json package.json
@@ -280,6 +344,10 @@ Auth-only channels can usually stop at the default path: core handles approvals 
     can show them in root help without activating the full channel runtime,
     while normal full loads still pick up the same descriptors for real command
     registration. Keep `registerFull(...)` for runtime-only work.
+    If `registerFull(...)` registers gateway RPC methods, use a
+    plugin-specific prefix. Core admin namespaces (`config.*`,
+    `exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always
+    resolve to `operator.admin`.
     `defineChannelPluginEntry` handles the registration-mode split automatically. See
     [Entry Points](/plugins/sdk-entrypoints#definechannelpluginentry) for all
     options.

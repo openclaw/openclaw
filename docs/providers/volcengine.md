@@ -82,6 +82,11 @@ Coding provider (`volcengine-plan`):
 `volcengine-plan/ark-code-latest` as the default model while also registering
 the general `volcengine` catalog.
 
+During onboarding/configure model selection, the Volcengine auth choice prefers
+both `volcengine/*` and `volcengine-plan/*` rows. If those models are not
+loaded yet, OpenClaw falls back to the unfiltered catalog instead of showing an
+empty provider-scoped picker.
+
 ## Environment note
 
 If the Gateway runs as a daemon (launchd/systemd), make sure

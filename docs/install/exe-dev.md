@@ -50,7 +50,9 @@ Then connect:
 ssh <vm-name>.exe.xyz
 ```
 
-Tip: keep this VM **stateful**. OpenClaw stores state under `~/.openclaw/` and `~/.openclaw/workspace/`.
+Tip: keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent
+`auth-profiles.json`, sessions, and channel/provider state under
+`~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
 
 ## 2) Install prerequisites (on the VM)
 
@@ -91,7 +93,7 @@ server {
         # Standard proxy headers
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # Timeout settings for long-lived connections
@@ -100,6 +102,10 @@ server {
     }
 }
 ```
+
+Overwrite forwarding headers instead of preserving client-supplied chains.
+OpenClaw trusts forwarded IP metadata only from explicitly configured proxies,
+and append-style `X-Forwarded-For` chains are treated as a hardening risk.
 
 ## 5) Access OpenClaw and grant privileges
 

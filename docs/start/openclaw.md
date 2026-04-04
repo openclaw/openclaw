@@ -16,7 +16,7 @@ You’re putting an agent in a position to:
 
 - run commands on your machine (depending on your tool policy)
 - read/write files in your workspace
-- send messages back out via WhatsApp/Telegram/Discord/Mattermost (plugin)
+- send messages back out via WhatsApp/Telegram/Discord/Mattermost and other bundled channels
 
 Start conservative:
 
@@ -206,7 +206,7 @@ That means generated images/files outside the workspace can now send when your f
 ```bash
 openclaw status          # local status (creds, sessions, queued events)
 openclaw status --all    # full diagnosis (read-only, pasteable)
-openclaw status --deep   # adds gateway health probes (Telegram + Discord)
+openclaw status --deep   # adds gateway health probes (WhatsApp Web + Telegram + Discord + Slack + Signal)
 openclaw health --json   # gateway health snapshot (WS)
 ```
 

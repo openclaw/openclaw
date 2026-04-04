@@ -1776,6 +1776,43 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
     expect(partialToolCall.arguments).toEqual({});
     expect(streamedToolCall.arguments).toEqual({});
   });
+
+  it("preserves preexisting tool arguments when later reevaluation fails", async () => {
+    const partialToolCall = {
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/etc/hosts" },
+    };
+    const streamedToolCall = { type: "toolCall", name: "read", arguments: {} };
+    const partialMessage = { role: "assistant", content: [partialToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [
+          {
+            type: "toolcall_delta",
+            contentIndex: 0,
+            delta: "}",
+            partial: partialMessage,
+          },
+          {
+            type: "toolcall_end",
+            contentIndex: 0,
+            toolCall: streamedToolCall,
+            partial: partialMessage,
+          },
+        ],
+        resultMessage: { role: "assistant", content: [partialToolCall] },
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn);
+    for await (const _item of stream) {
+      // drain
+    }
+
+    expect(partialToolCall.arguments).toEqual({ path: "/etc/hosts" });
+    expect(streamedToolCall.arguments).toEqual({});
+  });
 });
 
 describe("isOllamaCompatProvider", () => {
