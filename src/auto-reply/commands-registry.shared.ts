@@ -4,7 +4,14 @@ import type {
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+import { listThinkingLevels as listThinkingLevelsFallback } from "./thinking.shared.js";
+
+type BuildBuiltinChatCommandsDeps = {
+  listThinkingLevels?: (
+    provider?: string | null,
+    model?: string | null,
+  ) => ReturnType<typeof listThinkingLevelsFallback>;
+};
 
 type DefineChatCommandInput = {
   key: string;
@@ -113,7 +120,10 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
-export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
+export function buildBuiltinChatCommands(
+  deps: BuildBuiltinChatCommandsDeps = {},
+): ChatCommandDefinition[] {
+  const listThinkingLevels = deps.listThinkingLevels ?? listThinkingLevelsFallback;
   const commands: ChatCommandDefinition[] = [
     defineChatCommand({
       key: "help",

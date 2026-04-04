@@ -15,6 +15,24 @@ export type RawSessionConversationRef = {
   prefix: string;
 };
 
+type LegacySessionChatTypeSurface = {
+  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+};
+
+// Populated at runtime by Node.js entry points (e.g. send-policy.ts).
+// Browser and test contexts that do not register a provider get an empty list,
+// which is safe because legacy WhatsApp/Discord session key detection is
+// server-only behaviour.
+let _legacySurfacesProvider: (() => unknown[]) | null = null;
+
+export function setLegacySessionChatTypeSurfacesProvider(provider: () => unknown[]): void {
+  _legacySurfacesProvider = provider;
+}
+
+function listLegacySessionChatTypeSurfaces(): LegacySessionChatTypeSurface[] {
+  return (_legacySurfacesProvider?.() ?? []) as LegacySessionChatTypeSurface[];
+}
+
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
  * Returned values are normalized to lowercase for stable comparisons/routing.

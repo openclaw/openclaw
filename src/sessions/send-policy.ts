@@ -1,7 +1,13 @@
 import { normalizeChatType } from "../channels/chat-type.js";
+import { getBundledChannelContractSurfaces } from "../channels/plugins/contract-surfaces.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import { deriveSessionChatType } from "./session-chat-type.js";
+import { setLegacySessionChatTypeSurfacesProvider } from "./session-key-utils.js";
+
+// Register the Node.js-only channel contract surfaces so that deriveSessionChatType
+// can recognise legacy session key formats (WhatsApp @g.us groups, Discord channels, …).
+setLegacySessionChatTypeSurfacesProvider(getBundledChannelContractSurfaces);
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
