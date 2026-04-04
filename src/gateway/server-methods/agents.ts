@@ -414,7 +414,7 @@ function respondInvalidMethodParams(
   );
 }
 
-function isConfiguredAgent(cfg: ReturnType<typeof loadConfig>, agentId: string): boolean {
+export function isConfiguredAgent(cfg: ReturnType<typeof loadConfig>, agentId: string): boolean {
   return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
 }
 

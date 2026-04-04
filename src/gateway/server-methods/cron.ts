@@ -1,3 +1,4 @@
+import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
@@ -6,8 +7,6 @@ import {
 } from "../../cron/run-log.js";
 import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
-import { loadConfig } from "../../config/config.js";
-import { isConfiguredAgent } from "../../commands/agents.config.js";
 import {
   ErrorCodes,
   errorShape,
@@ -21,6 +20,7 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
+import { isConfiguredAgent } from "./agents.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
@@ -127,10 +127,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `agent "${jobCreate.agentId}" is not configured`,
-          ),
+          errorShape(ErrorCodes.INVALID_REQUEST, `agent "${jobCreate.agentId}" is not configured`),
         );
         return;
       }
@@ -189,10 +186,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         respond(
           false,
           undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `agent "${patch.agentId}" is not configured`,
-          ),
+          errorShape(ErrorCodes.INVALID_REQUEST, `agent "${patch.agentId}" is not configured`),
         );
         return;
       }
