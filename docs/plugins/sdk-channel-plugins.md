@@ -67,6 +67,8 @@ Most channel plugins do not need approval-specific code.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
 - If a channel needs native approval delivery, keep channel code focused on target normalization and transport hooks. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, `createApproverRestrictedNativeApprovalCapability`, and `createChannelNativeApprovalRuntime` from `openclaw/plugin-sdk/approval-runtime` so core owns request filtering, routing, dedupe, expiry, and gateway subscription.
 - Native approval channels must route both `accountId` and `approvalKind` through those helpers. `accountId` keeps multi-account approval policy scoped to the right bot account, and `approvalKind` keeps exec vs plugin approval behavior available to the channel without hardcoded branches in core.
+- Preserve the delivered approval id kind end-to-end. Native clients should not
+  guess or rewrite exec vs plugin approval routing from channel-local state.
 - `createApproverRestrictedNativeApprovalAdapter` still exists as a compatibility wrapper, but new code should prefer the capability builder and expose `approvalCapability` on the plugin.
 
 For hot channel entrypoints, prefer the narrower runtime subpaths when you only

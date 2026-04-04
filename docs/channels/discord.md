@@ -944,8 +944,8 @@ Default slash command settings:
 
   </Accordion>
 
-  <Accordion title="Exec approvals in Discord">
-    Discord supports button-based exec approvals in DMs and can optionally post approval prompts in the originating channel.
+  <Accordion title="Approvals in Discord">
+    Discord supports button-based approval handling in DMs and can optionally post approval prompts in the originating channel.
 
     Config path:
 
@@ -967,7 +967,16 @@ Default slash command settings:
     - remote-mode support via `gateway.remote.*` when applicable
     - URL overrides are override-safe: CLI overrides do not reuse implicit credentials, and env overrides use env credentials only
 
-    Exec approvals expire after 30 minutes by default. If approvals fail with unknown approval IDs, verify approver resolution and feature enablement.
+    Approval resolution behavior:
+
+    - IDs prefixed with `plugin:` resolve through `plugin.approval.resolve`.
+    - Other IDs resolve through `exec.approval.resolve`.
+    - Discord does not do an extra exec-to-plugin fallback hop here; the id
+      prefix decides which gateway method it calls.
+
+    Exec approvals expire after 30 minutes by default. If approvals fail with
+    unknown approval IDs, verify approver resolution, feature enablement, and
+    that the delivered approval id kind matches the pending request.
 
     Related docs: [Exec approvals](/tools/exec-approvals)
 

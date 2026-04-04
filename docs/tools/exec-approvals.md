@@ -544,6 +544,8 @@ Shared behavior:
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
+- native Discord approval buttons route by approval id kind: `plugin:` ids go
+  straight to plugin approvals, everything else goes to exec approvals
 - native Telegram approval buttons follow the same bounded exec-to-plugin fallback as `/approve`
 - when native `target` enables origin-chat delivery, approval prompts include the command text
 - pending exec approvals expire after 30 minutes by default
