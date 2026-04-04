@@ -1,8 +1,38 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const {
+  refreshChatAvatarMock,
+  loadChatHistoryMock,
+  loadSessionsMock,
+  syncUrlWithSessionKeyMock,
+} = vi.hoisted(() => ({
+  refreshChatAvatarMock: vi.fn(),
+  loadChatHistoryMock: vi.fn(),
+  loadSessionsMock: vi.fn(),
+  syncUrlWithSessionKeyMock: vi.fn(),
+}));
+
+vi.mock("./app-chat.ts", () => ({
+  refreshChat: vi.fn(),
+  refreshChatAvatar: refreshChatAvatarMock,
+}));
+
+vi.mock("./controllers/chat.ts", () => ({
+  loadChatHistory: loadChatHistoryMock,
+}));
+
+vi.mock("./controllers/sessions.ts", () => ({
+  loadSessions: loadSessionsMock,
+}));
+
+vi.mock("./app-settings.ts", () => ({
+  syncUrlWithSessionKey: syncUrlWithSessionKeyMock,
+}));
 import {
   isCronSessionKey,
   parseSessionKey,
   resolveSessionDisplayName,
+  switchChatSession,
 } from "./app-render.helpers.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -267,6 +297,45 @@ describe("resolveSessionDisplayName", () => {
         row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+});
+
+describe("switchChatSession", () => {
+  it("refreshes the avatar when switching sessions", () => {
+    refreshChatAvatarMock.mockReset();
+    loadChatHistoryMock.mockReset();
+    loadSessionsMock.mockReset();
+    syncUrlWithSessionKeyMock.mockReset();
+
+    const state = {
+      sessionKey: "agent:main:main",
+      chatMessage: "draft",
+      chatStream: "streaming",
+      chatRunId: "run-1",
+      settings: {
+        sessionKey: "agent:main:main",
+        lastActiveSessionKey: "agent:main:main",
+      },
+      chatQueue: [{ id: "queued" }],
+      chatAvatarUrl: "/avatar/old",
+      applySettings: vi.fn(),
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+    } as const;
+
+    switchChatSession(state as never, "agent:ops:main");
+
+    expect(state.applySettings).toHaveBeenCalledWith({
+      ...state.settings,
+      sessionKey: "agent:ops:main",
+      lastActiveSessionKey: "agent:ops:main",
+    });
+    expect(state.loadAssistantIdentity).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(refreshChatAvatarMock).toHaveBeenCalledWith(state);
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(syncUrlWithSessionKeyMock).toHaveBeenCalledWith(state, "agent:ops:main", true);
   });
 });
 

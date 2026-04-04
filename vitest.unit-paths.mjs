@@ -6,6 +6,7 @@ export const unitTestIncludePatterns = [
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
   "ui/src/ui/app-chat.test.ts",
+  "ui/src/ui/app-render.helpers.node.test.ts",
   "ui/src/ui/chat/**/*.test.ts",
   "ui/src/ui/views/agents-utils.test.ts",
   "ui/src/ui/views/channels.test.ts",
