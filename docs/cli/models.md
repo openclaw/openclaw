@@ -44,6 +44,9 @@ Notes:
 - If you omit the provider, OpenClaw resolves the input as an alias first, then
   as a unique configured-provider match for that exact model id, and only then
   falls back to the configured default provider with a deprecation warning.
+  If that provider no longer exposes the configured default model, OpenClaw
+  falls back to the first configured provider/model instead of surfacing a
+  stale removed-provider default.
 - `models status` may show `marker(<value>)` in auth output for non-secret placeholders (for example `OPENAI_API_KEY`, `secretref-managed`, `minimax-oauth`, `oauth:chutes`, `ollama-local`) instead of masking them as secrets.
 
 ### `models status`

@@ -125,6 +125,9 @@ Notes:
   1. alias match
   2. unique configured-provider match for that exact unprefixed model id
   3. deprecated fallback to the configured default provider
+     If that provider no longer exposes the configured default model, OpenClaw
+     instead falls back to the first configured provider/model to avoid
+     surfacing a stale removed-provider default.
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
 

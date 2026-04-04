@@ -113,7 +113,9 @@ Model refs in config (for example `agents.defaults.model` and `agents.defaults.m
 - If the model ID itself contains `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw tries an alias first, then a unique
   configured-provider match for that exact model id, and only then falls back
-  to the configured default provider.
+  to the configured default provider. If that provider no longer exposes the
+  configured default model, OpenClaw falls back to the first configured
+  provider/model instead of surfacing a stale removed-provider default.
 
 ## Configuration (minimal)
 
