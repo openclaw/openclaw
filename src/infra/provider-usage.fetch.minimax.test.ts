@@ -157,6 +157,65 @@ describe("fetchMinimaxUsage", () => {
         windows: [{ label: "2h", usedPercent: 40, resetAt: 1_700_000_100_000 }],
       },
     },
+    {
+      name: "prefers chat model entries from model_remains and derives window labels from timestamps",
+      payload: {
+        data: {
+          model_remains: [
+            {
+              model_name: "speech-hd",
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+            {
+              model_name: "MiniMax-M*",
+              current_interval_total_count: 600,
+              current_interval_usage_count: 595,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+            {
+              model_name: "image-01",
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+          ],
+        },
+      },
+      expected: {
+        plan: "Coding Plan · MiniMax-M*",
+        windows: [{ label: "4h", usedPercent: 0.8333333333333334, resetAt: 1_774_195_200_000 }],
+      },
+    },
+    {
+      name: "falls back to the first non-zero model_remains record when no MiniMax chat entry exists",
+      payload: {
+        data: {
+          model_remains: [
+            {
+              model_name: "speech-hd",
+              current_interval_total_count: 0,
+              current_interval_usage_count: 0,
+            },
+            {
+              model_name: "video-01",
+              current_interval_total_count: 200,
+              current_interval_usage_count: 150,
+              start_time: 1_774_180_800_000,
+              end_time: 1_774_195_200_000,
+            },
+          ],
+        },
+      },
+      expected: {
+        plan: "Coding Plan · video-01",
+        windows: [{ label: "4h", usedPercent: 25, resetAt: 1_774_195_200_000 }],
+      },
+    },
   ])("$name", async ({ payload, expected }) => {
     await expectMinimaxUsageResult({ payload, expected });
   });
