@@ -191,8 +191,10 @@ Custom hook names are resolved via `hooks.mappings` in config. Mappings can tran
 
 - Keep hook endpoints behind loopback, tailnet, or trusted reverse proxy.
 - Use a dedicated hook token; do not reuse gateway auth tokens.
+- Keep `hooks.path` on a dedicated subpath; `/` is rejected.
 - Set `hooks.allowedAgentIds` to limit explicit `agentId` routing.
 - Keep `hooks.allowRequestSessionKey=false` unless you require caller-selected sessions.
+- If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to constrain allowed session key shapes.
 - Hook payloads are wrapped with safety boundaries by default.
 
 ## Gmail PubSub integration

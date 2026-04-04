@@ -2839,6 +2839,14 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 ```
 
 Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
+Query-string hook tokens are rejected.
+
+Validation and safety notes:
+
+- `hooks.enabled=true` requires a non-empty `hooks.token`.
+- `hooks.token` must be **distinct** from `gateway.auth.token`; reusing the Gateway token is rejected.
+- `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
+- If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
 
 **Endpoints:**
 
