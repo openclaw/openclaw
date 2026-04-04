@@ -218,6 +218,11 @@ This page is not a generated full dump, but the public WS surface is broader
 than the handshake/auth examples above. These are the main method families the
 Gateway exposes today.
 
+`hello-ok.features.methods` is a conservative discovery list built from
+`src/gateway/server-methods-list.ts` plus loaded plugin/channel method exports.
+Treat it as feature discovery, not as a generated dump of every callable helper
+implemented in `src/gateway/server-methods/*.ts`.
+
 ### System and identity
 
 - `gateway.identity.get` returns the gateway device identity used by relay and

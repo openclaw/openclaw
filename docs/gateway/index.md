@@ -305,6 +305,8 @@ Defaults include isolated state/config and base gateway port `19001`.
 
 - First client frame must be `connect`.
 - Gateway returns `hello-ok` snapshot (`presence`, `health`, `stateVersion`, `uptimeMs`, limits/policy).
+- `hello-ok.features.methods` / `events` are a conservative discovery list, not
+  a generated dump of every callable helper route.
 - Requests: `req(method, params)` → `res(ok/payload|error)`.
 - Common events: `connect.challenge`, `agent`, `chat`, `presence`, `tick`, `health`, `heartbeat`, `shutdown`.
 
