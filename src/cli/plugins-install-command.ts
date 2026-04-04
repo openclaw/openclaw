@@ -76,6 +76,7 @@ async function tryInstallHookPackFromLocalPath(params: {
   config: OpenClawConfig;
   resolvedPath: string;
   installMode: "install" | "update";
+  dangerouslyForceUnsafeInstall?: boolean;
   link?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   if (params.link) {
@@ -88,6 +89,7 @@ async function tryInstallHookPackFromLocalPath(params: {
     }
 
     const probe = await installHooksFromPath({
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       path: params.resolvedPath,
       dryRun: true,
     });
@@ -126,6 +128,7 @@ async function tryInstallHookPackFromLocalPath(params: {
   }
 
   const result = await installHooksFromPath({
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     path: params.resolvedPath,
     mode: params.installMode,
     logger: createHookPackInstallLogger(),
@@ -340,10 +343,15 @@ export async function runPluginInstallCommand(params: {
     if (opts.link) {
       const existing = cfg.plugins?.load?.paths ?? [];
       const merged = Array.from(new Set([...existing, resolved]));
-      const probe = await installPluginFromPath({ path: resolved, dryRun: true });
+      const probe = await installPluginFromPath({
+        dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+        path: resolved,
+        dryRun: true,
+      });
       if (!probe.ok) {
         const hookFallback = await tryInstallHookPackFromLocalPath({
           config: cfg,
+          dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
           installMode,
           resolvedPath: resolved,
           link: true,
@@ -389,6 +397,7 @@ export async function runPluginInstallCommand(params: {
     if (!result.ok) {
       const hookFallback = await tryInstallHookPackFromLocalPath({
         config: cfg,
+        dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
         installMode,
         resolvedPath: resolved,
       });

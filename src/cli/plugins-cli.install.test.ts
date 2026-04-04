@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -6,10 +9,12 @@ import {
   buildPluginDiagnosticsReport,
   clearPluginManifestRegistryCache,
   enablePluginInConfig,
+  installHooksFromPath,
   installHooksFromNpmSpec,
   installPluginFromClawHub,
   installPluginFromMarketplace,
   installPluginFromNpmSpec,
+  installPluginFromPath,
   loadConfig,
   readConfigFileSnapshot,
   parseClawHubPluginSpec,
@@ -486,6 +491,154 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "demo",
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+  });
+
+  it("passes dangerous force unsafe install to linked path probe installs", async () => {
+    const cfg = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("demo");
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-link-"));
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromPath.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "demo",
+      targetDir: tmpRoot,
+      version: "1.2.3",
+      extensions: ["./dist/index.js"],
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    try {
+      await runPluginsCommand([
+        "plugins",
+        "install",
+        tmpRoot,
+        "--link",
+        "--dangerously-force-unsafe-install",
+      ]);
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+
+    expect(installPluginFromPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: tmpRoot,
+        dryRun: true,
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+  });
+
+  it("passes dangerous force unsafe install to linked hook-pack probe fallback", async () => {
+    const cfg = {} as OpenClawConfig;
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-link-"));
+    const installedCfg = {
+      hooks: {
+        internal: {
+          installs: {
+            "demo-hooks": {
+              source: "path",
+              sourcePath: tmpRoot,
+              installPath: tmpRoot,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromPath.mockResolvedValueOnce({
+      ok: false,
+      error: "plugin install probe failed",
+    });
+    installHooksFromPath.mockResolvedValueOnce({
+      ok: true,
+      hookPackId: "demo-hooks",
+      hooks: ["command-audit"],
+      targetDir: tmpRoot,
+      version: "1.2.3",
+    });
+    recordHookInstall.mockReturnValue(installedCfg);
+
+    try {
+      await runPluginsCommand([
+        "plugins",
+        "install",
+        tmpRoot,
+        "--link",
+        "--dangerously-force-unsafe-install",
+      ]);
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+
+    expect(installHooksFromPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: tmpRoot,
+        dryRun: true,
+        dangerouslyForceUnsafeInstall: true,
+      }),
+    );
+  });
+
+  it("passes dangerous force unsafe install to local hook-pack fallback installs", async () => {
+    const cfg = {} as OpenClawConfig;
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-install-"));
+    const installedCfg = {
+      hooks: {
+        internal: {
+          installs: {
+            "demo-hooks": {
+              source: "path",
+              sourcePath: tmpRoot,
+              installPath: tmpRoot,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromPath.mockResolvedValueOnce({
+      ok: false,
+      error: "plugin install failed",
+    });
+    installHooksFromPath.mockResolvedValueOnce({
+      ok: true,
+      hookPackId: "demo-hooks",
+      hooks: ["command-audit"],
+      targetDir: tmpRoot,
+      version: "1.2.3",
+    });
+    recordHookInstall.mockReturnValue(installedCfg);
+
+    try {
+      await runPluginsCommand([
+        "plugins",
+        "install",
+        tmpRoot,
+        "--dangerously-force-unsafe-install",
+      ]);
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+
+    expect(installHooksFromPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: tmpRoot,
+        mode: "install",
         dangerouslyForceUnsafeInstall: true,
       }),
     );
