@@ -249,13 +249,18 @@ describe("gateway broadcaster", () => {
     const clients = new Set<GatewayWsClient>([
       {
         socket: operatorSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.admin"] } as unknown as GatewayWsClient["connect"],
+        connect: {
+          role: "operator",
+          scopes: ["operator.admin"],
+        } as unknown as GatewayWsClient["connect"],
         connId: "c-operator",
+        usesSharedGatewayAuth: false,
       },
       {
         socket: nodeSocket as unknown as GatewayWsClient["socket"],
         connect: { role: "node", scopes: [] } as unknown as GatewayWsClient["connect"],
         connId: "c-node",
+        usesSharedGatewayAuth: false,
       },
     ]);
 

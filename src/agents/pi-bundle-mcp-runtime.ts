@@ -284,10 +284,34 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+      try {
+        return (await session.client.callTool({
+          name: toolName,
+          arguments: isMcpConfigRecord(input) ? input : {},
+        })) as CallToolResult;
+      } catch (error) {
+        // If the call failed due to transport/connection issues (process died,
+        // pipe closed, etc.), invalidate the cached catalog and dispose the
+        // stale session so the next tool call reconnects automatically.
+        const msg = String(error);
+        const isTransportError =
+          msg.includes("Not connected") ||
+          msg.includes("closed") ||
+          msg.includes("EPIPE") ||
+          msg.includes("ECONNRESET") ||
+          msg.includes("ECONNREFUSED") ||
+          msg.includes("transport") ||
+          msg.includes("Connection was closed");
+        if (isTransportError && !disposed) {
+          logWarn(
+            `bundle-mcp: server "${serverName}" call failed with transport error, invalidating catalog for reconnect: ${redactErrorUrls(error)}`,
+          );
+          catalog = null;
+          await disposeSession(session).catch(() => {});
+          sessions.delete(serverName);
+        }
+        throw error;
+      }
     },
     async dispose() {
       if (disposed) {
