@@ -256,6 +256,12 @@ function createChatContext(): Pick<
     dedupe: new Map(),
     loadGatewayModelCatalog: async () => [
       {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        input: ["text", "image"],
+      },
+      {
         provider: "anthropic",
         id: "claude-opus-4-6",
         name: "Claude Opus 4.6",
