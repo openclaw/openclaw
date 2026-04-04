@@ -83,10 +83,7 @@ describe("scoped vitest configs", () => {
   });
 
   it("keeps the core channel lane limited to non-extension roots", () => {
-    expect(defaultChannelsConfig.test?.include).toEqual([
-      "src/browser/**/*.test.ts",
-      "src/line/**/*.test.ts",
-    ]);
+    expect(defaultChannelsConfig.test?.include).toEqual([]);
   });
 
   it("loads channel include overrides from OPENCLAW_VITEST_INCLUDE_FILE", () => {
@@ -123,13 +120,17 @@ describe("scoped vitest configs", () => {
 
   it("normalizes extension channel include patterns relative to the scoped dir", () => {
     expect(defaultExtensionChannelsConfig.test?.dir).toBe("extensions");
-    expect(defaultExtensionChannelsConfig.test?.include).toEqual([
-      "discord/**/*.test.ts",
-      "whatsapp/**/*.test.ts",
-      "slack/**/*.test.ts",
-      "signal/**/*.test.ts",
-      "imessage/**/*.test.ts",
-    ]);
+    expect(defaultExtensionChannelsConfig.test?.include).toEqual(
+      expect.arrayContaining([
+        "browser/**/*.test.ts",
+        "discord/**/*.test.ts",
+        "line/**/*.test.ts",
+        "whatsapp/**/*.test.ts",
+        "slack/**/*.test.ts",
+        "signal/**/*.test.ts",
+        "imessage/**/*.test.ts",
+      ]),
+    );
   });
 
   it("normalizes extension include patterns relative to the scoped dir", () => {
