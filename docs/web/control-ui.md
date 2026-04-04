@@ -116,7 +116,12 @@ Cron jobs panel notes:
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
 - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
-- `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`) and omits assistant entries whose whole visible text is only `NO_REPLY`.
+- `chat.history` also strips visible-text scaffolding from assistant output before rendering:
+  - inline directive tags such as `[[reply_to_*]]` and `[[audio_as_voice]]`
+  - leaked reasoning / relevant-memories blocks
+  - leaked XML tool-call scaffolding such as `<tool_call>` / `<function_calls>`
+  - leaked provider control tokens such as `<|assistant|>` and similar `<|...|>` / `<｜...｜>` markers
+  - assistant entries whose whole visible text is only `NO_REPLY` are omitted
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
 - Stop:
