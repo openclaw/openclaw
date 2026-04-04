@@ -56,7 +56,7 @@ Core:
 - request/response types
 - provider registry + resolution
 - fallback behavior
-- config schema and labels/help
+- config schema plus propagated `title` / `description` docs metadata
 - runtime helper surface
 
 Vendor plugin:

@@ -308,7 +308,9 @@ Defaults include isolated state/config and base gateway port `19001`.
 - `hello-ok.features.methods` / `events` are a conservative discovery list, not
   a generated dump of every callable helper route.
 - Requests: `req(method, params)` → `res(ok/payload|error)`.
-- Common events: `connect.challenge`, `agent`, `chat`, `presence`, `tick`, `health`, `heartbeat`, `shutdown`.
+- Common events include `connect.challenge`, `agent`, `chat`,
+  `session.message`, `session.tool`, `sessions.changed`, `presence`, `tick`,
+  `health`, `heartbeat`, pairing/approval lifecycle events, and `shutdown`.
 
 Agent runs are two-stage:
 
