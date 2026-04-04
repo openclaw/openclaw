@@ -1,14 +1,14 @@
 import { Type } from "@sinclair/typebox";
-import type {
-  ProviderReplayPolicy,
-  ProviderReplayPolicyContext,
-} from "openclaw/plugin-sdk/plugin-entry";
 import {
   coerceSecretRef,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  composeProviderStreamWrappers,
+  createToolStreamWrapper,
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   jsonResult,
   readProviderEnvValue,
@@ -34,33 +34,6 @@ import {
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 const PROVIDER_ID = "xai";
-
-function buildXaiReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy | undefined {
-  if (
-    ctx.modelApi !== "openai-completions" &&
-    ctx.modelApi !== "openai-responses" &&
-    ctx.modelApi !== "openai-codex-responses" &&
-    ctx.modelApi !== "azure-openai-responses"
-  ) {
-    return undefined;
-  }
-
-  return {
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict",
-    ...(ctx.modelApi === "openai-completions"
-      ? {
-          applyAssistantFirstOrderingFix: true,
-          validateGeminiTurns: true,
-          validateAnthropicTurns: true,
-        }
-      : {
-          applyAssistantFirstOrderingFix: false,
-          validateGeminiTurns: false,
-          validateAnthropicTurns: false,
-        }),
-  };
-}
 
 function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   const literal = normalizeSecretInputString(value);
@@ -281,7 +254,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildXaiProvider,
     },
-    buildReplayPolicy: (ctx) => buildXaiReplayPolicy(ctx),
+    buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
     prepareExtraParams: (ctx) => {
       if (ctx.extraParams?.tool_stream !== undefined) {
         return ctx.extraParams;
@@ -291,14 +264,16 @@ export default defineSingleProviderPluginEntry({
         tool_stream: true,
       };
     },
-    wrapStreamFn: (ctx) => {
-      let streamFn = createXaiToolPayloadCompatibilityWrapper(ctx.streamFn);
-      if (typeof ctx.extraParams?.fastMode === "boolean") {
-        streamFn = createXaiFastModeWrapper(streamFn, ctx.extraParams.fastMode);
-      }
-      streamFn = createXaiToolCallArgumentDecodingWrapper(streamFn);
-      return createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false);
-    },
+    wrapStreamFn: (ctx) =>
+      composeProviderStreamWrappers(
+        ctx.streamFn,
+        (streamFn) => createXaiToolPayloadCompatibilityWrapper(streamFn),
+        typeof ctx.extraParams?.fastMode === "boolean"
+          ? (streamFn) => createXaiFastModeWrapper(streamFn, ctx.extraParams.fastMode)
+          : undefined,
+        (streamFn) => createXaiToolCallArgumentDecodingWrapper(streamFn),
+        (streamFn) => createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false),
+      ),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
