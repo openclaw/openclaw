@@ -1,1 +1,1 @@
-VeriClaw 爪印 pairs your iPhone with OpenClaw for review queues, evidence capture, voice actions, and role-aware correction follow-up.
+VeriClaw 爪印 pairs your iPhone with your gateway for review queues, evidence capture, voice actions, and role-aware correction follow-up. The current gateway and CLI still use OpenClaw / `openclaw` naming for compatibility.

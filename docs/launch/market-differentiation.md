@@ -71,7 +71,7 @@ Important caution:
 VeriClaw should keep all four of these together:
 
 1. `Companion, not clone`
-   - it strengthens OpenClaw rather than pretending to replace it
+   - it strengthens the current runtime layer rather than pretending to replace every part of the stack
 2. `Correction, not just monitoring`
    - it should always answer what to do next, not only what went wrong
 3. `Professional-role drift`
@@ -95,7 +95,7 @@ If the product drifts toward any of these, differentiation weakens fast:
 Preferred wording:
 
 - `Apple-native correction workspace for supervising drifting bots`
-- `professional-role correction companion for OpenClaw`
+- `professional-role correction companion for VeriClaw`
 - `evidence-first intervention and casebook learning`
 
 Avoid overstating:

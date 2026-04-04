@@ -1,6 +1,6 @@
-VeriClaw 爪印 is an iPhone verification and correction companion for OpenClaw.
+VeriClaw 爪印 is an iPhone verification and correction companion for a self-hosted AI assistant and gateway runtime.
 
-Pair this app with your OpenClaw Gateway to review suspicious output, capture evidence, and send grounded follow-up when a named bot drifts off task, overreaches, or stops honoring its professional role.
+Pair this app with your gateway to review suspicious output, capture evidence, and send grounded follow-up when a named bot drifts off task, overreaches, or stops honoring its professional role.
 
 What you can do:
 - Review queued verification and follow-up work from iPhone
@@ -13,7 +13,9 @@ What you can do:
 
 VeriClaw 爪印 is local-first: you control your gateway, keys, permissions, and routing.
 
+The public-facing product name is VeriClaw. The current gateway and CLI still use OpenClaw / `openclaw` naming for compatibility.
+
 Getting started:
-1) Set up your OpenClaw Gateway
+1) Set up your gateway
 2) Open VeriClaw 爪印 and pair it with your gateway
 3) Review, capture, and send correction follow-up from your phone

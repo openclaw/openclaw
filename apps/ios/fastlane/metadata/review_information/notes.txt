@@ -1,4 +1,4 @@
-VeriClaw 爪印 is an iPhone companion for a user-controlled OpenClaw Gateway.
+VeriClaw 爪印 is an iPhone companion for a user-controlled gateway and correction workflow. The public-facing product name is VeriClaw; the current gateway and CLI still use OpenClaw / `openclaw` naming for compatibility.
 
 Reviewers can launch the app, follow the in-app onboarding, pair with a test gateway, and verify review, evidence-capture, share-to-queue, and corrective follow-up flows without a separate hosted account.
 

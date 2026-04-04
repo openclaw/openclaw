@@ -1,5 +1,5 @@
 ---
-summary: "Operator checklist for the synchronized GitHub + Apple launch of VeriClaw, with OpenClaw runtime compatibility."
+summary: "Operator checklist for the synchronized GitHub + Apple launch of VeriClaw."
 read_when:
   - Preparing the public GitHub release surface
   - Keeping GitHub and Apple-facing launch copy aligned
@@ -16,7 +16,7 @@ the Apple-native companion story.
 Current positioning:
 
 - `VeriClaw` is the outward product brand
-- `OpenClaw` remains the current runtime and gateway compatibility layer
+- `OpenClaw` remains the current runtime and gateway compatibility layer and should stay out of headlines
 - GitHub and App Store should converge toward the same ship point
 - neither surface should be presented as live until that is verified
 
