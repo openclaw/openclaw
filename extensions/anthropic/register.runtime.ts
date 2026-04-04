@@ -316,10 +316,10 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
     normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
-    buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
+    buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
-    wrapStreamFn: (ctx) => wrapAnthropicProviderStream(ctx),
+    wrapStreamFn: wrapAnthropicProviderStream,
     resolveDefaultThinkingLevel: ({ modelId }) =>
       matchesAnthropicModernModel(modelId) &&
       (modelId.toLowerCase().startsWith(ANTHROPIC_OPUS_46_MODEL_ID) ||
