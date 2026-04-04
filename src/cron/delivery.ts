@@ -32,13 +32,14 @@ export async function sendFailureNotificationAnnounce(
   cfg: OpenClawConfig,
   agentId: string,
   jobId: string,
-  target: { channel?: string; to?: string; accountId?: string },
+  target: { channel?: string; to?: string; accountId?: string; sessionKey?: string },
   message: string,
 ): Promise<void> {
   const resolvedTarget = await resolveDeliveryTarget(cfg, agentId, {
     channel: target.channel as CronMessageChannel | undefined,
     to: target.to,
     accountId: target.accountId,
+    sessionKey: target.sessionKey,
   });
 
   if (!resolvedTarget.ok) {
