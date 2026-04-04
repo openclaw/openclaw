@@ -32,8 +32,8 @@ and process access when the model does something dumb.
 Not sandboxed:
 
 - The Gateway process itself.
-- Any tool explicitly allowed to run on the host (e.g. `tools.elevated`).
-  - **Elevated exec runs on the host and bypasses sandboxing.**
+- Any tool explicitly allowed to run outside the sandbox (e.g. `tools.elevated`).
+  - **Elevated exec bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).**
   - If sandboxing is off, `tools.elevated` does not change execution (already on host). See [Elevated Mode](/tools/elevated).
 
 ## Modes
@@ -429,7 +429,7 @@ Common pitfalls:
 Tool allow/deny policies still apply before sandbox rules. If a tool is denied
 globally or per-agent, sandboxing doesn’t bring it back.
 
-`tools.elevated` is an explicit escape hatch that runs `exec` on the host.
+`tools.elevated` is an explicit escape hatch that runs `exec` outside the sandbox (`gateway` by default, or `node` when the exec target is `node`).
 `/exec` directives only apply for authorized senders and persist per session; to hard-disable
 `exec`, use tool policy deny (see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated)).
 
