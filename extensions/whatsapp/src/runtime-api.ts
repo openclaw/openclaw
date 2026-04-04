@@ -8,7 +8,7 @@ export {
   formatWhatsAppConfigAllowFromEntries,
   resolveWhatsAppConfigAllowFrom,
   resolveWhatsAppConfigDefaultTo,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+} from "./config-accessors.js";
 export {
   createActionGate,
   jsonResult,

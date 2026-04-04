@@ -1,6 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { formatWhatsAppConfigAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -21,6 +20,7 @@ import {
 } from "./channel-actions.js";
 import { whatsappChannelOutbound } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
+import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import {
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppMentionStripRegexes,

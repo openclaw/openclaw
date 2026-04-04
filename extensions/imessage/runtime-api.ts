@@ -12,11 +12,11 @@ export {
   buildComputedAccountStatusSnapshot,
   collectStatusIssuesFromLastError,
 } from "openclaw/plugin-sdk/status-helpers";
+export { formatTrimmedAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 export {
-  formatTrimmedAllowFromEntries,
   resolveIMessageConfigAllowFrom,
   resolveIMessageConfigDefaultTo,
-} from "openclaw/plugin-sdk/channel-config-helpers";
+} from "./src/config-accessors.js";
 export { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./src/normalize.js";
 export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 export { IMessageConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";

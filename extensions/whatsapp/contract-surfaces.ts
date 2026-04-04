@@ -14,6 +14,8 @@ export const unsupportedSecretRefSurfacePatterns = [
   "channels.whatsapp.accounts.*.creds.json",
 ] as const;
 
+export const defaultMarkdownTableMode = "bullets";
+
 export { resolveLegacyGroupSessionKey } from "./src/group-session-contract.js";
 
 export function hasPersistedAuthState(params: {
