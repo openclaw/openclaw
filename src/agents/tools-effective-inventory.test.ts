@@ -163,16 +163,20 @@ describe("resolveEffectiveToolInventory", () => {
           name: "cron",
           label: "Cron",
           description:
-            "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }",
+            'Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
         },
       ],
     });
 
     const result = resolveEffectiveToolInventory({ cfg: {} });
 
-    expect(result.groups[0]?.tools[0]?.description).toBe(
+    const description = result.groups[0]?.tools[0]?.description ?? "";
+    expect(description).toContain(
       "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.",
     );
+    expect(description).toContain("Use this for reminders");
+    expect(description.endsWith("...")).toBe(true);
+    expect(description.length).toBeLessThanOrEqual(120);
     expect(result.groups[0]?.tools[0]?.rawDescription).toContain("ACTIONS:");
   });
 

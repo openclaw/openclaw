@@ -410,6 +410,22 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
   expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
 };
 
+describe("tool descriptions", () => {
+  it("adds cron-specific deferred follow-up guidance only when cron is available", () => {
+    const execWithCron = createTestExecTool({ hasCronTool: true });
+    const processWithCron = createProcessTool({ hasCronTool: true });
+
+    expect(execWithCron.description).toContain(
+      "Do not use exec sleep or delay loops for reminders or deferred follow-ups; use cron instead.",
+    );
+    expect(processWithCron.description).toContain(
+      "Do not use process polling to emulate timers or reminders; use cron for scheduled follow-ups.",
+    );
+    expect(execTool.description).not.toContain("use cron instead");
+    expect(processTool.description).not.toContain("scheduled follow-ups");
+  });
+});
+
 beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
