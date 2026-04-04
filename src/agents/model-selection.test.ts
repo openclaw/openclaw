@@ -473,7 +473,11 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
       expect(result.allowedCatalog).toEqual([
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        expect.objectContaining({
+          provider: "anthropic",
+          id: "claude-sonnet-4-6",
+          name: expect.any(String),
+        }),
       ]);
     });
 

@@ -56,7 +56,7 @@ describe("composeProviderStreamWrappers", () => {
 });
 
 describe("buildProviderStreamFamilyHooks", () => {
-  it("covers the stream family matrix", () => {
+  it("covers the stream family matrix", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     let capturedModelId: string | undefined;
     let capturedHeaders: Record<string, string> | undefined;
@@ -74,12 +74,17 @@ describe("buildProviderStreamFamilyHooks", () => {
     };
 
     const googleHooks = buildProviderStreamFamilyHooks("google-thinking");
-    void requireStreamFn(
+    const googleStream = requireStreamFn(
       requireWrapStreamFn(googleHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "high",
       } as never),
-    )({ api: "google-generative-ai", id: "gemini-3.1-pro-preview" } as never, {} as never, {});
+    );
+    await googleStream(
+      { api: "google-generative-ai", id: "gemini-3.1-pro-preview" } as never,
+      {} as never,
+      {},
+    );
     expect(capturedPayload).toMatchObject({
       config: { thinkingConfig: { thinkingLevel: "HIGH" } },
     });
@@ -89,12 +94,13 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(googleThinkingConfig).not.toHaveProperty("thinkingBudget");
 
     const minimaxHooks = buildProviderStreamFamilyHooks("minimax-fast-mode");
-    void requireStreamFn(
+    const minimaxStream = requireStreamFn(
       requireWrapStreamFn(minimaxHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         extraParams: { fastMode: true },
       } as never),
-    )(
+    );
+    await minimaxStream(
       {
         api: "anthropic-messages",
         provider: "minimax",
@@ -131,12 +137,17 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(capturedPayload).not.toHaveProperty("reasoning");
 
     const moonshotHooks = buildProviderStreamFamilyHooks("moonshot-thinking");
-    void requireStreamFn(
+    const moonshotStream = requireStreamFn(
       requireWrapStreamFn(moonshotHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         thinkingLevel: "off",
       } as never),
-    )({ api: "openai-completions", id: "kimi-k2.5" } as never, {} as never, {});
+    );
+    await moonshotStream(
+      { api: "openai-completions", id: "kimi-k2.5" } as never,
+      {} as never,
+      {},
+    );
     expect(capturedPayload).toMatchObject({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       thinking: { type: "disabled" },
@@ -192,23 +203,25 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(capturedPayload).not.toHaveProperty("reasoning");
 
     const toolStreamHooks = buildProviderStreamFamilyHooks("tool-stream-default-on");
-    void requireStreamFn(
+    const toolStreamDefault = requireStreamFn(
       requireWrapStreamFn(toolStreamHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         extraParams: {},
       } as never),
-    )({ id: "glm-4.7" } as never, {} as never, {});
+    );
+    await toolStreamDefault({ id: "glm-4.7" } as never, {} as never, {});
     expect(capturedPayload).toMatchObject({
       config: { thinkingConfig: { thinkingBudget: -1 } },
       tool_stream: true,
     });
 
-    void requireStreamFn(
+    const toolStreamDisabled = requireStreamFn(
       requireWrapStreamFn(toolStreamHooks.wrapStreamFn)({
         streamFn: baseStreamFn,
         extraParams: { tool_stream: false },
       } as never),
-    )({ id: "glm-4.7" } as never, {} as never, {});
+    );
+    await toolStreamDisabled({ id: "glm-4.7" } as never, {} as never, {});
     expect(capturedPayload).toMatchObject({
       config: { thinkingConfig: { thinkingBudget: -1 } },
     });

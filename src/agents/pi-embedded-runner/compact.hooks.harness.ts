@@ -234,12 +234,16 @@ export async function loadCompactHooksHarness(): Promise<{
             : JSON.parse(JSON.stringify(message)),
         ),
         agent: {
-          replaceMessages: vi.fn((messages: unknown[]) => {
-            session.messages = [...(messages as typeof session.messages)];
-          }),
           streamFn: vi.fn(),
-          setTransport: vi.fn(),
           transport: "sse",
+          state: {
+            get messages() {
+              return session.messages;
+            },
+            set messages(messages: unknown[]) {
+              session.messages = [...(messages as typeof session.messages)];
+            },
+          },
         },
         compact: vi.fn(async () => {
           session.messages.splice(1);

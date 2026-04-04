@@ -13,7 +13,8 @@ describe("createCachedLazyValueGetter", () => {
 
   it("uses the fallback when the lazy value resolves nullish", () => {
     const fallback = { type: "object" as const, properties: {} };
-    const getSchema = createCachedLazyValueGetter<typeof fallback>(() => undefined, fallback);
+    const resolveSchema = (): typeof fallback | undefined => undefined;
+    const getSchema = createCachedLazyValueGetter(resolveSchema, fallback);
 
     expect(getSchema()).toBe(fallback);
   });

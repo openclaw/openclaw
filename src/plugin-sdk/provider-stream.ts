@@ -1,6 +1,4 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ProviderPlugin } from "../plugins/types.js";
-import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
   createGoogleThinkingPayloadWrapper,
   sanitizeGoogleThinkingPayload,
@@ -28,7 +26,12 @@ import {
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
-import { createToolStreamWrapper, createZaiToolStreamWrapper } from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+import {
+  createToolStreamWrapper,
+  createZaiToolStreamWrapper,
+} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+import type { ProviderPlugin } from "../plugins/types.js";
+import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
 export type ProviderStreamWrapperFactory =
   | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
@@ -40,7 +43,7 @@ export function composeProviderStreamWrappers(
   baseStreamFn: StreamFn | undefined,
   ...wrappers: ProviderStreamWrapperFactory[]
 ): StreamFn | undefined {
-  return wrappers.reduce<StreamFn | undefined>(
+  return wrappers.reduce(
     (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
     baseStreamFn,
   );

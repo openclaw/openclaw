@@ -49,6 +49,10 @@ const DEFAULT_MAX_IMAGES = 20;
 const imageToolProviderDeps = {
   buildProviderRegistry,
   getMediaUnderstandingProvider,
+  describeImageWithModel,
+  describeImagesWithModel,
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
 };
 
 export const __testing = {
@@ -58,11 +62,23 @@ export const __testing = {
   setProviderDepsForTest(overrides?: {
     buildProviderRegistry?: typeof buildProviderRegistry;
     getMediaUnderstandingProvider?: typeof getMediaUnderstandingProvider;
+    describeImageWithModel?: typeof describeImageWithModel;
+    describeImagesWithModel?: typeof describeImagesWithModel;
+    resolveAutoMediaKeyProviders?: typeof resolveAutoMediaKeyProviders;
+    resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
   }) {
     imageToolProviderDeps.buildProviderRegistry =
       overrides?.buildProviderRegistry ?? buildProviderRegistry;
     imageToolProviderDeps.getMediaUnderstandingProvider =
       overrides?.getMediaUnderstandingProvider ?? getMediaUnderstandingProvider;
+    imageToolProviderDeps.describeImageWithModel =
+      overrides?.describeImageWithModel ?? describeImageWithModel;
+    imageToolProviderDeps.describeImagesWithModel =
+      overrides?.describeImagesWithModel ?? describeImagesWithModel;
+    imageToolProviderDeps.resolveAutoMediaKeyProviders =
+      overrides?.resolveAutoMediaKeyProviders ?? resolveAutoMediaKeyProviders;
+    imageToolProviderDeps.resolveDefaultMediaModel =
+      overrides?.resolveDefaultMediaModel ?? resolveDefaultMediaModel;
   },
 } as const;
 
@@ -108,7 +124,7 @@ export function resolveImageModelConfigForTool(params: {
     if (providerVisionFromConfig) {
       return [providerVisionFromConfig];
     }
-    const providerDefault = resolveDefaultMediaModel({
+    const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
       cfg: params.cfg,
       providerId: primary.provider,
       capability: "image",
@@ -122,17 +138,19 @@ export function resolveImageModelConfigForTool(params: {
     return [];
   })();
 
-  const autoCandidates = resolveAutoMediaKeyProviders({
-    cfg: params.cfg,
-    capability: "image",
-  }).map((providerId) => {
-    const modelId = resolveDefaultMediaModel({
+  const autoCandidates = imageToolProviderDeps
+    .resolveAutoMediaKeyProviders({
       cfg: params.cfg,
-      providerId,
       capability: "image",
+    })
+    .map((providerId) => {
+      const modelId = imageToolProviderDeps.resolveDefaultMediaModel({
+        cfg: params.cfg,
+        providerId,
+        capability: "image",
+      });
+      return modelId ? `${providerId}/${modelId}` : null;
     });
-    return modelId ? `${providerId}/${modelId}` : null;
-  });
 
   return buildToolModelConfigFromCandidates({
     explicit,
@@ -186,7 +204,8 @@ async function runImagePrompt(params: {
         params.images.length > 1 &&
         (imageProvider?.describeImages || !imageProvider?.describeImage)
       ) {
-        const describeImages = imageProvider?.describeImages ?? describeImagesWithModel;
+        const describeImages =
+          imageProvider?.describeImages ?? imageToolProviderDeps.describeImagesWithModel;
         const described = await describeImages({
           images: params.images.map((image, index) => ({
             buffer: image.buffer,
@@ -203,7 +222,8 @@ async function runImagePrompt(params: {
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
-      const describeImage = imageProvider?.describeImage ?? describeImageWithModel;
+      const describeImage =
+        imageProvider?.describeImage ?? imageToolProviderDeps.describeImageWithModel;
       if (params.images.length === 1) {
         const image = params.images[0];
         const described = await describeImage({
