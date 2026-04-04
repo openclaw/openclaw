@@ -1937,7 +1937,7 @@ Further restrict tools for specific providers or models. Order: base profile →
 
 ### `tools.elevated`
 
-Controls elevated (host) exec access:
+Controls elevated exec access outside the sandbox:
 
 ```json5
 {
@@ -1955,7 +1955,7 @@ Controls elevated (host) exec access:
 
 - Per-agent override (`agents.list[].tools.elevated`) can only further restrict.
 - `/elevated on|off|ask|full` stores state per session; inline directives apply to single message.
-- Elevated `exec` runs on the host, bypasses sandboxing.
+- Elevated `exec` bypasses sandboxing and uses the configured escape path (`gateway` by default, or `node` when the exec target is `node`).
 
 ### `tools.exec`
 
