@@ -31,40 +31,57 @@ describe("getBlockedBindReason", () => {
     expect(getBlockedBindReason("/var:/var")).toBeNull();
   });
 
-  it("blocks sensitive home subdirectories", () => {
+  it("blocks sensitive home credential paths", () => {
     vi.stubEnv("HOME", "/home/tester");
-    expect(getBlockedBindReason("/home/tester/.openclaw:/mnt/state:ro")).toEqual(
+
+    const cases = [
+      "/home/tester/.aws/credentials",
+      "/home/tester/.cargo/credentials.toml",
+      "/home/tester/.config/gcloud",
+      "/home/tester/.docker/config.json",
+      "/home/tester/.gnupg/private-keys-v1.d",
+      "/home/tester/.kube/config",
+      "/home/tester/.netrc",
+      "/home/tester/.npm/_logs",
+      "/home/tester/.openclaw/credentials",
+      "/home/tester/.ssh/config",
+    ] as const;
+
+    for (const source of cases) {
+      expect(getBlockedBindReason(`${source}:/mnt/test:ro`)).toEqual(
+        expect.objectContaining({ kind: "targets" }),
+      );
+    }
+  });
+
+  it("still blocks OS-home credential paths when OPENCLAW_HOME points elsewhere", () => {
+    vi.stubEnv("HOME", "/home/tester");
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+
+    expect(getBlockedBindReason("/home/tester/.gnupg/secring.gpg:/mnt/gnupg:ro")).toEqual(
       expect.objectContaining({
         kind: "targets",
-        blockedPath: "/home/tester/.openclaw",
-      }),
-    );
-    expect(getBlockedBindReason("/home/tester/.ssh:/mnt/ssh:ro")).toEqual(
-      expect.objectContaining({
-        kind: "targets",
-        blockedPath: "/home/tester/.ssh",
+        blockedPath: "/home/tester/.gnupg",
       }),
     );
   });
 
-  it("blocks sensitive home subdirectories under OPENCLAW_HOME", () => {
-    vi.stubEnv("HOME", "/home/tester");
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    expect(getBlockedBindReason("/srv/openclaw-home/.ssh:/mnt/ssh:ro")).toEqual(
-      expect.objectContaining({
-        kind: "targets",
-        blockedPath: "/srv/openclaw-home/.ssh",
-      }),
-    );
-  });
+  it("blocks canonical OS-home aliases for credential paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
 
-  it("still blocks OS-home sensitive paths when OPENCLAW_HOME is overridden", () => {
-    vi.stubEnv("HOME", "/home/tester");
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    expect(getBlockedBindReason("/home/tester/.aws:/mnt/aws:ro")).toEqual(
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const realHome = join(dir, "real-home");
+    const aliasHome = join(dir, "alias-home");
+    mkdirSync(join(realHome, ".ssh"), { recursive: true });
+    symlinkSync(realHome, aliasHome);
+    vi.stubEnv("HOME", aliasHome);
+
+    expect(getBlockedBindReason(`${join(realHome, ".ssh", "config")}:/mnt/ssh:ro`)).toEqual(
       expect.objectContaining({
         kind: "targets",
-        blockedPath: "/home/tester/.aws",
+        blockedPath: normalizePathForSnapshot(join(realHome, ".ssh")),
       }),
     );
   });
@@ -156,6 +173,32 @@ describe("validateBindMounts", () => {
 
   it("allows parent mounts that are not blocked", () => {
     expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
+  });
+
+  it("blocks sensitive home credential binds", () => {
+    vi.stubEnv("HOME", "/home/tester");
+
+    expect(() => validateBindMounts(["/home/tester/.docker/config.json:/mnt/docker:ro"])).toThrow(
+      /blocked path/,
+    );
+    expect(() => validateBindMounts(["/home/tester/.netrc:/mnt/netrc:ro"])).toThrow(/blocked path/);
+  });
+
+  it("blocks credential binds through canonical home aliases", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-home-"));
+    const realHome = join(dir, "real-home");
+    const aliasHome = join(dir, "alias-home");
+    mkdirSync(join(realHome, ".docker"), { recursive: true });
+    symlinkSync(realHome, aliasHome);
+    vi.stubEnv("HOME", aliasHome);
+
+    expect(() =>
+      validateBindMounts([`${join(realHome, ".docker", "config.json")}:/mnt/docker:ro`]),
+    ).toThrow(/credential paths/);
   });
 
   it("blocks symlink escapes into blocked directories", () => {
@@ -315,6 +358,10 @@ describe("validateBindMounts", () => {
     ).not.toThrow();
   });
 });
+
+function normalizePathForSnapshot(input: string): string {
+  return input.replaceAll("\\", "/");
+}
 
 describe("validateNetworkMode", () => {
   it("allows bridge/none/custom/undefined", () => {
