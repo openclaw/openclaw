@@ -102,7 +102,7 @@ bounded role entries in `deviceTokens`:
       {
         "deviceToken": "…",
         "role": "operator",
-        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
       }
     ]
   }
@@ -173,6 +173,10 @@ Common scopes:
 - `operator.admin`
 - `operator.approvals`
 - `operator.pairing`
+- `operator.talk.secrets`
+
+`talk.config` with `includeSecrets: true` requires `operator.talk.secrets`
+(or `operator.admin`).
 
 Plugin-registered gateway RPC methods may request their own operator scope, but
 reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,

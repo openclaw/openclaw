@@ -64,7 +64,9 @@ Auth matrix:
 - `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
   - proves possession of the shared gateway operator secret
   - ignores narrower `x-openclaw-scopes`
-  - restores the full default operator scope set
+  - restores the full default operator scope set:
+    `operator.admin`, `operator.approvals`, `operator.pairing`,
+    `operator.read`, `operator.talk.secrets`, `operator.write`
   - treats chat turns on this endpoint as owner-sender turns
 - trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
   - authenticate some outer trusted identity or deployment boundary
