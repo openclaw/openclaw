@@ -5,6 +5,7 @@ import {
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
@@ -21,6 +22,45 @@ import {
   MemoryGetSchema,
   MemorySearchSchema,
 } from "./tools.shared.js";
+
+function buildRecallKey(
+  result: Pick<MemorySearchResult, "source" | "path" | "startLine" | "endLine">,
+): string {
+  return `${result.source}:${result.path}:${result.startLine}:${result.endLine}`;
+}
+
+function resolveRecallTrackingResults(
+  rawResults: MemorySearchResult[],
+  surfacedResults: MemorySearchResult[],
+): MemorySearchResult[] {
+  if (surfacedResults.length === 0 || rawResults.length === 0) {
+    return surfacedResults;
+  }
+  const rawByKey = new Map<string, MemorySearchResult>();
+  for (const raw of rawResults) {
+    const key = buildRecallKey(raw);
+    if (!rawByKey.has(key)) {
+      rawByKey.set(key, raw);
+    }
+  }
+  return surfacedResults.map((surfaced) => rawByKey.get(buildRecallKey(surfaced)) ?? surfaced);
+}
+
+function queueShortTermRecallTracking(params: {
+  workspaceDir?: string;
+  query: string;
+  rawResults: MemorySearchResult[];
+  surfacedResults: MemorySearchResult[];
+}): void {
+  const trackingResults = resolveRecallTrackingResults(params.rawResults, params.surfacedResults);
+  void recordShortTermRecalls({
+    workspaceDir: params.workspaceDir,
+    query: params.query,
+    results: trackingResults,
+  }).catch(() => {
+    // Recall tracking is best-effort and must never block memory recall.
+  });
+}
 
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
@@ -56,19 +96,18 @@ export function createMemorySearchTool(options: {
             sessionKey: options.agentSessionKey,
           });
           const status = memory.manager.status();
-          await recordShortTermRecalls({
-            workspaceDir: status.workspaceDir,
-            query,
-            results: rawResults,
-          }).catch(() => {
-            // Recall tracking is best-effort and must never block memory recall.
-          });
           const decorated = decorateCitations(rawResults, includeCitations);
           const resolved = resolveMemoryBackendConfig({ cfg, agentId });
           const results =
             status.backend === "qmd"
               ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
               : decorated;
+          queueShortTermRecallTracking({
+            workspaceDir: status.workspaceDir,
+            query,
+            rawResults,
+            surfacedResults: results,
+          });
           const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
           return jsonResult({
             results,

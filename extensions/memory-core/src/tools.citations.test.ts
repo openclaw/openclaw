@@ -21,6 +21,25 @@ import {
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
 
+async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      return await task();
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error("Timed out waiting for async test condition");
+}
+
 beforeEach(() => {
   resetMemoryToolMockState({
     backend: "builtin",
@@ -175,7 +194,7 @@ describe("memory tools", () => {
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      const storeRaw = await fs.readFile(storePath, "utf-8");
+      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
       const store = JSON.parse(storeRaw) as {
         entries?: Record<string, { path: string; recallCount: number }>;
       };

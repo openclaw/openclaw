@@ -82,6 +82,7 @@ Dreaming is the overnight reflection pass for memory. It is called "dreaming" be
 
 - It is opt-in and disabled by default.
 - Enable it with `plugins.entries.memory-core.config.dreaming.mode`.
+- You can toggle modes from chat with `/dreaming off|core|rem|deep`. Run `/dreaming` (or `/dreaming options`) to see what each mode does.
 - When enabled, `memory-core` automatically creates and maintains a managed cron job.
 - Set `dreaming.limit` to `0` if you want dreaming enabled but automatic promotion effectively paused.
 - Ranking uses weighted signals: recall frequency, retrieval relevance, query diversity, and temporal recency (recent recalls decay over time).
