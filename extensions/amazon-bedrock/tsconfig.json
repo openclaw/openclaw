@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.base.json",
+  "include": ["./*.ts", "./*.mts", "./*.cts", "./src/**/*.ts", "./src/**/*.tsx"],
+  "exclude": [
+    "./node_modules",
+    "./dist",
+    "./coverage",
+    "./**/*.test.ts",
+    "./**/*.test.tsx",
+    "./**/*.spec.ts",
+    "./**/*.spec.tsx",
+    "./**/*.e2e.test.ts",
+    "./**/*.browser.test.ts",
+    "./**/*.node.test.ts",
+    "./**/__tests__/**"
+  ]
+}

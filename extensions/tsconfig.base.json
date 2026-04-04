@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": "..",
+    "paths": {
+      "openclaw/plugin-sdk": ["src/plugin-sdk/index.ts"],
+      "openclaw/plugin-sdk/*": ["src/plugin-sdk/*.ts"]
+    }
+  }
+}

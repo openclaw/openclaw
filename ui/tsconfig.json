@@ -1,0 +1,17 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node", "vite/client"]
+  },
+  "include": [
+    "./src/**/*.ts",
+    "./src/**/*.tsx",
+    "./vite.config.ts",
+    "./vitest.config.ts",
+    "./vitest.node.config.ts"
+  ],
+  "exclude": ["./node_modules", "./dist", "./coverage"]
+}
