@@ -53,6 +53,11 @@ The Tooling section also includes runtime guidance for long-running work:
 
 Safety guardrails in the system prompt are advisory. They guide model behavior but do not enforce policy. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable these by design.
 
+On channels with native approval cards/buttons, the runtime prompt now tells the
+agent to rely on that native approval UI first. It should only include a manual
+`/approve` command when the tool result says chat approvals are unavailable or
+manual approval is the only path.
+
 ## Prompt modes
 
 OpenClaw can render smaller system prompts for sub-agents. The runtime sets a

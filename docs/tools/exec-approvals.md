@@ -509,6 +509,11 @@ Some channels can also act as native approval clients. Native clients add approv
 fanout, and channel-specific interactive approval UX on top of the shared same-chat `/approve`
 flow.
 
+When native approval cards/buttons are available, that native UI is the primary
+agent-facing path. The agent should not also echo a duplicate plain chat
+`/approve` command unless the tool result says chat approvals are unavailable or
+manual approval is the only remaining path.
+
 Generic model:
 
 - host exec policy still decides whether exec approval is required
