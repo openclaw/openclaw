@@ -73,6 +73,9 @@ explicitly promotes one as public.
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
+    | `plugin-sdk/setup-runtime` | Account-scoped setup runtime helpers, delegated setup proxies, setup status builders |
+    | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
+    | `plugin-sdk/setup-tools` | Setup CLI/archive/docs helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
     | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
@@ -108,6 +111,11 @@ explicitly promotes one as public.
     | Subpath | Key exports |
     | --- | --- |
     | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
+    | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
+    | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
+    | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
+    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
+    | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
@@ -120,6 +128,10 @@ explicitly promotes one as public.
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/config-runtime` | Config load/write helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
+    | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
+    | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
+    | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
+    | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
