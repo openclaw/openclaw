@@ -46,7 +46,10 @@ function createModuleLoader() {
 
 const loadModule = createModuleLoader();
 
-function resolveContractSurfaceModulePath(rootDir: string): string | null {
+function resolveContractSurfaceModulePath(rootDir: string | undefined): string | null {
+  if (typeof rootDir !== "string" || rootDir.length === 0) {
+    return null;
+  }
   for (const basename of CONTRACT_SURFACE_BASENAMES) {
     const modulePath = path.join(rootDir, basename);
     if (fs.existsSync(modulePath)) {
