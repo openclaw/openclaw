@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Synology Chat/security: route webhook token comparison through the shared constant-time secret helper for consistency with other bundled plugins.
+- Gateway/security: scope loopback browser-origin auth throttling by normalized origin so one localhost Control UI tab cannot lock out a different localhost browser origin after repeated auth failures.
 - Node exec approvals: keep node-host `system.run` approvals bound to the prepared execution plan, so script-drift revalidation still runs after agent-side approval forwarding.
 - Models/MiniMax: honor `MINIMAX_API_HOST` for implicit bundled MiniMax provider catalogs so China-hosted API-key setups pick `api.minimaxi.com/anthropic` without manual provider config. (#34524) Thanks @caiqinghua.
 - Usage/MiniMax: invert remaining-style `usage_percent` fields when MiniMax reports only remaining percentage data, so usage bars stop showing nearly-full remaining quota as nearly-exhausted usage. (#60254) Thanks @jwchmodx.

@@ -277,6 +277,45 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
+  test("isolates loopback browser-origin auth lockouts per origin", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: true },
+    };
+    await withGatewayServer(async ({ port }) => {
+      const firstOrigin = originForPort(port);
+      const secondOrigin = "http://localhost:5173";
+
+      const firstWs = await openWs(port, { origin: firstOrigin });
+      try {
+        const first = await connectReq(firstWs, { token: "wrong" });
+        expect(first.ok).toBe(false);
+        expect(first.error?.message ?? "").not.toContain("retry later");
+      } finally {
+        firstWs.close();
+      }
+
+      const secondWs = await openWs(port, { origin: secondOrigin });
+      try {
+        const second = await connectReq(secondWs, { token: "wrong" });
+        expect(second.ok).toBe(false);
+        expect(second.error?.message ?? "").not.toContain("retry later");
+      } finally {
+        secondWs.close();
+      }
+
+      const thirdWs = await openWs(port, { origin: firstOrigin });
+      try {
+        const third = await connectReq(thirdWs, { token: "wrong" });
+        expect(third.ok).toBe(false);
+        expect(third.error?.message ?? "").toContain("retry later");
+      } finally {
+        thirdWs.close();
+      }
+    });
+  });
+
   test("omits sensitive gateway paths from low-privilege hello-ok snapshots", async () => {
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await withGatewayServer(async ({ port }) => {
