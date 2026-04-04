@@ -12,15 +12,7 @@ export function buildProgram() {
   // Without this, commands like `openclaw sessions list` would print an error
   // but exit with code 0, breaking scripts and monitoring tools.
   program.exitOverride((err) => {
-    if (
-      err.code === "commander.help" ||
-      err.code === "commander.helpDisplayed" ||
-      err.code === "commander.version"
-    ) {
-      process.exitCode = 0;
-    } else {
-      process.exitCode = 1;
-    }
+    process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
   });
   const ctx = createProgramContext();
   const argv = process.argv;

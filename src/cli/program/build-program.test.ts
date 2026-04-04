@@ -31,6 +31,12 @@ vi.mock("./program-context.js", () => ({
 }));
 
 describe("buildProgram", () => {
+  function mockProcessExit() {
+    return vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`process.exit:${String(code)}`);
+    }) as typeof process.exit);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     createProgramContextMock.mockReturnValue({
@@ -42,8 +48,8 @@ describe("buildProgram", () => {
   });
 
   afterEach(() => {
-    // Clean up exitCode after each test
     process.exitCode = undefined;
+    vi.restoreAllMocks();
   });
 
   it("wires context/help/preaction/command registration with shared context", () => {
@@ -64,49 +70,51 @@ describe("buildProgram", () => {
     }
   });
 
-  it("sets exitCode to 1 on argument errors (fixes #60905)", () => {
-    // Reset exitCode before test
-    process.exitCode = undefined;
+  it("sets exitCode to 1 on argument errors (fixes #60905)", async () => {
     const program = buildProgram();
+    const exitSpy = mockProcessExit();
     program.command("test").description("Test command");
 
-    // Simulate argument error: passing unexpected argument to command that doesn't accept any
-    try {
-      program.parse(["node", "openclaw", "test", "unexpected-arg"], { from: "user" });
-    } catch {
-      // exitOverride throws, but we expect exitCode to be set
-    }
-
+    await expect(program.parseAsync(["test", "unexpected-arg"], { from: "user" })).rejects.toThrow(
+      "process.exit:1",
+    );
+    expect(exitSpy).toHaveBeenCalledWith(1);
     expect(process.exitCode).toBe(1);
   });
 
-  it("preserves exitCode 0 for help display", () => {
-    // Reset exitCode before test
-    process.exitCode = undefined;
+  it("preserves exitCode 0 for help display", async () => {
     const program = buildProgram();
+    const exitSpy = mockProcessExit();
     program.command("test").description("Test command");
 
-    try {
-      program.parse(["node", "openclaw", "--help"], { from: "user" });
-    } catch {
-      // exitOverride throws for help too
-    }
-
+    await expect(program.parseAsync(["--help"], { from: "user" })).rejects.toThrow(
+      "process.exit:0",
+    );
+    expect(exitSpy).toHaveBeenCalledWith(0);
     expect(process.exitCode).toBe(0);
   });
 
-  it("preserves exitCode 0 for version display", () => {
-    // Reset exitCode before test
-    process.exitCode = undefined;
+  it("preserves exitCode 0 for version display", async () => {
     const program = buildProgram();
+    const exitSpy = mockProcessExit();
     program.version("1.0.0");
 
-    try {
-      program.parse(["node", "openclaw", "--version"], { from: "user" });
-    } catch {
-      // exitOverride throws for version too
-    }
-
+    await expect(program.parseAsync(["--version"], { from: "user" })).rejects.toThrow(
+      "process.exit:0",
+    );
+    expect(exitSpy).toHaveBeenCalledWith(0);
     expect(process.exitCode).toBe(0);
+  });
+
+  it("preserves non-zero exitCode for help error flows", async () => {
+    const program = buildProgram();
+    const exitSpy = mockProcessExit();
+    program.helpCommand("help [command]");
+
+    await expect(program.parseAsync(["help", "missing"], { from: "user" })).rejects.toThrow(
+      "process.exit:1",
+    );
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(process.exitCode).toBe(1);
   });
 });
