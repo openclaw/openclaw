@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { TELEGRAM_COMMAND_NAME_PATTERN as bundledTelegramCommandNamePattern } from "../../extensions/telegram/src/command-config.ts";
+import { TELEGRAM_COMMAND_NAME_PATTERN as bundledTelegramCommandNamePattern } from "../../extensions/telegram/channel-config-api.ts";
 
 type BundledChannelContractSurfaceParams = Parameters<
   (typeof import("../channels/plugins/contract-surfaces.js"))["getBundledChannelContractSurfaceModule"]
