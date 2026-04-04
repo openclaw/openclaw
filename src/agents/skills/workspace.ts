@@ -45,6 +45,16 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
   }));
 }
 
+function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
+  if (entry.exposure) {
+    return entry.exposure.includeInAvailableSkillsPrompt !== false;
+  }
+  if (entry.invocation) {
+    return entry.invocation.disableModelInvocation !== true;
+  }
+  return entry.skill.disableModelInvocation !== true;
+}
+
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
@@ -634,9 +644,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter(
-    (entry) => entry.exposure?.includeInAvailableSkillsPrompt !== false,
-  );
+  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
