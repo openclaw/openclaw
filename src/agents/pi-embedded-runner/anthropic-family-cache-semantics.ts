@@ -22,7 +22,7 @@ export function isAnthropicFamilyCacheTtlEligible(params: {
   modelId: string;
 }): boolean {
   const normalizedProvider = params.provider.trim().toLowerCase();
-  if (normalizedProvider === "anthropic") {
+  if (normalizedProvider === "anthropic" || normalizedProvider === "anthropic-vertex") {
     return true;
   }
   if (normalizedProvider === "amazon-bedrock") {
