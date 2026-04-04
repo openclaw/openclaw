@@ -24,7 +24,9 @@ const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
 const DEFAULT_CLAUDE_ARGS = [
   "-p",
   "--output-format",
-  "json",
+  "stream-json",
+  "--include-partial-messages",
+  "--verbose",
   "--permission-mode",
   "bypassPermissions",
 ];

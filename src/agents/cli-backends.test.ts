@@ -32,9 +32,16 @@ beforeEach(() => {
       id: "claude-cli",
       config: {
         command: "claude",
-        args: ["stream-json", "--verbose", "--permission-mode", "bypassPermissions"],
+        args: [
+          "stream-json",
+          "--include-partial-messages",
+          "--verbose",
+          "--permission-mode",
+          "bypassPermissions",
+        ],
         resumeArgs: [
           "stream-json",
+          "--include-partial-messages",
           "--verbose",
           "--permission-mode",
           "bypassPermissions",
@@ -42,6 +49,7 @@ beforeEach(() => {
           "{sessionId}",
         ],
         output: "jsonl",
+        input: "stdin",
       },
       normalizeConfig: (config) => {
         const normalizeArgs = (args: string[] | undefined) => {
@@ -185,11 +193,14 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.config.output).toBe("jsonl");
     expect(resolved?.config.args).toContain("stream-json");
+    expect(resolved?.config.args).toContain("--include-partial-messages");
     expect(resolved?.config.args).toContain("--verbose");
     expect(resolved?.config.args).toContain("--permission-mode");
     expect(resolved?.config.args).toContain("bypassPermissions");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
+    expect(resolved?.config.input).toBe("stdin");
     expect(resolved?.config.resumeArgs).toContain("stream-json");
+    expect(resolved?.config.resumeArgs).toContain("--include-partial-messages");
     expect(resolved?.config.resumeArgs).toContain("--verbose");
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
