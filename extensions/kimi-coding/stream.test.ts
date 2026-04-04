@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { createKimiToolCallMarkupWrapper } from "./stream.js";
+import { createKimiToolCallMarkupWrapper, wrapKimiProviderStream } from "./stream.js";
 
 type FakeStream = {
   result: () => Promise<unknown>;
@@ -203,6 +203,41 @@ describe("kimi tool-call markup wrapper", () => {
           id: "functions.write:1",
           name: "functions.write",
           arguments: { file_path: "./out.txt", content: "done" },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+  });
+
+  it("adapts provider stream context without changing wrapper behavior", async () => {
+    const finalMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: KIMI_TOOL_TEXT }],
+      stopReason: "stop",
+    };
+    const baseStreamFn: StreamFn = () =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }) as ReturnType<StreamFn>;
+
+    const wrapped = wrapKimiProviderStream({
+      streamFn: baseStreamFn,
+    } as never);
+    const stream = wrapped(
+      { api: "anthropic-messages", provider: "kimi", id: "k2p5" } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    ) as FakeStream;
+
+    await expect(stream.result()).resolves.toEqual({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "functions.read:0",
+          name: "functions.read",
+          arguments: { file_path: "./package.json" },
         },
       ],
       stopReason: "toolUse",
