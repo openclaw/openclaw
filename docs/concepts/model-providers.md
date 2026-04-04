@@ -283,6 +283,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   - Note: you do **not** paste a client id or secret into `openclaw.json`. The CLI login flow stores
     tokens in auth profiles on the gateway host.
   - If requests fail after login, set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host.
+  - Gemini CLI JSON replies are parsed from `response`; usage falls back to
+    `stats`, with `stats.cached` normalized into OpenClaw `cacheRead`.
 
 ### Z.AI (GLM)
 

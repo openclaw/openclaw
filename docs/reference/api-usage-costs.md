@@ -23,6 +23,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 
 - `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
 - `/usage tokens` shows tokens only; subscription-style OAuth, legacy token, and CLI flows hide dollar cost.
+- Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
+  `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
+  from `stats.input_tokens - stats.cached` when needed.
 
 Anthropic note: starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
 Anthropic says OpenClaw no longer uses included Claude subscription limits.

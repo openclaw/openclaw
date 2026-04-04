@@ -138,6 +138,15 @@ If the provider does not support this cache mode, `cacheRetention` has no effect
   forwarding a provider-native cached-content reference, not synthesizing cache
   markers.
 
+### Gemini CLI JSON usage
+
+- Gemini CLI JSON output can also surface cache hits through `stats.cached`;
+  OpenClaw maps that to `cacheRead`.
+- If the CLI omits a direct `stats.input` value, OpenClaw derives input tokens
+  from `stats.input_tokens - stats.cached`.
+- This is usage normalization only. It does not mean OpenClaw is creating
+  Anthropic/OpenAI-style prompt-cache markers for Gemini CLI.
+
 ## OpenClaw cache-stability guards
 
 OpenClaw also keeps several cache-sensitive payload shapes deterministic before

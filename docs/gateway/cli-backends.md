@@ -185,6 +185,8 @@ load local files from plain paths (Claude Code CLI behavior).
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
+- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and
+  usage from `stats` when `usage` is missing or empty.
 - `output: "jsonl"` parses JSONL streams (for example Claude CLI `stream-json`
   and Codex CLI `--json`) and extracts the final agent message plus session
   identifiers when present.
@@ -230,6 +232,14 @@ The bundled Google plugin also registers a default for `google-gemini-cli`:
 - `modelArg: "--model"`
 - `sessionMode: "existing"`
 - `sessionIdFields: ["session_id", "sessionId"]`
+
+Gemini CLI JSON notes:
+
+- Reply text is read from the JSON `response` field.
+- Usage falls back to `stats` when `usage` is absent or empty.
+- `stats.cached` is normalized into OpenClaw `cacheRead`.
+- If `stats.input` is missing, OpenClaw derives input tokens from
+  `stats.input_tokens - stats.cached`.
 
 Override only if needed (common: absolute `command` path).
 
