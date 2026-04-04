@@ -328,6 +328,106 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("strips leaked thinking tags from delivered text", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "<thinking>internal</thinking>\nVisible answer" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "Visible answer",
+      expect.objectContaining({ token: "token" }),
+    );
+  });
+
+  it("strips leaked relevant-memories scaffolding from delivered text", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "<relevant-memories>",
+            "Internal note",
+            "</relevant-memories>",
+            "",
+            "Visible answer",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "Visible answer",
+      expect.objectContaining({ token: "token" }),
+    );
+  });
+
+  it("preserves code-fenced role markers while stripping leaked thinking", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "```txt\nassistant:\n```\n<thinking>internal</thinking>\nVisible answer" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "```txt\nassistant:\n```\n\nVisible answer",
+      expect.objectContaining({ token: "token" }),
+    );
+  });
+
+  it("strips dotted assistant-to markers from delivered text", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "assistant to=functions.exec_command\nVisible answer" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "Visible answer",
+      expect.objectContaining({ token: "token" }),
+    );
+  });
+
+  it("strips tool-call scaffolding while preserving leading indentation", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: '  Visible prefix\n<tool_call>{"name":"read"}</tool_call>\nDone' }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "  Visible prefix\n\nDone",
+      expect.objectContaining({ token: "token" }),
+    );
+  });
+
   it("sends text chunks in order via sendDiscordText when rest is provided", async () => {
     const fakeRest = {} as import("@buape/carbon").RequestClient;
     const callOrder: string[] = [];

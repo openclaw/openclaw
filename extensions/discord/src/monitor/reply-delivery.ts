@@ -22,6 +22,7 @@ import { chunkDiscordTextWithMode } from "../chunk.js";
 import { createDiscordRetryRunner } from "../retry.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { sendDiscordText } from "../send.shared.js";
+import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -270,8 +271,9 @@ export async function deliverDiscordReply(params: {
   let deliveredAny = false;
   for (const payload of params.replies) {
     const tableMode = params.tableMode ?? "code";
+    const sanitizedText = sanitizeOutboundText(payload.text ?? "");
     const reply = resolveSendableOutboundReplyParts(payload, {
-      text: convertMarkdownTables(payload.text ?? "", tableMode),
+      text: convertMarkdownTables(sanitizedText, tableMode),
     });
     if (!reply.hasContent) {
       continue;
