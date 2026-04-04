@@ -90,9 +90,7 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
   for (const candidate of candidates) {
     for (const searchDir of resolveGeminiCliSearchDirs(candidate)) {
       const key =
-        process.platform === "win32"
-          ? searchDir.replace(/\\/g, "/").toLowerCase()
-          : searchDir;
+        process.platform === "win32" ? searchDir.replace(/\\/g, "/").toLowerCase() : searchDir;
       if (seen.has(key)) {
         continue;
       }

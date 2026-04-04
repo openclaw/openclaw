@@ -92,14 +92,7 @@ describe("extractGeminiCliCredentials", () => {
     process.env.PATH = layout.binDir;
 
     // resolveGeminiCliDirs checks package.json to validate candidate directories
-    const geminiCliDir = join(
-      rootDir,
-      "fake",
-      "lib",
-      "node_modules",
-      "@google",
-      "gemini-cli",
-    );
+    const geminiCliDir = join(rootDir, "fake", "lib", "node_modules", "@google", "gemini-cli");
     const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
 
     mockExistsSync.mockImplementation((p: string) => {
@@ -213,7 +206,7 @@ describe("extractGeminiCliCredentials", () => {
   }) {
     const nvmRoot = join(rootDir, "fake", "Users", "lobster", "AppData", "Local", "nvm");
     const versionDir = join(nvmRoot, "v24.1.0");
-    const geminiPath = join(versionDir, "gemini.cmd");
+    const geminiPath = join(versionDir, process.platform === "win32" ? "gemini.cmd" : "gemini");
     const resolvedPath = geminiPath;
     const geminiCliDir = join(versionDir, "node_modules", "@google", "gemini-cli");
     const packageJsonPath = normalizePath(join(geminiCliDir, "package.json"));
