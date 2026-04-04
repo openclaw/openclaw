@@ -1221,6 +1221,28 @@ struct CorrectionWorkspaceView: View {
         self.rebuildIssues()
     }
 
+    private func rebuildIssues() {
+        let initialIssues = self.buildIssues(casebook: self.casebookSnapshot)
+        self.casebookSnapshot = OpenClawKit.CorrectionCasebookStore.syncActiveCases(
+            initialIssues.filter(\.tracksCasebook).map(\.caseInput))
+        self.allIssues = self.buildIssues(casebook: self.casebookSnapshot)
+        self.syncSelection()
+    }
+
+    private func buildIssues(casebook: OpenClawKit.CorrectionCasebookSnapshot) -> [CorrectionWorkspaceIssue] {
+        CorrectionWorkspaceIssueBuilder.build(
+            state: self.state,
+            healthStore: self.healthStore,
+            heartbeatStore: self.heartbeatStore,
+            activityStore: self.activityStore,
+            agentEventStore: self.agentEventStore,
+            controlChannel: self.controlChannel,
+            pairingPrompter: self.pairingPrompter,
+            devicePairingPrompter: self.devicePairingPrompter,
+            sessionIdentities: self.sessionIdentitySnapshot,
+            casebook: casebook)
+    }
+
     @MainActor
     private func ensureExternalResearchIfNeeded(for issue: CorrectionWorkspaceIssue?, force: Bool = false) async {
         guard let issue,

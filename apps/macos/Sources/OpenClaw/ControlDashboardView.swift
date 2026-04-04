@@ -37,13 +37,13 @@ struct ControlDashboardView: View {
             Ellipse()
                 .fill(self.dashboardAccent.opacity(self.healthStore.state == .ok ? 0.14 : 0.20))
                 .frame(width: 440, height: 276)
-                .blur(radius: 92)
+                .blur(radius: 70)
                 .offset(x: -228, y: self.breathe ? -118 : -86)
 
             Ellipse()
                 .fill(Color.white.opacity(0.22))
                 .frame(width: 360, height: 208)
-                .blur(radius: 78)
+                .blur(radius: 58)
                 .offset(x: 72, y: self.breathe ? -52 : -28)
 
             ScrollView {
@@ -81,8 +81,10 @@ struct ControlDashboardView: View {
         }
         .onAppear {
             guard !self.breathe else { return }
-            withAnimation(.easeInOut(duration: 4.2).repeatForever(autoreverses: true)) {
-                self.breathe = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                withAnimation(.easeInOut(duration: 6.0).repeatForever(autoreverses: true)) {
+                    self.breathe = true
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -114,13 +116,13 @@ struct ControlDashboardView: View {
             Ellipse()
                 .fill(self.dashboardAccent.opacity(0.18))
                 .frame(width: 336, height: 214)
-                .blur(radius: 82)
+                .blur(radius: 60)
                 .offset(x: -154, y: -102)
 
             Ellipse()
                 .fill(Color.white.opacity(0.36))
                 .frame(width: 250, height: 144)
-                .blur(radius: 56)
+                .blur(radius: 38)
                 .offset(x: 74, y: -18)
 
             ViewThatFits(in: .horizontal) {

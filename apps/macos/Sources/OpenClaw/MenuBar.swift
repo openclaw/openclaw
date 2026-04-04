@@ -440,16 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
         }
         TerminationSignalWatcher.shared.start()
-        NodePairingApprovalPrompter.shared.start()
-        DevicePairingApprovalPrompter.shared.start()
-        ExecApprovalsPromptServer.shared.start()
-        ExecApprovalsGatewayPrompter.shared.start()
-        MacNodeModeCoordinator.shared.start()
-        VoiceWakeGlobalSettingsSync.shared.start()
-        Task { PresenceReporter.shared.start() }
-        Task { await HealthStore.shared.refresh(onDemand: true) }
-        Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
+        self.scheduleDeferredStartupServices()
         self.scheduleFirstRunOnboardingIfNeeded()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
@@ -535,6 +526,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
             OnboardingController.shared.show()
+        }
+    }
+
+    @MainActor
+    private func scheduleDeferredStartupServices() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            NodePairingApprovalPrompter.shared.start()
+            DevicePairingApprovalPrompter.shared.start()
+            ExecApprovalsPromptServer.shared.start()
+            ExecApprovalsGatewayPrompter.shared.start()
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+            MacNodeModeCoordinator.shared.start()
+            VoiceWakeGlobalSettingsSync.shared.start()
+            Task { PresenceReporter.shared.start() }
+            Task { await HealthStore.shared.refresh(onDemand: true) }
+            Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
+            Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         }
     }
 
