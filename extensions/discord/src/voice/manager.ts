@@ -412,8 +412,11 @@ export class DiscordVoiceManager {
                 const voiceSdk = loadDiscordVoiceSdk();
                 const childProcess = await import("node:child_process");
                 const { Readable } = await import("node:stream");
+                const GREETING_SILENCE_PAD = Buffer.alloc(24000); // 500ms
                 const pcmReadable = new Readable({ read() {} });
+                pcmReadable.push(GREETING_SILENCE_PAD);
                 pcmReadable.push(result);
+                pcmReadable.push(GREETING_SILENCE_PAD);
                 pcmReadable.push(null);
                 const ffmpeg = childProcess.spawn("ffmpeg", [
                   "-f", "s16le", "-ar", "24000", "-ac", "1", "-i", "pipe:0",
@@ -784,6 +787,12 @@ export class DiscordVoiceManager {
               if (msg) logger.warn(`discord voice: ffmpeg stderr: ${msg.slice(0, 200)}`);
             });
 
+            // Silence padding: 500ms of zeros at start and end (24kHz mono s16le = 48000 B/s)
+            const SILENCE_PAD = Buffer.alloc(24000); // 500ms silence
+
+            // Write leading silence to smooth the start
+            ffmpeg.stdin.write(SILENCE_PAD);
+
             // Pre-buffer: collect PCM chunks until we have >= 1s of audio (24kHz mono s16le = 48KB/s)
             // before piping to FFmpeg. This prevents stuttery playback while Kyutai generates.
             const PRE_BUFFER_BYTES = 96000; // ~2 seconds at 24kHz mono s16le
@@ -816,6 +825,8 @@ export class DiscordVoiceManager {
                 // Stream ended before buffer threshold — flush what we have
                 startPipeline();
               }
+              // Write trailing silence to smooth the end
+              ffmpeg.stdin.write(SILENCE_PAD);
             });
 
             pcmStream.on("error", (err: Error) => {
