@@ -171,7 +171,7 @@ flowchart TD
     Common log signatures:
 
     - `Gateway start blocked: set gateway.mode=local` or `existing config is missing gateway.mode` → gateway mode is remote, or the config file is missing the local-mode stamp and should be repaired.
-    - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
+    - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path (token/password, or trusted-proxy where configured).
     - `another gateway instance is already listening` or `EADDRINUSE` → port already taken.
 
     Deep pages:

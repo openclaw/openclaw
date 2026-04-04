@@ -104,14 +104,14 @@ If you need hostile-user isolation, split trust boundaries by OS user/host and r
 
 Use this as the quick model when triaging risk:
 
-| Boundary or control                         | What it means                                     | Common misread                                                                |
-| ------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `gateway.auth` (token/password/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
-| `sessionKey`                                | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
-| Prompt/content guardrails                   | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
-| `canvas.eval` / browser evaluate            | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
-| Local TUI `!` shell                         | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
-| Node pairing and node commands              | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
+| Boundary or control                                       | What it means                                     | Common misread                                                                |
+| --------------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
+| `sessionKey`                                              | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
+| Prompt/content guardrails                                 | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
+| `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
+| Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
+| Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
 
 ## Not vulnerabilities by design
 
@@ -758,7 +758,7 @@ If you load canvas content in a normal browser, treat it like any other untruste
 Bind mode controls where the Gateway listens:
 
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with a shared token/password and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured non-loopback trusted proxy) and a real firewall.
 
 Rules of thumb:
 
@@ -863,7 +863,7 @@ In minimal mode, the Gateway still broadcasts enough for device discovery (`role
 
 ### 0.5) Lock down the Gateway WebSocket (local auth)
 
-Gateway auth is **required by default**. If no token/password is configured,
+Gateway auth is **required by default**. If no valid gateway auth path is configured,
 the Gateway refuses WebSocket connections (fail‑closed).
 
 Onboarding generates a token by default (even for loopback) so
