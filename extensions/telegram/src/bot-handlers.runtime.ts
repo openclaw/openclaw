@@ -7,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildCommandsMessagePaginated,
-  buildCommandsPaginationKeyboard,
   resolveStoredModelOverride,
 } from "openclaw/plugin-sdk/command-auth";
 import { writeConfigFile } from "openclaw/plugin-sdk/config-runtime";
@@ -30,7 +29,6 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
-import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -47,6 +45,7 @@ import {
   resolveDefaultAgentId,
   resolveDefaultModelForAgent,
 } from "./bot-handlers.agent.runtime.js";
+import { buildTelegramInboundDebounceKey } from "./bot-handlers.debounce-key.js";
 import {
   hasInboundMedia,
   hasReplyTargetMedia,
@@ -75,6 +74,7 @@ import {
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
+import { buildCommandsPaginationKeyboard } from "./command-ui.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -92,6 +92,7 @@ import {
 } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
+import { dispatchTelegramPluginInteractiveHandler } from "./interactive-dispatch.js";
 import {
   buildModelsKeyboard,
   buildProviderKeyboard,
@@ -1085,7 +1086,12 @@ export const registerTelegramHandlers = ({
       conversationThreadId != null ? `${chatId}:topic:${conversationThreadId}` : String(chatId);
     const debounceLane = resolveTelegramDebounceLane(msg);
     const debounceKey = senderId
-      ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
+      ? buildTelegramInboundDebounceKey({
+          accountId,
+          conversationKey,
+          senderId,
+          debounceLane,
+        })
       : null;
     await inboundDebouncer.enqueue({
       ctx,
@@ -1280,8 +1286,7 @@ export const registerTelegramHandlers = ({
         await replyToCallbackChat(buildPluginBindingResolvedText(resolved));
         return;
       }
-      const pluginCallback = await dispatchPluginInteractiveHandler({
-        channel: "telegram",
+      const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
         data,
         callbackId: callback.id,
         ctx: {

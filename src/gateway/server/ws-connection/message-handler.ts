@@ -107,8 +107,10 @@ import {
 import {
   resolveDeviceSignaturePayloadVersion,
   resolveHandshakeBrowserSecurityContext,
+  resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
+  shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
@@ -159,7 +161,7 @@ export function attachGatewayWsMessageHandler(params: {
   requestUserAgent?: string;
   canvasHostUrl?: string;
   connectNonce: string;
-  resolvedAuth: ResolvedGatewayAuth;
+  getResolvedAuth: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
@@ -194,7 +196,7 @@ export function attachGatewayWsMessageHandler(params: {
     requestUserAgent,
     canvasHostUrl,
     connectNonce,
-    resolvedAuth,
+    getResolvedAuth,
     rateLimiter,
     browserRateLimiter,
     gatewayMethods,
@@ -247,6 +249,7 @@ export function attachGatewayWsMessageHandler(params: {
   const hasUntrustedProxyHeaders = hasProxyHeaders && !remoteIsTrustedProxy;
   const hostIsLocalish = isLocalishHost(requestHost);
   const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies, allowRealIpFallback);
+
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -433,6 +436,7 @@ export function attachGatewayWsMessageHandler(params: {
         const isControlUi = isOperatorUiClient(connectParams.client);
         const isBrowserOperatorUi = isBrowserOperatorUiClient(connectParams.client);
         const isWebchat = isWebchatConnect(connectParams);
+        const resolvedAuth = getResolvedAuth();
         if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
@@ -722,12 +726,30 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
-        const skipPairing = shouldSkipControlUiPairing(
-          controlUiAuthPolicy,
-          role,
-          trustedProxyAuthOk,
-          resolvedAuth.mode,
-        );
+        const pairingLocality = resolvePairingLocality({
+          connectParams,
+          isLocalClient,
+          requestHost,
+          remoteAddress: remoteAddr,
+          hasProxyHeaders,
+          hasBrowserOriginHeader,
+          sharedAuthOk,
+          authMethod,
+        });
+        const skipPairing =
+          shouldSkipLocalBackendSelfPairing({
+            connectParams,
+            locality: pairingLocality,
+            hasBrowserOriginHeader,
+            sharedAuthOk,
+            authMethod,
+          }) ||
+          shouldSkipControlUiPairing(
+            controlUiAuthPolicy,
+            role,
+            trustedProxyAuthOk,
+            resolvedAuth.mode,
+          );
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -803,7 +825,7 @@ export function attachGatewayWsMessageHandler(params: {
               });
             };
             const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
-              isLocalClient,
+              locality: pairingLocality,
               hasBrowserOriginHeader,
               isControlUi,
               isWebchat,

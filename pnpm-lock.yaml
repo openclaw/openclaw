@@ -557,7 +557,11 @@ importers:
 
   extensions/open-prose: {}
 
-  extensions/openai: {}
+  extensions/openai:
+    dependencies:
+      ws:
+        specifier: ^8.20.0
+        version: 8.20.0
 
   extensions/opencode: {}
 
@@ -606,6 +610,8 @@ importers:
         version: 7.15.0
 
   extensions/speech-core: {}
+
+  extensions/stepfun: {}
 
   extensions/synology-chat: {}
 

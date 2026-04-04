@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildHybridAnthropicOrOpenAIReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { createMinimaxFastModeWrapper } from "openclaw/plugin-sdk/provider-stream";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
@@ -235,6 +236,10 @@ export default definePluginEntry({
         });
         return apiKey ? { token: apiKey } : null;
       },
+      buildReplayPolicy: (ctx) =>
+        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
+          anthropicModelDropThinkingBlocks: true,
+        }),
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),
@@ -287,6 +292,10 @@ export default definePluginEntry({
           run: createOAuthHandler("cn"),
         },
       ],
+      buildReplayPolicy: (ctx) =>
+        buildHybridAnthropicOrOpenAIReplayPolicy(ctx, {
+          anthropicModelDropThinkingBlocks: true,
+        }),
       wrapStreamFn: (ctx) =>
         createMinimaxFastModeWrapper(ctx.streamFn, ctx.extraParams?.fastMode === true),
       resolveReasoningOutputMode: () => resolveMinimaxReasoningOutputMode(),

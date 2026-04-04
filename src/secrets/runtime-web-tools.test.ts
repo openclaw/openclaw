@@ -35,9 +35,10 @@ vi.mock("../plugins/web-search-providers.js", () => ({
   resolveBundledPluginWebSearchProviders: resolveBundledPluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/web-search-providers.runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../plugins/web-search-providers.runtime.js")>();
+vi.mock("../plugins/web-search-providers.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/web-search-providers.runtime.js")>(
+    "../plugins/web-search-providers.runtime.js",
+  );
   return {
     ...actual,
     resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
@@ -48,8 +49,10 @@ vi.mock("../plugins/web-fetch-providers.js", () => ({
   resolveBundledPluginWebFetchProviders: resolveBundledPluginWebFetchProvidersMock,
 }));
 
-vi.mock("../plugins/web-fetch-providers.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/web-fetch-providers.runtime.js")>();
+vi.mock("../plugins/web-fetch-providers.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/web-fetch-providers.runtime.js")>(
+    "../plugins/web-fetch-providers.runtime.js",
+  );
   return {
     ...actual,
     resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,

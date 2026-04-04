@@ -15,14 +15,16 @@ const fallbackState = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugin-sdk/facade-runtime.js", () => ({
-  tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) =>
+  loadBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) =>
     dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
       ? { resolveSessionConversation: fallbackState.resolveSessionConversation }
-      : null,
+      : {},
 }));
 
-vi.mock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+vi.mock("../../plugins/bundled-plugin-metadata.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/bundled-plugin-metadata.js")>(
+    "../../plugins/bundled-plugin-metadata.js",
+  );
   return {
     ...actual,
     resolveBundledPluginPublicSurfacePath: ({ dirName }: { dirName: string }) =>

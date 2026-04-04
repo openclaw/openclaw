@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 
 type CronSessionEntry = {
@@ -63,7 +64,7 @@ export const resolveDeliveryTargetMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
-const resolveFastModeStateMock = createMock();
+export const resolveFastModeStateMock = createMock();
 const resolveNestedAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 const deriveSessionTotalTokensMock = createMock();
@@ -237,7 +238,7 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     formattedTime: "2026-02-10 12:00",
     timeLine: "Current time: 2026-02-10 12:00 UTC",
   });
-  resolveFastModeStateMock.mockReturnValue({ enabled: false });
+  resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveNestedAgentLaneMock.mockReturnValue(undefined);
   resolveAgentTimeoutMsMock.mockReturnValue(60_000);
   deriveSessionTotalTokensMock.mockReturnValue(30);

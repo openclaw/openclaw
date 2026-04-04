@@ -4,7 +4,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 export function createMockChannelSetupPluginInstallModule(
-  actual: typeof import("./channel-setup/plugin-install.js"),
+  actual?: Partial<typeof import("./channel-setup/plugin-install.js")>,
 ) {
   return {
     ...actual,

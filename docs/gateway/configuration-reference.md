@@ -818,6 +818,30 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 }
 ```
 
+### `agents.defaults.skills`
+
+Optional default skill allowlist for agents that do not set
+`agents.list[].skills`.
+
+```json5
+{
+  agents: {
+    defaults: { skills: ["github", "weather"] },
+    list: [
+      { id: "writer" }, // inherits github, weather
+      { id: "docs", skills: ["docs-search"] }, // replaces defaults
+      { id: "locked-down", skills: [] }, // no skills
+    ],
+  },
+}
+```
+
+- Omit `agents.defaults.skills` for unrestricted skills by default.
+- Omit `agents.list[].skills` to inherit the defaults.
+- Set `agents.list[].skills: []` for no skills.
+- A non-empty `agents.list[].skills` list is the final set for that agent; it
+  does not merge with defaults.
+
 ### `agents.defaults.skipBootstrap`
 
 Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`).
@@ -1425,6 +1449,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
+        skills: ["docs-search"], // replaces agents.defaults.skills when set
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -1459,6 +1484,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
@@ -2160,6 +2186,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 128000,
+            contextTokens: 96000,
             maxTokens: 32000,
           },
         ],
@@ -2178,6 +2205,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
   - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
   - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
   - Matching model `contextWindow`/`maxTokens` use the higher value between explicit config and implicit catalog values.
+  - Matching model `contextTokens` preserves an explicit runtime cap when present; use it to limit effective context without changing native model metadata.
   - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
   - Marker persistence is source-authoritative: markers are written from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 
@@ -2193,6 +2221,8 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
 - `models.providers.*.models`: explicit provider model catalog entries.
+- `models.providers.*.models.*.contextWindow`: native model context window metadata.
+- `models.providers.*.models.*.contextTokens`: optional runtime context cap. Use this when you want a smaller effective context budget than the model's native `contextWindow`.
 - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
 - `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
 - `models.bedrockDiscovery.enabled`: turn discovery polling on/off.
@@ -3037,6 +3067,8 @@ Notes:
       billingBackoffHours: 5,
       billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
       billingMaxHours: 24,
+      authPermanentBackoffMinutes: 10,
+      authPermanentMaxMinutes: 60,
       failureWindowHours: 24,
       overloadedProfileRotations: 1,
       overloadedBackoffMs: 0,
@@ -3049,6 +3081,8 @@ Notes:
 - `billingBackoffHours`: base backoff in hours when a profile fails due to billing/insufficient credits (default: `5`).
 - `billingBackoffHoursByProvider`: optional per-provider overrides for billing backoff hours.
 - `billingMaxHours`: cap in hours for billing backoff exponential growth (default: `24`).
+- `authPermanentBackoffMinutes`: base backoff in minutes for high-confidence `auth_permanent` failures (default: `10`).
+- `authPermanentMaxMinutes`: cap in minutes for `auth_permanent` backoff growth (default: `60`).
 - `failureWindowHours`: rolling window in hours used for backoff counters (default: `24`).
 - `overloadedProfileRotations`: maximum same-provider auth-profile rotations for overloaded errors before switching to model fallback (default: `1`).
 - `overloadedBackoffMs`: fixed delay before retrying an overloaded provider/profile rotation (default: `0`).

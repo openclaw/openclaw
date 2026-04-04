@@ -160,6 +160,23 @@ describe("zalouser setup wizard", () => {
     ).toBe(true);
   });
 
+  it("writes canonical enabled entries for configured groups", async () => {
+    const prompter = createQuickstartPrompter({
+      groupAccess: true,
+      groupPolicy: "allowlist",
+      textByMessage: {
+        "Zalo groups allowlist (comma-separated)": "Family, Work",
+      },
+    });
+
+    const result = await runSetup({ prompter });
+
+    expect(result.cfg.channels?.zalouser?.groups).toEqual({
+      Family: { enabled: true, requireMention: true },
+      Work: { enabled: true, requireMention: true },
+    });
+  });
+
   it("preserves non-quickstart forceAllowFrom behavior", async () => {
     const note = vi.fn(async (_message: string, _title?: string) => {});
     const seen: string[] = [];
@@ -251,6 +268,34 @@ describe("zalouser setup wizard", () => {
         allowFromKey: "channels.zalouser.accounts.work.allowFrom",
       },
     );
+  });
+
+  it("uses configured defaultAccount for omitted DM policy account context", () => {
+    const cfg = {
+      channels: {
+        zalouser: {
+          defaultAccount: "work",
+          dmPolicy: "disabled",
+          allowFrom: ["123456789"],
+          accounts: {
+            work: {
+              dmPolicy: "allowlist",
+              profile: "work-profile",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(zalouserSetupWizard.dmPolicy?.getCurrent(cfg)).toBe("allowlist");
+    expect(zalouserSetupWizard.dmPolicy?.resolveConfigKeys?.(cfg)).toEqual({
+      policyKey: "channels.zalouser.accounts.work.dmPolicy",
+      allowFromKey: "channels.zalouser.accounts.work.allowFrom",
+    });
+
+    const next = zalouserSetupWizard.dmPolicy?.setPolicy(cfg, "open");
+    expect(next?.channels?.zalouser?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.zalouser?.accounts?.work?.dmPolicy).toBe("open");
   });
 
   it('writes open policy state to the named account and preserves inherited allowFrom with "*"', () => {

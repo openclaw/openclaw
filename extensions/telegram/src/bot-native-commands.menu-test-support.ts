@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
@@ -12,6 +12,7 @@ type RegisteredCommand = {
   command: string;
   description: string;
 };
+type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
 type CreateCommandBotResult = {
   bot: RegisterTelegramNativeCommandsParams["bot"];
@@ -36,7 +37,7 @@ const deliveryMocks = vi.hoisted(() => ({
 export const listSkillCommandsForAgents = skillCommandMocks.listSkillCommandsForAgents;
 export const deliverReplies = deliveryMocks.deliverReplies;
 export const editMessageTelegram = deliveryMocks.editMessageTelegram;
-export const emitTelegramMessageSentHooks = deliveryMocks.emitTelegramMessageSentHooks;
+export const emitTelegramMessageSentHooks: UnknownMock = deliveryMocks.emitTelegramMessageSentHooks;
 
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,

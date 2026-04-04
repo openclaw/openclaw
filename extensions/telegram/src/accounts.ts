@@ -62,6 +62,7 @@ export type TelegramMediaRuntimeOptions = {
   token: string;
   transport?: TelegramTransport;
   apiRoot?: string;
+  trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
 };
 
@@ -156,7 +157,9 @@ export function createTelegramActionGate(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): (key: keyof TelegramActionConfig, defaultValue?: boolean) => boolean {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultTelegramAccountId(params.cfg),
+  );
   return createAccountActionGate({
     baseActions: params.cfg.channels?.telegram?.actions,
     accountActions: resolveTelegramAccountConfig(params.cfg, accountId)?.actions,
@@ -177,6 +180,7 @@ export function resolveTelegramMediaRuntimeOptions(params: {
     token: params.token,
     transport: params.transport,
     apiRoot: accountCfg?.apiRoot,
+    trustedLocalFileRoots: accountCfg?.trustedLocalFileRoots,
     dangerouslyAllowPrivateNetwork: accountCfg?.network?.dangerouslyAllowPrivateNetwork,
   };
 }

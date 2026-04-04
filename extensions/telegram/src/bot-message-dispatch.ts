@@ -26,14 +26,14 @@ import {
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
 import {
+  generateTopicLabel,
   loadSessionStore,
   resolveMarkdownTableMode,
   resolveSessionStoreEntry,
   resolveStorePath,
   getAgentScopedMediaLocalRoots,
-  resolveChunkMode,
   resolveAutoTopicLabelConfig,
-  generateTopicLabel,
+  resolveChunkMode,
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";

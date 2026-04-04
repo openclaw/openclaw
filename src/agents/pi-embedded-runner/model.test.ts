@@ -847,13 +847,13 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
   });
 
-  it("builds an openai-codex fallback for gpt-5.4", () => {
+  it("builds an openai-codex fallback for gpt-5.4-mini", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
-    const result = resolveModelForTest("openai-codex", "gpt-5.4", "/tmp/agent");
+    const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4"));
+    expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"));
   });
 
   it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
@@ -990,6 +990,17 @@ describe("resolveModel", () => {
         "X-Proxy-Auth": "token-123",
       },
     );
+  });
+
+  it("resolves github-copilot Claude dynamic models to anthropic-messages by default", () => {
+    const result = resolveModelForTest("github-copilot", "claude-sonnet-4.6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "github-copilot",
+      id: "claude-sonnet-4.6",
+      api: "anthropic-messages",
+    });
   });
 
   it("builds an openai fallback for gpt-5.4 mini from the gpt-5-mini template", () => {
@@ -1147,6 +1158,7 @@ describe("resolveModel", () => {
       runtimeHooks: {
         applyProviderResolvedModelCompatWithPlugins: () => undefined,
         buildProviderUnknownModelHintWithPlugin: () => undefined,
+        clearProviderRuntimeHookCache: () => {},
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,
         applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>

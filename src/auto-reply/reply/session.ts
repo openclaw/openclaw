@@ -66,6 +66,31 @@ function resolveExplicitSessionEndReason(
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
+function resolveSessionDefaultAccountId(params: {
+  cfg: OpenClawConfig;
+  channelRaw?: string;
+  accountIdRaw?: string;
+  persistedLastAccountId?: string;
+}): string | undefined {
+  const explicit = params.accountIdRaw?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const persisted = params.persistedLastAccountId?.trim();
+  if (persisted) {
+    return persisted;
+  }
+  const channel = params.channelRaw?.trim().toLowerCase();
+  if (!channel) {
+    return undefined;
+  }
+  const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
+  const configuredDefault = channels?.[channel]?.defaultAccount;
+  return typeof configuredDefault === "string" && configuredDefault.trim()
+    ? configuredDefault.trim()
+    : undefined;
+}
+
 function resolveStaleSessionEndReason(params: {
   entry: SessionEntry | undefined;
   freshness?: SessionFreshness;
@@ -509,7 +534,12 @@ export async function initSessionState(params: {
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
   });
-  const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
+  const lastAccountIdRaw = resolveSessionDefaultAccountId({
+    cfg,
+    channelRaw: lastChannelRaw,
+    accountIdRaw: ctx.AccountId,
+    persistedLastAccountId: baseEntry?.lastAccountId,
+  });
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.

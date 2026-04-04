@@ -9,8 +9,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 let MEDIA_DIR = "";
 const cleanOldMedia = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("./store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store.js")>();
+vi.mock("./store.js", async () => {
+  const actual = await vi.importActual<typeof import("./store.js")>("./store.js");
   return {
     ...actual,
     getMediaDir: () => MEDIA_DIR,

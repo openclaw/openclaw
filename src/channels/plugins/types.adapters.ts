@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ConfiguredBindingRule } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../../infra/exec-approvals.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
@@ -19,6 +20,7 @@ import type {
   ChannelDirectoryEntry,
   ChannelGroupContext,
   ChannelHeartbeatDeps,
+  ChannelLegacyStateMigrationPlan,
   ChannelLogSink,
   ChannelOutboundTargetMode,
   ChannelPollContext,
@@ -178,7 +180,10 @@ export type ChannelOutboundAdapter = {
   chunker?: ((text: string, limit: number) => string[]) | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
+  sanitizeText?: (params: { text: string; payload: ReplyPayload }) => string;
   pollMaxOptions?: number;
+  supportsPollDurationSeconds?: boolean;
+  supportsAnonymousPolls?: boolean;
   normalizePayload?: (params: { payload: ReplyPayload }) => ReplyPayload | null;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
@@ -198,6 +203,15 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     hint?: ChannelOutboundPayloadHint;
   }) => Promise<void> | void;
+  shouldTreatRoutedTextAsVisible?: (params: {
+    kind: "tool" | "block" | "final";
+    text?: string;
+  }) => boolean;
+  targetsMatchForReplySuppression?: (params: {
+    originTarget: string;
+    targetKey: string;
+    targetThreadId?: string;
+  }) => boolean;
   resolveTarget?: (params: {
     cfg?: OpenClawConfig;
     to?: string;
@@ -217,6 +231,7 @@ export type ChannelOutboundAdapter = {
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
+  skipStaleSocketHealthCheck?: boolean;
   buildChannelSummary?: (params: {
     account: ResolvedAccount;
     cfg: OpenClawConfig;
@@ -380,6 +395,7 @@ export type ChannelPairingAdapter = {
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
+  resolveGatewayAuthBypassPaths?: (params: { cfg: OpenClawConfig }) => string[];
   loginWithQrStart?: (params: {
     accountId?: string;
     force?: boolean;
@@ -497,6 +513,87 @@ export type ChannelElevatedAdapter = {
 export type ChannelCommandAdapter = {
   enforceOwnerForCommands?: boolean;
   skipWhenConfigEmpty?: boolean;
+  nativeCommandsAutoEnabled?: boolean;
+  nativeSkillsAutoEnabled?: boolean;
+  preferSenderE164ForCommands?: boolean;
+  resolveNativeCommandName?: (params: {
+    commandKey: string;
+    defaultName: string;
+  }) => string | undefined;
+  buildCommandsListChannelData?: (params: {
+    currentPage: number;
+    totalPages: number;
+    agentId?: string;
+  }) => ReplyPayload["channelData"] | null;
+  buildModelsProviderChannelData?: (params: {
+    providers: Array<{ id: string; count: number }>;
+  }) => ReplyPayload["channelData"] | null;
+  buildModelsListChannelData?: (params: {
+    provider: string;
+    models: readonly string[];
+    currentModel?: string;
+    currentPage: number;
+    totalPages: number;
+    pageSize?: number;
+    modelNames?: ReadonlyMap<string, string>;
+  }) => ReplyPayload["channelData"] | null;
+  buildModelBrowseChannelData?: () => ReplyPayload["channelData"] | null;
+};
+
+export type ChannelDoctorConfigMutation = {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings?: string[];
+};
+
+export type ChannelDoctorLegacyConfigRule = LegacyConfigRule;
+
+export type ChannelDoctorSequenceResult = {
+  changeNotes: string[];
+  warningNotes: string[];
+};
+
+export type ChannelDoctorEmptyAllowlistAccountContext = {
+  account: Record<string, unknown>;
+  channelName: string;
+  dmPolicy?: string;
+  effectiveAllowFrom?: Array<string | number>;
+  parent?: Record<string, unknown>;
+  prefix: string;
+};
+
+export type ChannelDoctorAdapter = {
+  dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+  groupModel?: "sender" | "route" | "hybrid";
+  groupAllowFromFallbackToAllowFrom?: boolean;
+  warnOnEmptyGroupSenderAllowlist?: boolean;
+  legacyConfigRules?: LegacyConfigRule[];
+  normalizeCompatibilityConfig?: (params: { cfg: OpenClawConfig }) => ChannelDoctorConfigMutation;
+  collectPreviewWarnings?: (params: {
+    cfg: OpenClawConfig;
+    doctorFixCommand: string;
+  }) => string[] | Promise<string[]>;
+  collectMutableAllowlistWarnings?: (params: {
+    cfg: OpenClawConfig;
+  }) => string[] | Promise<string[]>;
+  repairConfig?: (params: {
+    cfg: OpenClawConfig;
+    doctorFixCommand: string;
+  }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
+  runConfigSequence?: (params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    shouldRepair: boolean;
+  }) => ChannelDoctorSequenceResult | Promise<ChannelDoctorSequenceResult>;
+  cleanStaleConfig?: (params: {
+    cfg: OpenClawConfig;
+  }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
+  collectEmptyAllowlistExtraWarnings?: (
+    params: ChannelDoctorEmptyAllowlistAccountContext,
+  ) => string[];
+  shouldSkipDefaultEmptyGroupAllowlistWarning?: (
+    params: ChannelDoctorEmptyAllowlistAccountContext,
+  ) => boolean;
 };
 
 export type ChannelLifecycleAdapter = {
@@ -511,6 +608,22 @@ export type ChannelLifecycleAdapter = {
     accountId: string;
     runtime: RuntimeEnv;
   }) => Promise<void> | void;
+  runStartupMaintenance?: (params: {
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    log: {
+      info?: (message: string) => void;
+      warn?: (message: string) => void;
+    };
+    trigger?: string;
+    logPrefix?: string;
+  }) => Promise<void> | void;
+  detectLegacyStateMigrations?: (params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    stateDir: string;
+    oauthDir: string;
+  }) => ChannelLegacyStateMigrationPlan[] | Promise<ChannelLegacyStateMigrationPlan[]>;
 };
 
 export type ChannelApprovalDeliveryAdapter = {
@@ -694,6 +807,7 @@ export type ChannelCommandConversationContext = {
 };
 
 export type ChannelConfiguredBindingProvider = {
+  selfParentConversationByDefault?: boolean;
   compileConfiguredBinding: (params: {
     binding: ConfiguredBindingRule;
     conversationId: string;
@@ -711,6 +825,48 @@ export type ChannelConfiguredBindingProvider = {
 
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
+  /**
+   * Preferred placement when a command is started from a top-level conversation
+   * without an existing native thread id.
+   *
+   * - `current`: bind/spawn in the current conversation
+   * - `child`: create a child thread/conversation first
+   */
+  defaultTopLevelPlacement?: "current" | "child";
+  resolveConversationRef?: (params: {
+    accountId?: string | null;
+    conversationId: string;
+    parentConversationId?: string;
+    threadId?: string | number | null;
+  }) => {
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
+  buildBoundReplyChannelData?: (params: {
+    operation: "acp-spawn";
+    placement: "current" | "child";
+    conversation: {
+      channel: string;
+      accountId?: string | null;
+      conversationId: string;
+      parentConversationId?: string;
+    };
+  }) => ReplyPayload["channelData"] | null | Promise<ReplyPayload["channelData"] | null>;
+  buildModelOverrideParentCandidates?: (params: {
+    parentConversationId?: string | null;
+  }) => string[] | null | undefined;
+  shouldStripThreadFromAnnounceOrigin?: (params: {
+    requester: {
+      channel?: string;
+      to?: string;
+      threadId?: string | number;
+    };
+    entry: {
+      channel?: string;
+      to?: string;
+      threadId?: string | number;
+    };
+  }) => boolean;
   setIdleTimeoutBySessionKey?: (params: {
     targetSessionKey: string;
     accountId?: string | null;
@@ -741,8 +897,35 @@ export type ChannelConversationBindingSupport = {
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {
+  applyConfigFixes?: (params: {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+  }) => ChannelDoctorConfigMutation | Promise<ChannelDoctorConfigMutation>;
   resolveDmPolicy?: (
     ctx: ChannelSecurityContext<ResolvedAccount>,
   ) => ChannelSecurityDmPolicy | null;
   collectWarnings?: (ctx: ChannelSecurityContext<ResolvedAccount>) => Promise<string[]> | string[];
+  collectAuditFindings?: (
+    ctx: ChannelSecurityContext<ResolvedAccount> & {
+      sourceConfig: OpenClawConfig;
+      orderedAccountIds: string[];
+      hasExplicitAccountPath: boolean;
+    },
+  ) =>
+    | Promise<
+        Array<{
+          checkId: string;
+          severity: "info" | "warn" | "critical";
+          title: string;
+          detail: string;
+          remediation?: string;
+        }>
+      >
+    | Array<{
+        checkId: string;
+        severity: "info" | "warn" | "critical";
+        title: string;
+        detail: string;
+        remediation?: string;
+      }>;
 };

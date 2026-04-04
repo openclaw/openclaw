@@ -1,20 +1,160 @@
 import {
-  formatSlackStreamingBooleanMigrationMessage,
-  formatSlackStreamModeMigrationMessage,
-  resolveDiscordPreviewStreamMode,
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-  resolveTelegramPreviewStreamMode,
-} from "./discord-preview-streaming.js";
-import {
   defineLegacyConfigMigration,
   getRecord,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "./legacy.shared.js";
 
+type StreamingMode = "off" | "partial" | "block" | "progress";
+type DiscordPreviewStreamMode = "off" | "partial" | "block";
+type TelegramPreviewStreamMode = "off" | "partial" | "block";
+type SlackLegacyDraftStreamMode = "replace" | "status_final" | "append";
+
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function normalizeStreamingMode(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function parseStreamingMode(value: unknown): StreamingMode | null {
+  const normalized = normalizeStreamingMode(value);
+  if (
+    normalized === "off" ||
+    normalized === "partial" ||
+    normalized === "block" ||
+    normalized === "progress"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+function parseDiscordPreviewStreamMode(value: unknown): DiscordPreviewStreamMode | null {
+  const parsed = parseStreamingMode(value);
+  if (!parsed) {
+    return null;
+  }
+  return parsed === "progress" ? "partial" : parsed;
+}
+
+function parseTelegramPreviewStreamMode(value: unknown): TelegramPreviewStreamMode | null {
+  const parsed = parseStreamingMode(value);
+  if (!parsed) {
+    return null;
+  }
+  return parsed === "progress" ? "partial" : parsed;
+}
+
+function parseSlackLegacyDraftStreamMode(value: unknown): SlackLegacyDraftStreamMode | null {
+  const normalized = normalizeStreamingMode(value);
+  if (normalized === "replace" || normalized === "status_final" || normalized === "append") {
+    return normalized;
+  }
+  return null;
+}
+
+function mapSlackLegacyDraftStreamModeToStreaming(mode: SlackLegacyDraftStreamMode): StreamingMode {
+  if (mode === "append") {
+    return "block";
+  }
+  if (mode === "status_final") {
+    return "progress";
+  }
+  return "partial";
+}
+
+function resolveTelegramPreviewStreamMode(
+  params: {
+    streamMode?: unknown;
+    streaming?: unknown;
+  } = {},
+): TelegramPreviewStreamMode {
+  const parsedStreaming = parseStreamingMode(params.streaming);
+  if (parsedStreaming) {
+    return parsedStreaming === "progress" ? "partial" : parsedStreaming;
+  }
+
+  const legacy = parseTelegramPreviewStreamMode(params.streamMode);
+  if (legacy) {
+    return legacy;
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming ? "partial" : "off";
+  }
+  return "partial";
+}
+
+function resolveDiscordPreviewStreamMode(
+  params: {
+    streamMode?: unknown;
+    streaming?: unknown;
+  } = {},
+): DiscordPreviewStreamMode {
+  const parsedStreaming = parseDiscordPreviewStreamMode(params.streaming);
+  if (parsedStreaming) {
+    return parsedStreaming;
+  }
+
+  const legacy = parseDiscordPreviewStreamMode(params.streamMode);
+  if (legacy) {
+    return legacy;
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming ? "partial" : "off";
+  }
+  return "off";
+}
+
+function resolveSlackStreamingMode(
+  params: {
+    streamMode?: unknown;
+    streaming?: unknown;
+  } = {},
+): StreamingMode {
+  const parsedStreaming = parseStreamingMode(params.streaming);
+  if (parsedStreaming) {
+    return parsedStreaming;
+  }
+  const legacyStreamMode = parseSlackLegacyDraftStreamMode(params.streamMode);
+  if (legacyStreamMode) {
+    return mapSlackLegacyDraftStreamModeToStreaming(legacyStreamMode);
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming ? "partial" : "off";
+  }
+  return "partial";
+}
+
+function resolveSlackNativeStreaming(
+  params: {
+    nativeStreaming?: unknown;
+    streaming?: unknown;
+  } = {},
+): boolean {
+  if (typeof params.nativeStreaming === "boolean") {
+    return params.nativeStreaming;
+  }
+  if (typeof params.streaming === "boolean") {
+    return params.streaming;
+  }
+  return true;
+}
+
+function formatSlackStreamModeMigrationMessage(pathPrefix: string, resolvedStreaming: string) {
+  return `Moved ${pathPrefix}.streamMode → ${pathPrefix}.streaming (${resolvedStreaming}).`;
+}
+
+function formatSlackStreamingBooleanMigrationMessage(
+  pathPrefix: string,
+  resolvedNativeStreaming: boolean,
+) {
+  return `Moved ${pathPrefix}.streaming (boolean) → ${pathPrefix}.nativeStreaming (${resolvedNativeStreaming}).`;
 }
 
 function hasLegacyThreadBindingTtl(value: unknown): boolean {
@@ -61,6 +201,23 @@ function migrateThreadBindingsTtlHoursForPath(params: {
   return true;
 }
 
+function hasLegacyThreadBindingTtlInAnyChannel(value: unknown): boolean {
+  const channels = getRecord(value);
+  if (!channels) {
+    return false;
+  }
+  return Object.values(channels).some((entry) => {
+    const channel = getRecord(entry);
+    if (!channel) {
+      return false;
+    }
+    return (
+      hasLegacyThreadBindingTtl(channel.threadBindings) ||
+      hasLegacyThreadBindingTtlInAccounts(channel.accounts)
+    );
+  });
+}
+
 function hasLegacyTelegramStreamingKeys(value: unknown): boolean {
   const entry = getRecord(value);
   if (!entry) {
@@ -85,7 +242,7 @@ function hasLegacySlackStreamingKeys(value: unknown): boolean {
   return entry.streamMode !== undefined || typeof entry.streaming === "boolean";
 }
 
-function hasLegacyStreamingKeysInAccounts(
+function hasLegacyKeysInAccounts(
   value: unknown,
   matchEntry: (entry: Record<string, unknown>) => boolean,
 ): boolean {
@@ -96,6 +253,69 @@ function hasLegacyStreamingKeysInAccounts(
   return Object.values(accounts).some((entry) => matchEntry(getRecord(entry) ?? {}));
 }
 
+function hasLegacyAllowAlias(entry: Record<string, unknown>): boolean {
+  return hasOwnKey(entry, "allow");
+}
+
+function migrateAllowAliasForPath(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): boolean {
+  if (!hasLegacyAllowAlias(params.entry)) {
+    return false;
+  }
+
+  const legacyAllow = params.entry.allow;
+  const hadEnabled = params.entry.enabled !== undefined;
+  if (!hadEnabled) {
+    params.entry.enabled = legacyAllow;
+  }
+  delete params.entry.allow;
+
+  if (hadEnabled) {
+    params.changes.push(
+      `Removed ${params.pathPrefix}.allow (${params.pathPrefix}.enabled already set).`,
+    );
+  } else {
+    params.changes.push(`Moved ${params.pathPrefix}.allow → ${params.pathPrefix}.enabled.`);
+  }
+  return true;
+}
+
+function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
+  const entry = getRecord(value);
+  const channels = getRecord(entry?.channels);
+  if (!channels) {
+    return false;
+  }
+  return Object.values(channels).some((channel) => hasLegacyAllowAlias(getRecord(channel) ?? {}));
+}
+
+function hasLegacyGoogleChatGroupAllowAlias(value: unknown): boolean {
+  const entry = getRecord(value);
+  const groups = getRecord(entry?.groups);
+  if (!groups) {
+    return false;
+  }
+  return Object.values(groups).some((group) => hasLegacyAllowAlias(getRecord(group) ?? {}));
+}
+
+function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
+  const entry = getRecord(value);
+  const guilds = getRecord(entry?.guilds);
+  if (!guilds) {
+    return false;
+  }
+  return Object.values(guilds).some((guildValue) => {
+    const channels = getRecord(getRecord(guildValue)?.channels);
+    if (!channels) {
+      return false;
+    }
+    return Object.values(channels).some((channel) => hasLegacyAllowAlias(getRecord(channel) ?? {}));
+  });
+}
+
 const THREAD_BINDING_RULES: LegacyConfigRule[] = [
   {
     path: ["session", "threadBindings"],
@@ -104,16 +324,10 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
     match: (value) => hasLegacyThreadBindingTtl(value),
   },
   {
-    path: ["channels", "discord", "threadBindings"],
+    path: ["channels"],
     message:
-      "channels.discord.threadBindings.ttlHours was renamed to channels.discord.threadBindings.idleHours (auto-migrated on load).",
-    match: (value) => hasLegacyThreadBindingTtl(value),
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      "channels.discord.accounts.<id>.threadBindings.ttlHours was renamed to channels.discord.accounts.<id>.threadBindings.idleHours (auto-migrated on load).",
-    match: (value) => hasLegacyThreadBindingTtlInAccounts(value),
+      "channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours (auto-migrated on load).",
+    match: (value) => hasLegacyThreadBindingTtlInAnyChannel(value),
   },
 ];
 
@@ -128,7 +342,7 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     path: ["channels", "telegram", "accounts"],
     message:
       "channels.telegram.accounts.<id>.streamMode is legacy; use channels.telegram.accounts.<id>.streaming instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyTelegramStreamingKeys),
   },
   {
     path: ["channels", "discord"],
@@ -140,7 +354,7 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     path: ["channels", "discord", "accounts"],
     message:
       "channels.discord.accounts.<id>.streamMode and boolean channels.discord.accounts.<id>.streaming are legacy; use channels.discord.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordStreamingKeys),
   },
   {
     path: ["channels", "slack"],
@@ -152,7 +366,46 @@ const CHANNEL_STREAMING_RULES: LegacyConfigRule[] = [
     path: ["channels", "slack", "accounts"],
     message:
       "channels.slack.accounts.<id>.streamMode and boolean channels.slack.accounts.<id>.streaming are legacy; use channels.slack.accounts.<id>.streaming with enum values instead (auto-migrated on load).",
-    match: (value) => hasLegacyStreamingKeysInAccounts(value, hasLegacySlackStreamingKeys),
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacySlackStreamingKeys),
+  },
+];
+
+const CHANNEL_ENABLED_ALIAS_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "slack"],
+    message:
+      "channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacySlackChannelAllowAlias(value),
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      "channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacySlackChannelAllowAlias),
+  },
+  {
+    path: ["channels", "googlechat"],
+    message:
+      "channels.googlechat.groups.<id>.allow is legacy; use channels.googlechat.groups.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyGoogleChatGroupAllowAlias(value),
+  },
+  {
+    path: ["channels", "googlechat", "accounts"],
+    message:
+      "channels.googlechat.accounts.<id>.groups.<id>.allow is legacy; use channels.googlechat.accounts.<id>.groups.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyGoogleChatGroupAllowAlias),
+  },
+  {
+    path: ["channels", "discord"],
+    message:
+      "channels.discord.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyDiscordGuildChannelAllowAlias(value),
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      "channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead (auto-migrated on load).",
+    match: (value) => hasLegacyKeysInAccounts(value, hasLegacyDiscordGuildChannelAllowAlias),
   },
 ];
 
@@ -160,7 +413,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "thread-bindings.ttlHours->idleHours",
     describe:
-      "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channels.discord)",
+      "Move legacy threadBindings.ttlHours keys to threadBindings.idleHours (session + channel configs)",
     legacyRules: THREAD_BINDING_RULES,
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
@@ -174,35 +427,39 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       }
 
       const channels = getRecord(raw.channels);
-      const discord = getRecord(channels?.discord);
-      if (!channels || !discord) {
+      if (!channels) {
         return;
       }
 
-      migrateThreadBindingsTtlHoursForPath({
-        owner: discord,
-        pathPrefix: "channels.discord",
-        changes,
-      });
-
-      const accounts = getRecord(discord.accounts);
-      if (accounts) {
-        for (const [accountId, accountRaw] of Object.entries(accounts)) {
-          const account = getRecord(accountRaw);
-          if (!account) {
-            continue;
-          }
-          migrateThreadBindingsTtlHoursForPath({
-            owner: account,
-            pathPrefix: `channels.discord.accounts.${accountId}`,
-            changes,
-          });
-          accounts[accountId] = account;
+      for (const [channelId, channelRaw] of Object.entries(channels)) {
+        const channel = getRecord(channelRaw);
+        if (!channel) {
+          continue;
         }
-        discord.accounts = accounts;
-      }
+        migrateThreadBindingsTtlHoursForPath({
+          owner: channel,
+          pathPrefix: `channels.${channelId}`,
+          changes,
+        });
 
-      channels.discord = discord;
+        const accounts = getRecord(channel.accounts);
+        if (accounts) {
+          for (const [accountId, accountRaw] of Object.entries(accounts)) {
+            const account = getRecord(accountRaw);
+            if (!account) {
+              continue;
+            }
+            migrateThreadBindingsTtlHoursForPath({
+              owner: account,
+              pathPrefix: `channels.${channelId}.accounts.${accountId}`,
+              changes,
+            });
+            accounts[accountId] = account;
+          }
+          channel.accounts = accounts;
+        }
+        channels[channelId] = channel;
+      }
       raw.channels = channels;
     },
   }),
@@ -308,6 +565,122 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       migrateProvider("telegram");
       migrateProvider("discord");
       migrateProvider("slack");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "channels.allow->channels.enabled",
+    describe:
+      "Normalize legacy nested channel allow toggles to enabled (Slack/Google Chat/Discord)",
+    legacyRules: CHANNEL_ENABLED_ALIAS_RULES,
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      if (!channels) {
+        return;
+      }
+
+      const migrateSlackEntry = (entry: Record<string, unknown>, pathPrefix: string) => {
+        const channelEntries = getRecord(entry.channels);
+        if (!channelEntries) {
+          return;
+        }
+        for (const [channelId, channelRaw] of Object.entries(channelEntries)) {
+          const channel = getRecord(channelRaw);
+          if (!channel) {
+            continue;
+          }
+          migrateAllowAliasForPath({
+            entry: channel,
+            pathPrefix: `${pathPrefix}.channels.${channelId}`,
+            changes,
+          });
+          channelEntries[channelId] = channel;
+        }
+        entry.channels = channelEntries;
+      };
+
+      const migrateGoogleChatEntry = (entry: Record<string, unknown>, pathPrefix: string) => {
+        const groups = getRecord(entry.groups);
+        if (!groups) {
+          return;
+        }
+        for (const [groupId, groupRaw] of Object.entries(groups)) {
+          const group = getRecord(groupRaw);
+          if (!group) {
+            continue;
+          }
+          migrateAllowAliasForPath({
+            entry: group,
+            pathPrefix: `${pathPrefix}.groups.${groupId}`,
+            changes,
+          });
+          groups[groupId] = group;
+        }
+        entry.groups = groups;
+      };
+
+      const migrateDiscordEntry = (entry: Record<string, unknown>, pathPrefix: string) => {
+        const guilds = getRecord(entry.guilds);
+        if (!guilds) {
+          return;
+        }
+        for (const [guildId, guildRaw] of Object.entries(guilds)) {
+          const guild = getRecord(guildRaw);
+          if (!guild) {
+            continue;
+          }
+          const channelEntries = getRecord(guild.channels);
+          if (!channelEntries) {
+            guilds[guildId] = guild;
+            continue;
+          }
+          for (const [channelId, channelRaw] of Object.entries(channelEntries)) {
+            const channel = getRecord(channelRaw);
+            if (!channel) {
+              continue;
+            }
+            migrateAllowAliasForPath({
+              entry: channel,
+              pathPrefix: `${pathPrefix}.guilds.${guildId}.channels.${channelId}`,
+              changes,
+            });
+            channelEntries[channelId] = channel;
+          }
+          guild.channels = channelEntries;
+          guilds[guildId] = guild;
+        }
+        entry.guilds = guilds;
+      };
+
+      const migrateProviderAccounts = (
+        provider: "slack" | "googlechat" | "discord",
+        migrateEntry: (entry: Record<string, unknown>, pathPrefix: string) => void,
+      ) => {
+        const providerEntry = getRecord(channels[provider]);
+        if (!providerEntry) {
+          return;
+        }
+        migrateEntry(providerEntry, `channels.${provider}`);
+        const accounts = getRecord(providerEntry.accounts);
+        if (!accounts) {
+          channels[provider] = providerEntry;
+          return;
+        }
+        for (const [accountId, accountRaw] of Object.entries(accounts)) {
+          const account = getRecord(accountRaw);
+          if (!account) {
+            continue;
+          }
+          migrateEntry(account, `channels.${provider}.accounts.${accountId}`);
+          accounts[accountId] = account;
+        }
+        providerEntry.accounts = accounts;
+        channels[provider] = providerEntry;
+      };
+
+      migrateProviderAccounts("slack", migrateSlackEntry);
+      migrateProviderAccounts("googlechat", migrateGoogleChatEntry);
+      migrateProviderAccounts("discord", migrateDiscordEntry);
+      raw.channels = channels;
     },
   }),
 ];

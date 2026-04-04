@@ -557,15 +557,6 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  "whatsapp-targets": {
-    module: typeof import("@openclaw/whatsapp/targets.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/whatsapp/targets.js");
-      };
-    };
-    types: {};
-  };
   "whatsapp-surface": {
     module: typeof import("@openclaw/whatsapp/api.js");
     sourceModules: {

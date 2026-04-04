@@ -12,12 +12,24 @@ describe("loadBoundaryIncludePatternsFromEnv", () => {
 });
 
 describe("boundary vitest config", () => {
-  it("keeps boundary suites on the shared runner without global setup", () => {
+  it("keeps boundary suites on the shared runner with shared test bootstrap", () => {
     const config = createBoundaryVitestConfig({});
 
     expect(config.test?.isolate).toBe(false);
     expect(config.test?.runner).toBe("./test/non-isolated-runner.ts");
     expect(config.test?.include).toEqual(boundaryTestFiles);
-    expect(config.test?.setupFiles).toEqual([]);
+    expect(config.test?.setupFiles).toEqual(["test/setup.ts"]);
+  });
+
+  it("narrows boundary includes to matching CLI file filters", () => {
+    const config = createBoundaryVitestConfig({}, [
+      "node",
+      "vitest",
+      "run",
+      "src/infra/openclaw-root.test.ts",
+    ]);
+
+    expect(config.test?.include).toEqual(["src/infra/openclaw-root.test.ts"]);
+    expect(config.test?.passWithNoTests).toBe(true);
   });
 });

@@ -1,4 +1,7 @@
 import { listBundledChannelPlugins } from "../bundled.js";
+import { vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { listBundledChannelPlugins, setBundledChannelRuntime } from "../bundled.js";
 import type { ChannelPlugin } from "../types.js";
 import {
   channelPluginSurfaceKeys,
@@ -32,6 +35,35 @@ type DirectoryContractEntry = {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage?: "lookups" | "presence";
 };
+
+const sendMessageMatrixMock = vi.hoisted(() =>
+  vi.fn(async (to: string, _message: string, opts?: { threadId?: string }) => ({
+    messageId: opts?.threadId ? "$matrix-thread" : "$matrix-root",
+    roomId: to.replace(/^room:/, ""),
+  })),
+);
+
+const lineContractApi = await import(buildBundledPluginModuleId("line", "contract-api.js"));
+
+setBundledChannelRuntime("line", {
+  channel: {
+    line: {
+      listLineAccountIds: lineContractApi.listLineAccountIds,
+      resolveDefaultLineAccountId: lineContractApi.resolveDefaultLineAccountId,
+      resolveLineAccount: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>
+        lineContractApi.resolveLineAccount({ cfg, accountId }),
+    },
+  },
+} as never);
+
+vi.mock(buildBundledPluginModuleId("matrix", "runtime-api.js"), async () => {
+  const matrixRuntimeApiModuleId = buildBundledPluginModuleId("matrix", "runtime-api.js");
+  const actual = await vi.importActual(matrixRuntimeApiModuleId);
+  return {
+    ...actual,
+    sendMessageMatrix: sendMessageMatrixMock,
+  };
+});
 
 let surfaceContractRegistryCache: SurfaceContractEntry[] | undefined;
 let threadingContractRegistryCache: ThreadingContractEntry[] | undefined;

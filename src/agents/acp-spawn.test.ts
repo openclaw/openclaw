@@ -519,7 +519,7 @@ describe("spawnAcpDirect", () => {
         agentTo: "room:!room:example",
       },
     );
-    expect(result.status).toBe("accepted");
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "child",
@@ -533,7 +533,7 @@ describe("spawnAcpDirect", () => {
     expectAgentGatewayCall({
       deliver: true,
       channel: "matrix",
-      to: "room:!room:example",
+      to: "channel:child-thread",
       threadId: "child-thread",
     });
   });
@@ -576,7 +576,7 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(result.status).toBe("accepted");
+    expect(result.status, JSON.stringify(result)).toBe("accepted");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
@@ -598,6 +598,97 @@ describe("spawnAcpDirect", () => {
     );
     expect(transcriptCalls).toHaveLength(1);
     expect(transcriptCalls[0]?.threadId).toBeUndefined();
+  });
+
+  it("binds ACP sessions through the configured default account when accountId is omitted", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      channels: {
+        ...hoisted.state.cfg.channels,
+        custom: {
+          defaultAccount: "work",
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: true,
+          },
+          accounts: {
+            work: {
+              threadBindings: {
+                enabled: true,
+                spawnAcpSessions: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    registerSessionBindingAdapter({
+      channel: "custom",
+      accountId: "work",
+      capabilities: {
+        bindSupported: true,
+        unbindSupported: true,
+        placements: ["current"] satisfies SessionBindingPlacement[],
+      },
+      bind: async (input) => await hoisted.sessionBindingBindMock(input),
+      listBySession: (targetSessionKey) =>
+        hoisted.sessionBindingListBySessionMock(targetSessionKey),
+      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+    });
+    hoisted.sessionBindingBindMock.mockImplementationOnce(
+      async (input: {
+        targetSessionKey: string;
+        conversation: { accountId: string; conversationId: string };
+        metadata?: Record<string, unknown>;
+      }) =>
+        createSessionBinding({
+          targetSessionKey: input.targetSessionKey,
+          conversation: {
+            channel: "custom",
+            accountId: input.conversation.accountId,
+            conversationId: input.conversation.conversationId,
+          },
+          metadata: {
+            boundBy:
+              typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+            agentId: "codex",
+          },
+        }),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:custom:channel:123456",
+        agentChannel: "custom",
+        agentTo: "channel:123456",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "custom",
+          accountId: "work",
+          conversationId: "123456",
+        }),
+      }),
+    );
+    expectAgentGatewayCall({
+      deliver: true,
+      channel: "custom",
+      to: "channel:123456",
+      threadId: undefined,
+    });
+    expect(findAgentGatewayCall()?.params?.accountId).toBe("work");
   });
 
   it.each([

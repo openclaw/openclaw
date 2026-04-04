@@ -82,7 +82,7 @@ export async function runWatchMain(params = {}) {
         env: childEnv,
         stdio: "inherit",
       });
-      watchProcess.on("exit", () => {
+      watchProcess.on("exit", (exitCode, exitSignal) => {
         watchProcess = null;
         if (shuttingDown) {
           return;
@@ -90,7 +90,9 @@ export async function runWatchMain(params = {}) {
         if (restartRequested) {
           restartRequested = false;
           startRunner();
+          return;
         }
+        settle(exitSignal ? 1 : (exitCode ?? 1));
       });
     };
 

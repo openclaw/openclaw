@@ -101,3 +101,31 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     ]);
   });
 });
+
+describe("normalizeCompatibilityConfigValues browser compatibility aliases", () => {
+  it("removes legacy browser relay bind host and migrates extension profiles", () => {
+    const res = normalizeCompatibilityConfigValues({
+      browser: {
+        relayBindHost: "127.0.0.1",
+        profiles: {
+          work: {
+            driver: "extension",
+          },
+          keep: {
+            driver: "existing-session",
+          },
+        },
+      },
+    } as never);
+
+    expect(
+      (res.config.browser as { relayBindHost?: string } | undefined)?.relayBindHost,
+    ).toBeUndefined();
+    expect(res.config.browser?.profiles?.work?.driver).toBe("existing-session");
+    expect(res.config.browser?.profiles?.keep?.driver).toBe("existing-session");
+    expect(res.changes).toEqual([
+      "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
+      'Moved browser.profiles.work.driver "extension" → "existing-session" (Chrome MCP attach).',
+    ]);
+  });
+});

@@ -10,8 +10,8 @@ const fsMocks = vi.hoisted(() => ({
   realpath: vi.fn(),
 }));
 
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs/promises")>();
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   return {
     ...actual,
     default: {
@@ -24,8 +24,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     execFileSync: childProcessMocks.execFileSync,

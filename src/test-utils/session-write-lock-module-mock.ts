@@ -4,10 +4,10 @@ import type * as SessionWriteLockModule from "../agents/session-write-lock.js";
 type SessionWriteLockModuleShape = typeof SessionWriteLockModule;
 
 export async function buildSessionWriteLockModuleMock(
-  importOriginal: () => Promise<SessionWriteLockModuleShape>,
+  loadActual: () => Promise<SessionWriteLockModuleShape>,
   acquireSessionWriteLock: SessionWriteLockModuleShape["acquireSessionWriteLock"],
 ): Promise<SessionWriteLockModuleShape> {
-  const original = await importOriginal();
+  const original = await loadActual();
   return {
     ...original,
     acquireSessionWriteLock,
@@ -19,9 +19,9 @@ export function resetModulesWithSessionWriteLockDoMock(
   acquireSessionWriteLock: SessionWriteLockModuleShape["acquireSessionWriteLock"],
 ): void {
   vi.resetModules();
-  vi.doMock(modulePath, (importOriginal) =>
+  vi.doMock(modulePath, () =>
     buildSessionWriteLockModuleMock(
-      importOriginal as () => Promise<SessionWriteLockModuleShape>,
+      () => vi.importActual<SessionWriteLockModuleShape>(modulePath),
       acquireSessionWriteLock,
     ),
   );

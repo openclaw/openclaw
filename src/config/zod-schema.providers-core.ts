@@ -5,7 +5,7 @@ import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
-} from "./telegram-custom-commands.js";
+} from "./telegram-command-config.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import {
   ChannelHealthMonitorSchema,
@@ -298,6 +298,12 @@ export const TelegramAccountSchemaBase = z
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     apiRoot: z.string().url().optional(),
+    trustedLocalFileRoots: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths under these roots are read directly; all other absolute paths are rejected.",
+      ),
     autoTopicLabel: AutoTopicLabelSchema,
   })
   .strict();
@@ -405,7 +411,6 @@ export const DiscordDmSchema = z
 
 export const DiscordGuildChannelSchema = z
   .object({
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     ignoreOtherMentions: z.boolean().optional(),
     tools: ToolPolicySchema,
@@ -757,7 +762,6 @@ export const GoogleChatDmSchema = z
 export const GoogleChatGroupSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
@@ -831,7 +835,6 @@ export const SlackDmSchema = z
 export const SlackChannelSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow: z.boolean().optional(),
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,

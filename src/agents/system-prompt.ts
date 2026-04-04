@@ -1,6 +1,8 @@
 import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -8,6 +10,7 @@ import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -175,13 +178,13 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
 
 function buildExecApprovalPromptGuidance(params: { runtimeChannel?: string }) {
   const runtimeChannel = params.runtimeChannel?.trim().toLowerCase();
-  if (
-    runtimeChannel === "discord" ||
-    runtimeChannel === "slack" ||
-    runtimeChannel === "telegram" ||
-    runtimeChannel === "webchat"
-  ) {
-    return "When exec returns approval-pending on Discord, Slack, Telegram, or WebChat, rely on the native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
+  const usesNativeApprovalUi =
+    runtimeChannel === "webchat" ||
+    (runtimeChannel
+      ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
+      : false);
+  if (usesNativeApprovalUi) {
+    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
   }
   return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
 }
@@ -582,12 +585,6 @@ export function buildAgentSystemPrompt(params: {
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -656,6 +653,18 @@ export function buildAgentSystemPrompt(params: {
       `✅ Right: ${SILENT_REPLY_TOKEN}`,
       "",
     );
+  }
+
+  // Keep large stable prompt context above this seam so Anthropic-family
+  // transports can reuse it across labs and turns. Dynamic group/session
+  // additions below it are the primary cache invalidators.
+  lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+  if (extraSystemPrompt) {
+    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
+    const contextHeader =
+      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    lines.push(contextHeader, extraSystemPrompt, "");
   }
 
   // Skip heartbeats for subagent/none modes

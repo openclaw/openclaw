@@ -12,6 +12,20 @@ title: "Anthropic"
 Anthropic builds the **Claude** model family and provides access via an API.
 In OpenClaw you can authenticate with an API key or a **setup-token**.
 
+<Warning>
+Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
+OpenClaw or other third-party harnesses. You can still use Anthropic
+subscription auth in OpenClaw, but Anthropic now requires **Extra Usage**
+(pay-as-you-go, billed separately from the subscription) for that traffic.
+
+If you want a clearer billing path, use an Anthropic API key instead. OpenClaw
+also supports other subscription-style options, including [OpenAI
+Codex](/providers/openai), [Alibaba Cloud Model Studio Coding
+Plan](/providers/qwen_modelstudio), [MiniMax Coding Plan](/providers/minimax),
+and [Z.AI / GLM Coding Plan](/providers/glm).
+</Warning>
+
 ## Option A: Anthropic API key
 
 **Best for:** standard API access and usage-based billing.
@@ -194,6 +208,11 @@ OAuth betas.
 **Best for:** a single-user gateway host that already has Claude CLI installed
 and signed in with a Claude subscription.
 
+Billing note: when Claude CLI is used through OpenClaw, Anthropic now treats
+that traffic as third-party harness usage. As of **April 4, 2026 at 12:00 PM
+PT / 8:00 PM BST**, Anthropic requires **Extra Usage** instead of included
+Claude subscription limits for this path.
+
 This path uses the local `claude` binary for model inference instead of calling
 the Anthropic API directly. OpenClaw treats it as a **CLI backend provider**
 with model refs like:
@@ -266,7 +285,15 @@ If the `claude` binary is not on the gateway host PATH:
 ### Migrate from Anthropic auth to Claude CLI
 
 If you currently use `anthropic/...` with a setup-token or API key and want to
-switch the same gateway host to Claude CLI:
+switch the same gateway host to Claude CLI, OpenClaw supports that as a normal
+provider-auth migration path.
+
+Prerequisites:
+
+- Claude CLI installed on the **same gateway host** that runs OpenClaw
+- Claude CLI already signed in there: `claude auth login`
+
+Then run:
 
 ```bash
 openclaw models auth login --provider anthropic --method cli --set-default
@@ -278,6 +305,11 @@ Or in onboarding:
 openclaw onboard --auth-choice anthropic-cli
 ```
 
+Interactive `openclaw onboard` and `openclaw configure` now prefer **Anthropic
+Claude CLI** first and **Anthropic API key** second. The setup-token flow
+remains supported through manual auth commands, but is not shown in the
+assistant picker.
+
 What this does:
 
 - verifies Claude CLI is already signed in on the gateway host
@@ -285,6 +317,14 @@ What this does:
 - rewrites Anthropic default-model fallbacks like `anthropic/claude-opus-4-6`
   to `claude-cli/claude-opus-4-6`
 - adds matching `claude-cli/...` entries to `agents.defaults.models`
+
+Quick verification:
+
+```bash
+openclaw models status
+```
+
+You should see the resolved primary model under `claude-cli/...`.
 
 What it does **not** do:
 
@@ -304,9 +344,10 @@ you need to.
 
 More details: [/gateway/cli-backends](/gateway/cli-backends)
 
-## Option C: Claude setup-token
+## Option C: Claude setup-token (manual)
 
-**Best for:** using your Claude subscription.
+**Best for:** using your Claude subscription with Anthropic **Extra Usage**
+enabled, or while transitioning to API-key billing.
 
 ### Where to get a setup-token
 
@@ -316,23 +357,16 @@ Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. 
 claude setup-token
 ```
 
-Paste the token into OpenClaw (wizard: **Anthropic token (paste setup-token)**), or run it on the gateway host:
+Then either run it on the gateway host:
 
 ```bash
 openclaw models auth setup-token --provider anthropic
 ```
 
-If you generated the token on a different machine, paste it:
+Or if you generated the token on a different machine, paste it:
 
 ```bash
 openclaw models auth paste-token --provider anthropic
-```
-
-### CLI setup (setup-token)
-
-```bash
-# Paste a setup-token during setup
-openclaw onboard --auth-choice setup-token
 ```
 
 ### Config snippet (setup-token)
@@ -346,6 +380,9 @@ openclaw onboard --auth-choice setup-token
 ## Notes
 
 - Generate the setup-token with `claude setup-token` and paste it, or run `openclaw models auth setup-token` on the gateway host.
+- Anthropic says that starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
+  OpenClaw usage with Claude subscription auth requires **Extra Usage**
+  (pay-as-you-go billed separately from the subscription).
 - If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting](/gateway/troubleshooting).
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 

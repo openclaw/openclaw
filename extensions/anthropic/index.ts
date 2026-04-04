@@ -26,6 +26,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
+import { composeProviderStreamWrappers } from "openclaw/plugin-sdk/provider-stream";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
@@ -381,6 +382,7 @@ export default definePluginEntry({
             choiceId: "anthropic-cli",
             choiceLabel: "Anthropic Claude CLI",
             choiceHint: "Reuse a local Claude CLI login on this host",
+            assistantPriority: -20,
             groupId: "anthropic",
             groupLabel: "Anthropic",
             groupHint: "Claude CLI + setup-token + API key",
@@ -408,6 +410,7 @@ export default definePluginEntry({
             choiceId: "token",
             choiceLabel: "Anthropic token (paste setup-token)",
             choiceHint: "Run `claude setup-token` elsewhere, then paste the token here",
+            assistantVisibility: "manual-only",
             groupId: "anthropic",
             groupLabel: "Anthropic",
             groupHint: "Claude CLI + setup-token + API key",
@@ -449,21 +452,23 @@ export default definePluginEntry({
       resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
       buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
       isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
+      resolveReasoningOutputMode: () => "native",
       wrapStreamFn: (ctx) => {
-        let streamFn = ctx.streamFn;
         const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
-        if (anthropicBetas?.length) {
-          streamFn = createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas);
-        }
         const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
-        if (serviceTier) {
-          streamFn = createAnthropicServiceTierWrapper(streamFn, serviceTier);
-        }
         const fastMode = resolveAnthropicFastMode(ctx.extraParams);
-        if (fastMode !== undefined) {
-          streamFn = createAnthropicFastModeWrapper(streamFn, fastMode);
-        }
-        return streamFn;
+        return composeProviderStreamWrappers(
+          ctx.streamFn,
+          anthropicBetas?.length
+            ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+            : undefined,
+          serviceTier
+            ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)
+            : undefined,
+          fastMode !== undefined
+            ? (streamFn) => createAnthropicFastModeWrapper(streamFn, fastMode)
+            : undefined,
+        );
       },
       resolveDefaultThinkingLevel: ({ modelId }) =>
         matchesAnthropicModernModel(modelId) &&

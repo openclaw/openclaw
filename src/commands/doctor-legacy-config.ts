@@ -1,15 +1,8 @@
+import { migrateVoiceCallLegacyConfigInput } from "../../extensions/voice-call/config-api.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../config/defaults.js";
-import {
-  formatSlackStreamingBooleanMigrationMessage,
-  formatSlackStreamModeMigrationMessage,
-  resolveDiscordPreviewStreamMode,
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-  resolveTelegramPreviewStreamMode,
-} from "../config/discord-preview-streaming.js";
 import { migrateLegacyWebFetchConfig } from "../config/legacy-web-fetch.js";
 import { migrateLegacyWebSearchConfig } from "../config/legacy-web-search.js";
 import { migrateLegacyXSearchConfig } from "../config/legacy-x-search.js";
@@ -371,6 +364,37 @@ export function normalizeCompatibilityConfigValues(cfg: unknown): {
     };
   };
 
+  const normalizeVoiceCallLegacyConfig = () => {
+    const rawVoiceCallConfig = next.plugins?.entries?.["voice-call"]?.config;
+    if (!isRecord(rawVoiceCallConfig)) {
+      return;
+    }
+
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: rawVoiceCallConfig,
+      configPathPrefix: "plugins.entries.voice-call.config",
+    });
+    if (migration.changes.length === 0) {
+      return;
+    }
+
+    const plugins = structuredClone(next.plugins ?? {});
+    const entries = { ...plugins.entries };
+    const existingVoiceCallEntry = isRecord(entries["voice-call"])
+      ? (entries["voice-call"] as Record<string, unknown>)
+      : {};
+    entries["voice-call"] = {
+      ...existingVoiceCallEntry,
+      config: migration.config,
+    };
+    plugins.entries = entries;
+    next = {
+      ...next,
+      plugins,
+    };
+    changes.push(...migration.changes);
+  };
+
   const seedMissingDefaultAccountsFromSingleAccountBase = () => {
     const channels = next.channels as Record<string, unknown> | undefined;
     if (!channels) {
@@ -397,13 +421,12 @@ export function normalizeCompatibilityConfigValues(cfg: unknown): {
       }
 
       const keysToMove = Object.entries(rawChannel)
-        .filter(
-          ([key, value]) =>
-            key !== "accounts" &&
-            key !== "enabled" &&
-            value !== undefined &&
-            shouldMoveSingleAccountChannelKey({ channelKey: channelId, key }),
-        )
+        .filter(([key, value]) => {
+          if (key === "accounts" || key === "enabled" || value === undefined) {
+            return false;
+          }
+          return shouldMoveSingleAccountChannelKey({ channelKey: channelId, key });
+        })
         .map(([key]) => key);
       if (keysToMove.length === 0) {
         continue;
@@ -441,11 +464,9 @@ export function normalizeCompatibilityConfigValues(cfg: unknown): {
     };
   };
 
-  normalizeProvider("telegram");
-  normalizeProvider("slack");
-  normalizeProvider("discord");
   seedMissingDefaultAccountsFromSingleAccountBase();
   normalizeLegacyBrowserProfiles();
+  normalizeVoiceCallLegacyConfig();
   const webSearchMigration = migrateLegacyWebSearchConfig(next);
   if (webSearchMigration.changes.length > 0) {
     next = webSearchMigration.config;

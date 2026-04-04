@@ -4,7 +4,11 @@ import {
   resolveNonEnvSecretRefApiKeyMarker,
 } from "openclaw/plugin-sdk/provider-auth";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  composeProviderStreamWrappers,
+  createToolStreamWrapper,
+} from "openclaw/plugin-sdk/provider-stream";
 import {
   jsonResult,
   readProviderEnvValue,
@@ -250,22 +254,29 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildXaiProvider,
     },
+    buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
     prepareExtraParams: (ctx) => {
-      if (ctx.extraParams?.tool_stream !== undefined) {
-        return ctx.extraParams;
+      const extraParams = ctx.extraParams;
+      if (extraParams && extraParams.tool_stream !== undefined) {
+        return extraParams;
       }
       return {
-        ...ctx.extraParams,
+        ...(extraParams ?? {}),
         tool_stream: true,
       };
     },
     wrapStreamFn: (ctx) => {
-      let streamFn = createXaiToolPayloadCompatibilityWrapper(ctx.streamFn);
-      if (typeof ctx.extraParams?.fastMode === "boolean") {
-        streamFn = createXaiFastModeWrapper(streamFn, ctx.extraParams.fastMode);
-      }
-      streamFn = createXaiToolCallArgumentDecodingWrapper(streamFn);
-      return createToolStreamWrapper(streamFn, ctx.extraParams?.tool_stream !== false);
+      const extraParams = ctx.extraParams;
+      const fastMode = extraParams?.fastMode;
+      const toolStreamEnabled = extraParams?.tool_stream !== false;
+      return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
+        let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
+        if (typeof fastMode === "boolean") {
+          wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
+        }
+        wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
+        return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
+      });
     },
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's

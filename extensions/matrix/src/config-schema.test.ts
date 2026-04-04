@@ -37,7 +37,7 @@ describe("MatrixConfigSchema SecretInput", () => {
       accessToken: "token",
       groups: {
         "!room:example.org": {
-          allow: true,
+          enabled: true,
           account: "axis",
         },
       },
@@ -55,7 +55,7 @@ describe("MatrixConfigSchema SecretInput", () => {
       accessToken: "token",
       rooms: {
         "!room:example.org": {
-          allow: true,
+          enabled: true,
           account: "axis",
         },
       },

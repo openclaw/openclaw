@@ -1,40 +1,18 @@
-import fs from "node:fs";
-import path from "node:path";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { listBundledPluginManifestSnapshots } from "./bundled-manifest-snapshots.js";
+import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 export type BundledPluginContractSnapshot = {
   pluginId: string;
   cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
+  realtimeTranscriptionProviderIds: string[];
+  realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
   webFetchProviderIds: string[];
   webSearchProviderIds: string[];
   toolNames: string[];
 };
-
-function resolveBundledManifestSnapshotDir(): string | undefined {
-  const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  if (!packageRoot) {
-    return undefined;
-  }
-  for (const candidate of [
-    path.join(packageRoot, "extensions"),
-    path.join(packageRoot, "dist", "extensions"),
-    path.join(packageRoot, "dist-runtime", "extensions"),
-  ]) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
-const BUNDLED_PLUGIN_MANIFEST_SNAPSHOTS = listBundledPluginManifestSnapshots({
-  bundledDir: resolveBundledManifestSnapshotDir(),
-});
 
 function uniqueStrings(values: readonly string[] | undefined): string[] {
   const result: string[] = [];
@@ -50,12 +28,21 @@ function uniqueStrings(values: readonly string[] | undefined): string[] {
   return result;
 }
 
+const BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES = listBundledPluginMetadata({
+  includeChannelConfigs: false,
+  includeSyntheticChannelConfigs: false,
+});
+
 export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSnapshot[] =
-  BUNDLED_PLUGIN_MANIFEST_SNAPSHOTS.map(({ manifest }) => ({
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.map(({ manifest }) => ({
     pluginId: manifest.id,
     cliBackendIds: uniqueStrings(manifest.cliBackends),
     providerIds: uniqueStrings(manifest.providers),
     speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
+    realtimeTranscriptionProviderIds: uniqueStrings(
+      manifest.contracts?.realtimeTranscriptionProviders,
+    ),
+    realtimeVoiceProviderIds: uniqueStrings(manifest.contracts?.realtimeVoiceProviders),
     mediaUnderstandingProviderIds: uniqueStrings(manifest.contracts?.mediaUnderstandingProviders),
     imageGenerationProviderIds: uniqueStrings(manifest.contracts?.imageGenerationProviders),
     webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders),
@@ -67,6 +54,8 @@ export const BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS: readonly BundledPluginContractSn
         entry.cliBackendIds.length > 0 ||
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
+        entry.realtimeTranscriptionProviderIds.length > 0 ||
+        entry.realtimeVoiceProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
         entry.webFetchProviderIds.length > 0 ||
@@ -87,6 +76,14 @@ export const BUNDLED_PROVIDER_PLUGIN_IDS = collectPluginIds((entry) => entry.pro
 
 export const BUNDLED_SPEECH_PLUGIN_IDS = collectPluginIds((entry) => entry.speechProviderIds);
 
+export const BUNDLED_REALTIME_TRANSCRIPTION_PLUGIN_IDS = collectPluginIds(
+  (entry) => entry.realtimeTranscriptionProviderIds,
+);
+
+export const BUNDLED_REALTIME_VOICE_PLUGIN_IDS = collectPluginIds(
+  (entry) => entry.realtimeVoiceProviderIds,
+);
+
 export const BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS = collectPluginIds(
   (entry) => entry.mediaUnderstandingProviderIds,
 );
@@ -103,6 +100,8 @@ export const BUNDLED_RUNTIME_CONTRACT_PLUGIN_IDS = [
       (entry) =>
         entry.providerIds.length > 0 ||
         entry.speechProviderIds.length > 0 ||
+        entry.realtimeTranscriptionProviderIds.length > 0 ||
+        entry.realtimeVoiceProviderIds.length > 0 ||
         entry.mediaUnderstandingProviderIds.length > 0 ||
         entry.imageGenerationProviderIds.length > 0 ||
         entry.webFetchProviderIds.length > 0 ||
@@ -130,7 +129,7 @@ export const BUNDLED_PROVIDER_PLUGIN_ID_ALIASES = Object.fromEntries(
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
-  BUNDLED_PLUGIN_MANIFEST_SNAPSHOTS.flatMap(({ manifest }) =>
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
     (manifest.legacyPluginIds ?? []).map(
       (legacyPluginId) => [legacyPluginId, manifest.id] as const,
     ),
@@ -138,7 +137,7 @@ export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
 ) as Readonly<Record<string, string>>;
 
 export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
-  BUNDLED_PLUGIN_MANIFEST_SNAPSHOTS.flatMap(({ manifest }) =>
+  BUNDLED_PLUGIN_METADATA_FOR_CAPABILITIES.flatMap(({ manifest }) =>
     (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
       providerId,
       manifest.id,

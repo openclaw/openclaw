@@ -3,13 +3,16 @@ import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
 import {
+  applyExtraParamsToAgentMock,
   contextEngineCompactMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
   hookRunner,
   loadCompactHooksHarness,
+  resolveAgentTransportOverrideMock,
   resolveContextEngineMock,
+  resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
   resolveSessionAgentIdMock,
@@ -207,6 +210,52 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
+  });
+
+  it("routes compaction through shared stream resolution and extra params", async () => {
+    const resolvedStreamFn = vi.fn();
+    resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
+    applyExtraParamsToAgentMock.mockReturnValue({
+      effectiveExtraParams: { transport: "websocket" },
+    });
+    resolveAgentTransportOverrideMock.mockReturnValue("websocket");
+
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentStreamFn: expect.any(Function),
+        sessionId: "session-1",
+      }),
+    );
+    expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        streamFn: resolvedStreamFn,
+      }),
+      undefined,
+      "openai",
+      "gpt-5.4",
+      undefined,
+      undefined,
+      "main",
+      "/tmp/workspace",
+      expect.objectContaining({
+        provider: "openai",
+        id: "fake",
+      }),
+      "/tmp",
+    );
+    expect(resolveAgentTransportOverrideMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effectiveExtraParams: { transport: "websocket" },
+      }),
+    );
   });
 
   it("emits internal + plugin compaction hooks with counts", async () => {

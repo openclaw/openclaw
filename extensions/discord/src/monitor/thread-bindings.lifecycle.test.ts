@@ -41,8 +41,8 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
+vi.mock("../send.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
     ...actual,
     addRoleDiscord: vi.fn(),

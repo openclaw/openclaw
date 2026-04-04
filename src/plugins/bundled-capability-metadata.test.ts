@@ -28,6 +28,10 @@ describe("bundled capability metadata", () => {
         cliBackendIds: uniqueStrings(manifest.cliBackends),
         providerIds: uniqueStrings(manifest.providers),
         speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders),
+        realtimeTranscriptionProviderIds: uniqueStrings(
+          manifest.contracts?.realtimeTranscriptionProviders,
+        ),
+        realtimeVoiceProviderIds: uniqueStrings(manifest.contracts?.realtimeVoiceProviders),
         mediaUnderstandingProviderIds: uniqueStrings(
           manifest.contracts?.mediaUnderstandingProviders,
         ),
@@ -41,6 +45,8 @@ describe("bundled capability metadata", () => {
           entry.cliBackendIds.length > 0 ||
           entry.providerIds.length > 0 ||
           entry.speechProviderIds.length > 0 ||
+          entry.realtimeTranscriptionProviderIds.length > 0 ||
+          entry.realtimeVoiceProviderIds.length > 0 ||
           entry.mediaUnderstandingProviderIds.length > 0 ||
           entry.imageGenerationProviderIds.length > 0 ||
           entry.webFetchProviderIds.length > 0 ||

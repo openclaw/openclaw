@@ -432,8 +432,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveThreadBindingThreadName",
       "resolveThreadBindingsEnabled",
       "formatThreadBindingDisabledError",
-      "DISCORD_THREAD_BINDING_CHANNEL",
-      "MATRIX_THREAD_BINDING_CHANNEL",
       "resolveControlCommandGate",
       "resolveCommandAuthorizedFromAuthorizers",
       "resolveDualTextControlCommandGate",
@@ -609,6 +607,8 @@ describe("plugin-sdk subpath exports", () => {
       "shouldComputeCommandAuthorized",
       "shouldHandleTextCommands",
     ]);
+    expectSourceOmitsSnippet("command-auth", "../../extensions/");
+    expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -621,8 +621,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
 
     expectSourceMentions("conversation-runtime", [
-      "DISCORD_THREAD_BINDING_CHANNEL",
-      "MATRIX_THREAD_BINDING_CHANNEL",
       "formatThreadBindingDisabledError",
       "resolveThreadBindingFarewellText",
       "resolveThreadBindingConversationIdFromBindingId",
@@ -704,12 +702,7 @@ describe("plugin-sdk subpath exports", () => {
       "createTopLevelChannelDmPolicy",
       "mergeAllowFromEntries",
     ]);
-    expectSourceMentions("setup-tools", [
-      "formatCliCommand",
-      "detectBinary",
-      "installSignalCli",
-      "formatDocsLink",
-    ]);
+    expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceContract("self-hosted-provider-setup", {
       mentions: [
@@ -865,10 +858,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expect("createScopedPairingAccess" in channelPairingSdk).toBe(false);
 
-    expectSourceMentions("channel-reply-pipeline", ["createChannelReplyPipeline"]);
-    expect("createTypingCallbacks" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixContext" in channelReplyPipelineSdk).toBe(false);
-    expect("createReplyPrefixOptions" in channelReplyPipelineSdk).toBe(false);
+    expectSourceMentions("channel-reply-pipeline", [
+      "createChannelReplyPipeline",
+      "createTypingCallbacks",
+      "createReplyPrefixContext",
+      "createReplyPrefixOptions",
+    ]);
+    expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
+    expect(typeof channelReplyPipelineSdk.createReplyPrefixContext).toBe("function");
+    expect(typeof channelReplyPipelineSdk.createReplyPrefixOptions).toBe("function");
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {

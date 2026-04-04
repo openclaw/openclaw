@@ -87,16 +87,20 @@ vi.mock("./sdk-runtime.js", () => ({
   }),
 }));
 
-vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/routing")>();
+vi.mock("openclaw/plugin-sdk/routing", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/routing")>(
+    "openclaw/plugin-sdk/routing",
+  );
   return {
     ...actual,
     resolveAgentRoute: resolveAgentRouteMock,
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
+vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-runtime")>(
+    "openclaw/plugin-sdk/agent-runtime",
+  );
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,

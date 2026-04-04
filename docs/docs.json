@@ -1051,6 +1051,7 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
+                  "concepts/soul",
                   "concepts/oauth",
                   "start/bootstrapping"
                 ]
@@ -1068,7 +1069,8 @@
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
-                      "concepts/memory-search"
+                      "concepts/memory-search",
+                      "concepts/memory-dreaming"
                     ]
                   },
                   "concepts/compaction"
@@ -1177,6 +1179,7 @@
                       "tools/gemini-search",
                       "tools/grok-search",
                       "tools/kimi-search",
+                      "tools/ollama-search",
                       "tools/perplexity-search",
                       "tools/searxng-search",
                       "tools/tavily"
