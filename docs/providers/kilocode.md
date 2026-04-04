@@ -20,7 +20,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-openclaw onboard --kilocode-api-key <key>
+openclaw onboard --auth-choice kilocode-api-key
 ```
 
 Or set the environment variable:
@@ -60,7 +60,7 @@ Any model available on the gateway can be used with the `kilocode/` prefix:
 ```
 kilocode/kilo/auto              (default - smart routing)
 kilocode/anthropic/claude-sonnet-4
-kilocode/openai/gpt-5.2
+kilocode/openai/gpt-5.4
 kilocode/google/gemini-3-pro-preview
 ...and many more
 ```

@@ -18,6 +18,7 @@ import type {
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,
+  ProviderApplyConfigDefaultsContext,
   ProviderBuildMissingAuthMessageContext,
   ProviderBuildUnknownModelHintContext,
   ProviderBuiltInModelSuppressionContext,
@@ -28,6 +29,7 @@ import type {
   ProviderDeferSyntheticProfileAuthContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderDiscoveryContext,
+  ProviderFailoverErrorContext,
   ProviderFetchUsageSnapshotContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
@@ -77,6 +79,7 @@ export type {
   ProviderCatalogResult,
   ProviderDeferSyntheticProfileAuthContext,
   ProviderAugmentModelCatalogContext,
+  ProviderApplyConfigDefaultsContext,
   ProviderBuiltInModelSuppressionContext,
   ProviderBuiltInModelSuppressionResult,
   ProviderBuildMissingAuthMessageContext,
@@ -84,6 +87,7 @@ export type {
   ProviderCacheTtlEligibilityContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderFailoverErrorContext,
   ProviderModernModelPolicyContext,
   ProviderNormalizeConfigContext,
   ProviderNormalizeToolSchemasContext,
@@ -172,12 +176,19 @@ export function definePluginEntry({
   configSchema = emptyPluginConfigSchema,
   register,
 }: DefinePluginEntryOptions): DefinedPluginEntry {
+  let resolvedConfigSchema: OpenClawPluginConfigSchema | undefined;
+  const getConfigSchema = (): OpenClawPluginConfigSchema => {
+    resolvedConfigSchema ??= resolvePluginConfigSchema(configSchema);
+    return resolvedConfigSchema;
+  };
   return {
     id,
     name,
     description,
     ...(kind ? { kind } : {}),
-    configSchema: resolvePluginConfigSchema(configSchema),
+    get configSchema() {
+      return getConfigSchema();
+    },
     register,
   };
 }

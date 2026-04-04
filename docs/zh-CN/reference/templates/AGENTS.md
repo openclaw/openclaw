@@ -4,7 +4,7 @@ read_when:
 summary: AGENTS.md 的工作区模板
 x-i18n:
   generated_at: "2026-02-01T21:37:51Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 137c1346c44158b0688968b3b33cbc5cedcc978822e7737d21b54f67ccd7933a
   source_path: reference/templates/AGENTS.md

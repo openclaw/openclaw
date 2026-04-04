@@ -139,14 +139,6 @@ What you set:
     On macOS, choose "Always Allow" so launchd starts do not block.
 
   </Accordion>
-  <Accordion title="Anthropic setup-token (manual)">
-    Supported for manual config, not shown as an interactive assistant choice.
-
-    - Generate on any machine: `claude setup-token`
-    - Run on the gateway host: `openclaw models auth setup-token --provider anthropic`
-    - Or paste an existing token: `openclaw models auth paste-token --provider anthropic`
-
-  </Accordion>
   <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
     If `~/.codex/auth.json` exists, the wizard can reuse it.
     Reused Codex CLI credentials stay managed by Codex CLI; OpenClaw re-reads
@@ -232,8 +224,8 @@ Model behavior:
 
 Credential and profile paths:
 
-- OAuth credentials: `~/.openclaw/credentials/oauth.json`
 - Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
 
 Credential storage mode:
 
@@ -259,8 +251,10 @@ Credential storage mode:
 
 <Note>
 Headless and server tip: complete OAuth on a machine with a browser, then copy
-`~/.openclaw/credentials/oauth.json` (or `$OPENCLAW_STATE_DIR/credentials/oauth.json`)
-to the gateway host.
+that agent's `auth-profiles.json` (for example
+`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
+`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
+is only a legacy import source.
 </Note>
 
 ## Outputs and internals

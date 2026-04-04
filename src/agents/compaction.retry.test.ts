@@ -47,7 +47,7 @@ describe("compaction retry integration", () => {
       content: [{ type: "text", text: "Test response" }],
       api: "openai-responses",
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.4",
       usage: {
         input: 0,
         output: 0,

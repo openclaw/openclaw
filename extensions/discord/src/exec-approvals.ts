@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
-import { parseDiscordTarget } from "./targets.js";
+import { parseDiscordTarget } from "./target-parsing.js";
 
 function normalizeDiscordApproverId(value: string): string | undefined {
   const trimmed = value.trim();

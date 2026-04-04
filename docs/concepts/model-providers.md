@@ -28,14 +28,14 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`,
-  `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`,
-  `refreshOAuth`, `buildAuthDoctorHint`,
-  `isCacheTtlEligible`, `buildMissingAuthMessage`,
-  `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`,
-  `supportsXHighThinking`, `resolveDefaultThinkingLevel`,
-  `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot`.
+  `normalizeConfig`, `resolveDynamicModel`, `prepareDynamicModel`,
+  `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
+  `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
+  `matchesContextOverflowError`, `classifyFailoverReason`,
+  `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
+  `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
+  `resolveDefaultThinkingLevel`, `applyConfigDefaults`, `isModernModelRef`,
+  `prepareRuntimeAuth`, `resolveUsageAuth`, and `fetchUsageSnapshot`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
   family, transcript/tooling quirks, transport/cache hints). It is not the
   same as the [public capability model](/plugins/architecture#public-capability-model)
@@ -53,6 +53,7 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
+- `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
@@ -67,6 +68,10 @@ Typical split:
   refreshers are not enough
 - `buildAuthDoctorHint`: provider appends repair guidance when OAuth refresh
   fails
+- `matchesContextOverflowError`: provider recognizes provider-specific
+  context-window overflow errors that generic heuristics would miss
+- `classifyFailoverReason`: provider maps provider-specific raw transport/API
+  errors to failover reasons such as rate limit or overload
 - `isCacheTtlEligible`: provider decides which upstream model ids support prompt-cache TTL
 - `buildMissingAuthMessage`: provider replaces the generic auth-store error
   with a provider-specific recovery hint
@@ -78,6 +83,8 @@ Typical split:
 - `supportsXHighThinking`: provider opts selected models into `xhigh`
 - `resolveDefaultThinkingLevel`: provider owns default `/think` policy for a
   model family
+- `applyConfigDefaults`: provider applies provider-specific global defaults
+  during config materialization based on auth mode, env, or model family
 - `isModernModelRef`: provider owns live/smoke preferred-model matching
 - `prepareRuntimeAuth`: provider turns a configured credential into a short
   lived runtime token
@@ -89,7 +96,10 @@ Typical split:
 Current bundled examples:
 
 - `anthropic`: Claude 4.6 forward-compat fallback, auth repair hints, usage
-  endpoint fetching, and cache-TTL/provider-family metadata
+  endpoint fetching, cache-TTL/provider-family metadata, and auth-aware global
+  config defaults
+- `amazon-bedrock`: provider-owned context-overflow matching and failover
+  reason classification for Bedrock-specific throttle/not-ready errors
 - `openrouter`: pass-through model ids, request wrappers, provider capability
   hints, and cache-TTL policy
 - `github-copilot`: onboarding/device login, forward-compat model fallback,
@@ -109,7 +119,7 @@ Current bundled examples:
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
   policy, binary-thinking/live-model policy, and usage auth + quota fetching
 - `mistral`, `opencode`, and `opencode-go`: plugin-owned capability metadata
-- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
+- `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi`,
   `modelstudio`, `nvidia`, `qianfan`, `stepfun`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
@@ -164,13 +174,13 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 ### Anthropic
 
 - Provider: `anthropic`
-- Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
+- Auth: `ANTHROPIC_API_KEY`
 - Optional rotation: `ANTHROPIC_API_KEYS`, `ANTHROPIC_API_KEY_1`, `ANTHROPIC_API_KEY_2`, plus `OPENCLAW_LIVE_ANTHROPIC_KEY` (single override)
 - Example model: `anthropic/claude-opus-4-6`
-- CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
+- CLI: `openclaw onboard --auth-choice apiKey` or `openclaw onboard --auth-choice anthropic-cli`
 - Direct public Anthropic requests support the shared `/fast` toggle and `params.fastMode`, including API-key and OAuth-authenticated traffic sent to `api.anthropic.com`; OpenClaw maps that to Anthropic `service_tier` (`auto` vs `standard_only`)
-- Billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and subscription-auth traffic now requires **Extra Usage** billed separately from the subscription.
-- Recommendation: Anthropic API key auth is the safer, recommended path over subscription setup-token auth.
+- Billing note: Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover OpenClaw, and Claude CLI traffic now requires **Extra Usage** billed separately from the subscription.
+- Existing legacy Anthropic token profiles still run if already configured, but new setup is no longer offered through onboarding or auth commands.
 
 ```json5
 {
@@ -270,7 +280,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Provider: `kilocode`
 - Auth: `KILOCODE_API_KEY`
 - Example model: `kilocode/anthropic/claude-opus-4.6`
-- CLI: `openclaw onboard --kilocode-api-key <key>`
+- CLI: `openclaw onboard --auth-choice kilocode-api-key`
 - Base URL: `https://api.kilo.ai/api/gateway/`
 - Expanded built-in catalog includes GLM-5 Free, MiniMax M2.7 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
 
@@ -279,12 +289,12 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
 ### Other bundled provider plugins
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
-- Example model: `openrouter/anthropic/claude-sonnet-4-6`
+- Example model: `openrouter/auto`
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - MiniMax: `minimax` (`MINIMAX_API_KEY`)
 - Moonshot: `moonshot` (`MOONSHOT_API_KEY`)
-- Kimi Coding: `kimi-coding` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
+- Kimi Coding: `kimi` (`KIMI_API_KEY` or `KIMICODE_API_KEY`)
 - Qianfan: `qianfan` (`QIANFAN_API_KEY`)
 - Model Studio: `modelstudio` (`MODELSTUDIO_API_KEY`)
 - NVIDIA: `nvidia` (`NVIDIA_API_KEY`)
@@ -361,18 +371,20 @@ Kimi K2 model IDs:
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 
-- Provider: `kimi-coding`
+- Provider: `kimi`
 - Auth: `KIMI_API_KEY`
-- Example model: `kimi-coding/k2p5`
+- Example model: `kimi/kimi-code`
 
 ```json5
 {
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi-coding/k2p5" } },
+    defaults: { model: { primary: "kimi/kimi-code" } },
   },
 }
 ```
+
+Legacy `kimi/k2p5` remains accepted as a compatibility model id.
 
 ### Volcano Engine (Doubao)
 

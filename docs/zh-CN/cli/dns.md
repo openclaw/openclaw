@@ -6,7 +6,7 @@ summary: "`openclaw dns` 的 CLI 参考（广域设备发现辅助工具）"
 title: dns
 x-i18n:
   generated_at: "2026-02-03T07:44:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: d2011e41982ffb4b71ab98211574529bc1c8b7769ab1838abddd593f42b12380
   source_path: cli/dns.md

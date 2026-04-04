@@ -447,6 +447,14 @@
       "types": "./dist/plugin-sdk/channel-actions.d.ts",
       "default": "./dist/plugin-sdk/channel-actions.js"
     },
+    "./plugin-sdk/channel-plugin-common": {
+      "types": "./dist/plugin-sdk/channel-plugin-common.d.ts",
+      "default": "./dist/plugin-sdk/channel-plugin-common.js"
+    },
+    "./plugin-sdk/channel-core": {
+      "types": "./dist/plugin-sdk/channel-core.d.ts",
+      "default": "./dist/plugin-sdk/channel-core.js"
+    },
     "./plugin-sdk/channel-contract": {
       "types": "./dist/plugin-sdk/channel-contract.d.ts",
       "default": "./dist/plugin-sdk/channel-contract.js"
@@ -478,6 +486,10 @@
     "./plugin-sdk/channel-targets": {
       "types": "./dist/plugin-sdk/channel-targets.d.ts",
       "default": "./dist/plugin-sdk/channel-targets.js"
+    },
+    "./plugin-sdk/messaging-targets": {
+      "types": "./dist/plugin-sdk/messaging-targets.d.ts",
+      "default": "./dist/plugin-sdk/messaging-targets.js"
     },
     "./plugin-sdk/feishu": {
       "types": "./dist/plugin-sdk/feishu.d.ts",
@@ -883,6 +895,10 @@
       "types": "./dist/plugin-sdk/synthetic.d.ts",
       "default": "./dist/plugin-sdk/synthetic.js"
     },
+    "./plugin-sdk/target-resolver-runtime": {
+      "types": "./dist/plugin-sdk/target-resolver-runtime.d.ts",
+      "default": "./dist/plugin-sdk/target-resolver-runtime.js"
+    },
     "./plugin-sdk/thread-ownership": {
       "types": "./dist/plugin-sdk/thread-ownership.d.ts",
       "default": "./dist/plugin-sdk/thread-ownership.js"
@@ -1133,6 +1149,7 @@
     "test:install:e2e:openai": "OPENCLAW_E2E_MODELS=openai bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
     "test:live": "node scripts/test-live.mjs",
+    "test:live:cache": "bun scripts/check-live-cache.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
     "test:live:models-profiles": "node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts",
     "test:max": "OPENCLAW_VITEST_MAX_WORKERS=8 vitest run --config vitest.config.ts",

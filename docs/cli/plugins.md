@@ -32,8 +32,9 @@ openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 ```
 
-Bundled plugins ship with OpenClaw but start disabled. Use `plugins enable` to
-activate them.
+Bundled plugins ship with OpenClaw. Some are enabled by default (for example
+bundled model providers, bundled speech providers, and the bundled browser
+plugin); others require `plugins enable`.
 
 Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON
 Schema (`configSchema`, even if empty). Compatible bundles use their own bundle

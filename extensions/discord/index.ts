@@ -1,4 +1,4 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { discordPlugin } from "./src/channel.js";
 import { setDiscordRuntime } from "./src/runtime.js";
 

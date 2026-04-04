@@ -204,7 +204,6 @@ Some categories are exclusive (only one active at a time):
 openclaw plugins list                    # compact inventory
 openclaw plugins inspect <id>            # deep detail
 openclaw plugins inspect <id> --json     # machine-readable
-openclaw plugins status                  # operational summary
 openclaw plugins doctor                  # diagnostics
 
 openclaw plugins install <package>        # install (ClawHub first, then npm)
@@ -216,10 +215,17 @@ openclaw plugins install <spec> --dangerously-force-unsafe-install
 openclaw plugins update <id>             # update one plugin
 openclaw plugins update <id> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
+openclaw plugins uninstall <id>          # remove config/install records
+openclaw plugins uninstall <id> --keep-files
+openclaw plugins marketplace list <source>
 
 openclaw plugins enable <id>
 openclaw plugins disable <id>
 ```
+
+Bundled plugins ship with OpenClaw. Many are enabled by default (for example
+bundled model providers, bundled speech providers, and the bundled browser
+plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 
 `--force` overwrites an existing installed plugin or hook pack in place.
 It is not supported with `--link`, which reuses the source path instead of
@@ -239,7 +245,9 @@ See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 
 ## Plugin API overview
 
-Plugins export either a function or an object with `register(api)`:
+Native plugins export an entry object that exposes `register(api)`. Older
+plugins may still use `activate(api)` as a legacy alias, but new plugins should
+use `register`.
 
 ```typescript
 export default definePluginEntry({
@@ -258,6 +266,11 @@ export default definePluginEntry({
   },
 });
 ```
+
+OpenClaw loads the entry object and calls `register(api)` during plugin
+activation. The loader still falls back to `activate(api)` for older plugins,
+but bundled plugins and new external plugins should treat `register` as the
+public contract.
 
 Common registration methods:
 

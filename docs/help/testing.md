@@ -244,26 +244,6 @@ openclaw models list
 openclaw models list --json
 ```
 
-## Live: Anthropic setup-token smoke
-
-- Test: `src/agents/anthropic.setup-token.live.test.ts`
-- Goal: verify Claude Code CLI setup-token (or a pasted setup-token profile) can complete an Anthropic prompt.
-- Enable:
-  - `pnpm test:live` (or `OPENCLAW_LIVE_TEST=1` if invoking Vitest directly)
-  - `OPENCLAW_LIVE_SETUP_TOKEN=1`
-- Token sources (pick one):
-  - Profile: `OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test`
-  - Raw token: `OPENCLAW_LIVE_SETUP_TOKEN_VALUE=sk-ant-oat01-...`
-- Model override (optional):
-  - `OPENCLAW_LIVE_SETUP_TOKEN_MODEL=anthropic/claude-opus-4-6`
-
-Setup example:
-
-```bash
-openclaw models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
-OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
-```
-
 ## Live: CLI backend smoke (Claude Code CLI or other local CLIs)
 
 - Test: `src/gateway/gateway-cli-backend.live.test.ts`

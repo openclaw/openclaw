@@ -1,19 +1,19 @@
-import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { AuthChoice } from "./onboard-types.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "../plugin-sdk/google.js";
 import { MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
 import { ZAI_CODING_CN_BASE_URL, ZAI_CODING_GLOBAL_BASE_URL } from "../plugin-sdk/zai.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { providerApiKeyAuthRuntime } from "../plugins/provider-api-key-auth.runtime.js";
-import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
-import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
   createAuthTestLifecycle,
@@ -650,6 +650,27 @@ describe("applyAuthChoice", () => {
   });
 
   resolvePluginProviders.mockReturnValue(createDefaultProviderPlugins());
+
+  it("rejects legacy Anthropic token setup aliases", async () => {
+    await setupTempState();
+
+    await expect(
+      applyAuthChoice({
+        authChoice: "token",
+        config: {} as OpenClawConfig,
+        prompter: createPrompter({}),
+        runtime: createExitThrowingRuntime(),
+        setDefaultModel: true,
+        opts: { tokenProvider: "anthropic" },
+      }),
+    ).rejects.toThrow(
+      [
+        'Auth choice "token" is no longer supported for Anthropic setup in OpenClaw.',
+        "Existing Anthropic token profiles still run if they are already configured.",
+        'Use "anthropic-cli" or "apiKey" instead.',
+      ].join("\n"),
+    );
+  });
 
   it("does not throw when openai-codex oauth fails", async () => {
     await setupTempState();

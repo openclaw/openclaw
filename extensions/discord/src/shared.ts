@@ -2,7 +2,6 @@ import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -53,7 +52,7 @@ export function createDiscordPluginBase(params: {
   | "config"
   | "setup"
 > {
-  return createChannelPluginBase({
+  return {
     id: DISCORD_CHANNEL,
     setupWizard: discordSetupWizard,
     meta: { ...getChatChannelMeta(DISCORD_CHANNEL) },
@@ -90,7 +89,7 @@ export function createDiscordPluginBase(params: {
         }),
     },
     setup: params.setup,
-  }) as Pick<
+  } as Pick<
     ChannelPlugin<ResolvedDiscordAccount>,
     | "id"
     | "meta"

@@ -12,7 +12,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
     const messages: AgentMessage[] = [
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call_1", name: "web_fetch", arguments: { url: "x" } }],
-        model: "gpt-5.2",
+        model: "gpt-5.4",
         stopReason: "toolUse",
         timestamp: 1,
       }),
@@ -38,7 +38,7 @@ describe("sanitizeSessionHistory toolResult details stripping", () => {
       messages,
       modelApi: "anthropic-messages",
       provider: "anthropic",
-      modelId: "claude-opus-4-5",
+      modelId: "claude-opus-4-6",
       sessionManager: sm,
       sessionId: "test",
     });

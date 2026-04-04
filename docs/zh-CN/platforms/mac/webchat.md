@@ -5,7 +5,7 @@ summary: macOS 应用如何嵌入 Gateway 网关 WebChat 以及如何调试
 title: WebChat
 x-i18n:
   generated_at: "2026-02-03T07:52:46Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 04ff448758e530098e2004625f33e42fc3dbe31137cd3beec2d55590e507de08
   source_path: platforms/mac/webchat.md

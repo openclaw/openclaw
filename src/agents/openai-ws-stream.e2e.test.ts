@@ -38,8 +38,8 @@ let openAIWsConnectionModule: OpenAIWsConnectionModule;
 const model = {
   api: "openai-responses" as const,
   provider: "openai",
-  id: "gpt-5.2",
-  name: "gpt-5.2",
+  id: "gpt-5.4",
+  name: "gpt-5.4",
   contextWindow: 128_000,
   maxTokens: 4_096,
   reasoning: true,

@@ -5,7 +5,7 @@ summary: 从 Gateway 网关暴露 OpenAI 兼容的 /v1/chat/completions HTTP 端
 title: OpenAI Chat Completions
 x-i18n:
   generated_at: "2026-02-03T07:48:15Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 6f935777f489bff925a3bf18b1e4b7493f83ae7b1e581890092e5779af59b732
   source_path: gateway/openai-http-api.md

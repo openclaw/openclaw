@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
@@ -8,8 +9,7 @@ import {
   type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 
 type BlueBubblesBindingTargetKind = "subagent" | "acp";
 

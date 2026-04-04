@@ -6,7 +6,7 @@ summary: "`openclaw models` 的 CLI 参考（status/list/set/scan、别名、回
 title: models
 x-i18n:
   generated_at: "2026-02-01T20:21:16Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 923b6ffc7de382ba25bc6e699f0515607e74877b39f2136ccdba2d99e1b1e9c3
   source_path: cli/models.md

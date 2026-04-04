@@ -128,7 +128,7 @@ export function createAnthropicBetaHeadersWrapper(
         : betas;
     if (isOauth && requestedContext1m) {
       log.warn(
-        `ignoring context1m for Anthropic subscription (OAuth setup-token) auth on ${model.provider}/${model.id}; falling back to the standard context window because Anthropic rejects context-1m beta with OAuth auth`,
+        `ignoring context1m for Anthropic Claude CLI or legacy token auth on ${model.provider}/${model.id}; falling back to the standard context window because Anthropic rejects context-1m beta with non-API-key auth`,
       );
     }
 

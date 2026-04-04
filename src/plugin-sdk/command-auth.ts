@@ -1,6 +1,6 @@
-import { getBundledChannelContractSurfaceModule } from "../channels/plugins/contract-surfaces.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
+export { buildCommandsPaginationKeyboard } from "./telegram-command-ui.js";
 export {
   createPreCryptoDirectDmAuthorizer,
   resolveInboundDirectDmAccessWithRuntime,
@@ -85,37 +85,6 @@ export {
   buildCommandsMessagePaginated,
   buildHelpMessage,
 } from "../auto-reply/status.js";
-
-type TelegramCommandUiContract = {
-  buildCommandsPaginationKeyboard: (
-    currentPage: number,
-    totalPages: number,
-    agentId?: string,
-  ) => Array<Array<{ text: string; callback_data: string }>>;
-};
-
-function loadTelegramCommandUiContract(): TelegramCommandUiContract {
-  const contract = getBundledChannelContractSurfaceModule<TelegramCommandUiContract>({
-    pluginId: "telegram",
-    preferredBasename: "contract-api.ts",
-  });
-  if (!contract) {
-    throw new Error("telegram command ui contract surface is unavailable");
-  }
-  return contract;
-}
-
-export function buildCommandsPaginationKeyboard(
-  currentPage: number,
-  totalPages: number,
-  agentId?: string,
-): Array<Array<{ text: string; callback_data: string }>> {
-  return loadTelegramCommandUiContract().buildCommandsPaginationKeyboard(
-    currentPage,
-    totalPages,
-    agentId,
-  );
-}
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;

@@ -7,7 +7,7 @@ summary: 将 Claude Max/Pro 订阅用作 OpenAI 兼容的 API 端点
 title: Claude Max API 代理
 x-i18n:
   generated_at: "2026-02-01T21:34:52Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 63b61096b96b720c6d0c317520852db65d72ca8279b3868f35e8387fe3b6ce41
   source_path: providers/claude-max-api-proxy.md
