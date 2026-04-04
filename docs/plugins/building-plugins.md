@@ -10,8 +10,10 @@ read_when:
 
 # Building Plugins
 
-Plugins extend OpenClaw with new capabilities: channels, model providers, speech,
-image generation, web search, agent tools, or any combination.
+Plugins extend OpenClaw with new capabilities: channels, model providers,
+speech, realtime transcription, realtime voice, media understanding, image
+generation, video generation, web fetch, web search, agent tools, or any
+combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
 [ClawHub](/tools/clawhub) or npm and users install with

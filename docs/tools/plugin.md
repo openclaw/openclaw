@@ -306,20 +306,24 @@ public contract.
 
 Common registration methods:
 
-| Method                               | What it registers    |
-| ------------------------------------ | -------------------- |
-| `registerProvider`                   | Model provider (LLM) |
-| `registerChannel`                    | Chat channel         |
-| `registerTool`                       | Agent tool           |
-| `registerHook` / `on(...)`           | Lifecycle hooks      |
-| `registerSpeechProvider`             | Text-to-speech / STT |
-| `registerMediaUnderstandingProvider` | Image/audio analysis |
-| `registerImageGenerationProvider`    | Image generation     |
-| `registerWebSearchProvider`          | Web search           |
-| `registerHttpRoute`                  | HTTP endpoint        |
-| `registerCommand` / `registerCli`    | CLI commands         |
-| `registerContextEngine`              | Context engine       |
-| `registerService`                    | Background service   |
+| Method                                  | What it registers           |
+| --------------------------------------- | --------------------------- |
+| `registerProvider`                      | Model provider (LLM)        |
+| `registerChannel`                       | Chat channel                |
+| `registerTool`                          | Agent tool                  |
+| `registerHook` / `on(...)`              | Lifecycle hooks             |
+| `registerSpeechProvider`                | Text-to-speech / STT        |
+| `registerRealtimeTranscriptionProvider` | Streaming STT               |
+| `registerRealtimeVoiceProvider`         | Duplex realtime voice       |
+| `registerMediaUnderstandingProvider`    | Image/audio analysis        |
+| `registerImageGenerationProvider`       | Image generation            |
+| `registerVideoGenerationProvider`       | Video generation            |
+| `registerWebFetchProvider`              | Web fetch / scrape provider |
+| `registerWebSearchProvider`             | Web search                  |
+| `registerHttpRoute`                     | HTTP endpoint               |
+| `registerCommand` / `registerCli`       | CLI commands                |
+| `registerContextEngine`                 | Context engine              |
+| `registerService`                       | Background service          |
 
 Hook guard behavior for typed lifecycle hooks:
 
