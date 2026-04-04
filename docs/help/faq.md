@@ -1025,11 +1025,20 @@ for usage/billing and raise limits as needed.
 
     ```bash
     openclaw skills search "calendar"
+    openclaw skills search --limit 20
     openclaw skills install <skill-slug>
+    openclaw skills install <skill-slug> --version <version>
+    openclaw skills install <skill-slug> --force
     openclaw skills update --all
+    openclaw skills list --eligible
+    openclaw skills check
     ```
 
-    Install the separate `clawhub` CLI only if you want to publish or sync your own skills. For shared installs across agents, put the skill under `~/.openclaw/skills` and use `agents.defaults.skills` or `agents.list[].skills` if you want to narrow which agents can see it.
+    Native `openclaw skills install` writes into the active workspace `skills/`
+    directory. Install the separate `clawhub` CLI only if you want to publish or
+    sync your own skills. For shared installs across agents, put the skill under
+    `~/.openclaw/skills` and use `agents.defaults.skills` or
+    `agents.list[].skills` if you want to narrow which agents can see it.
 
   </Accordion>
 
