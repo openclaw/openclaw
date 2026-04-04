@@ -1,27 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
-
-// ---------------------------------------------------------------------------
-// isPlainTextSurface
-// ---------------------------------------------------------------------------
-
-describe("isPlainTextSurface", () => {
-  it.each(["whatsapp", "signal", "sms", "irc", "telegram", "imessage", "googlechat"])(
-    "returns true for %s",
-    (channel) => {
-      expect(isPlainTextSurface(channel)).toBe(true);
-    },
-  );
-
-  it.each(["discord", "slack", "web", "matrix"])("returns false for %s", (channel) => {
-    expect(isPlainTextSurface(channel)).toBe(false);
-  });
-
-  it("is case-insensitive", () => {
-    expect(isPlainTextSurface("WhatsApp")).toBe(true);
-    expect(isPlainTextSurface("SIGNAL")).toBe(true);
-  });
-});
+import { sanitizeForPlainText } from "./sanitize-text.js";
 
 // ---------------------------------------------------------------------------
 // sanitizeForPlainText

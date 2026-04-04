@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -58,6 +59,7 @@ export default defineSingleProviderPluginEntry({
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
+    buildReplayPolicy: (ctx) => buildOpenAICompatibleReplayPolicy(ctx.modelApi),
     wrapStreamFn: (ctx) => {
       const thinkingType = resolveMoonshotThinkingType({
         configuredThinking: ctx.extraParams?.thinking,

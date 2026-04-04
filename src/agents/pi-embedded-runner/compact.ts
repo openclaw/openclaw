@@ -19,6 +19,7 @@ import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
@@ -61,10 +62,6 @@ import {
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
-import {
-  resolveProviderRequestConfig,
-  sanitizeRuntimeProviderRequestOverrides,
-} from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { resolveSandboxContext } from "../sandbox.js";
@@ -102,27 +99,33 @@ import {
 } from "./compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
-import {
-  logToolSchemasForGoogle,
-  sanitizeSessionHistory,
-  sanitizeToolsForGoogle,
-  validateReplayTurns,
-} from "./google.js";
+import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
+import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { buildModelAliasLines, resolveModelAsync } from "./model.js";
+import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
+import { shouldUseOpenAIWebSocketTransport } from "./run/attempt.thread-helpers.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { truncateSessionAfterCompaction } from "./session-truncation.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
+import {
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+} from "./stream-resolution.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
+import {
+  logProviderToolSchemaDiagnostics,
+  normalizeProviderToolSchemas,
+} from "./tool-schema-runtime.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
@@ -364,24 +367,8 @@ export async function compactEmbeddedPiSessionDirect(
           profileId: apiKeyInfo.profileId,
         },
       });
-      if (preparedAuth?.baseUrl || preparedAuth?.request) {
-        const runtimeRequestConfig = resolveProviderRequestConfig({
-          provider: runtimeModel.provider,
-          api: runtimeModel.api,
-          baseUrl: preparedAuth?.baseUrl ?? runtimeModel.baseUrl,
-          providerHeaders:
-            runtimeModel.headers && typeof runtimeModel.headers === "object"
-              ? runtimeModel.headers
-              : undefined,
-          request: sanitizeRuntimeProviderRequestOverrides(preparedAuth?.request),
-          capability: "llm",
-          transport: "stream",
-        });
-        runtimeModel = {
-          ...runtimeModel,
-          ...(preparedAuth?.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
-          ...(runtimeRequestConfig.headers ? { headers: runtimeRequestConfig.headers } : {}),
-        };
+      if (preparedAuth?.baseUrl) {
+        runtimeModel = { ...runtimeModel, baseUrl: preparedAuth.baseUrl };
       }
       const runtimeApiKey = preparedAuth?.apiKey ?? apiKeyInfo.apiKey;
       hasRuntimeAuthExchange = Boolean(preparedAuth?.apiKey);
@@ -413,6 +400,10 @@ export async function compactEmbeddedPiSessionDirect(
     sessionId: params.sessionId,
     cwd: effectiveWorkspace,
   });
+  const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
 
   let restoreSkillEnv: (() => void) | undefined;
   let compactionSessionManager: unknown = null;
@@ -420,6 +411,7 @@ export async function compactEmbeddedPiSessionDirect(
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
+      agentId: effectiveSkillAgentId,
       skillsSnapshot: params.skillsSnapshot,
     });
     restoreSkillEnv = params.skillsSnapshot
@@ -436,6 +428,7 @@ export async function compactEmbeddedPiSessionDirect(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      agentId: effectiveSkillAgentId,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -452,18 +445,20 @@ export async function compactEmbeddedPiSessionDirect(
     });
     // Apply contextTokens cap to model so pi-coding-agent's auto-compaction
     // threshold uses the effective limit, not the native context window.
+    const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
       provider,
       modelId,
-      modelContextWindow: runtimeModel.contextWindow,
+      modelContextTokens: readPiModelContextTokens(runtimeModel),
+      modelContextWindow: runtimeModelWithContext.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
     });
     const effectiveModel = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
-        ctxInfo.tokens < (runtimeModel.contextWindow ?? Infinity)
-          ? { ...runtimeModel, contextWindow: ctxInfo.tokens }
-          : runtimeModel,
+        ctxInfo.tokens < (runtimeModelWithContext.contextWindow ?? Infinity)
+          ? { ...runtimeModelWithContext, contextWindow: ctxInfo.tokens }
+          : runtimeModelWithContext,
         apiKeyInfo,
       ),
       // Skip header injection when runtime auth exchange produced a
@@ -502,7 +497,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
-    const tools = sanitizeToolsForGoogle({
+    const tools = normalizeProviderToolSchemas({
       tools: toolsEnabled ? toolsRaw : [],
       provider,
       config: params.config,
@@ -535,7 +530,7 @@ export async function compactEmbeddedPiSessionDirect(
       ...(bundleLspRuntime?.tools ?? []),
     ];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
-    logToolSchemasForGoogle({
+    logProviderToolSchemaDiagnostics({
       tools: effectiveTools,
       provider,
       config: params.config,
@@ -757,13 +752,61 @@ export async function compactEmbeddedPiSessionDirect(
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride());
       const providerStreamFn = registerProviderStreamForModel({
-        model,
+        model: effectiveModel,
         cfg: params.config,
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      if (providerStreamFn) {
-        session.agent.streamFn = providerStreamFn;
+      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
+        provider,
+        modelApi: effectiveModel.api,
+      });
+      const wsApiKey = shouldUseWebSocketTransport
+        ? await authStorage.getApiKey(provider)
+        : undefined;
+      if (shouldUseWebSocketTransport && !wsApiKey) {
+        log.warn(
+          `[ws-stream] no API key for provider=${provider}; keeping compaction HTTP transport`,
+        );
+      }
+      // Compaction builds the same embedded system prompt, so it must flow
+      // through the same transport/payload shaping stack as normal turns.
+      session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+        currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session }),
+        providerStreamFn,
+        shouldUseWebSocketTransport,
+        wsApiKey,
+        sessionId: params.sessionId,
+        signal: runAbortController.signal,
+        model: effectiveModel,
+        authStorage,
+      });
+      const { effectiveExtraParams } = applyExtraParamsToAgent(
+        session.agent,
+        params.config,
+        provider,
+        modelId,
+        undefined,
+        params.thinkLevel,
+        sessionAgentId,
+        effectiveWorkspace,
+        effectiveModel,
+        agentDir,
+      );
+      const agentTransportOverride = resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams,
+      });
+      if (
+        agentTransportOverride &&
+        typeof (session.agent as { setTransport?: unknown }).setTransport === "function" &&
+        (session.agent as { transport?: unknown }).transport !== agentTransportOverride
+      ) {
+        (
+          session.agent as {
+            setTransport(nextTransport: string): void;
+          }
+        ).setTransport(agentTransportOverride);
       }
 
       try {
@@ -962,14 +1005,30 @@ export async function compactEmbeddedPiSessionDirect(
           },
         };
       } finally {
-        await flushPendingToolResultsAfterIdle({
-          agent: session?.agent,
-          sessionManager,
-          clearPendingOnTimeout: true,
-        });
-        session.dispose();
-        await bundleMcpRuntime?.dispose();
-        await bundleLspRuntime?.dispose();
+        try {
+          await flushPendingToolResultsAfterIdle({
+            agent: session?.agent,
+            sessionManager,
+            clearPendingOnTimeout: true,
+          });
+        } catch {
+          /* best-effort */
+        }
+        try {
+          session.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleMcpRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
+        try {
+          await bundleLspRuntime?.dispose();
+        } catch {
+          /* best-effort */
+        }
       }
     } finally {
       await sessionLock.release();
@@ -1026,11 +1085,13 @@ export async function compactEmbeddedPiSession(
           agentDir,
           params.config,
         );
+        const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
         const ceCtxInfo = resolveContextWindowInfo({
           cfg: params.config,
           provider: ceProvider,
           modelId: ceModelId,
-          modelContextWindow: ceModel?.contextWindow,
+          modelContextTokens: readPiModelContextTokens(ceModel),
+          modelContextWindow: ceRuntimeModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
         // When the context engine owns compaction, its compact() implementation

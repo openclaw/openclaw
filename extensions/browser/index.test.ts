@@ -14,8 +14,8 @@ const runtimeApiMocks = vi.hoisted(() => ({
   registerBrowserCli: vi.fn(),
 }));
 
-vi.mock("./runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+vi.mock("./runtime-api.js", async () => {
+  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
   return {
     ...actual,
     createBrowserPluginService: runtimeApiMocks.createBrowserPluginService,

@@ -70,6 +70,7 @@ export function createDiscordMonitorClient(params: {
   accountId: string;
   applicationId: string;
   token: string;
+  proxyFetch?: typeof fetch;
   commands: BaseCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
@@ -115,6 +116,7 @@ export function createDiscordMonitorClient(params: {
       token: params.token,
       autoDeploy: false,
       eventQueue: eventQueueOpts,
+      ...(params.proxyFetch ? { requestOptions: { fetch: params.proxyFetch } } : {}),
     },
     {
       commands: params.commands,

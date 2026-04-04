@@ -14,7 +14,7 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPENROUTER_API_KEY"
+openclaw onboard --auth-choice openrouter-api-key
 ```
 
 ## Config snippet
@@ -24,7 +24,7 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
   env: { OPENROUTER_API_KEY: "sk-or-..." },
   agents: {
     defaults: {
-      model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
+      model: { primary: "openrouter/auto" },
     },
   },
 }
@@ -33,5 +33,7 @@ openclaw onboard --auth-choice apiKey --token-provider openrouter --token "$OPEN
 ## Notes
 
 - Model refs are `openrouter/<provider>/<model>`.
+- Onboarding defaults to `openrouter/auto`. Switch to a concrete model later with
+  `openclaw models set openrouter/<provider>/<model>`.
 - For more model/provider options, see [/concepts/model-providers](/concepts/model-providers).
 - OpenRouter uses a Bearer token with your API key under the hood.

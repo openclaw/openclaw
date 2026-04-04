@@ -14,6 +14,10 @@ export { logConfigUpdated } from "../config/logging.js";
 export { updateConfig } from "../commands/models/shared.js";
 export { resolveChannelModelOverride } from "../channels/model-overrides.js";
 export {
+  evaluateSupplementalContextVisibility,
+  filterSupplementalContextItems,
+} from "../security/context-visibility.js";
+export {
   resolveChannelContextVisibilityMode,
   resolveDefaultContextVisibility,
 } from "../config/context-visibility.js";
@@ -39,16 +43,7 @@ export {
   TELEGRAM_COMMAND_NAME_PATTERN,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
-} from "../config/telegram-custom-commands.js";
-export {
-  mapStreamingModeToSlackLegacyDraftStreamMode,
-  resolveDiscordPreviewStreamMode,
-  resolveSlackNativeStreaming,
-  resolveSlackStreamingMode,
-  resolveTelegramPreviewStreamMode,
-  type SlackLegacyDraftStreamMode,
-  type StreamingMode,
-} from "../config/discord-preview-streaming.js";
+} from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
@@ -60,17 +55,23 @@ export {
   resolveRequiredConfiguredSecretRefInputString,
 } from "../gateway/resolve-configured-secret-input-string.js";
 export type {
+  BlockStreamingCoalesceConfig,
   DiscordAccountConfig,
   DiscordActionConfig,
   DiscordAutoPresenceConfig,
+  DiscordConfig,
   DiscordExecApprovalConfig,
   DiscordGuildChannelConfig,
   DiscordGuildEntry,
   DiscordIntentsConfig,
   DiscordSlashCommandConfig,
+  DmConfig,
   DmPolicy,
   ContextVisibilityMode,
   GroupPolicy,
+  GroupToolPolicyBySenderConfig,
+  GroupToolPolicyConfig,
+  MarkdownConfig,
   MarkdownTableMode,
   OpenClawConfig,
   ReplyToMode,

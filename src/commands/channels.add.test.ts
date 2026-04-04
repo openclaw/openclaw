@@ -24,24 +24,30 @@ const manifestRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn(() => ({ plugins: [], diagnostics: [] })),
 }));
 
-vi.mock("../channels/plugins/catalog.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../channels/plugins/catalog.js")>();
+vi.mock("../channels/plugins/catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
+    "../channels/plugins/catalog.js",
+  );
   return {
     ...actual,
     listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+vi.mock("../plugins/manifest-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/manifest-registry.js")>(
+    "../plugins/manifest-registry.js",
+  );
   return {
     ...actual,
     loadPluginManifestRegistry: manifestRegistryMocks.loadPluginManifestRegistry,
   };
 });
 
-vi.mock("./channel-setup/plugin-install.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./channel-setup/plugin-install.js")>();
+vi.mock("./channel-setup/plugin-install.js", async () => {
+  const actual = await vi.importActual<typeof import("./channel-setup/plugin-install.js")>(
+    "./channel-setup/plugin-install.js",
+  );
   const { createMockChannelSetupPluginInstallModule } =
     await import("./channels.plugin-install.test-helpers.js");
   return createMockChannelSetupPluginInstallModule(actual);

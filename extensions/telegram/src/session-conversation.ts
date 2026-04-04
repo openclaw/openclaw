@@ -1,4 +1,4 @@
-import { parseTelegramTopicConversation } from "openclaw/plugin-sdk/telegram-core";
+import { parseTelegramTopicConversation } from "./topic-conversation.js";
 
 export function resolveTelegramSessionConversation(params: {
   kind: "group" | "channel";

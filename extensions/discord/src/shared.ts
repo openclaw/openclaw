@@ -1,7 +1,7 @@
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
   listDiscordAccountIds,
@@ -9,12 +9,9 @@ import {
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
+import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
-import {
-  createScopedChannelConfigAdapter,
-  getChatChannelMeta,
-  type ChannelPlugin,
-} from "./runtime-api.js";
+import { discordDoctor } from "./doctor.js";
 import { createDiscordSetupWizardProxy } from "./setup-core.js";
 
 export const DISCORD_CHANNEL = "discord" as const;
@@ -47,13 +44,15 @@ export function createDiscordPluginBase(params: {
   | "meta"
   | "setupWizard"
   | "capabilities"
+  | "commands"
+  | "doctor"
   | "streaming"
   | "reload"
   | "configSchema"
   | "config"
   | "setup"
 > {
-  return createChannelPluginBase({
+  return {
     id: DISCORD_CHANNEL,
     setupWizard: discordSetupWizard,
     meta: { ...getChatChannelMeta(DISCORD_CHANNEL) },
@@ -65,6 +64,13 @@ export function createDiscordPluginBase(params: {
       media: true,
       nativeCommands: true,
     },
+    commands: {
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: true,
+      resolveNativeCommandName: ({ commandKey, defaultName }) =>
+        commandKey === "tts" ? "voice" : defaultName,
+    },
+    doctor: discordDoctor,
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
     },
@@ -83,12 +89,14 @@ export function createDiscordPluginBase(params: {
         }),
     },
     setup: params.setup,
-  }) as Pick<
+  } as Pick<
     ChannelPlugin<ResolvedDiscordAccount>,
     | "id"
     | "meta"
     | "setupWizard"
     | "capabilities"
+    | "commands"
+    | "doctor"
     | "streaming"
     | "reload"
     | "configSchema"

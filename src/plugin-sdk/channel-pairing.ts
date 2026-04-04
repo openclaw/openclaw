@@ -4,6 +4,11 @@ export {
   createPairingPrefixStripper,
   createTextPairingAdapter,
 } from "../channels/plugins/pairing-adapters.js";
+export {
+  readChannelAllowFromStore,
+  readChannelAllowFromStoreSync,
+} from "../pairing/pairing-store.js";
+export { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createScopedPairingAccess } from "./pairing-access.js";

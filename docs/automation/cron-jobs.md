@@ -163,7 +163,7 @@ Run an isolated agent turn:
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
 ```
 
 Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
@@ -313,7 +313,7 @@ openclaw doctor
 - Check `cron.enabled` and `OPENCLAW_SKIP_CRON` env var.
 - Confirm the Gateway is running continuously.
 - For `cron` schedules, verify timezone (`--tz`) vs the host timezone.
-- `reason: not-due` in run output means manual run called without `--force`.
+- `reason: not-due` in run output means manual run was checked with `openclaw cron run <jobId> --due` and the job was not due yet.
 
 ### Cron fired but no delivery
 

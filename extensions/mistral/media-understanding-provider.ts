@@ -9,6 +9,8 @@ const DEFAULT_MISTRAL_AUDIO_MODEL = "voxtral-mini-latest";
 export const mistralMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "mistral",
   capabilities: ["audio"],
+  defaultModels: { audio: DEFAULT_MISTRAL_AUDIO_MODEL },
+  autoPriority: { audio: 50 },
   transcribeAudio: async (req) =>
     await transcribeOpenAiCompatibleAudio({
       ...req,

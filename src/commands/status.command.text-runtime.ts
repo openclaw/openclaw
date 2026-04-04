@@ -21,6 +21,7 @@ export { formatGatewayAuthUsed } from "./status-all/format.js";
 export {
   formatDuration,
   formatKTokens,
+  formatPromptCacheCompact,
   formatTokensCompact,
   shortenText,
 } from "./status.format.js";

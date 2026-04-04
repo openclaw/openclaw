@@ -1,6 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { matchesExactOrPrefix } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  buildPassthroughGeminiSanitizingReplayPolicy,
+  matchesExactOrPrefix,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { applyOpencodeZenConfig, OPENCODE_ZEN_DEFAULT_MODEL } from "./api.js";
 
 const PROVIDER_ID = "opencode";
@@ -54,11 +57,7 @@ export default definePluginEntry({
           },
         }),
       ],
-      capabilities: {
-        openAiCompatTurnValidation: false,
-        geminiThoughtSignatureSanitization: true,
-        geminiThoughtSignatureModelHints: ["gemini"],
-      },
+      buildReplayPolicy: ({ modelId }) => buildPassthroughGeminiSanitizingReplayPolicy(modelId),
       isModernModelRef: ({ modelId }) => isModernOpencodeModel(modelId),
     });
   },

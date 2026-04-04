@@ -9,6 +9,7 @@ import {
 import { isRecord } from "./shared.js";
 
 const ACPX_PLUGIN_ID = "acpx";
+const ACPX_ENABLED_BY_DEFAULT = true;
 
 /**
  * Walk plugin config entries and collect SecretRef assignments for MCP server
@@ -63,7 +64,14 @@ export function collectPluginConfigAssignments(params: {
       continue;
     }
 
-    const enableState = resolveEnableState(pluginId, pluginOrigin ?? "config", normalizedConfig);
+    const enableState = resolveEnableState(
+      pluginId,
+      pluginOrigin ?? "config",
+      normalizedConfig,
+      pluginId === ACPX_PLUGIN_ID && pluginOrigin === "bundled"
+        ? ACPX_ENABLED_BY_DEFAULT
+        : undefined,
+    );
     collectMcpServerEnvAssignments({
       pluginId,
       pluginConfig,

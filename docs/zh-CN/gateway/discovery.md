@@ -7,7 +7,7 @@ summary: 用于发现 Gateway 网关的节点发现和传输协议（Bonjour、T
 title: 设备发现 + 传输协议
 x-i18n:
   generated_at: "2026-02-03T10:06:11Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: e12172c181515bfa6aab8625ed3fbc335b80ba92e2b516c02c6066aeeb9f884c
   source_path: gateway/discovery.md

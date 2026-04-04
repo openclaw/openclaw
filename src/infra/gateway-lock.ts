@@ -299,7 +299,13 @@ export async function acquireGatewayLock(
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
       const ownerStatus = ownerPid
-        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port, opts.readProcessCmdline)
+        ? await resolveGatewayOwnerStatus(
+            ownerPid,
+            lastPayload,
+            platform,
+            port,
+            opts.readProcessCmdline,
+          )
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });
