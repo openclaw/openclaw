@@ -250,7 +250,7 @@ describe("collectPluginConfigAssignments", () => {
     );
   });
 
-  it("keeps bundled acpx inactive unless explicitly enabled", () => {
+  it("treats bundled acpx as active by default", () => {
     const config = asConfig({
       plugins: {
         enabled: true,
@@ -274,9 +274,11 @@ describe("collectPluginConfigAssignments", () => {
       loadablePluginOrigins: loadablePluginOrigins([["acpx", "bundled"]]),
     });
 
-    expect(context.assignments).toHaveLength(0);
+    expect(context.assignments).toHaveLength(1);
+    expect(context.assignments[0]?.path).toBe("plugins.entries.acpx.config.mcpServers.s1.env.K");
+    expect(context.assignments[0]?.ref.id).toBe("K");
     expect(context.warnings.some((w) => w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")).toBe(
-      true,
+      false,
     );
   });
 

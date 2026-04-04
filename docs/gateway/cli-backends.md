@@ -20,6 +20,10 @@ rate-limited, or temporarily misbehaving. This is intentionally conservative:
 This is designed as a **safety net** rather than a primary path. Use it when you
 want “always works” text responses without relying on external APIs.
 
+If you want a full harness runtime with ACP session controls, background tasks,
+thread/conversation binding, and persistent external coding sessions, use
+[ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
+
 ## Beginner-friendly quick start
 
 You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
