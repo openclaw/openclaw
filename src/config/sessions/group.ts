@@ -10,6 +10,15 @@ type LegacyGroupSessionSurface = {
   resolveLegacyGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
 };
 
+function resolveLegacyWhatsAppGroupId(from: string): string | null {
+  const candidate = from.trim().replace(/^whatsapp:/i, "");
+  if (!candidate.toLowerCase().endsWith("@g.us")) {
+    return null;
+  }
+  const localPart = candidate.slice(0, candidate.length - "@g.us".length);
+  return /^[0-9]+(-[0-9]+)*$/i.test(localPart) ? `${localPart}@g.us` : null;
+}
+
 function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   for (const surface of getBundledChannelContractSurfaces() as LegacyGroupSessionSurface[]) {
     const resolved = surface.resolveLegacyGroupSessionKey?.(ctx);
@@ -71,6 +80,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const chatType = ctx.ChatType?.trim().toLowerCase();
   const normalizedChatType =
     chatType === "channel" ? "channel" : chatType === "group" ? "group" : undefined;
+  const legacyWhatsAppGroupId = resolveLegacyWhatsAppGroupId(from);
 
   const legacyResolution = resolveLegacyGroupSessionKey(ctx);
   const looksLikeGroup =
@@ -78,6 +88,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     normalizedChatType === "channel" ||
     from.includes(":group:") ||
     from.includes(":channel:") ||
+    legacyWhatsAppGroupId !== null ||
     legacyResolution !== null;
   if (!looksLikeGroup) {
     return null;
@@ -91,6 +102,15 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
 
   if (!headIsSurface && !providerHint && legacyResolution) {
     return legacyResolution;
+  }
+
+  if (!headIsSurface && legacyWhatsAppGroupId) {
+    return {
+      key: `whatsapp:group:${legacyWhatsAppGroupId}`,
+      channel: "whatsapp",
+      id: legacyWhatsAppGroupId,
+      chatType: "group",
+    };
   }
 
   const provider = headIsSurface ? head : (providerHint ?? legacyResolution?.channel);
