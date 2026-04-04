@@ -62,6 +62,8 @@ type AnnounceQueueState = {
   lastSummaryTarget?: AnnounceQueueItem;
   /** Latest dropped-item target when summarized drops still belong to one origin. */
   summaryOverflowTarget?: AnnounceQueueItem;
+  /** Tracks whether summarize-mode origin routing has already observed a dropped item. */
+  summaryOverflowOriginInitialized?: boolean;
   /** Origin key for summarized drops; null means mixed/ambiguous and unsafe to route. */
   summaryOverflowOriginKey?: string | null;
   /** Consecutive drain failures — drives exponential backoff on errors. */
@@ -110,6 +112,7 @@ function getAnnounceQueue(
     send,
     lastSummaryTarget: undefined,
     summaryOverflowTarget: undefined,
+    summaryOverflowOriginInitialized: false,
     summaryOverflowOriginKey: undefined,
     consecutiveFailures: 0,
   };
@@ -154,12 +157,14 @@ function clearAnnounceSummaryState(
     | "dropPolicy"
     | "droppedCount"
     | "summaryLines"
+    | "summaryOverflowOriginInitialized"
     | "summaryOverflowTarget"
     | "summaryOverflowOriginKey"
   >,
 ): void {
   clearQueueSummaryState(queue);
   queue.summaryOverflowTarget = undefined;
+  queue.summaryOverflowOriginInitialized = false;
   queue.summaryOverflowOriginKey = undefined;
 }
 
@@ -171,6 +176,7 @@ export async function maybeSendAnnounceCollectEmptySummary(params: {
     | "droppedCount"
     | "summaryLines"
     | "lastSummaryTarget"
+    | "summaryOverflowOriginInitialized"
     | "summaryOverflowTarget"
     | "summaryOverflowOriginKey"
   >;
@@ -195,8 +201,11 @@ export async function maybeSendAnnounceCollectEmptySummary(params: {
   params.queue.lastSummaryTarget = summaryTarget;
   await params.send({
     ...summaryTarget,
+    announceId: undefined,
+    enqueuedAt: Date.now(),
     execution: { visibility: "internal", agentPrompt: summaryPrompt },
     display: { visibility: "user-visible", text: summaryPrompt },
+    internalEvents: undefined,
   });
   clearAnnounceSummaryState(params.queue);
   return true;
@@ -351,7 +360,8 @@ export function enqueueAnnounce(params: {
     summarize: (item) => {
       if (queue.summaryOverflowOriginKey !== null) {
         const itemOriginKey = item.originKey;
-        if (queue.summaryOverflowOriginKey === undefined) {
+        if (!queue.summaryOverflowOriginInitialized) {
+          queue.summaryOverflowOriginInitialized = true;
           queue.summaryOverflowOriginKey = itemOriginKey;
           queue.summaryOverflowTarget = item;
         } else if (queue.summaryOverflowOriginKey === itemOriginKey) {

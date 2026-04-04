@@ -94,12 +94,14 @@ describe("subagent-announce-queue", () => {
       droppedCount: 1,
       summaryLines: ["first safe summary"],
       lastSummaryTarget: {
+        announceId: "ann-prev",
         execution: { visibility: "internal", agentPrompt: "internal" },
         display: { visibility: "summary-only", summaryLine: "second safe summary" },
         enqueuedAt: 1,
         sessionKey: "agent:main:telegram:dm:u1",
         origin: { channel: "telegram", to: "telegram:2" },
         originKey: "telegram:telegram:2",
+        internalEvents: [{ type: "task_completion" } as never],
       },
     };
 
@@ -108,6 +110,9 @@ describe("subagent-announce-queue", () => {
     const sent = getSentItem(send, 0);
     expect(sent.display.text).toContain("[Queue overflow]");
     expect(sent.display.text).toContain("first safe summary");
+    expect((sent as { announceId?: string }).announceId).toBeUndefined();
+    expect((sent as { enqueuedAt?: number }).enqueuedAt).not.toBe(1);
+    expect((sent as { internalEvents?: unknown[] }).internalEvents).toBeUndefined();
     expect(queue.droppedCount).toBe(0);
     expect(queue.summaryLines).toEqual([]);
   });
