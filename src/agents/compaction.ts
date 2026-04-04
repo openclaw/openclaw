@@ -153,7 +153,11 @@ export function splitMessagesByTokenShare(
 
     if (message.role === "assistant") {
       const toolCalls = extractToolCallsFromAssistant(message);
-      pendingToolCallIds = new Set(toolCalls.map((t) => t.id));
+      const stopReason = (message as { stopReason?: unknown }).stopReason;
+      pendingToolCallIds =
+        stopReason === "aborted" || stopReason === "error"
+          ? new Set()
+          : new Set(toolCalls.map((t) => t.id));
     } else if (message.role === "toolResult" && pendingToolCallIds.size > 0) {
       const resultId = extractToolResultId(message);
       if (!resultId) {

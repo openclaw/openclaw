@@ -24,6 +24,7 @@ function makeAssistantToolCall(
   timestamp: number,
   toolCallId: string,
   text = "x".repeat(4000),
+  stopReason: AssistantMessage["stopReason"] = "stop",
 ): AssistantMessage {
   return makeAgentAssistantMessage({
     content: [
@@ -31,7 +32,7 @@ function makeAssistantToolCall(
       { type: "toolCall", id: toolCallId, name: "test_tool", arguments: {} },
     ],
     model: "gpt-5.4",
-    stopReason: "stop",
+    stopReason,
     timestamp,
   });
 }
@@ -167,6 +168,19 @@ describe("splitMessagesByTokenShare", () => {
     const chunk1Roles = parts[0].map((m) => m.role);
     expect(chunk1Roles).toContain("assistant");
     expect(chunk1Roles).toContain("toolResult");
+    expect(parts.flat().length).toBe(messages.length);
+  });
+
+  it("does not block splits after aborted tool-call assistants", () => {
+    const messages: AgentMessage[] = [
+      makeAssistantToolCall(1, "call_abort", "y".repeat(4000), "aborted"),
+      makeMessage(2, 4000),
+      makeMessage(3, 4000),
+    ];
+
+    const parts = splitMessagesByTokenShare(messages, 2);
+
+    expect(parts.length).toBe(2);
     expect(parts.flat().length).toBe(messages.length);
   });
 });
