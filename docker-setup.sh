@@ -22,21 +22,17 @@ fi
 #   - Users can use OpenClaw CLI tools as if they were installed natively on the host.
 #   - It avoids confusion when switching between environments (WSL, native Linux, Docker).
 #
-# The container name is derived from COMPOSE_PROJECT_NAME (set by Docker Compose based on the project
-# directory name or --project-name flag) to avoid hardcoding a name that may vary across environments.
-# The script checks if an alias already exists and updates it if necessary, ensuring idempotency
-# and preventing duplicate entries. This is especially useful in onboarding, CI, or when sharing
-# setup scripts with teams.
+# The alias dynamically resolves the running openclaw gateway container via `docker ps`,
+# so it works regardless of the project name or how the container was started.
 if [[ -f ~/.bashrc ]]; then
-  _OPENCLAW_PROJECT="${COMPOSE_PROJECT_NAME:-openclaw}"
-  _OPENCLAW_CONTAINER="${_OPENCLAW_PROJECT}-openclaw-gateway-1"
-  _OPENCLAW_ALIAS="alias openclaw='docker exec -it ${_OPENCLAW_CONTAINER} openclaw'"
+  # shellcheck disable=SC2016
+  _OPENCLAW_ALIAS="alias openclaw='docker exec -it \$(docker ps --filter name=openclaw-gateway --format \"{{.Names}}\" | head -1) openclaw'"
   if grep -q "^alias openclaw=" ~/.bashrc 2>/dev/null; then
     sed -i "s|^alias openclaw=.*|${_OPENCLAW_ALIAS}|" ~/.bashrc
   else
     echo "${_OPENCLAW_ALIAS}" >> ~/.bashrc
   fi
-  unset _OPENCLAW_PROJECT _OPENCLAW_CONTAINER _OPENCLAW_ALIAS
+  unset _OPENCLAW_ALIAS
 fi
 
 exec "$SCRIPT_PATH" "$@"
