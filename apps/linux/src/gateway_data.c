@@ -566,20 +566,28 @@ GatewayCronData* gateway_data_parse_cron(JsonNode *payload) {
             job->agent_id = json_get_string_or_null(obj, "agentId");
             job->transcript_session_key = json_get_string_or_null(obj, "transcriptSessionKey");
 
-            /* schedule: { type, value } or { cron } or { interval } etc. */
+            /* Routing fields are at the job root level, not in payload */
+            job->session_target = json_get_string_or_null(obj, "sessionTarget");
+            job->wake_mode = json_get_string_or_null(obj, "wakeMode");
+            job->delivery = json_get_string_or_null(obj, "delivery");
+
+            /* schedule: { kind, expr } for cron, { kind, everyMs } for every, { kind, at } for at */
             if (json_object_has_member(obj, "schedule")) {
                 JsonNode *scn = json_object_get_member(obj, "schedule");
                 if (scn && JSON_NODE_HOLDS_OBJECT(scn)) {
                     JsonObject *sch = json_node_get_object(scn);
-                    job->schedule_type = json_get_string_or_null(sch, "type");
-                    job->schedule_value = json_get_string_or_null(sch, "value");
-                    if (!job->schedule_value) {
-                        /* Fallback: try cron/interval/at keys directly */
-                        job->schedule_value = json_get_string_or_null(sch, "cron");
-                        if (!job->schedule_value)
-                            job->schedule_value = json_get_string_or_null(sch, "interval");
-                        if (!job->schedule_value)
+                    job->schedule_type = json_get_string_or_null(sch, "kind");
+                    if (job->schedule_type) {
+                        if (g_strcmp0(job->schedule_type, "cron") == 0) {
+                            job->schedule_value = json_get_string_or_null(sch, "expr");
+                        } else if (g_strcmp0(job->schedule_type, "every") == 0) {
+                            gint64 every_ms = json_get_int64_or_zero(sch, "everyMs");
+                            if (every_ms > 0) {
+                                job->schedule_value = g_strdup_printf("%" G_GINT64_FORMAT, every_ms);
+                            }
+                        } else if (g_strcmp0(job->schedule_type, "at") == 0) {
                             job->schedule_value = json_get_string_or_null(sch, "at");
+                        }
                     }
                 }
             }
@@ -606,9 +614,6 @@ GatewayCronData* gateway_data_parse_cron(JsonNode *payload) {
                     job->payload_thinking = json_get_string_or_null(pay, "thinking");
                     job->payload_event = json_get_string_or_null(pay, "event");
                     job->payload_timeout = json_get_int_or_zero(pay, "timeout");
-                    job->session_target = json_get_string_or_null(pay, "sessionTarget");
-                    job->wake_mode = json_get_string_or_null(pay, "wakeMode");
-                    job->delivery = json_get_string_or_null(pay, "delivery");
                 }
             }
         }

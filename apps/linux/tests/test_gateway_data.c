@@ -295,7 +295,10 @@ static void test_cron_parse_basic(void) {
         "      \"updatedAtMs\": 1700000001000,"
         "      \"agentId\": \"agent-main\","
         "      \"transcriptSessionKey\": \"sess-abc\","
-        "      \"schedule\": { \"type\": \"cron\", \"value\": \"0 9 * * *\" },"
+        "      \"sessionTarget\": \"main\","
+        "      \"wakeMode\": \"next-heartbeat\","
+        "      \"delivery\": \"async\","
+        "      \"schedule\": { \"kind\": \"cron\", \"expr\": \"0 9 * * *\" },"
         "      \"state\": {"
         "        \"nextRunAtMs\": 1700100000000,"
         "        \"lastRunAtMs\": 1700000000000,"
@@ -305,10 +308,7 @@ static void test_cron_parse_basic(void) {
         "      \"payload\": {"
         "        \"message\": \"Generate report\","
         "        \"thinking\": \"deep\","
-        "        \"timeout\": 60,"
-        "        \"sessionTarget\": \"isolated\","
-        "        \"wakeMode\": \"now\","
-        "        \"delivery\": \"direct\""
+        "        \"timeout\": 60"
         "      }"
         "    },"
         "    {"
@@ -346,6 +346,11 @@ static void test_cron_parse_basic(void) {
     ASSERT(data->jobs[0].auto_delete == FALSE, "job[0] auto_delete");
     ASSERT(g_strcmp0(data->jobs[0].agent_id, "agent-main") == 0, "job[0] agent_id");
     ASSERT(g_strcmp0(data->jobs[0].transcript_session_key, "sess-abc") == 0, "job[0] transcript_session_key");
+    /* Routing fields now at root level, not in payload */
+    ASSERT(g_strcmp0(data->jobs[0].session_target, "main") == 0, "job[0] session_target from root");
+    ASSERT(g_strcmp0(data->jobs[0].wake_mode, "next-heartbeat") == 0, "job[0] wake_mode from root");
+    ASSERT(g_strcmp0(data->jobs[0].delivery, "async") == 0, "job[0] delivery from root");
+    /* New schedule schema: kind + expr instead of type + value */
     ASSERT(g_strcmp0(data->jobs[0].schedule_type, "cron") == 0, "job[0] schedule_type");
     ASSERT(g_strcmp0(data->jobs[0].schedule_value, "0 9 * * *") == 0, "job[0] schedule_value");
     ASSERT(data->jobs[0].next_run_at_ms == 1700100000000, "job[0] next_run_at_ms");
@@ -354,9 +359,6 @@ static void test_cron_parse_basic(void) {
     ASSERT(g_strcmp0(data->jobs[0].payload_message, "Generate report") == 0, "job[0] payload_message");
     ASSERT(g_strcmp0(data->jobs[0].payload_thinking, "deep") == 0, "job[0] payload_thinking");
     ASSERT(data->jobs[0].payload_timeout == 60, "job[0] payload_timeout");
-    ASSERT(g_strcmp0(data->jobs[0].session_target, "isolated") == 0, "job[0] session_target");
-    ASSERT(g_strcmp0(data->jobs[0].wake_mode, "now") == 0, "job[0] wake_mode");
-    ASSERT(g_strcmp0(data->jobs[0].delivery, "direct") == 0, "job[0] delivery");
 
     ASSERT(g_strcmp0(data->jobs[1].id, "job-2") == 0, "job[1] id");
     ASSERT(data->jobs[1].enabled == FALSE, "job[1] enabled");
@@ -366,6 +368,81 @@ static void test_cron_parse_basic(void) {
     ASSERT(data->jobs[1].schedule_type == NULL, "job[1] no schedule_type");
     ASSERT(data->jobs[1].payload_message == NULL, "job[1] no payload_message");
 
+    gateway_cron_data_free(data);
+    json_node_unref(node);
+}
+
+static void test_cron_parse_schedule_kind_every(void) {
+    /* Every schedule with kind=every and everyMs */
+    const gchar *json =
+        "{"
+        "  \"jobs\": ["
+        "    {"
+        "      \"id\": \"job-every\","
+        "      \"name\": \"Every Job\","
+        "      \"enabled\": true,"
+        "      \"schedule\": { \"kind\": \"every\", \"everyMs\": 60000 }"
+        "    }"
+        "  ]"
+        "}";
+
+    JsonNode *node = parse_json(json);
+    GatewayCronData *data = gateway_data_parse_cron(node);
+    ASSERT(data != NULL, "cron_every: parsed");
+    ASSERT(data->n_jobs == 1, "cron_every: 1 job");
+    ASSERT(g_strcmp0(data->jobs[0].schedule_type, "every") == 0, "cron_every: schedule_type");
+    ASSERT(g_strcmp0(data->jobs[0].schedule_value, "60000") == 0, "cron_every: schedule_value");
+    gateway_cron_data_free(data);
+    json_node_unref(node);
+}
+
+static void test_cron_parse_schedule_kind_at(void) {
+    /* At schedule with kind=at and at timestamp */
+    const gchar *json =
+        "{"
+        "  \"jobs\": ["
+        "    {"
+        "      \"id\": \"job-at\","
+        "      \"name\": \"At Job\","
+        "      \"enabled\": true,"
+        "      \"schedule\": { \"kind\": \"at\", \"at\": \"2025-04-03T10:00:00Z\" }"
+        "    }"
+        "  ]"
+        "}";
+
+    JsonNode *node = parse_json(json);
+    GatewayCronData *data = gateway_data_parse_cron(node);
+    ASSERT(data != NULL, "cron_at: parsed");
+    ASSERT(data->n_jobs == 1, "cron_at: 1 job");
+    ASSERT(g_strcmp0(data->jobs[0].schedule_type, "at") == 0, "cron_at: schedule_type");
+    ASSERT(g_strcmp0(data->jobs[0].schedule_value, "2025-04-03T10:00:00Z") == 0, "cron_at: schedule_value");
+    gateway_cron_data_free(data);
+    json_node_unref(node);
+}
+
+static void test_cron_parse_routing_fields_from_root(void) {
+    /* Cron job with sessionTarget, wakeMode, delivery at root level (not in payload) */
+    const gchar *json =
+        "{"
+        "  \"jobs\": ["
+        "    {"
+        "      \"id\": \"job-1\","
+        "      \"name\": \"Test Job\","
+        "      \"enabled\": true,"
+        "      \"sessionTarget\": \"main\","
+        "      \"wakeMode\": \"now\","
+        "      \"delivery\": \"async\""
+        "    }"
+        "  ]"
+        "}";
+
+    JsonNode *node = parse_json(json);
+    GatewayCronData *data = gateway_data_parse_cron(node);
+    ASSERT(data != NULL, "cron_routing: parsed");
+    ASSERT(data->n_jobs == 1, "cron_routing: 1 job");
+    ASSERT(g_strcmp0(data->jobs[0].session_target, "main") == 0, "cron_routing: session_target");
+    ASSERT(g_strcmp0(data->jobs[0].wake_mode, "now") == 0, "cron_routing: wake_mode");
+    ASSERT(g_strcmp0(data->jobs[0].delivery, "async") == 0, "cron_routing: delivery");
     gateway_cron_data_free(data);
     json_node_unref(node);
 }
@@ -1115,6 +1192,9 @@ int main(void) {
 
     /* Cron — happy path */
     test_cron_parse_basic();
+    test_cron_parse_schedule_kind_every();
+    test_cron_parse_schedule_kind_at();
+    test_cron_parse_routing_fields_from_root();
     /* Cron — negative */
     test_cron_missing_jobs();
     test_cron_jobs_wrong_type();

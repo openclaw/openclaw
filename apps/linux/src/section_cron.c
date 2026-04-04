@@ -176,8 +176,9 @@ static void on_open_transcript(GtkButton *btn, gpointer user_data) {
        If it exists and is readable, open it directly.
        Otherwise, fall back to the dashboard web route. */
     if (cron_status_cache && cron_status_cache->store_path) {
-        /* In cron, transcripts are usually stored inside `sessions/` within the store path */
-        g_autofree gchar *sessions_dir = g_build_filename(cron_status_cache->store_path, "sessions", NULL);
+        /* In cron, transcripts are usually stored inside `sessions/` within the store directory */
+        g_autofree gchar *store_dir = g_path_get_dirname(cron_status_cache->store_path);
+        g_autofree gchar *sessions_dir = g_build_filename(store_dir, "sessions", NULL);
         g_autofree gchar *local_path = g_build_filename(sessions_dir, key, "transcript.jsonl", NULL);
         if (g_file_test(local_path, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
             g_autofree gchar *file_uri = g_filename_to_uri(local_path, NULL, NULL);
@@ -1052,9 +1053,12 @@ static void cron_refresh(void) {
         return;
     }
 
+    /* H1: Use current generation so responses are not treated as stale */
+    guint current_gen = cron_refresh_generation;
+
     cron_fetch_in_flight = TRUE;
     g_autofree gchar *req_id1 = gateway_rpc_request(
-        "cron.list", NULL, 0, on_cron_rpc_response, NULL);
+        "cron.list", NULL, 0, on_cron_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id1) {
         cron_fetch_in_flight = FALSE;
         if (cron_status_label)
@@ -1063,7 +1067,7 @@ static void cron_refresh(void) {
 
     cron_status_fetch_in_flight = TRUE;
     g_autofree gchar *req_id2 = gateway_rpc_request(
-        "cron.status", NULL, 0, on_cron_status_rpc_response, NULL);
+        "cron.status", NULL, 0, on_cron_status_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id2) cron_status_fetch_in_flight = FALSE;
 
     cron_runs_fetch_in_flight = TRUE;
@@ -1076,7 +1080,7 @@ static void cron_refresh(void) {
     g_object_unref(b);
     
     g_autofree gchar *req_id3 = gateway_rpc_request(
-        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, NULL);
+        "cron.runs", runs_params, 0, on_cron_runs_rpc_response, GUINT_TO_POINTER(current_gen));
     if (!req_id3) cron_runs_fetch_in_flight = FALSE;
     json_node_unref(runs_params);
 }

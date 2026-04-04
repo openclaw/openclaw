@@ -208,7 +208,8 @@ static void on_session_log(GtkButton *btn, gpointer user_data) {
        If it exists and is readable, open it directly.
        Otherwise, fall back to the dashboard web route. */
     if (sessions_data_cache && sessions_data_cache->path) {
-        g_autofree gchar *local_path = g_build_filename(sessions_data_cache->path, key, "transcript.jsonl", NULL);
+        g_autofree gchar *store_dir = g_path_get_dirname(sessions_data_cache->path);
+        g_autofree gchar *local_path = g_build_filename(store_dir, key, "transcript.jsonl", NULL);
         if (g_file_test(local_path, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
             g_autofree gchar *file_uri = g_filename_to_uri(local_path, NULL, NULL);
             if (file_uri) {
