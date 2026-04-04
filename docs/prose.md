@@ -1,5 +1,5 @@
 ---
-summary: "OpenProse: .prose workflows, slash commands, and state in OpenClaw"
+summary: "OpenProse plugin for OpenClaw: .prose workflows, multi-agent orchestration, /prose slash command, install, enable, and state"
 read_when:
   - You want to run or write .prose workflows
   - You want to enable the OpenProse plugin
@@ -11,13 +11,38 @@ title: "OpenProse"
 
 OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
 
+If you are looking for an OpenClaw workflow plugin, a `.prose` runner, or a reusable multi-agent orchestration format for AI automation, OpenProse is the built-in option to enable.
+
 Official site: [https://www.prose.md](https://www.prose.md)
+
+## Quick start
+
+Enable the bundled plugin, restart Gateway, then check that it loaded:
+
+```bash
+openclaw plugins enable open-prose
+openclaw gateway restart
+openclaw plugins info open-prose
+```
+
+In a chat or TUI session, begin with:
+
+```text
+/prose help
+```
 
 ## What it can do
 
 - Multi-agent research + synthesis with explicit parallelism.
 - Repeatable approval-safe workflows (code review, incident triage, content pipelines).
 - Reusable `.prose` programs you can run across supported agent runtimes.
+
+## Why teams install OpenProse
+
+- It gives OpenClaw a portable workflow format instead of one-off prompts.
+- It makes multi-agent orchestration explicit and reviewable.
+- It helps teams repeat the same approval-safe workflows with less drift.
+- It keeps artifacts under `.prose/` so successful runs are easier to inspect and reuse.
 
 ## Install + enable
 
@@ -32,6 +57,20 @@ Restart the Gateway after enabling the plugin.
 Dev/local checkout: `openclaw plugins install ./extensions/open-prose`
 
 Related docs: [Plugins](/tools/plugin), [Plugin manifest](/plugins/manifest), [Skills](/tools/skills).
+
+## First successful run
+
+Create a file named `hello.prose`:
+
+```prose
+session "Say hello from OpenProse."
+```
+
+Then run:
+
+```text
+/prose run ./hello.prose
+```
 
 ## Slash command
 
@@ -126,6 +165,12 @@ OpenProse programs map to OpenClaw primitives:
 | Web fetch                 | `web_fetch`      |
 
 If your tool allowlist blocks these tools, OpenProse programs will fail. See [Skills config](/tools/skills-config).
+
+## Troubleshooting
+
+- If `/prose` is missing, run `openclaw plugins info open-prose` and confirm the plugin status is `loaded`.
+- Restart Gateway after enabling, updating, or reinstalling the plugin.
+- If programs fail on startup, confirm your tool allowlist still permits `sessions_spawn`, `read`, `write`, and `web_fetch`.
 
 ## Security + approvals
 

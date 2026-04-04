@@ -3,7 +3,7 @@ read_when:
   - 你想运行或编写 .prose 工作流
   - 你想启用 OpenProse 插件
   - 你需要了解状态存储
-summary: OpenProse：OpenClaw 中的 .prose 工作流、斜杠命令和状态
+summary: OpenProse 插件：OpenClaw 中的 .prose 工作流、多智能体编排、/prose 命令、安装启用与状态
 title: OpenProse
 x-i18n:
   generated_at: "2026-02-03T07:53:38Z"
@@ -18,13 +18,38 @@ x-i18n:
 
 OpenProse 是一种可移植的、以 Markdown 为中心的工作流格式，用于编排 AI 会话。在 OpenClaw 中，它作为插件发布，安装一个 OpenProse Skills 包以及一个 `/prose` 斜杠命令。程序存放在 `.prose` 文件中，可以生成多个具有显式控制流的子智能体。
 
+如果你在找 OpenClaw 工作流插件、`.prose` 运行器，或者一个可复用的多智能体 AI 编排格式，OpenProse 就是应该优先启用的内置方案。
+
 官方网站：https://www.prose.md
+
+## 快速开始
+
+先启用捆绑插件，重启 Gateway，再确认插件已经加载：
+
+```bash
+openclaw plugins enable open-prose
+openclaw gateway restart
+openclaw plugins info open-prose
+```
+
+然后在聊天窗口或 TUI 会话里输入：
+
+```text
+/prose help
+```
 
 ## 它能做什么
 
 - 具有显式并行性的多智能体研究 + 综合。
 - 可重复的批准安全工作流（代码审查、事件分类、内容管道）。
 - 可在支持的智能体运行时之间运行的可重用 `.prose` 程序。
+
+## 为什么很多人会安装 OpenProse
+
+- 它把一次性提示词变成可复用的 OpenClaw 工作流。
+- 它让多智能体编排更明确、更容易审查。
+- 它适合沉淀可重复执行的审批安全工作流。
+- 它会把运行产物保存到 `.prose/`，方便复盘、复用和分享。
 
 ## 安装 + 启用
 
@@ -39,6 +64,20 @@ openclaw plugins enable open-prose
 开发/本地检出：`openclaw plugins install ./extensions/open-prose`
 
 相关文档：[插件](/tools/plugin)、[插件清单](/plugins/manifest)、[Skills](/tools/skills)。
+
+## 第一次成功运行
+
+先创建一个 `hello.prose` 文件：
+
+```prose
+session "Say hello from OpenProse."
+```
+
+然后运行：
+
+```text
+/prose run ./hello.prose
+```
 
 ## 斜杠命令
 
@@ -133,6 +172,12 @@ OpenProse 程序映射到 OpenClaw 原语：
 | Web 获取             | `web_fetch`      |
 
 如果你的工具白名单阻止这些工具，OpenProse 程序将失败。参见 [Skills 配置](/tools/skills-config)。
+
+## 故障排查
+
+- 如果看不到 `/prose`，先运行 `openclaw plugins info open-prose`，确认状态是 `loaded`。
+- 启用、更新或重新安装插件后，都建议重启 Gateway。
+- 如果程序一启动就失败，确认工具白名单仍允许 `sessions_spawn`、`read`、`write` 和 `web_fetch`。
 
 ## 安全 + 批准
 

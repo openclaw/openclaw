@@ -3,7 +3,19 @@
   "displayName": "OpenProse",
   "version": "2026.3.14",
   "private": true,
-  "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
+  "description": "OpenClaw OpenProse plugin for .prose workflows, multi-agent orchestration, and the /prose slash command.",
+  "keywords": [
+    ".prose",
+    "ai orchestration",
+    "multi-agent",
+    "multi-agent orchestration",
+    "openclaw",
+    "openprose",
+    "portable workflows",
+    "prose workflows",
+    "slash command",
+    "workflow automation"
+  ],
   "homepage": "https://github.com/openclaw/openclaw/tree/main/extensions/open-prose",
   "bugs": {
     "url": "https://github.com/openclaw/openclaw/issues"

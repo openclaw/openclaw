@@ -1,8 +1,10 @@
 {
   "id": "open-prose",
   "name": "OpenProse",
-  "description": "OpenProse VM skill pack with a /prose slash command.",
+  "description": "Portable .prose workflow engine for OpenClaw with bundled prose skills, multi-agent orchestration, and the /prose slash command.",
   "skills": ["./skills"],
+  "bundledSkills": ["prose"],
+  "commands": ["prose"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
