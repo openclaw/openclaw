@@ -14,7 +14,7 @@ x-i18n:
 
 # 群组消息（WhatsApp 网页渠道）
 
-目标：让 Clawd 留在 WhatsApp 群组中，仅在被提及时唤醒，并将该对话线程与个人私信会话分开。
+目标：让 OpenClaw 留在 WhatsApp 群组中，仅在被提及时唤醒，并将该对话线程与个人私信会话分开。
 
 注意：`agents.list[].groupChat.mentionPatterns` 现在也被 Telegram/Discord/Slack/iMessage 使用；本文档重点介绍 WhatsApp 特定的行为。对于多智能体设置，为每个智能体设置 `agents.list[].groupChat.mentionPatterns`（或使用 `messages.groupChat.mentionPatterns` 作为全局回退）。
 
