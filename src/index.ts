@@ -7,6 +7,7 @@ import {
   installUnhandledRejectionHandler,
   isAbortError,
   isTransientNetworkError,
+  isTransientSqliteError,
 } from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
@@ -96,7 +97,7 @@ if (isMain) {
       console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
       return;
     }
-    if (isTransientNetworkError(error)) {
+    if (isTransientNetworkError(error) || isTransientSqliteError(error)) {
       console.warn(
         "[openclaw] Non-fatal uncaught exception (continuing):",
         formatUncaughtError(error),

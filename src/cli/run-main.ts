@@ -172,28 +172,36 @@ export async function runCli(argv: string[] = process.argv) {
 
     const { buildProgram } = await import("./program.js");
     const program = buildProgram();
-    const { installUnhandledRejectionHandler, isAbortError, isTransientNetworkError } =
-      await import("../infra/unhandled-rejections.js");
+    const {
+      installUnhandledRejectionHandler,
+      isAbortError,
+      isTransientNetworkError,
+      isTransientSqliteError,
+    } = await import("../infra/unhandled-rejections.js");
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
     // These log the error and exit gracefully instead of crashing without trace.
-    installUnhandledRejectionHandler();
+    // Guard: skip registration when already installed by src/index.ts to avoid
+    // duplicate handlers (see P2 review feedback on PR #60627).
+    if (process.listenerCount("uncaughtException") === 0) {
+      installUnhandledRejectionHandler();
 
-    process.on("uncaughtException", (error) => {
-      if (isAbortError(error)) {
-        console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
-        return;
-      }
-      if (isTransientNetworkError(error)) {
-        console.warn(
-          "[openclaw] Non-fatal uncaught exception (continuing):",
-          formatUncaughtError(error),
-        );
-        return;
-      }
-      console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
-      process.exit(1);
-    });
+      process.on("uncaughtException", (error) => {
+        if (isAbortError(error)) {
+          console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
+          return;
+        }
+        if (isTransientNetworkError(error) || isTransientSqliteError(error)) {
+          console.warn(
+            "[openclaw] Non-fatal uncaught exception (continuing):",
+            formatUncaughtError(error),
+          );
+          return;
+        }
+        console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+        process.exit(1);
+      });
+    }
 
     const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
     // Register the primary command (builtin or subcli) so help and command parsing
