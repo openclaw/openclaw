@@ -132,6 +132,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/install: preserve `--dangerously-force-unsafe-install` across linked plugin probes and linked hook-pack fallback probes so local `--link` installs honor the documented unsafe override. (#60624) Thanks @JerrettDavis.
 - Auto-reply/reasoning: preserve reasoning and compaction markers while coalescing adjacent reply blocks so hidden reasoning does not leak when mixed with visible text on channels like WhatsApp. Thanks @mcaxtr.
 - Exec/gateway: reuse durable exact-command `allow-always` approvals in allowlist mode so repeated gateway exec reruns stop re-prompting or failing on allowlist misses. (#59880) Thanks @luoyanglang.
+- Telegram/local Bot API: trust absolute Bot API `file_path` values only under explicit `channels.telegram.trustedLocalFileRoots`, copy trusted local media into inbound storage, and reject untrusted absolute paths instead of reading arbitrary host files. (#60705) Thanks @jzakirov.
 
 ## 2026.4.2
 
