@@ -83,6 +83,7 @@ Recommended for most interactive installs on macOS/Linux/WSL.
     - `git` method: clone/update repo, install deps with pnpm, build, then install wrapper at `~/.local/bin/openclaw`
   </Step>
   <Step title="Post-install tasks">
+    - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
     - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
     - Defaults `SHARP_IGNORE_GLOBAL_LIBVIPS=1`
@@ -289,7 +290,9 @@ by default, plus git-checkout installs under the same prefix flow.
     - `git` method: clone/update repo, install/build with pnpm, and install wrapper at `%USERPROFILE%\.local\bin\openclaw.cmd`
   </Step>
   <Step title="Post-install tasks">
-    Adds needed bin directory to user PATH when possible, then runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort).
+    - Adds needed bin directory to user PATH when possible
+    - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
+    - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
   </Step>
 </Steps>
 
