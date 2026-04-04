@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
   method?: string;
@@ -45,15 +46,6 @@ function createGatewayCallModuleMock() {
   };
 }
 
-function createSessionsModuleMock() {
-  return {
-    loadSessionStore: vi.fn(() => sessionStore),
-    resolveAgentIdFromSessionKey: () => "main",
-    resolveStorePath: () => "/tmp/sessions-main.json",
-    resolveMainSessionKey: () => "agent:main:main",
-  };
-}
-
 function createSubagentDepthModuleMock() {
   return {
     getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
@@ -80,40 +72,32 @@ function createTimeoutHistoryWithNoReply() {
 
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("./subagent-depth.js", createSubagentDepthModuleMock);
-vi.mock("./subagent-announce-delivery.runtime.js", () => ({
-  createBoundDeliveryRouter: () => ({
-    resolveDestination: () => ({ mode: "none" }),
+vi.mock("./subagent-announce-delivery.runtime.js", () =>
+  createSubagentAnnounceDeliveryRuntimeMock({
+    callGateway: async (request: unknown) => {
+      const typed = request as GatewayCall;
+      gatewayCalls.push(typed);
+      if (typed.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return await callGatewayImpl(typed);
+    },
+    loadConfig: () => configOverride,
+    loadSessionStore: () => sessionStore,
+    resolveAgentIdFromSessionKey: () => "main",
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
+    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+    queueEmbeddedPiMessage: () => false,
   }),
-  resolveConversationIdFromTargets: () => "",
-  resolveExternalBestEffortDeliveryTarget: (params: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string;
-  }) => ({
-    deliver: Boolean(params.channel && params.to),
-    channel: params.channel,
-    to: params.to,
-    accountId: params.accountId,
-    threadId: params.threadId,
-  }),
-  resolveQueueSettings: (params: {
-    cfg?: {
-      messages?: {
-        queue?: {
-          byChannel?: Record<string, string>;
-        };
-      };
-    };
-    channel?: string;
-  }) => ({
-    mode: (params.channel && params.cfg?.messages?.queue?.byChannel?.[params.channel]) ?? "none",
-  }),
-}));
+);
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
   loadConfig: () => configOverride,
-  ...createSessionsModuleMock(),
+  loadSessionStore: vi.fn(() => sessionStore),
+  resolveAgentIdFromSessionKey: () => "main",
+  resolveStorePath: () => "/tmp/sessions-main.json",
+  resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   queueEmbeddedPiMessage: (_sessionId: string, _text: string) => false,
   waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>

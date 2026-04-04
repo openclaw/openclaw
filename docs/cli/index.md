@@ -673,7 +673,7 @@ Subcommands:
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
-  - When adding a non-default account to a channel still using single-account top-level config, OpenClaw moves account-scoped values into `channels.<channel>.accounts.default` before writing the new account.
+  - When adding a non-default account to a channel still using single-account top-level config, OpenClaw promotes account-scoped values into the channel account map before writing the new account. Most channels use `accounts.default`; Matrix can preserve an existing matching named/default target instead.
   - Non-interactive `channels add` does not auto-create/upgrade bindings; channel-only bindings continue to match the default account.
 - `channels remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `channels login`: interactive channel login (WhatsApp Web only).
@@ -776,12 +776,12 @@ Subcommands:
 - `skills install <slug> --force`: overwrite an existing workspace skill folder.
 - `skills update <slug|--all>`: update tracked ClawHub skills.
 - `skills list`: list skills (default when no subcommand).
-- `skills list --json`: emit machine-readable skill inventory.
+- `skills list --json`: emit machine-readable skill inventory on stdout.
 - `skills list --verbose`: include missing requirements in the table.
 - `skills info <name>`: show details for one skill.
-- `skills info <name> --json`: emit machine-readable details.
+- `skills info <name> --json`: emit machine-readable details on stdout.
 - `skills check`: summary of ready vs missing requirements.
-- `skills check --json`: emit machine-readable readiness output.
+- `skills check --json`: emit machine-readable readiness output on stdout.
 
 Options:
 

@@ -257,8 +257,8 @@ importers:
   extensions/acpx:
     dependencies:
       acpx:
-        specifier: 0.4.0
-        version: 0.4.0(zod@4.3.6)
+        specifier: 0.4.1
+        version: 0.4.1(zod@4.3.6)
 
   extensions/amazon-bedrock:
     dependencies:
@@ -3622,8 +3622,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.4.0:
-    resolution: {integrity: sha512-JyMw9+loIEuy+jUyv7Irx+qNDhrL0ToR+wAfX3ucBACrSBfsWKFmGJWewH+c1gr+MuzTG1Jd/0kIM6/+ZL67OA==}
+  acpx@0.4.1:
+    resolution: {integrity: sha512-3Hay6yvjyHXSt9qMlU+1jGhtyXJgwA4SkrzMMf50wQAuk8Njt+LCI4Cwze8+Sj/1nPDmiQFKTUiPsQIJXmqAEQ==}
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -10041,7 +10041,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.4.0(zod@4.3.6):
+  acpx@0.4.1(zod@4.3.6):
     dependencies:
       '@agentclientprotocol/sdk': 0.17.1(zod@4.3.6)
       commander: 14.0.3

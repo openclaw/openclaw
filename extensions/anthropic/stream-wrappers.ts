@@ -210,7 +210,9 @@ export function resolveAnthropicServiceTier(
   return normalized;
 }
 
-export function wrapAnthropicProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+export function wrapAnthropicProviderStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const fastMode = resolveAnthropicFastMode(ctx.extraParams);
