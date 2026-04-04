@@ -176,6 +176,7 @@ export async function executePreparedCliRun(
         for (const key of backend.clearEnv ?? []) {
           delete next[key];
         }
+        Object.assign(next, context.preparedBackend.env);
         return next;
       })();
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
