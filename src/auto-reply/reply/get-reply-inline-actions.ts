@@ -192,7 +192,6 @@ export async function handleInlineActions(params: {
         ? (await import("../skill-commands.runtime.js")).listSkillCommandsForWorkspace({
             workspaceDir,
             cfg,
-            agentId,
             skillFilter,
           })
         : [];

@@ -149,66 +149,6 @@ describe("loadWorkspaceSkillEntries", () => {
     expect(entries.map((entry) => entry.skill.name)).toContain("fallback-name");
   });
 
-  it("inherits agents.defaults.skills when an agent omits skills", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "github"),
-      name: "github",
-      description: "GitHub",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "weather"),
-      name: "weather",
-      description: "Weather",
-    });
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          list: [{ id: "writer" }],
-        },
-      },
-      agentId: "writer",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["github"]);
-  });
-
-  it("uses agents.list[].skills as a full replacement for defaults", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "github"),
-      name: "github",
-      description: "GitHub",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "docs-search"),
-      name: "docs-search",
-      description: "Docs",
-    });
-
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
-      config: {
-        agents: {
-          defaults: {
-            skills: ["github"],
-          },
-          list: [{ id: "writer", skills: ["docs-search"] }],
-        },
-      },
-      agentId: "writer",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
-    });
-
-    expect(entries.map((entry) => entry.skill.name)).toEqual(["docs-search"]);
-  });
-
   it.runIf(process.platform !== "win32")(
     "skips workspace skill directories that resolve outside the workspace root",
     async () => {

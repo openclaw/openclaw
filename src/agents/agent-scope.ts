@@ -11,7 +11,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
+import { normalizeSkillFilter } from "./skills/filter.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
@@ -160,7 +160,7 @@ export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
 ): string[] | undefined {
-  return resolveEffectiveAgentSkillFilter(cfg, agentId);
+  return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
 }
 
 function resolveModelPrimary(raw: unknown): string | undefined {

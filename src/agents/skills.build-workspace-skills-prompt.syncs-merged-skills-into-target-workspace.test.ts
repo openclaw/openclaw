@@ -122,53 +122,6 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Extra version");
     expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
   });
-
-  it("syncs the explicit agent skill subset instead of inherited defaults", async () => {
-    const sourceWorkspace = await createCaseDir("source");
-    const targetWorkspace = await createCaseDir("target");
-    await writeSkill({
-      dir: path.join(sourceWorkspace, "skills", "foo_bar"),
-      name: "foo_bar",
-      description: "Underscore variant",
-    });
-    await writeSkill({
-      dir: path.join(sourceWorkspace, "skills", "foo.dot"),
-      name: "foo.dot",
-      description: "Dot variant",
-    });
-
-    await withEnv({ HOME: sourceWorkspace, PATH: "" }, () =>
-      syncSkillsToWorkspace({
-        sourceWorkspaceDir: sourceWorkspace,
-        targetWorkspaceDir: targetWorkspace,
-        agentId: "alpha",
-        config: {
-          agents: {
-            defaults: {
-              skills: ["foo_bar", "foo.dot"],
-            },
-            list: [{ id: "alpha", skills: ["foo_bar"] }],
-          },
-        },
-        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
-        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
-      }),
-    );
-
-    const prompt = buildPrompt(targetWorkspace, {
-      bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
-      managedSkillsDir: path.join(targetWorkspace, ".managed"),
-    });
-
-    expect(prompt).toContain("Underscore variant");
-    expect(prompt).not.toContain("Dot variant");
-    expect(await pathExists(path.join(targetWorkspace, "skills", "foo_bar", "SKILL.md"))).toBe(
-      true,
-    );
-    expect(await pathExists(path.join(targetWorkspace, "skills", "foo.dot", "SKILL.md"))).toBe(
-      false,
-    );
-  });
   it.runIf(process.platform !== "win32")(
     "does not sync workspace skills that resolve outside the source workspace root",
     async () => {
