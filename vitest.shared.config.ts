@@ -44,7 +44,6 @@ function detectVitestHostInfo(): Required<VitestHostInfo> {
 export function resolveLocalVitestMaxWorkers(
   env: Record<string, string | undefined> = process.env,
   system: VitestHostInfo = detectVitestHostInfo(),
-  pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
 ): number {
   const override = parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
   if (override !== null) {
@@ -77,19 +76,6 @@ export function resolveLocalVitestMaxWorkers(
     inferred = Math.max(1, inferred - 1);
   }
 
-  if (pool === "threads") {
-    // Thread workers are faster per slot on the steady state, but their startup
-    // compile pressure is much burstier. Keep headroom so a second local Vitest
-    // run can start without immediately saturating the host.
-    inferred = Math.min(inferred, 4);
-    if (cpuCount >= 8) {
-      inferred = Math.max(1, inferred - 1);
-    }
-    if (loadRatio >= 0.5) {
-      inferred = Math.max(1, inferred - 1);
-    }
-  }
-
   return clamp(inferred, 1, 16);
 }
 
@@ -107,7 +93,7 @@ const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
 const defaultPool = resolveDefaultVitestPool();
-const localWorkers = resolveLocalVitestMaxWorkers(process.env, detectVitestHostInfo(), defaultPool);
+const localWorkers = resolveLocalVitestMaxWorkers(process.env, detectVitestHostInfo());
 const ciWorkers = isWindows ? 2 : 3;
 
 export const sharedVitestConfig = {

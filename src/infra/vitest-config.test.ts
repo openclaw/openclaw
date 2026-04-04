@@ -17,9 +17,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 64 * 1024 ** 3,
         },
-        "threads",
       ),
-    ).toBe(2);
+    ).toBe(3);
   });
 
   it("lets OPENCLAW_VITEST_MAX_WORKERS override the inferred cap", () => {
@@ -61,9 +60,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 16 * 1024 ** 3,
         },
-        "threads",
       ),
-    ).toBe(1);
+    ).toBe(2);
   });
 
   it("lets roomy hosts use more local parallelism", () => {
@@ -75,9 +73,8 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 0,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "threads",
       ),
-    ).toBe(3);
+    ).toBe(4);
   });
 
   it("backs off further when the host is already busy", () => {
@@ -89,36 +86,34 @@ describe("resolveLocalVitestMaxWorkers", () => {
           loadAverage1m: 16,
           totalMemoryBytes: 128 * 1024 ** 3,
         },
-        "threads",
       ),
-    ).toBe(1);
+    ).toBe(2);
   });
 
-  it("keeps fork pools less conservative than thread pools on roomy hosts", () => {
+  it("caps very large hosts at six local workers", () => {
     expect(
       resolveLocalVitestMaxWorkers(
         {},
         {
-          cpuCount: 16,
+          cpuCount: 32,
           loadAverage1m: 0,
-          totalMemoryBytes: 128 * 1024 ** 3,
+          totalMemoryBytes: 256 * 1024 ** 3,
         },
-        "forks",
       ),
-    ).toBe(4);
+    ).toBe(6);
   });
 });
 
 describe("base vitest config", () => {
-  it("defaults the base pool to threads", () => {
-    expect(resolveDefaultVitestPool()).toBe("threads");
-    expect(baseConfig.test?.pool).toBe("threads");
+  it("defaults the base pool to forks", () => {
+    expect(resolveDefaultVitestPool()).toBe("forks");
+    expect(baseConfig.test?.pool).toBe("forks");
   });
 
-  it("lets OPENCLAW_VITEST_POOL force forks for local debugging", () => {
+  it("keeps forks even when non-fork pools are requested", () => {
     expect(
       resolveDefaultVitestPool({
-        OPENCLAW_VITEST_POOL: "forks",
+        OPENCLAW_VITEST_POOL: "threads",
       }),
     ).toBe("forks");
   });
@@ -141,7 +136,7 @@ describe("test scripts", () => {
     };
 
     expect(pkg.scripts?.["test:serial"]).toBe(
-      "OPENCLAW_VITEST_MAX_WORKERS=1 vitest run --config vitest.config.ts",
+      "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     );
     expect(pkg.scripts?.["test:single"]).toBeUndefined();
   });
