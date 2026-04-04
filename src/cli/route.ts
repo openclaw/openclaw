@@ -10,7 +10,9 @@ async function prepareRoutedCommand(params: {
   loadPlugins?: boolean | ((argv: string[]) => boolean);
 }) {
   const suppressDoctorStdout = hasFlag(params.argv, "--json");
-  const skipConfigGuard = params.commandPath[0] === "status" && suppressDoctorStdout;
+  const skipConfigGuard =
+    (params.commandPath[0] === "status" && suppressDoctorStdout) ||
+    (params.commandPath[0] === "gateway" && params.commandPath[1] === "status");
   if (!suppressDoctorStdout && process.stdout.isTTY) {
     const [{ emitCliBanner }, { VERSION }] = await Promise.all([
       import("./banner.js"),
