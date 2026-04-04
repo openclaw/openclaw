@@ -1531,7 +1531,8 @@ export async function runEmbeddedAttempt(
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Called each run; only mutates already-answered user turns that still carry image blocks.
+          // Only mutates user turns older than a few assistant replies so recent
+          // history stays byte-identical for prompt-cache prefix matching.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.replaceMessages(activeSession.messages);
