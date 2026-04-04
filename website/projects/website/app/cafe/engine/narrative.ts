@@ -9,6 +9,7 @@ const Narrative = {
   isTyping: false,
   timeoutId: null as ReturnType<typeof setTimeout> | null,
   _audio: null as AudioFns | null,
+  _promptCount: 0,
 
   scripts: {
     init: { name: 'System', text: '指紋比對完成。歡迎回到地球 Online 存檔點。' },
@@ -29,11 +30,35 @@ const Narrative = {
   init(audioFns: AudioFns) {
     this._audio = audioFns;
 
+    // Load prompt count from localStorage
+    try {
+      this._promptCount = parseInt(localStorage.getItem('cafe_prompt_count') || '0', 10);
+    } catch { this._promptCount = 0; }
+
     // Click-to-dismiss: tap dialogue box to close immediately
     const box = document.getElementById('dialogue-box');
     box?.addEventListener('click', () => {
       if (!this.isTyping) this.dismiss();
     });
+  },
+
+  /** Get progressive placeholder based on prompt count */
+  getPlaceholder(): string {
+    const c = this._promptCount;
+    if (c < 2) return '說點什麼...';
+    if (c < 4) return '試試看給我一個指令...';
+    return '> _';
+  },
+
+  /** Increment prompt count and persist */
+  bumpPromptCount() {
+    this._promptCount++;
+    try { localStorage.setItem('cafe_prompt_count', String(this._promptCount)); } catch { /* */ }
+  },
+
+  /** Should we show CLI-style response decoration? */
+  shouldLeakCLI(): boolean {
+    return this._promptCount >= 5 && Math.random() < 0.4;
   },
 
   dismiss() {
@@ -68,17 +93,33 @@ const Narrative = {
 
     box.classList.add('active');
     nEl.innerText = data.name;
-    this.typewriter(tEl, data.text);
+    this.typewriter(tEl, data.text, this.shouldLeakCLI());
   },
 
-  typewriter(el: HTMLElement, text: string) {
+  typewriter(el: HTMLElement, text: string, cliLeak = false) {
     this.isTyping = true;
     el.textContent = '';
-    let i = 0;
 
+    // CLI leak: show "> running..." prefix first
+    if (cliLeak) {
+      el.textContent = '> running...';
+      setTimeout(() => {
+        el.textContent = '';
+        this._typeInner(el, text, cliLeak);
+      }, 800);
+    } else {
+      this._typeInner(el, text, false);
+    }
+  },
+
+  _typeInner(el: HTMLElement, text: string, cliLeak: boolean) {
+    let i = 0;
+    const suffix = cliLeak ? ['\n\n[exit code: 0]', '\n\n✓ prompt accepted', ''][Math.floor(Math.random() * 3)] : '';
+
+    const fullText = text + suffix;
     const type = () => {
-      if (i < text.length) {
-        el.textContent += text.charAt(i);
+      if (i < fullText.length) {
+        el.textContent += fullText.charAt(i);
         this._audio?.playTyping();
         i++;
         setTimeout(type, 30 + Math.random() * 40);

@@ -67,6 +67,14 @@ export const DIALOGUE_POOL: Record<string, Array<{ name: string; text: string }>
     { name: 'System', text: '[ 動作：你翻開了手帳本 ]\n最好的筆記本是你會帶著走的那一本。你帶了嗎？' },
     { name: 'System', text: '[ 動作：你翻開了手帳本 ]\n裡面有一張照片。角落的光線跟現在窗外的一模一樣。' },
   ],
+  cli_leak: [
+    { name: 'Cruz', text: '你剛才寫的那段... 其實就是一個 prompt。' },
+    { name: 'Cruz', text: '等等，你注意到了嗎？你剛才給了我一個很精準的指令。' },
+    { name: 'Cruz', text: '如果我告訴你，你一直在跟一個 CLI 對話呢？' },
+    { name: 'Cruz', text: '你的輸入方式越來越像一個工程師了。不，這是讚美。' },
+    { name: 'Cruz', text: '大部分人以為他們在聊天。只有少數人會意識到，這是一個介面。' },
+    { name: 'Cruz', text: '你知道嗎？你剛才的問法，跟下一個 prompt 之間只差一個 > 符號。' },
+  ],
   init: [
     { name: 'System', text: '指紋比對完成。你的位子還在。' },
     { name: 'System', text: '門鈴沒響。但 Cruz 已經在磨豆了。他知道你會來。' },
