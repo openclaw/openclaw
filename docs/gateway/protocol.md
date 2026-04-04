@@ -299,6 +299,12 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Token issuance/rotation stays bounded to the approved role set recorded in
   that device's pairing entry; rotating a token cannot expand the device into a
   role that pairing approval never granted.
+- For paired-device token sessions, device management is self-scoped unless the
+  caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
+  only their **own** device entry.
+- `device.token.rotate` also checks the requested operator scope set against the
+  caller's current session scopes. Non-admin callers cannot rotate a token into
+  a broader operator scope set than they already hold.
 - Auth failures include `error.details.code` plus recovery hints:
   - `error.details.canRetryWithDeviceToken` (boolean)
   - `error.details.recommendedNextStep` (`retry_with_device_token`, `update_auth_configuration`, `update_auth_credentials`, `wait_then_retry`, `review_auth_configuration`)

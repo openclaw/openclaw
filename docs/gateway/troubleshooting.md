@@ -158,6 +158,13 @@ If logs show nonce/signature errors, update the connecting client and verify it:
 2. signs the challenge-bound payload
 3. sends `connect.params.device.nonce` with the same challenge nonce
 
+If `openclaw devices rotate` / `revoke` / `remove` is denied unexpectedly:
+
+- paired-device token sessions can manage only **their own** device unless the
+  caller also has `operator.admin`
+- `openclaw devices rotate --scope ...` can only request operator scopes that
+  the caller session already holds
+
 Related:
 
 - [/web/control-ui](/web/control-ui)

@@ -2641,6 +2641,9 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - If mismatch persists after the one retry, rotate/re-approve the paired device token:
       - `openclaw devices list`
       - `openclaw devices rotate --device <id> --role operator`
+    - If that rotate call says it was denied, check two things:
+      - paired-device sessions can rotate only their **own** device unless they also have `operator.admin`
+      - explicit `--scope` values cannot exceed the caller's current operator scopes
     - Still stuck? Run `openclaw status --all` and follow [Troubleshooting](/gateway/troubleshooting). See [Dashboard](/web/dashboard) for auth details.
 
   </Accordion>
