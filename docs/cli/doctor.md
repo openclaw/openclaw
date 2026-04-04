@@ -21,7 +21,20 @@ Related:
 openclaw doctor
 openclaw doctor --repair
 openclaw doctor --deep
+openclaw doctor --repair --non-interactive
+openclaw doctor --generate-gateway-token
 ```
+
+## Options
+
+- `--no-workspace-suggestions`: disable workspace memory/search suggestions
+- `--yes`: accept defaults without prompting
+- `--repair`: apply recommended repairs without prompting
+- `--fix`: alias for `--repair`
+- `--force`: apply aggressive repairs, including overwriting custom service config when needed
+- `--non-interactive`: run without prompts; safe migrations only
+- `--generate-gateway-token`: generate and configure a gateway token
+- `--deep`: scan system services for extra gateway installs
 
 Notes:
 

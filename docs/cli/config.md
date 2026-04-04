@@ -11,10 +11,28 @@ Config helpers for non-interactive edits in `openclaw.json`: get/set/unset/file/
 values by path and print the active config file. Run without a subcommand to
 open the configure wizard (same as `openclaw configure`).
 
+Root options:
+
+- `--section <section>`: repeatable guided-setup section filter when you run `openclaw config` without a subcommand
+
+Supported guided sections:
+
+- `workspace`
+- `model`
+- `web`
+- `gateway`
+- `daemon`
+- `channels`
+- `plugins`
+- `skills`
+- `health`
+
 ## Examples
 
 ```bash
 openclaw config file
+openclaw config --section model
+openclaw config --section gateway --section daemon
 openclaw config schema
 openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
@@ -68,6 +86,8 @@ openclaw config set agents.defaults.heartbeat.every "0m"
 openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
+
+`config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
 
 ## `config set` modes
 

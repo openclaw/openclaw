@@ -25,6 +25,22 @@ Related:
 - Gateway configuration reference: [Configuration](/gateway/configuration)
 - Config CLI: [Config](/cli/config)
 
+## Options
+
+- `--section <section>`: repeatable section filter
+
+Available sections:
+
+- `workspace`
+- `model`
+- `web`
+- `gateway`
+- `daemon`
+- `channels`
+- `plugins`
+- `skills`
+- `health`
+
 Notes:
 
 - Choosing where the Gateway runs always updates `gateway.mode`. You can select "Continue" without other sections if that is all you need.
@@ -39,4 +55,5 @@ Notes:
 openclaw configure
 openclaw configure --section web
 openclaw configure --section model --section channels
+openclaw configure --section gateway --section daemon
 ```
