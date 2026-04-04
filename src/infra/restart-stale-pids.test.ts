@@ -183,16 +183,26 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(result).toEqual([stalePid]); // deduped — not [pid, pid]
     });
 
-    it("returns [] and skips lsof on win32", () => {
+    it("returns [] when no listeners on win32", () => {
       // The entire describe block is skipped on Windows (isWindows guard at top),
-      // so this test only runs on Linux/macOS. It mocks platform to win32 for the
-      // single assertion without needing to restore — the suite-level skipIf means
-      // this will never run on an actual Windows runner where the mock could leak.
+      // so this test only runs on Linux/macOS. It mocks platform to win32 so
+      // findGatewayPidsOnPortSync takes the Windows netstat path.
       const origDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
       try {
+        // netstat returns successfully but no LISTENING entries on our port
+        mockSpawnSync.mockReturnValue({
+          error: null,
+          status: 0,
+          stdout: "\r\nActive Connections\r\n\r\n  Proto  Local Address          Foreign Address        State           PID\r\n  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1024\r\n",
+          stderr: "",
+        });
         expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
-        expect(mockSpawnSync).not.toHaveBeenCalled();
+        expect(mockSpawnSync).toHaveBeenCalledWith(
+          "netstat",
+          expect.arrayContaining(["-ano"]),
+          expect.any(Object),
+        );
       } finally {
         if (origDescriptor) {
           Object.defineProperty(process, "platform", origDescriptor);
