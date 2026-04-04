@@ -477,7 +477,7 @@ export function buildGatewayCronService(params: {
                     to: failureDest.to,
                     accountId: failureDest.accountId,
                   },
-                  `[Cron Failure] ${failureMessage}`,
+                  `⚠️ ${failureMessage}`,
                 );
               }
             } else {
