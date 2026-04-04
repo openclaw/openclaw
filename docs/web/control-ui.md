@@ -29,8 +29,12 @@ Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.password`
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
-  The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
-  Onboarding generates a gateway token by default, so shared-secret setups usually paste that here on first connect.
+
+The dashboard settings panel keeps a token for the current browser tab session
+and selected gateway URL; passwords are not persisted. Onboarding generates a
+gateway token by default, so shared-secret setups usually paste that token here
+on first connect, but password auth works too when `gateway.auth.mode` is
+`"password"`.
 
 ## Device pairing (first connection)
 
