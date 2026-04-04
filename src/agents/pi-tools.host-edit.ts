@@ -95,21 +95,58 @@ function didEditLikelyApply(params: {
     return false;
   }
 
-  let withoutInsertedNewText = normalizedCurrent;
+  // Use before/after occurrence counts for more robust detection.
+  // This handles the case where newText pre-existed in the file.
+  const countOccurrences = (hay: string, needle: string): number => {
+    if (needle.length === 0) {
+      return 0;
+    }
+    let count = 0;
+    let idx = 0;
+    while ((idx = hay.indexOf(needle, idx)) !== -1) {
+      count++;
+      idx += needle.length;
+    }
+    return count;
+  };
+
   for (const edit of params.edits) {
     const normalizedNew = normalizeToLF(edit.newText);
+    const normalizedOld = normalizeToLF(edit.oldText);
+
+    // Check if newText exists in current content
     if (normalizedNew.length > 0 && !normalizedCurrent.includes(normalizedNew)) {
       return false;
     }
-    withoutInsertedNewText =
-      normalizedNew.length > 0
-        ? removeExactOccurrences(withoutInsertedNewText, normalizedNew)
-        : withoutInsertedNewText;
-  }
 
-  for (const edit of params.edits) {
-    const normalizedOld = normalizeToLF(edit.oldText);
-    if (withoutInsertedNewText.includes(normalizedOld)) {
+    // Count occurrences before and after
+    const newTextCountAfter = countOccurrences(normalizedCurrent, normalizedNew);
+    const newTextCountBefore =
+      normalizedOriginal !== undefined ? countOccurrences(normalizedOriginal, normalizedNew) : 0;
+
+    // Evidence the edit added at least one new occurrence of newText
+    const editAddedNewText = newTextCountAfter > newTextCountBefore;
+
+    // For oldText checking, strip newText occurrences to handle the case where
+    // oldText is a substring of newText (e.g. appending/wrapping, #49363)
+    const stripNewText = (s: string): string =>
+      normalizedOld.length > 0 && normalizedNew.includes(normalizedOld)
+        ? s.split(normalizedNew).join("")
+        : s;
+
+    const contentAfterStrip = stripNewText(normalizedCurrent);
+    const stillHasOld = normalizedOld.length > 0 && contentAfterStrip.includes(normalizedOld);
+
+    // When original is available, check that oldText count decreased
+    const oldTextDecreasedOrAbsent =
+      !stillHasOld &&
+      (normalizedOriginal === undefined ||
+        countOccurrences(stripNewText(normalizedCurrent), normalizedOld) <=
+          countOccurrences(stripNewText(normalizedOriginal), normalizedOld));
+
+    // Recover only when: newText added AND oldText decreased/absent
+    const recovered = editAddedNewText && oldTextDecreasedOrAbsent;
+    if (!recovered) {
       return false;
     }
   }
