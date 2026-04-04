@@ -611,6 +611,11 @@ export type PluginHookMessageSendingEvent = {
   /**
    * Agent reasoning context for the current turn.
    * Present when the message originates from an agent run; `undefined` otherwise.
+   *
+   * **Note:** `agentContext` is not persisted in the write-ahead delivery queue.
+   * If a delivery is retried (e.g. after a transient network failure), this field
+   * will be `undefined` on the retry attempt. Hook authors should treat it as
+   * best-effort and always check for `undefined`.
    */
   agentContext?: MessageSendingAgentContext;
 };

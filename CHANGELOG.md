@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Plugins/message_sending hook: enrich `message_sending` plugin hook event with optional `agentContext` field — tool call names, token usage, context fill %, agent identity, and response length. Enables pre-send validation guards without prompt-only heuristics. `agentContext` is best-effort and `undefined` on delivery retries or non-agent sends. (#21184, #39761) Thanks @rmzlb.
+
 ## 2026.3.8
 
 ### Changes

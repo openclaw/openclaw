@@ -186,4 +186,14 @@ describe("buildAgentContextFromMeta", () => {
     expect(ctx!.toolCalls).toEqual([]);
     expect(ctx!.toolCallCount).toBe(0);
   });
+
+  it("returns contextFillPercent undefined when contextWindow is zero", () => {
+    const result = makeResult({
+      lastCallUsage: { total: 50000 },
+      contextWindow: 0,
+    });
+
+    const ctx = buildAgentContextFromMeta(result, session, "telegram", [{ text: "ok" }]);
+    expect(ctx!.contextFillPercent).toBeUndefined(); // guard against division by zero
+  });
 });
