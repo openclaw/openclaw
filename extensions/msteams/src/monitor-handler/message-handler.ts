@@ -52,6 +52,37 @@ import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message
 import { resolveMSTeamsSenderAccess } from "./access.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
+function buildStoredConversationReference(params: {
+  activity: MSTeamsTurnContext["activity"];
+  conversationId: string;
+  conversationType: string;
+  teamId?: string;
+}): StoredConversationReference {
+  const { activity, conversationId, conversationType, teamId } = params;
+  const from = activity.from;
+  const conversation = activity.conversation;
+  const agent = activity.recipient;
+  const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+    | { timezone?: string }
+    | undefined;
+  return {
+    activityId: activity.id,
+    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
+    agent,
+    bot: agent ? { id: agent.id, name: agent.name } : undefined,
+    conversation: {
+      id: conversationId,
+      conversationType,
+      tenantId: conversation?.tenantId,
+    },
+    teamId,
+    channelId: activity.channelId,
+    serviceUrl: activity.serviceUrl,
+    locale: activity.locale,
+    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+  };
+}
+
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
@@ -140,6 +171,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    const conversationRef = buildStoredConversationReference({
+      activity,
+      conversationId,
+      conversationType,
+      teamId,
+    });
 
     const {
       dmPolicy,
@@ -177,6 +214,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching,
       });
       if (access.decision === "pairing") {
+        conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+          log.debug?.("failed to save conversation reference", {
+            error: formatUnknownError(err),
+          });
+        });
         const request = await pairing.upsertPairingRequest({
           id: senderId,
           meta: { name: senderName },
@@ -306,30 +348,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    // Extract clientInfo entity (Teams sends this on every activity with timezone, locale, etc.)
-    const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
-      | { timezone?: string; locale?: string; country?: string; platform?: string }
-      | undefined;
-
-    // Build conversation reference for proactive replies.
-    const agent = activity.recipient;
-    const conversationRef: StoredConversationReference = {
-      activityId: activity.id,
-      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
-      agent,
-      bot: agent ? { id: agent.id, name: agent.name } : undefined,
-      conversation: {
-        id: conversationId,
-        conversationType,
-        tenantId: conversation?.tenantId,
-      },
-      teamId,
-      channelId: activity.channelId,
-      serviceUrl: activity.serviceUrl,
-      locale: activity.locale,
-      // Only set timezone if present (preserve previously stored value on next upsert)
-      ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
-    };
     conversationStore.upsert(conversationId, conversationRef).catch((err) => {
       log.debug?.("failed to save conversation reference", {
         error: formatUnknownError(err),
@@ -620,6 +638,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const { dispatcher, replyOptions, markDispatchIdle } = createMSTeamsReplyDispatcher({
       cfg,
       agentId: route.agentId,
+      sessionKey: route.sessionKey,
       accountId: route.accountId,
       runtime,
       log,
@@ -641,8 +660,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // Use Teams clientInfo timezone if no explicit userTimezone is configured.
     // This ensures the agent knows the sender's timezone for time-aware responses
     // and proactive sends within the same session.
-    // Apply Teams clientInfo timezone if no explicit userTimezone is configured.
-    const senderTimezone = clientInfo?.timezone || conversationRef.timezone;
+    const activityClientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
+      | { timezone?: string }
+      | undefined;
+    const senderTimezone = activityClientInfo?.timezone || conversationRef.timezone;
     const configOverride =
       senderTimezone && !cfg.agents?.defaults?.userTimezone
         ? {

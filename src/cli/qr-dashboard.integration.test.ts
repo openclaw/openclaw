@@ -1,56 +1,43 @@
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
-import type { MockFn } from "../test-utils/vitest-mock-fn.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
+const {
+  runtimeLogs,
+  runtimeErrors,
+  defaultRuntime: runtime,
+  resetRuntimeCapture,
+} = createCliRuntimeCapture();
+const runtimeExit = runtime.exit;
 
-type CliRuntimeEnv = RuntimeEnv & {
-  log: MockFn<RuntimeEnv["log"]>;
-  error: MockFn<RuntimeEnv["error"]>;
-  exit: MockFn<RuntimeEnv["exit"]>;
-};
-
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const runtime = vi.hoisted<CliRuntimeEnv>(() => ({
-  log: vi.fn((...args: unknown[]) => {
-    runtimeLogs.push(args.map(String).join(" "));
-  }),
-  error: vi.fn((...args: unknown[]) => {
-    runtimeErrors.push(args.map(String).join(" "));
-  }),
-  exit: vi.fn<(code: number) => void>(),
+vi.mock("../config/config.js", () => ({
+  loadConfig: loadConfigMock,
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+  resolveGatewayPort: resolveGatewayPortMock,
 }));
-
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: loadConfigMock,
-    readConfigFileSnapshot: readConfigFileSnapshotMock,
-    resolveGatewayPort: resolveGatewayPortMock,
-  };
-});
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
-vi.mock("../runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
-  return {
-    ...actual,
-    defaultRuntime: runtime,
-  };
-});
+vi.mock("../infra/device-bootstrap.js", () => ({
+  issueDeviceBootstrapToken: vi.fn(async () => ({
+    token: "bootstrap-123",
+    expiresAtMs: 123,
+  })),
+}));
 
-let dashboardCommand: typeof import("../commands/dashboard.js").dashboardCommand;
-let registerQrCli: typeof import("./qr-cli.js").registerQrCli;
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: runtime,
+}));
+
+const { dashboardCommand } = await import("../commands/dashboard.js");
+const { registerQrCli } = await import("./qr-cli.js");
 
 function createGatewayTokenRefFixture() {
   return {
@@ -124,16 +111,11 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
   });
-  beforeAll(async () => {
-    ({ dashboardCommand } = await import("../commands/dashboard.js"));
-    ({ registerQrCli } = await import("./qr-cli.js"));
-  });
 
   beforeEach(() => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     vi.clearAllMocks();
-    vi.mocked(runtime.exit).mockImplementation(() => {});
+    runtimeExit.mockImplementation(() => {});
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.SHARED_GATEWAY_TOKEN;

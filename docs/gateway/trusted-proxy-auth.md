@@ -265,6 +265,30 @@ If you see a `mixed_trusted_proxy_token` error on startup:
 
 Loopback trusted-proxy auth also fails closed: same-host callers must supply the configured identity headers through a trusted proxy instead of being silently authenticated.
 
+## Operator scopes header
+
+Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may
+optionally declare operator scopes with `x-openclaw-scopes`.
+
+Examples:
+
+- `x-openclaw-scopes: operator.read`
+- `x-openclaw-scopes: operator.read,operator.write`
+- `x-openclaw-scopes: operator.admin,operator.write`
+
+Behavior:
+
+- When the header is present, OpenClaw honors the declared scope set.
+- When the header is present but empty, the request declares **no** operator scopes.
+- When the header is absent, normal identity-bearing HTTP APIs fall back to the standard operator default scope set.
+- Gateway-auth **plugin HTTP routes** are narrower by default: when `x-openclaw-scopes` is absent, their runtime scope falls back to `operator.write`.
+
+Practical rule:
+
+- Send `x-openclaw-scopes` explicitly when you want a trusted-proxy request to
+  be narrower than the defaults, or when a gateway-auth plugin route needs
+  something stronger than write scope.
+
 ## Security Checklist
 
 Before enabling trusted-proxy auth, verify:

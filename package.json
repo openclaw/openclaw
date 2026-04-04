@@ -95,6 +95,22 @@
       "types": "./dist/plugin-sdk/approval-auth-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-auth-runtime.js"
     },
+    "./plugin-sdk/approval-client-runtime": {
+      "types": "./dist/plugin-sdk/approval-client-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-client-runtime.js"
+    },
+    "./plugin-sdk/approval-delivery-runtime": {
+      "types": "./dist/plugin-sdk/approval-delivery-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-delivery-runtime.js"
+    },
+    "./plugin-sdk/approval-native-runtime": {
+      "types": "./dist/plugin-sdk/approval-native-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-native-runtime.js"
+    },
+    "./plugin-sdk/approval-reply-runtime": {
+      "types": "./dist/plugin-sdk/approval-reply-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-reply-runtime.js"
+    },
     "./plugin-sdk/approval-runtime": {
       "types": "./dist/plugin-sdk/approval-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-runtime.js"

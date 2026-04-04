@@ -360,10 +360,49 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 
 ## Secrets
 
-- `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
-- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift (`--allow-exec` to execute exec providers during audit).
-- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply (`--allow-exec` to execute exec providers during preflight and exec-containing apply flows).
-- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported; use `--allow-exec` to permit exec providers in dry-run and exec-containing write plans).
+### `secrets`
+
+Manage SecretRefs and related runtime/config hygiene.
+
+Subcommands:
+
+- `secrets reload`
+- `secrets audit`
+- `secrets configure`
+- `secrets apply --from <path>`
+
+`secrets reload` options:
+
+- `--url`, `--token`, `--timeout`, `--expect-final`, `--json`
+
+`secrets audit` options:
+
+- `--check`
+- `--allow-exec`
+- `--json`
+
+`secrets configure` options:
+
+- `--apply`
+- `--yes`
+- `--providers-only`
+- `--skip-provider-setup`
+- `--agent <id>`
+- `--allow-exec`
+- `--plan-out <path>`
+- `--json`
+
+`secrets apply --from <path>` options:
+
+- `--dry-run`
+- `--allow-exec`
+- `--json`
+
+Notes:
+
+- `reload` is a Gateway RPC and keeps the last-known-good runtime snapshot when resolution fails.
+- `audit --check` returns non-zero on findings; unresolved refs use a higher-priority non-zero exit code.
+- Dry-run exec checks are skipped by default; use `--allow-exec` to opt in.
 
 ## Plugins
 
@@ -382,9 +421,25 @@ Most plugin changes require a gateway restart. See [/plugin](/tools/plugin).
 
 Vector search over `MEMORY.md` + `memory/*.md`:
 
-- `openclaw memory status` — show index stats.
+- `openclaw memory status` — show index stats; use `--deep` for provider probes or `--fix` to repair stale recall/promotion artifacts.
 - `openclaw memory index` — reindex memory files.
 - `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
+- `openclaw memory promote` — rank short-term recalls and optionally append top entries into `MEMORY.md`.
+
+## Sandbox
+
+Manage sandbox runtimes for isolated agent execution. See [/cli/sandbox](/cli/sandbox).
+
+Subcommands:
+
+- `sandbox list [--browser] [--json]`
+- `sandbox recreate [--all] [--session <key>] [--agent <id>] [--browser] [--force]`
+- `sandbox explain [--session <key>] [--agent <id>] [--json]`
+
+Notes:
+
+- `sandbox recreate` removes existing runtimes so the next use seeds them again with current config.
+- For `ssh` and OpenShell `remote` backends, recreate deletes the canonical remote workspace for the selected scope.
 
 ## Chat slash commands
 
@@ -397,6 +452,22 @@ Highlights:
 - `/debug` for runtime-only config overrides (memory, not disk; requires `commands.debug: true`).
 
 ## Setup + onboarding
+
+### `completion`
+
+Generate shell-completion scripts and optionally install them into your shell profile.
+
+Options:
+
+- `-s, --shell <zsh|bash|powershell|fish>`
+- `-i, --install`
+- `--write-state`
+- `-y, --yes`
+
+Notes:
+
+- Without `--install` or `--write-state`, `completion` prints the script to stdout.
+- `--install` writes an `OpenClaw Completion` block into your shell profile and points it at the cached script under the OpenClaw state directory.
 
 ### `setup`
 
@@ -535,6 +606,38 @@ Notes:
 
 - For SecretRef-managed gateway tokens, `dashboard` prints or opens a non-tokenized URL instead of exposing the secret in terminal output or browser launch arguments.
 
+### `update`
+
+Update the installed CLI.
+
+Root options:
+
+- `--json`
+- `--no-restart`
+- `--dry-run`
+- `--channel <stable|beta|dev>`
+- `--tag <dist-tag|version|spec>`
+- `--timeout <seconds>`
+- `--yes`
+
+Subcommands:
+
+- `update status`
+- `update wizard`
+
+`update status` options:
+
+- `--json`
+- `--timeout <seconds>`
+
+`update wizard` options:
+
+- `--timeout <seconds>`
+
+Notes:
+
+- `openclaw --update` rewrites to `openclaw update`.
+
 ### `backup`
 
 Create and verify local backup archives for OpenClaw state.
@@ -598,11 +701,38 @@ Common options:
 - `--no-usage`: skip model provider usage/quota snapshots (OAuth/API-backed only).
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
 
+`channels status` options:
+
+- `--probe`
+- `--timeout <ms>`
+- `--json`
+
+`channels capabilities` options:
+
+- `--channel <name>`
+- `--account <id>` (only with `--channel`)
+- `--target <dest>`
+- `--timeout <ms>`
+- `--json`
+
+`channels resolve` options:
+
+- `<entries...>`
+- `--channel <name>`
+- `--account <id>`
+- `--kind <auto|user|group>`
+- `--json`
+
 `channels logs` options:
 
 - `--channel <name|all>` (default `all`)
 - `--lines <n>` (default `200`)
 - `--json`
+
+Notes:
+
+- `channels login` supports `--verbose`.
+- `channels capabilities --account` only applies when `--channel` is set.
 
 More detail: [/concepts/oauth](/concepts/oauth)
 
@@ -615,6 +745,23 @@ openclaw channels remove --channel discord --account work --delete
 openclaw channels status --probe
 openclaw status --deep
 ```
+
+### `directory`
+
+Look up self, peer, and group IDs for channels that expose a directory surface. See [`openclaw directory`](/cli/directory).
+
+Common options:
+
+- `--channel <name>`
+- `--account <id>`
+- `--json`
+
+Subcommands:
+
+- `directory self`
+- `directory peers list [--query <text>] [--limit <n>]`
+- `directory groups list [--query <text>] [--limit <n>]`
+- `directory groups members --group-id <id> [--limit <n>]`
 
 ### `skills`
 
@@ -647,6 +794,11 @@ Subcommands:
 - `pairing approve <channel> <code> [--account <id>] [--notify]`
 - `pairing approve --channel <channel> [--account <id>] <code> [--notify]`
 
+Notes:
+
+- If exactly one pairing-capable channel is configured, `pairing approve <code>` is also allowed.
+- `list` and `approve` both support `--account <id>` for multi-account channels.
+
 ### `devices`
 
 Manage gateway device pairing entries and per-role device tokens.
@@ -661,6 +813,69 @@ Subcommands:
 - `devices rotate --device <id> --role <role> [--scope <scope...>]`
 - `devices revoke --device <id> --role <role>`
 
+Notes:
+
+- `devices list` and `devices approve` can fall back to local pairing files on local loopback when direct pairing scope is unavailable.
+- `devices approve` auto-selects the newest pending request when no `requestId` is passed or `--latest` is set.
+- `devices rotate` and `devices revoke` return JSON payloads.
+
+### `qr`
+
+Generate a mobile pairing QR and setup code from the current Gateway config. See [`openclaw qr`](/cli/qr).
+
+Options:
+
+- `--remote`
+- `--url <url>`
+- `--public-url <url>`
+- `--token <token>`
+- `--password <password>`
+- `--setup-code-only`
+- `--no-ascii`
+- `--json`
+
+Notes:
+
+- `--token` and `--password` are mutually exclusive.
+- The setup code carries a short-lived bootstrap token, not the shared gateway token/password.
+- After scanning, approve the request with `openclaw devices list` / `openclaw devices approve <requestId>`.
+
+### `clawbot`
+
+Legacy alias namespace. Currently supports `openclaw clawbot qr`, which maps to [`openclaw qr`](/cli/qr).
+
+### `hooks`
+
+Manage internal agent hooks.
+
+Subcommands:
+
+- `hooks list`
+- `hooks info <name>`
+- `hooks check`
+- `hooks enable <name>`
+- `hooks disable <name>`
+- `hooks install <path-or-spec>` (deprecated alias for `openclaw plugins install`)
+- `hooks update [id]` (deprecated alias for `openclaw plugins update`)
+
+Common options:
+
+- `--json`
+- `--eligible`
+- `-v`, `--verbose`
+
+Notes:
+
+- Plugin-managed hooks cannot be enabled or disabled through `openclaw hooks`; enable or disable the owning plugin instead.
+- `hooks install` and `hooks update` still work as compatibility aliases, but they print deprecation warnings and forward to the plugin commands.
+
+### `webhooks`
+
+Webhook helpers. Current built-in surface is Gmail Pub/Sub setup + runner:
+
+- `webhooks gmail setup`
+- `webhooks gmail run`
+
 ### `webhooks gmail`
 
 Gmail Pub/Sub hook setup + runner. See [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration).
@@ -670,13 +885,30 @@ Subcommands:
 - `webhooks gmail setup` (requires `--account <email>`; supports `--project`, `--topic`, `--subscription`, `--label`, `--hook-url`, `--hook-token`, `--push-token`, `--bind`, `--port`, `--path`, `--include-body`, `--max-bytes`, `--renew-minutes`, `--tailscale`, `--tailscale-path`, `--tailscale-target`, `--push-endpoint`, `--json`)
 - `webhooks gmail run` (runtime overrides for the same flags)
 
+Notes:
+
+- `setup` configures the Gmail watch plus the OpenClaw-facing push path.
+- `run` starts the local Gmail watcher/renew loop with optional runtime overrides.
+
+### `dns`
+
+Wide-area discovery DNS helpers (CoreDNS + Tailscale). Current built-in surface:
+
+- `dns setup [--domain <domain>] [--apply]`
+
 ### `dns setup`
 
 Wide-area discovery DNS helper (CoreDNS + Tailscale). See [/gateway/discovery](/gateway/discovery).
 
 Options:
 
+- `--domain <domain>`
 - `--apply`: install/update CoreDNS config (requires sudo; macOS only).
+
+Notes:
+
+- Without `--apply`, this is a planning helper that prints the recommended OpenClaw + Tailscale DNS config.
+- `--apply` currently supports macOS with Homebrew CoreDNS only.
 
 ## Messaging + agent
 
@@ -707,6 +939,8 @@ Examples:
 
 Run one agent turn via the Gateway (or `--local` embedded).
 
+Pass at least one session selector: `--to`, `--session-id`, or `--agent`.
+
 Required:
 
 - `-m, --message <text>`
@@ -722,14 +956,22 @@ Options:
 - `--reply-to <target>` (delivery target override, separate from session routing)
 - `--reply-channel <channel>` (delivery channel override)
 - `--reply-account <id>` (delivery account id override)
-- `--local`
+- `--local` (embedded run; plugin registry still preloads first)
 - `--deliver`
 - `--json`
 - `--timeout <seconds>`
 
+Notes:
+
+- Gateway mode falls back to the embedded agent when the Gateway request fails.
+- `--local` still preloads the plugin registry, so plugin-provided providers, tools, and channels remain available during embedded runs.
+- `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not routing.
+
 ### `agents`
 
 Manage isolated agents (workspaces + auth + routing).
+
+Running `openclaw agents` with no subcommand is equivalent to `openclaw agents list`.
 
 #### `agents list`
 
@@ -754,6 +996,7 @@ Options:
 - `--json`
 
 Binding specs use `channel[:accountId]`. When `accountId` is omitted, OpenClaw may resolve account scope via channel defaults/plugin hooks; otherwise it is a channel binding without explicit account scope.
+Passing any explicit add flags switches the command into the non-interactive path. `main` is reserved and cannot be used as the new agent id.
 
 #### `agents bindings`
 
@@ -770,7 +1013,7 @@ Add routing bindings for an agent.
 
 Options:
 
-- `--agent <id>`
+- `--agent <id>` (defaults to the current default agent)
 - `--bind <channel[:accountId]>` (repeatable)
 - `--json`
 
@@ -780,10 +1023,12 @@ Remove routing bindings for an agent.
 
 Options:
 
-- `--agent <id>`
+- `--agent <id>` (defaults to the current default agent)
 - `--bind <channel[:accountId]>` (repeatable)
 - `--all`
 - `--json`
+
+Use either `--all` or `--bind`, not both.
 
 #### `agents delete <id>`
 
@@ -793,6 +1038,11 @@ Options:
 
 - `--force`
 - `--json`
+
+Notes:
+
+- `main` cannot be deleted.
+- Without `--force`, interactive confirmation is required.
 
 #### `agents set-identity`
 
@@ -809,6 +1059,11 @@ Options:
 - `--emoji <emoji>`
 - `--avatar <value>`
 - `--json`
+
+Notes:
+
+- `--agent` or `--workspace` can be used to select the target agent.
+- When no explicit identity fields are provided, the command reads `IDENTITY.md`.
 
 ### `acp`
 
@@ -842,6 +1097,48 @@ Options:
 - `--verbose`
 
 See [`acp`](/cli/acp) for full behavior, security notes, and examples.
+
+### `mcp`
+
+Manage saved MCP server definitions and expose OpenClaw channels over MCP stdio.
+
+#### `mcp serve`
+
+Expose routed OpenClaw channel conversations over MCP stdio.
+
+Options:
+
+- `--url <url>`
+- `--token <token>`
+- `--token-file <path>`
+- `--password <password>`
+- `--password-file <path>`
+- `--claude-channel-mode <auto|on|off>`
+- `--verbose`
+
+#### `mcp list`
+
+List saved MCP server definitions.
+
+Options:
+
+- `--json`
+
+#### `mcp show [name]`
+
+Show one saved MCP server definition or the full saved MCP server object.
+
+Options:
+
+- `--json`
+
+#### `mcp set <name> <value>`
+
+Save one MCP server definition from a JSON object.
+
+#### `mcp unset <name>`
+
+Remove one saved MCP server definition.
 
 ### `approvals`
 
@@ -996,10 +1293,18 @@ List and manage [background task](/automation/tasks) runs across agents.
 - `tasks notify <id>` — change notification policy for a task run
 - `tasks cancel <id>` — cancel a running task
 - `tasks audit` — surface operational issues (stale, lost, delivery failures)
-- `tasks maintenance` — preview or apply tasks and TaskFlow cleanup/reconciliation
+- `tasks maintenance` — preview or apply tasks and TaskFlow cleanup/reconciliation (ACP/subagent child sessions, active cron jobs, live CLI runs)
 - `tasks flow list` — list active and recent Task Flow flows
 - `tasks flow show <lookup>` — inspect a flow by id or lookup key
 - `tasks flow cancel <lookup>` — cancel a running flow and its active tasks
+
+### `flows`
+
+Legacy docs shortcut. Flow commands live under `openclaw tasks flow`:
+
+- `tasks flow list [--json]`
+- `tasks flow show <lookup>`
+- `tasks flow cancel <lookup>`
 
 ## Gateway
 
@@ -1047,12 +1352,32 @@ Notes:
 - `gateway status` probes the Gateway RPC by default using the service’s resolved port/config (override with `--url/--token/--password`).
 - `gateway status` supports `--no-probe`, `--deep`, `--require-rpc`, and `--json` for scripting.
 - `gateway status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named OpenClaw services are treated as first-class and aren't flagged as "extra".
-- `gateway status` prints which config path the CLI uses vs which config the service likely uses (service env), plus the resolved probe target URL.
+- `gateway status` stays available for diagnostics even when the local CLI config is missing or invalid.
+- `gateway status` prints the resolved file log path, the CLI-vs-service config paths/validity snapshot, and the resolved probe target URL.
 - If gateway auth SecretRefs are unresolved in the current command path, `gateway status --json` reports `rpc.authWarning` only when probe connectivity/auth fails (warnings are suppressed when probe succeeds).
 - On Linux systemd installs, status token-drift checks include both `Environment=` and `EnvironmentFile=` unit sources.
 - `gateway install|uninstall|start|stop|restart` support `--json` for scripting (default output stays human-friendly).
 - `gateway install` defaults to Node runtime; bun is **not recommended** (WhatsApp/Telegram bugs).
 - `gateway install` options: `--port`, `--runtime`, `--token`, `--force`, `--json`.
+
+### `daemon`
+
+Legacy alias for the Gateway service-management commands. See [/cli/daemon](/cli/daemon).
+
+Subcommands:
+
+- `daemon status`
+- `daemon install`
+- `daemon uninstall`
+- `daemon start`
+- `daemon stop`
+- `daemon restart`
+
+Common options:
+
+- `status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
+- `install`: `--port`, `--runtime <node|bun>`, `--token`, `--force`, `--json`
+- `uninstall|start|stop|restart`: `--json`
 
 ### `logs`
 
@@ -1096,7 +1421,7 @@ Include `--token` or `--password` explicitly. Missing explicit credentials is an
 
 Subcommands:
 
-- `gateway call <method> [--params <json>]`
+- `gateway call <method> [--params <json>] [--url <url>] [--token <token>] [--password <password>] [--timeout <ms>] [--expect-final] [--json]`
 - `gateway health`
 - `gateway status`
 - `gateway probe`
@@ -1305,6 +1630,8 @@ All `cron` commands accept `--url`, `--token`, `--timeout`, `--expect-final`.
 
 ## Node host
 
+### `node`
+
 `node` runs a **headless node host** or manages it as a background service. See
 [`openclaw node`](/cli/node).
 
@@ -1409,7 +1736,29 @@ Actions:
 - `browser console [--level <error|warn|info>] [--target-id <id>]`
 - `browser pdf [--target-id <id>]`
 
+## Voice call
+
+### `voicecall`
+
+Plugin-provided voice-call utilities. Only appears when the voice-call plugin is installed and enabled. See [`openclaw voicecall`](/cli/voicecall).
+
+Common commands:
+
+- `voicecall call --to <phone> --message <text> [--mode notify|conversation]`
+- `voicecall start --to <phone> [--message <text>] [--mode notify|conversation]`
+- `voicecall continue --call-id <id> --message <text>`
+- `voicecall speak --call-id <id> --message <text>`
+- `voicecall end --call-id <id>`
+- `voicecall status --call-id <id>`
+- `voicecall tail [--file <path>] [--since <n>] [--poll <ms>]`
+- `voicecall latency [--file <path>] [--last <n>]`
+- `voicecall expose [--mode off|serve|funnel] [--path <path>] [--port <port>] [--serve-path <path>]`
+
 ## Docs search
+
+### `docs`
+
+Search the live OpenClaw docs index.
 
 ### `docs [query...]`
 

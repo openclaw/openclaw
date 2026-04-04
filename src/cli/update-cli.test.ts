@@ -8,6 +8,7 @@ import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.opencla
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
 
 const confirm = vi.fn();
 const select = vi.fn();
@@ -747,18 +748,6 @@ describe("update-cli", () => {
     const pkgRoot = path.join(brewRoot, "openclaw");
     const brewNpm = path.join(brewPrefix, "bin", "npm");
     const win32PrefixNpm = path.join(brewPrefix, "npm.cmd");
-    const isOwningNpmCommand = (value: unknown): boolean => {
-      if (typeof value !== "string") {
-        return false;
-      }
-      const normalized = path.normalize(value);
-      return (
-        normalized !== path.normalize("npm") &&
-        path.isAbsolute(value) &&
-        normalized.includes(path.normalize(brewPrefix)) &&
-        /npm(?:\.cmd)?$/i.test(normalized)
-      );
-    };
     const pathNpmRoot = createCaseDir("nvm-root");
     mockPackageInstallStatus(pkgRoot);
     pathExists.mockResolvedValue(false);
@@ -784,7 +773,7 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
-      if (isOwningNpmCommand(argv[0]) && argv[1] === "root" && argv[2] === "-g") {
+      if (isOwningNpmCommand(argv[0], brewPrefix) && argv[1] === "root" && argv[2] === "-g") {
         return {
           stdout: `${brewRoot}\n`,
           stderr: "",
@@ -817,7 +806,7 @@ describe("update-cli", () => {
       .mock.calls.find(
         ([argv]) =>
           Array.isArray(argv) &&
-          isOwningNpmCommand(argv[0]) &&
+          isOwningNpmCommand(argv[0], brewPrefix) &&
           argv[1] === "i" &&
           argv[2] === "-g" &&
           argv[3] === "openclaw@latest",
