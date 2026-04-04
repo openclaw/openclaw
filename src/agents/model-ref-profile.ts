@@ -14,8 +14,25 @@ export function splitTrailingAuthProfile(raw: string): {
   }
 
   const versionSuffix = trimmed.slice(profileDelimiter + 1);
+
+  // Keep well-known "version" suffixes (ex: @20251001) as part of the model id,
+  // but allow an auth profile suffix *after* them (ex: ...@20251001@work).
   if (/^\d{8}(?:@|$)/.test(versionSuffix)) {
     const nextDelimiter = trimmed.indexOf("@", profileDelimiter + 9);
+    if (nextDelimiter < 0) {
+      return { model: trimmed };
+    }
+    profileDelimiter = nextDelimiter;
+  }
+
+  // Keep local model quant suffixes (common in LM Studio/Ollama catalogs) as part
+  // of the model id. These often use '@' (ex: gemma-4-31b-it@q8_0) which would
+  // otherwise be misinterpreted as an auth profile delimiter.
+  //
+  // If an auth profile is needed, it can still be specified as a second suffix:
+  //   lmstudio/foo@q8_0@work
+  if (/^(?:q\d+(?:_[a-z0-9]+)*|\d+bit)(?:@|$)/i.test(versionSuffix)) {
+    const nextDelimiter = trimmed.indexOf("@", profileDelimiter + 1);
     if (nextDelimiter < 0) {
       return { model: trimmed };
     }
