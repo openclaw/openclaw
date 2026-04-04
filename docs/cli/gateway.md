@@ -127,10 +127,12 @@ Options:
 
 Notes:
 
+- `gateway status` stays available for diagnostics even when the local CLI config is missing or invalid.
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
 - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need the Gateway RPC itself to be healthy.
+- Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
 - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
 - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
 - If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win), token-drift checks skip config token resolution.
