@@ -19,6 +19,7 @@
   "approval-reply-runtime",
   "approval-runtime",
   "config-runtime",
+  "secret-input-runtime",
   "telegram-command-config",
   "config-schema",
   "reply-runtime",
