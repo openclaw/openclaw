@@ -475,6 +475,20 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     ).not.toThrow();
   });
 
+  it("rejects custom session targets with path separators", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    expect(() =>
+      createJob(state, {
+        name: "bad-custom-session",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:../../outside",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+  });
+
   it("rejects failureDestination on main jobs without webhook delivery mode", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     expect(() =>
@@ -525,6 +539,20 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
       return;
     }
     expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).not.toThrow();
+  });
+
+  it("rejects patching to a custom session target with path separators", () => {
+    const job = createMainJob();
+    expect(() =>
+      applyJobPatch(
+        job,
+        {
+          sessionTarget: "session:..\\outside",
+          payload: { kind: "agentTurn", message: "hello" },
+        },
+        { defaultAgentId: "main" },
+      ),
+    ).toThrow("invalid cron sessionTarget session id");
   });
 });
 

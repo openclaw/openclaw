@@ -18,6 +18,7 @@ import {
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
+import { assertSafeCronSessionTargetId } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -287,10 +288,7 @@ export function buildGatewayCronService(params: {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       let sessionKey = `cron:${job.id}`;
       if (job.sessionTarget.startsWith("session:")) {
-        const customSessionId = job.sessionTarget.slice(8).trim();
-        if (customSessionId) {
-          sessionKey = customSessionId;
-        }
+        sessionKey = assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
       }
       try {
         return await runCronIsolatedAgentTurn({

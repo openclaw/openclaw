@@ -593,6 +593,23 @@ describe("normalizeCronJobCreate", () => {
 
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
+
+  it("rejects custom session ids with path separators", () => {
+    expect(() =>
+      normalizeCronJobCreate({
+        name: "bad-custom-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "session:../../outside",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+
+    expect(() =>
+      normalizeCronJobPatch({
+        sessionTarget: "session:..\\outside",
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+  });
 });
 
 describe("normalizeCronJobPatch", () => {

@@ -462,6 +462,52 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("rejects unsafe custom session ids on add and update", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-bad-session-target-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "bad custom session",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:../../outside",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+      expect(addRes.ok).toBe(false);
+      expect(addRes.error?.message).toContain("invalid cron sessionTarget session id");
+
+      const validRes = await rpcReq(ws, "cron.add", {
+        name: "good custom session",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:project-alpha:ops",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hello" },
+      });
+      expect(validRes.ok).toBe(true);
+      const jobId = (validRes.payload as { id?: unknown } | null)?.id;
+      expect(typeof jobId).toBe("string");
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          sessionTarget: "session:..\\outside",
+        },
+      });
+      expect(updateRes.ok).toBe(false);
+      expect(updateRes.error?.message).toContain("invalid cron sessionTarget session id");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
   test("writes cron run history and auto-runs due jobs", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-log-",
@@ -558,6 +604,44 @@ describe("gateway server cron", () => {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 45_000);
+
+  test("fails closed for persisted unsafe custom session ids", async () => {
+    const now = Date.now();
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-persisted-bad-session-target-",
+      cronEnabled: false,
+      jobs: [
+        {
+          id: "bad-custom-session-job",
+          name: "bad custom session job",
+          enabled: true,
+          createdAtMs: now,
+          updatedAtMs: now,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "session:../../outside",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "hello" },
+          state: {},
+        },
+      ],
+    });
+
+    cronIsolatedRun.mockClear();
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const runRes = await rpcReq(ws, "cron.run", {
+        id: "bad-custom-session-job",
+        mode: "force",
+      });
+      expect(runRes.ok).toBe(false);
+      expect(runRes.error?.message).toContain("invalid cron sessionTarget session id");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
 
   test("returns from cron.run immediately while isolated work continues in background", async () => {
     const { prevSkipCron } = await setupCronTestRun({

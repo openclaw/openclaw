@@ -93,10 +93,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
         ? (params as { sessionKey: string }).sessionKey
         : undefined;
-    const normalized =
-      normalizeCronJobCreate(params, {
-        sessionContext: { sessionKey },
-      }) ?? params;
+    let normalized: unknown;
+    try {
+      normalized =
+        normalizeCronJobCreate(params, {
+          sessionContext: { sessionKey },
+        }) ?? params;
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.add params: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+      return;
+    }
     if (!validateCronAddParams(normalized)) {
       respond(
         false,
@@ -123,7 +136,20 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
-    const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+    let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
+    try {
+      normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.update params: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+      return;
+    }
     const candidate =
       normalizedPatch && typeof params === "object" && params !== null
         ? { ...params, patch: normalizedPatch }
