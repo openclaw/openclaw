@@ -13,10 +13,6 @@ import {
 } from "react";
 import { HeroSuggestions } from "./hero-suggestions";
 import { ChatMessage } from "./chat-message";
-import {
-	FilePickerModal,
-	type SelectedFile,
-} from "./file-picker-modal";
 import { ChatEditor, type ChatEditorHandle } from "./tiptap/chat-editor";
 import { ChatVoiceInputButton } from "./chat-voice-input-button";
 import {
@@ -836,8 +832,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 		const [attachedFiles, setAttachedFiles] = useState<
 			AttachedFile[]
 		>([]);
-		const [showFilePicker, setShowFilePicker] =
-			useState(false);
+		const fileInputRef = useRef<HTMLInputElement>(null);
 
 		const [mounted, setMounted] = useState(false);
 		useEffect(() => { setMounted(true); }, []);
@@ -1992,23 +1987,6 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 
 		// ── Attachment handlers ──
 
-		const handleFilesSelected = useCallback(
-			(files: SelectedFile[]) => {
-				const newFiles: AttachedFile[] = files.map(
-					(f) => ({
-						id: `${f.path}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-						name: f.name,
-						path: f.path,
-					}),
-				);
-				setAttachedFiles((prev) => [
-					...prev,
-					...newFiles,
-				]);
-			},
-			[],
-		);
-
 		const removeAttachment = useCallback((id: string) => {
 			setAttachedFiles((prev) => {
 				const removed = prev.find((f) => f.id === id);
@@ -2165,19 +2143,33 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 				<div className={`flex items-center justify-between ${compact ? "px-2 pb-1.5" : "px-3 pb-2.5"}`}>
 					<div className="flex items-center gap-0.5">
 						{!isSubagentMode && (
-							<button
-								type="button"
-								onClick={() => setShowFilePicker(true)}
-								className="p-1.5 rounded-lg hover:opacity-80 transition-opacity"
-								style={{
-									color: attachedFiles.length > 0 ? "var(--color-accent)" : "var(--color-text-muted)",
-								}}
-								title="Attach files"
-							>
-								<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-									<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-								</svg>
-							</button>
+							<>
+								<input
+									ref={fileInputRef}
+									type="file"
+									multiple
+									className="hidden"
+									onChange={(e) => {
+										if (e.target.files && e.target.files.length > 0) {
+											uploadAndAttachNativeFiles(e.target.files);
+										}
+										e.target.value = "";
+									}}
+								/>
+								<button
+									type="button"
+									onClick={() => fileInputRef.current?.click()}
+									className="p-1.5 rounded-lg hover:opacity-80 transition-opacity"
+									style={{
+										color: attachedFiles.length > 0 ? "var(--color-accent)" : "var(--color-text-muted)",
+									}}
+									title="Attach files"
+								>
+									<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+										<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+									</svg>
+								</button>
+							</>
 						)}
 					</div>
 					<div className="flex items-center gap-1.5">
@@ -2607,18 +2599,7 @@ export const ChatPanel = forwardRef<ChatPanelHandle, ChatPanelProps>(
 					</div>
 				)}
 
-				{/* File picker modal (not in subagent mode) */}
-				{!isSubagentMode && (
-				<FilePickerModal
-					open={showFilePicker}
-					onClose={() =>
-						setShowFilePicker(false)
-					}
-					onSelect={handleFilesSelected}
-				/>
-				)}
-
-			</div>
+				</div>
 		);
 	},
 );
