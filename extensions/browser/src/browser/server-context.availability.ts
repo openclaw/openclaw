@@ -74,12 +74,10 @@ export function createProfileAvailability({
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeCdpReady(
-      profile.cdpUrl,
-      httpTimeoutMs,
-      wsTimeoutMs,
-      state().resolved.ssrfPolicy,
-    );
+    // CDP control-plane reachability must not be gated by SSRF policy —
+    // the configured CDP endpoint is a trusted management channel.
+    // SSRF enforcement applies at navigation time (navigation-guard.ts).
+    return await isChromeCdpReady(profile.cdpUrl, httpTimeoutMs, wsTimeoutMs);
   };
 
   const isHttpReachable = async (timeoutMs?: number) => {
@@ -87,7 +85,7 @@ export function createProfileAvailability({
       return await isReachable(timeoutMs);
     }
     const { httpTimeoutMs } = resolveTimeouts(timeoutMs);
-    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs, state().resolved.ssrfPolicy);
+    return await isChromeReachable(profile.cdpUrl, httpTimeoutMs);
   };
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {

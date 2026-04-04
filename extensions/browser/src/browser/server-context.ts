@@ -187,11 +187,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       } else {
         // Check if something is listening on the port
         try {
-          const reachable = await isChromeReachable(
-            profile.cdpUrl,
-            200,
-            current.resolved.ssrfPolicy,
-          );
+          const reachable = await isChromeReachable(profile.cdpUrl, 200);
           if (reachable) {
             running = true;
             const tabs = await profileCtx.listTabs().catch(() => []);
