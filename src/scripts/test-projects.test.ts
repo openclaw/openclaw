@@ -89,6 +89,41 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes top-level repo tests to the contracts config", () => {
+    expect(buildVitestRunPlans(["test/appcast.test.ts"])).toEqual([
+      {
+        config: "vitest.contracts.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/appcast.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes contract tests to the contracts config", () => {
+    expect(
+      buildVitestRunPlans(["src/plugins/contracts/memory-embedding-provider.contract.test.ts"]),
+    ).toEqual([
+      {
+        config: "vitest.contracts.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/plugins/contracts/memory-embedding-provider.contract.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes config baseline integration tests to the contracts config", () => {
+    expect(buildVitestRunPlans(["src/config/doc-baseline.integration.test.ts"])).toEqual([
+      {
+        config: "vitest.contracts.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/config/doc-baseline.integration.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes command targets to the commands config", () => {
     expect(buildVitestRunPlans(["src/commands/status.summary.test.ts"])).toEqual([
       {
@@ -152,6 +187,17 @@ describe("test-projects args", () => {
         config: "vitest.extensions.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/memory-core/src/memory/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("widens top-level test helpers to sibling repo tests under contracts", () => {
+    expect(buildVitestRunPlans(["test/helpers/temp-home.ts"])).toEqual([
+      {
+        config: "vitest.contracts.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/helpers/**/*.test.ts"],
         watchMode: false,
       },
     ]);
