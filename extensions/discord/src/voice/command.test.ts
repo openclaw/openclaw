@@ -30,6 +30,7 @@ function createVoiceCommandHarness(manager: DiscordVoiceManager | null = null) {
     command,
     leave: findVoiceSubcommand(command, "leave"),
     status: findVoiceSubcommand(command, "status"),
+    switch: findVoiceSubcommand(command, "switch"),
   };
 }
 
@@ -73,6 +74,65 @@ describe("createDiscordVoiceCommand", () => {
     expect(reply).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({
       content: "Voice manager is not available yet.",
+      ephemeral: true,
+    });
+  });
+
+  it("vc switch reports missing guild before manager lookup", async () => {
+    const { switch: switchCmd } = createVoiceCommandHarness(null);
+    const { interaction, reply } = createInteraction();
+
+    await switchCmd.run(interaction);
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "Unable to resolve guild for this command.",
+      ephemeral: true,
+    });
+  });
+
+  it("vc switch reports unavailable voice manager", async () => {
+    const { switch: switchCmd } = createVoiceCommandHarness(null);
+    const { interaction, reply } = createInteraction({
+      guild: { id: "g1" } as CommandInteraction["guild"],
+    });
+
+    await switchCmd.run(interaction);
+
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith({
+      content: "Voice manager is not available yet.",
+      ephemeral: true,
+    });
+  });
+
+  it("vc switch calls switchAgent and replies with result", async () => {
+    const switchAgentSpy = vi.fn(() => ({
+      ok: true,
+      message: "Switched from **ceo** to **maya**.",
+    }));
+    const statusSpy = vi.fn(() => [{ guildId: "g1", channelId: "111111111111111111" }]);
+    const manager = {
+      switchAgent: switchAgentSpy,
+      status: statusSpy,
+    } as unknown as DiscordVoiceManager;
+    const { switch: switchCmd } = createVoiceCommandHarness(manager);
+    const { interaction, reply } = createInteraction({
+      guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+      client: {
+        fetchChannel: vi.fn(async () => null),
+        fetchMember: vi.fn(async () => ({ roles: [] })),
+      } as unknown as CommandInteraction["client"],
+      options: {
+        getString: vi.fn(async () => "maya"),
+      } as unknown as CommandInteraction["options"],
+    });
+
+    await switchCmd.run(interaction);
+
+    expect(switchAgentSpy).toHaveBeenCalledWith({ guildId: "g1", agentId: "maya" });
+    expect(reply).toHaveBeenCalledWith({
+      content: "Switched from **ceo** to **maya**.",
       ephemeral: true,
     });
   });

@@ -266,6 +266,50 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     }
   }
 
+  class SwitchCommand extends Command {
+    name = "switch";
+    description = "Switch the active agent for this voice session";
+    defer = true;
+    ephemeral = params.ephemeralDefault;
+    options: CommandOptions = [
+      {
+        name: "agent",
+        description: "Agent ID to switch to (e.g. maya, ceo)",
+        type: ApplicationCommandOptionType.String,
+        required: true,
+      },
+    ];
+
+    async run(interaction: CommandInteraction) {
+      const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
+      if (!runtimeContext) {
+        return;
+      }
+      const sessionChannelId = resolveSessionChannelId(
+        runtimeContext.manager,
+        runtimeContext.guildId,
+      );
+      const authorized = await ensureVoiceCommandAccess({
+        interaction,
+        context: params,
+        channelOverride: sessionChannelId ? { id: sessionChannelId } : undefined,
+      });
+      if (!authorized) {
+        return;
+      }
+      const agentId = (await interaction.options.getString("agent", true))?.trim() ?? "";
+      if (!agentId) {
+        await interaction.reply({ content: "Agent ID is required.", ephemeral: true });
+        return;
+      }
+      const result = runtimeContext.manager.switchAgent({
+        guildId: runtimeContext.guildId,
+        agentId,
+      });
+      await interaction.reply({ content: result.message, ephemeral: true });
+    }
+  }
+
   class StatusCommand extends Command {
     name = "status";
     description = "Show active voice sessions";
@@ -303,7 +347,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   return new (class extends CommandWithSubcommands {
     name = "vc";
     description = "Voice channel controls";
-    subcommands = [new JoinCommand(), new LeaveCommand(), new StatusCommand()];
+    subcommands = [new JoinCommand(), new LeaveCommand(), new SwitchCommand(), new StatusCommand()];
   })();
 }
 

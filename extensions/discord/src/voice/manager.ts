@@ -11,7 +11,7 @@ import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/ag
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -523,6 +523,36 @@ export class DiscordVoiceManager {
     return {
       ok: true,
       message: `Left ${formatMention({ channelId: entry.channelId })}.`,
+      guildId,
+      channelId: entry.channelId,
+    };
+  }
+
+  switchAgent(params: { guildId: string; agentId: string }): VoiceOperationResult {
+    const guildId = params.guildId.trim();
+    const agentId = params.agentId.trim();
+    const entry = this.sessions.get(guildId);
+    if (!entry) {
+      return { ok: false, message: "Not connected to a voice channel in this guild." };
+    }
+    const agents = this.params.cfg.agents?.list ?? [];
+    if (!agents.some((a) => a.id === agentId)) {
+      return { ok: false, message: `Agent "${agentId}" not found.` };
+    }
+    const newSessionKey = buildAgentSessionKey({
+      agentId,
+      channel: "discord",
+      accountId: this.params.accountId,
+      peer: { kind: "channel", id: entry.sessionChannelId },
+    }).toLowerCase();
+    const previousAgentId = entry.route.agentId;
+    entry.route = { ...entry.route, agentId, sessionKey: newSessionKey };
+    logVoiceVerbose(
+      `switchAgent: guild ${guildId} channel ${entry.channelId} ${previousAgentId} -> ${agentId}`,
+    );
+    return {
+      ok: true,
+      message: `Switched from **${previousAgentId}** to **${agentId}**.`,
       guildId,
       channelId: entry.channelId,
     };

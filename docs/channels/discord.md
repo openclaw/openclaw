@@ -1030,7 +1030,12 @@ Requirements:
 - Configure `channels.discord.voice`.
 - The bot needs Connect + Speak permissions in the target voice channel.
 
-Use the Discord-only native command `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+Use the Discord-only native command `/vc join|leave|switch|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+
+- `/vc join <channel>` — join a voice channel and start a session with the default (or binding-matched) agent
+- `/vc leave` — leave the current voice channel
+- `/vc switch <agent>` — hand off the active session to a different agent (e.g. `/vc switch maya`); the bot stays in the channel and continues responding as the new agent from that point forward. Switching is bidirectional and can be repeated at any time.
+- `/vc status` — show the current voice session
 
 Auto-join example:
 
