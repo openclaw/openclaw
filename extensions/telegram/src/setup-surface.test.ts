@@ -215,7 +215,7 @@ describe("telegramSetupWizard.dmPolicy", () => {
     });
 
     const next = telegramSetupWizard.dmPolicy?.setPolicy(cfg, "open");
-    expect(next?.channels?.telegram?.dmPolicy).toBe("disabled");
+    expect(next?.channels?.telegram?.dmPolicy).toBeUndefined();
     expect(next?.channels?.telegram?.accounts?.alerts?.dmPolicy).toBe("open");
   });
 
