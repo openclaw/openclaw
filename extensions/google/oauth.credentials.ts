@@ -54,6 +54,13 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     }
 
     const resolvedPath = credentialFs.realpathSync(geminiPath);
+
+    const dynamicCredentials = readGeminiCliCredentialsFromDynamicChunk(resolvedPath);
+    if (dynamicCredentials) {
+      cachedGeminiCliCredentials = dynamicCredentials;
+      return dynamicCredentials;
+    }
+
     const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     for (const geminiCliDir of geminiCliDirs) {
@@ -63,6 +70,7 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
         return directCredentials;
       }
 
+      // Make sure findGeminiCliCredentialsInTree is reverted to strictly "oauth2.js"
       const discoveredCredentials = findGeminiCliCredentialsInTree(geminiCliDir, 10);
       if (discoveredCredentials) {
         cachedGeminiCliCredentials = discoveredCredentials;
@@ -199,7 +207,8 @@ function findGeminiCliCredentialsInTree(
   try {
     for (const entry of credentialFs.readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
-      if (entry.isFile() && entry.name.endsWith(".js")) {
+
+      if (entry.isFile() && entry.name === "oauth2.js") {
         const credentials = readGeminiCliCredentialsFile(path);
         if (credentials) {
           return credentials;
@@ -214,6 +223,23 @@ function findGeminiCliCredentialsInTree(
       }
     }
   } catch {}
+  return null;
+}
+function readGeminiCliCredentialsFromDynamicChunk(
+  entryFilePath: string,
+): { clientId: string; clientSecret: string } | null {
+  try {
+    const content = credentialFs.readFileSync(entryFilePath, "utf8");
+    const match = content.match(/getOauthClient[\s\S]*?(?:from|require\s*\()\s*['"]([^'"]+)['"]/);
+    if (match && match[1]) {
+      const chunkPath = join(dirname(entryFilePath), match[1]);
+      if (credentialFs.existsSync(chunkPath)) {
+        return readGeminiCliCredentialsFile(chunkPath);
+      }
+    }
+  } catch {
+    // Fail silently if file can't be read
+  }
   return null;
 }
 
