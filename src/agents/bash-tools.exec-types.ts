@@ -12,6 +12,7 @@ export type ExecToolDefaults = {
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;
+  obfuscationCheck?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   agentId?: string;

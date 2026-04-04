@@ -552,6 +552,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
   "tools.exec.strictInlineEval":
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
+  "tools.exec.obfuscationCheck":
+    "Enable the obfuscation detection heuristic that flags encoded or obfuscated commands (base64 piped to shell, hex decoding, etc.). When enabled (default), detected commands require explicit approval and time out with denial. Set to false to disable the heuristic and let those commands go through normal approval flow.",
   "tools.exec.safeBinTrustedDirs":
     "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
   "tools.exec.safeBinProfiles":

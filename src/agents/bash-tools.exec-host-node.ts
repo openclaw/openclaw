@@ -50,6 +50,7 @@ export type ExecuteNodeHostCommandParams = {
   security: ExecSecurity;
   ask: ExecAsk;
   strictInlineEval?: boolean;
+  obfuscationCheck?: boolean;
   timeoutSec?: number;
   defaultTimeoutSec: number;
   approvalRunningNoticeMs: number;
@@ -193,7 +194,10 @@ export async function executeNodeHostCommand(
       // Fall back to requiring approval if node approvals cannot be fetched.
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
+  const obfuscation =
+    params.obfuscationCheck !== false
+      ? detectCommandObfuscation(params.command)
+      : { detected: false, reasons: [] as string[], matchedPatterns: [] as string[] };
   if (obfuscation.detected) {
     logInfo(
       `exec: obfuscation detected (node=${nodeQuery ?? "default"}): ${obfuscation.reasons.join(", ")}`,

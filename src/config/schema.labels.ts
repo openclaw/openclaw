@@ -197,6 +197,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.pathPrepend": "Exec PATH Prepend",
   "tools.exec.safeBins": "Exec Safe Bins",
   "tools.exec.strictInlineEval": "Require Inline-Eval Approval",
+  "tools.exec.obfuscationCheck": "Exec Obfuscation Check",
   "tools.exec.safeBinTrustedDirs": "Exec Safe Bin Trusted Dirs",
   "tools.exec.safeBinProfiles": "Exec Safe Bin Profiles",
   approvals: "Approvals",

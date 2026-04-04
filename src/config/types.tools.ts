@@ -247,6 +247,13 @@ export type ExecToolConfig = {
    * Prevents silent allowlist reuse and allow-always persistence for those forms.
    */
   strictInlineEval?: boolean;
+  /**
+   * Enable or disable the obfuscation detection heuristic for exec commands.
+   * When `false`, commands that would normally trigger obfuscation-detected
+   * approval timeouts are allowed through the normal approval flow instead.
+   * Default: `true`.
+   */
+  obfuscationCheck?: boolean;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */

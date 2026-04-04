@@ -58,6 +58,7 @@ export type ProcessGatewayAllowlistParams = {
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   strictInlineEval?: boolean;
+  obfuscationCheck?: boolean;
   trigger?: string;
   agentId?: string;
   sessionKey?: string;
@@ -151,7 +152,10 @@ export async function processGatewayAllowlist(
       enforcedCommand = enforced.command;
     }
   }
-  const obfuscation = detectCommandObfuscation(params.command);
+  const obfuscation =
+    params.obfuscationCheck !== false
+      ? detectCommandObfuscation(params.command)
+      : { detected: false, reasons: [] as string[], matchedPatterns: [] as string[] };
   if (obfuscation.detected) {
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
     params.warnings.push(`⚠️ Obfuscated command detected: ${obfuscation.reasons.join("; ")}`);
