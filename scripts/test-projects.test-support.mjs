@@ -6,6 +6,7 @@ import { isBoundaryTestFile, isBundledPluginDependentUnitTestFile } from "../vit
 
 const DEFAULT_VITEST_CONFIG = "vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "vitest.agents.config.ts";
+const ACP_VITEST_CONFIG = "vitest.acp.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "vitest.auto-reply.config.ts";
 const BOUNDARY_VITEST_CONFIG = "vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "vitest.bundled.config.ts";
@@ -15,6 +16,7 @@ const CONTRACTS_VITEST_CONFIG = "vitest.contracts.config.ts";
 const E2E_VITEST_CONFIG = "vitest.e2e.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "vitest.extensions.config.ts";
 const GATEWAY_VITEST_CONFIG = "vitest.gateway.config.ts";
+const UI_VITEST_CONFIG = "vitest.ui.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
 
 function normalizePathPattern(value) {
@@ -98,6 +100,9 @@ function classifyTarget(arg, cwd) {
   if (relative.startsWith("src/gateway/")) {
     return "gateway";
   }
+  if (relative.startsWith("src/acp/")) {
+    return "acp";
+  }
   if (relative.startsWith("src/commands/")) {
     return "command";
   }
@@ -106,6 +111,9 @@ function classifyTarget(arg, cwd) {
   }
   if (relative.startsWith("src/agents/")) {
     return "agent";
+  }
+  if (relative.startsWith("ui/src/ui/")) {
+    return "ui";
   }
   return "default";
 }
@@ -177,9 +185,11 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
     "contracts",
     "bundled",
     "gateway",
+    "acp",
     "command",
     "autoReply",
     "agent",
+    "ui",
     "e2e",
     "channel",
     "extension",
@@ -199,19 +209,23 @@ export function buildVitestRunPlans(args, cwd = process.cwd()) {
             ? BUNDLED_VITEST_CONFIG
             : kind === "gateway"
               ? GATEWAY_VITEST_CONFIG
-              : kind === "command"
-                ? COMMANDS_VITEST_CONFIG
-                : kind === "autoReply"
-                  ? AUTO_REPLY_VITEST_CONFIG
-                  : kind === "agent"
-                    ? AGENTS_VITEST_CONFIG
-                    : kind === "e2e"
-                      ? E2E_VITEST_CONFIG
-                      : kind === "channel"
-                        ? CHANNEL_VITEST_CONFIG
-                        : kind === "extension"
-                          ? EXTENSIONS_VITEST_CONFIG
-                          : DEFAULT_VITEST_CONFIG;
+              : kind === "acp"
+                ? ACP_VITEST_CONFIG
+                : kind === "command"
+                  ? COMMANDS_VITEST_CONFIG
+                  : kind === "autoReply"
+                    ? AUTO_REPLY_VITEST_CONFIG
+                    : kind === "agent"
+                      ? AGENTS_VITEST_CONFIG
+                      : kind === "ui"
+                        ? UI_VITEST_CONFIG
+                        : kind === "e2e"
+                          ? E2E_VITEST_CONFIG
+                          : kind === "channel"
+                            ? CHANNEL_VITEST_CONFIG
+                            : kind === "extension"
+                              ? EXTENSIONS_VITEST_CONFIG
+                              : DEFAULT_VITEST_CONFIG;
     const includePatterns =
       kind === "default" || kind === "e2e"
         ? null
