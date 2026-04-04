@@ -12,12 +12,14 @@ const {
   loadConfigMock,
   fetchWithSsrFGuardMock,
   runCronIsolatedAgentTurnMock,
+  closeTrackedBrowserTabsForSessionsMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatNowMock: vi.fn(),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  closeTrackedBrowserTabsForSessionsMock: vi.fn(async () => 0),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -59,6 +61,10 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
+vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: closeTrackedBrowserTabsForSessionsMock,
+}));
+
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
@@ -80,6 +86,7 @@ describe("buildGatewayCronService", () => {
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
+    closeTrackedBrowserTabsForSessionsMock.mockClear();
   });
 
   it("routes main-target jobs to the scoped session for enqueue + wake", async () => {
@@ -200,6 +207,10 @@ describe("buildGatewayCronService", () => {
           sessionKey: "project-alpha-monitor",
         }),
       );
+      expect(closeTrackedBrowserTabsForSessionsMock).toHaveBeenCalledWith({
+        sessionKeys: ["project-alpha-monitor"],
+        onWarn: expect.any(Function),
+      });
     } finally {
       state.cron.stop();
     }
