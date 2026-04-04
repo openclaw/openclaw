@@ -40,7 +40,9 @@ per-message dollar estimate that OpenClaw can show in `/usage full`.
 - Human output is normalized to `X% left` across providers.
 - MiniMax note: its raw `usage_percent` / `usagePercent` fields mean remaining
   quota, so OpenClaw inverts them before display. Count-based fields still win
-  when present.
+  when present. If the provider returns `model_remains`, OpenClaw prefers the
+  chat-model entry, derives the window label from timestamps when needed, and
+  includes the model name in the plan label.
 
 See [Token use & costs](/reference/token-use) for details and examples.
 

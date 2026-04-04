@@ -32,7 +32,11 @@ title: "Usage Tracking"
   - JSON usage falls back to `stats`; `stats.cached` is normalized into
     `cacheRead`.
 - **OpenAI Codex**: OAuth tokens in auth profiles (accountId used when present).
-- **MiniMax**: API key (coding plan key; `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`); uses the 5‑hour coding plan window. MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining** quota, so OpenClaw inverts them before display; count-based fields win when present.
+- **MiniMax**: API key (coding plan key; `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`); coding-plan window labels come from provider hours/minutes fields when present, then fall back to the `start_time` / `end_time` span. MiniMax's raw `usage_percent` / `usagePercent` fields mean **remaining** quota, so OpenClaw inverts them before display; count-based fields win when present.
+  - If the coding-plan endpoint returns `model_remains`, OpenClaw prefers the
+    chat-model entry, derives the window label from timestamps when explicit
+    `window_hours` / `window_minutes` fields are absent, and includes the model
+    name in the plan label.
 - **z.ai**: API key via env/config/auth store.
 
 Usage is hidden if no matching OAuth/API credentials exist.
