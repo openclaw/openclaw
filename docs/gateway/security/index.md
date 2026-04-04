@@ -304,8 +304,8 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `browser.remote_cdp_http`                                     | warn          | Remote CDP over plain HTTP lacks transport encryption                                | browser profile `cdpUrl`                                                                             | no       |
 | `browser.remote_cdp_private_host`                             | warn          | Remote CDP targets a private/internal host                                           | browser profile `cdpUrl`, `browser.ssrfPolicy.*`                                                     | no       |
 | `sandbox.docker_config_mode_off`                              | warn          | Sandbox Docker config present but inactive                                           | `agents.*.sandbox.mode`                                                                              | no       |
-| `sandbox.bind_mount_non_absolute`                             | critical      | Relative bind mounts can resolve unpredictably                                       | `agents.*.sandbox.binds[].source`                                                                    | no       |
-| `sandbox.dangerous_bind_mount`                                | critical      | Sandbox bind mount points outside safe trusted paths                                 | `agents.*.sandbox.binds`                                                                             | no       |
+| `sandbox.bind_mount_non_absolute`                             | warn          | Relative bind mounts can resolve unpredictably                                       | `agents.*.sandbox.docker.binds[]`                                                                    | no       |
+| `sandbox.dangerous_bind_mount`                                | critical      | Sandbox bind mount targets blocked system, credential, or Docker socket paths        | `agents.*.sandbox.docker.binds[]`                                                                    | no       |
 | `sandbox.dangerous_network_mode`                              | critical      | Sandbox Docker network uses `host` or `container:*` namespace-join mode              | `agents.*.sandbox.docker.network`                                                                    | no       |
 | `sandbox.dangerous_seccomp_profile`                           | critical      | Sandbox seccomp profile weakens container isolation                                  | `agents.*.sandbox.docker.securityOpt`                                                                | no       |
 | `sandbox.dangerous_apparmor_profile`                          | critical      | Sandbox AppArmor profile weakens container isolation                                 | `agents.*.sandbox.docker.securityOpt`                                                                | no       |
@@ -542,7 +542,7 @@ change other sessions.
 
 Two built-in tools can make persistent control-plane changes:
 
-- `gateway` can call `config.apply`, `config.patch`, and `update.run`.
+- `gateway` can inspect config with `config.schema.lookup` / `config.get`, and can make persistent changes with `config.apply`, `config.patch`, and `update.run`.
 - `cron` can create scheduled jobs that keep running after the original chat/task ends.
 
 For any agent/surface that handles untrusted content, deny these by default:
@@ -1113,6 +1113,7 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "none"` (default) keeps the agent workspace off-limits; tools run against a sandbox workspace under `~/.openclaw/sandboxes`
 - `agents.defaults.sandbox.workspaceAccess: "ro"` mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`)
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
+- Extra `sandbox.docker.binds` are validated against normalized and canonicalized source paths. Parent-symlink tricks and canonical home aliases still fail closed if they resolve into blocked roots such as `/etc`, `/var/run`, or credential directories under the OS home.
 
 Important: `tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
 

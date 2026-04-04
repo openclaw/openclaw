@@ -29,8 +29,11 @@ Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.password`
 - Tailscale Serve identity headers when `gateway.auth.allowTailscale: true`
 - trusted-proxy identity headers when `gateway.auth.mode: "trusted-proxy"`
-  The dashboard settings panel keeps a token for the current browser tab session and selected gateway URL; passwords are not persisted.
-  Onboarding generates a gateway token by default, so shared-secret setups usually paste that here on first connect.
+
+The dashboard settings panel keeps a token for the current browser tab session
+and selected gateway URL; passwords are not persisted. Onboarding usually
+generates a gateway token for shared-secret auth on first connect, but password
+auth works too when `gateway.auth.mode` is `"password"`.
 
 ## Device pairing (first connection)
 
@@ -93,8 +96,9 @@ The Control UI can localize itself on first load based on your browser locale, a
 - Config writes include a base-hash guard to prevent clobbering concurrent edits
 - Config writes (`config.set`/`config.apply`/`config.patch`) also preflight active SecretRef resolution for refs in the submitted config payload; unresolved active submitted refs are rejected before write
 - Config schema + form rendering (`config.schema` / `config.schema.lookup`,
-  including field labels/help plus plugin + channel schemas when available);
-  Raw JSON editor is available only when the snapshot has a safe raw round-trip
+  including field `title` / `description`, matched UI hints, immediate child
+  summaries, plus plugin + channel schemas when available); Raw JSON editor is
+  available only when the snapshot has a safe raw round-trip
 - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
 - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)

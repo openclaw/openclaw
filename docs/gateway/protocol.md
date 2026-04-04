@@ -277,10 +277,18 @@ Gateway exposes today.
 - `config.apply` validates + replaces the full config payload.
 - `config.schema` returns the live config schema payload used by Control UI and
   CLI tooling: schema, `uiHints`, version, and generation metadata, including
-  plugin + channel schema metadata when the runtime can load it.
+  plugin + channel schema metadata when the runtime can load it. The schema
+  includes field `title` / `description` metadata derived from the same labels
+  and help text used by the UI.
 - `config.schema.lookup` returns a path-scoped lookup payload for one config
-  path: normalized path, a shallow schema node with field docs, matched hint +
-  `hintPath`, and immediate child summaries for UI/CLI drill-down.
+  path: normalized path, a shallow schema node, matched hint + `hintPath`, and
+  immediate child summaries for UI/CLI drill-down.
+  - Lookup schema nodes keep the user-facing docs and common validation fields:
+    `title`, `description`, `type`, `enum`, `const`, `format`, `pattern`,
+    numeric/string/array/object bounds, and boolean flags like
+    `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`.
+  - Child summaries expose `key`, normalized `path`, `type`, `required`,
+    `hasChildren`, plus the matched `hint` / `hintPath`.
 - `update.run` runs the gateway update flow and schedules a restart only when
   the update itself succeeded.
 - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the

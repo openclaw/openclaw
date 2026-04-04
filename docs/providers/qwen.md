@@ -48,7 +48,8 @@ openclaw onboard --auth-choice qwen-standard-api-key-cn
 ```
 
 Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
-work.
+work as compatibility aliases, but new setup flows should prefer the canonical
+`qwen-*` auth-choice ids and `qwen/...` model refs.
 
 After onboarding, set a default model:
 
