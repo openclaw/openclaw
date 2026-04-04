@@ -13,7 +13,8 @@ sidebarTitle: "Release Channels"
 OpenClaw ships three update channels:
 
 - **stable**: npm dist-tag `latest`. Recommended for most users.
-- **beta**: npm dist-tag `beta` (builds under test).
+- **beta**: npm dist-tag `beta` when it is current; if beta is missing or older than
+  the latest stable release, the update flow falls back to `latest`.
 - **dev**: moving head of `main` (git). npm dist-tag: `dev` (when published).
   The `main` branch is for experimentation and active development. It may contain
   incomplete features or breaking changes. Do not use it for production gateways.
@@ -35,8 +36,12 @@ openclaw update --channel dev
 `--channel` persists your choice in config (`update.channel`) and aligns the
 install method:
 
-- **`stable`/`beta`** (package installs): updates via the matching npm dist-tag.
-- **`stable`/`beta`** (git installs): checks out the latest matching git tag.
+- **`stable`** (package installs): updates via npm dist-tag `latest`.
+- **`beta`** (package installs): prefers npm dist-tag `beta`, but falls back to
+  `latest` when `beta` is missing or older than the current stable tag.
+- **`stable`** (git installs): checks out the latest stable git tag.
+- **`beta`** (git installs): prefers the latest beta git tag, but falls back to
+  the latest stable git tag when beta is missing or older.
 - **`dev`**: ensures a git checkout (default `~/openclaw`, override with
   `OPENCLAW_GIT_DIR`), switches to `main`, rebases on upstream, builds, and
   installs the global CLI from that checkout.
@@ -70,6 +75,9 @@ Notes:
   channel as usual.
 - Downgrade protection: if the target version is older than your current version,
   OpenClaw prompts for confirmation (skip with `--yes`).
+- `--channel beta` is different from `--tag beta`: the channel flow can fall back
+  to stable/latest when beta is missing or older, while `--tag beta` targets the
+  raw `beta` dist-tag for that one run.
 
 ## Dry run
 

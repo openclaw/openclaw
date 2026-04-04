@@ -73,7 +73,9 @@ install method aligned:
 
 - `dev` → ensures a git checkout (default: `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
-- `stable`/`beta` → installs from npm using the matching dist-tag.
+- `stable` → installs from npm using `latest`.
+- `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is
+  missing or older than the current stable release.
 
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
@@ -82,7 +84,8 @@ The Gateway core auto-updater (when enabled via config) reuses this same update 
 Channels:
 
 - `stable`: checkout the latest non-beta tag, then build + doctor.
-- `beta`: checkout the latest `-beta` tag, then build + doctor.
+- `beta`: prefer the latest `-beta` tag, but fall back to the latest stable tag
+  when beta is missing or older.
 - `dev`: checkout `main`, then fetch + rebase.
 
 High-level:
