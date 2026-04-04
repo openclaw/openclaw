@@ -46,6 +46,11 @@ function createGuardrailWrapStreamFn(
 
 const PROVIDER_ID = "amazon-bedrock";
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
+const BEDROCK_CONTEXT_OVERFLOW_PATTERNS = [
+  /ValidationException.*(?:input is too long|max input token|input token.*exceed)/i,
+  /ValidationException.*(?:exceeds? the (?:maximum|max) (?:number of )?(?:input )?tokens)/i,
+  /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
+] as const;
 
 export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promise<void> {
   const guardrail = (api.pluginConfig as Record<string, unknown> | undefined)?.guardrail as
@@ -86,6 +91,17 @@ export async function registerAmazonBedrockPlugin(api: OpenClawPluginApi): Promi
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     buildReplayPolicy: ({ modelId }) => buildAnthropicReplayPolicyForModel(modelId),
     wrapStreamFn,
+    matchesContextOverflowError: ({ errorMessage }) =>
+      BEDROCK_CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(errorMessage)),
+    classifyFailoverReason: ({ errorMessage }) => {
+      if (/ThrottlingException|Too many concurrent requests/i.test(errorMessage)) {
+        return "rate_limit";
+      }
+      if (/ModelNotReadyException/i.test(errorMessage)) {
+        return "overloaded";
+      }
+      return undefined;
+    },
     resolveDefaultThinkingLevel: ({ modelId }) =>
       CLAUDE_46_MODEL_RE.test(modelId.trim()) ? "adaptive" : undefined,
   });

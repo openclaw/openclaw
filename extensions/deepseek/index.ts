@@ -34,5 +34,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildDeepSeekProvider,
     },
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\bdeepseek\b.*(?:input.*too long|context.*exceed)/i.test(errorMessage),
   },
 });

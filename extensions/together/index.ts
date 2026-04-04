@@ -30,5 +30,9 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildTogetherProvider,
     },
+    classifyFailoverReason: ({ errorMessage }) =>
+      /\bconcurrency limit\b.*\b(?:breached|reached)\b/i.test(errorMessage)
+        ? "rate_limit"
+        : undefined,
   },
 });

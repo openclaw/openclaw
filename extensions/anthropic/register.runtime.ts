@@ -30,6 +30,10 @@ import { composeProviderStreamWrappers } from "openclaw/plugin-sdk/provider-stre
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
+import {
+  applyAnthropicConfigDefaults,
+  normalizeAnthropicProviderConfig,
+} from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildAnthropicReplayPolicy } from "./replay-policy.js";
 import {
@@ -445,6 +449,8 @@ export async function registerAnthropicPlugin(api: OpenClawPluginApi): Promise<v
         },
       }),
     ],
+    normalizeConfig: ({ providerConfig }) => normalizeAnthropicProviderConfig(providerConfig),
+    applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),
     resolveDynamicModel: (ctx) => resolveAnthropicForwardCompatModel(ctx),
     buildReplayPolicy: (ctx) => buildAnthropicReplayPolicy(ctx),
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),

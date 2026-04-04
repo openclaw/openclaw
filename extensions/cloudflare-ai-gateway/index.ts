@@ -246,6 +246,8 @@ export default definePluginEntry({
           return null;
         },
       },
+      classifyFailoverReason: ({ errorMessage }) =>
+        /\bworkers?_ai\b.*\b(?:rate|limit|quota)\b/i.test(errorMessage) ? "rate_limit" : undefined,
     });
   },
 });

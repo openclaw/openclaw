@@ -35,4 +35,51 @@ describe("anthropic provider replay hooks", () => {
       dropThinkingBlocks: true,
     });
   });
+
+  it("defaults provider api through plugin config normalization", () => {
+    const provider = registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.normalizeConfig?.({
+        provider: "anthropic",
+        providerConfig: {
+          models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }],
+        },
+      } as never),
+    ).toMatchObject({
+      api: "anthropic-messages",
+    });
+  });
+
+  it("applies Anthropic pruning defaults through plugin hooks", () => {
+    const provider = registerSingleProviderPlugin(anthropicPlugin);
+
+    const next = provider.applyConfigDefaults?.({
+      provider: "anthropic",
+      env: {},
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+          },
+        },
+      },
+    } as never);
+
+    expect(next?.agents?.defaults?.contextPruning).toMatchObject({
+      mode: "cache-ttl",
+      ttl: "1h",
+    });
+    expect(next?.agents?.defaults?.heartbeat).toMatchObject({
+      every: "30m",
+    });
+    expect(
+      next?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
+    ).toBe("short");
+  });
 });
