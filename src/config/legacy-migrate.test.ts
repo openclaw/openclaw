@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
-import { validateConfigObjectWithPlugins } from "./validation.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
@@ -509,6 +512,62 @@ describe("legacy migrate channel streaming aliases", () => {
 });
 
 describe("legacy migrate nested channel enabled aliases", () => {
+  it("accepts legacy allow aliases through with-plugins validation and normalizes them", () => {
+    const raw = {
+      channels: {
+        slack: {
+          channels: {
+            ops: {
+              allow: false,
+            },
+          },
+        },
+        googlechat: {
+          groups: {
+            "spaces/aaa": {
+              allow: true,
+            },
+          },
+        },
+        discord: {
+          guilds: {
+            "100": {
+              channels: {
+                general: {
+                  allow: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const validated = validateConfigObjectWithPlugins(raw);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    expect(validated.config.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+    expect(validated.config.channels?.googlechat?.groups?.["spaces/aaa"]).toEqual({
+      enabled: true,
+    });
+    expect(validated.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
+      enabled: false,
+    });
+
+    const rawValidated = validateConfigObjectRawWithPlugins(raw);
+    expect(rawValidated.ok).toBe(true);
+    if (!rawValidated.ok) {
+      return;
+    }
+    expect(rawValidated.config.channels?.slack?.channels?.ops).toEqual({
+      enabled: false,
+    });
+  });
+
   it("moves legacy allow toggles into enabled for slack, googlechat, and discord", () => {
     const res = migrateLegacyConfig({
       channels: {
