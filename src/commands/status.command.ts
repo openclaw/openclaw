@@ -208,16 +208,10 @@ export async function statusCommand(
                   if (gatewayProbeAuthWarning) {
                     return null;
                   }
-                  const mode = cfg.gateway?.auth?.mode;
-                  if (mode === "token" && !gatewayProbeAuth?.token) {
-                    return "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.";
-                  }
-                  if (mode === "password" && !gatewayProbeAuth?.password) {
-                    return "gateway.auth.password SecretRef is unresolved in this command path; probing without configured auth credentials.";
-                  }
                   // Heuristic fallback for best-effort config loads where auth mode
                   // information may be missing from the resolved snapshot.
                   if (
+                    cfg.gateway?.auth?.mode == null &&
                     !gatewayProbeAuth?.token &&
                     !gatewayProbeAuth?.password &&
                     gatewayProbe?.ok === false &&
@@ -296,8 +290,10 @@ export async function statusCommand(
             const latency = formatDuration(gatewayProbe?.connectLatencyMs);
             if (gatewayProbe && !gatewayProbe.rpcOk) {
               const reason = gatewayProbe.error ? ` (${gatewayProbe.error})` : "";
-              const label = gatewayProbe.scopeLimited ? "scope-limited" : "rpc-failed";
-              return ok(`reachable ${latency}`) + muted(` · ${label}${reason}`);
+              if (gatewayProbe.scopeLimited) {
+                return ok(`reachable ${latency}`) + muted(` · scope-limited${reason}`);
+              }
+              return ok(`reachable ${latency}`) + muted(` · RPC failed${reason}`);
             }
             return ok(`reachable ${latency}`);
           })()

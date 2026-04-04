@@ -83,18 +83,10 @@ async function resolveGatewayProbeSnapshot(params: {
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
   const gatewayMode = isRemoteMode ? "remote" : "local";
   const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
+  // Only emit SecretRef warnings when the SecretRef resolution path itself detected
+  // an unresolved reference. Missing credentials can also happen for non-SecretRef
+  // configs and should not be misdiagnosed as a SecretRef failure.
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  if (!gatewayProbeAuthWarning) {
-    const mode = params.cfg.gateway?.auth?.mode;
-    const auth = gatewayProbeAuthResolution.auth;
-    if (mode === "token" && !auth.token) {
-      gatewayProbeAuthWarning =
-        "gateway.auth.token SecretRef is unresolved in this command path; probing without configured auth credentials.";
-    } else if (mode === "password" && !auth.password) {
-      gatewayProbeAuthWarning =
-        "gateway.auth.password SecretRef is unresolved in this command path; probing without configured auth credentials.";
-    }
-  }
   const gatewayProbe = remoteUrlMissing
     ? null
     : await probeGateway({
