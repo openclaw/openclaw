@@ -84,6 +84,9 @@ are filtered out to keep the sub-agent context small).
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
 
+If you want to make the agent sound less generic, start with
+[SOUL.md Personality Guide](/concepts/soul).
+
 To inspect how much each injected file contributes (raw vs injected, truncation, plus tool schema overhead), use `/context list` or `/context detail`. See [Context](/concepts/context).
 
 ## Time handling
@@ -93,7 +96,8 @@ user timezone is known. To keep the prompt cache-stable, it now only includes
 the **time zone** (no dynamic clock or time format).
 
 Use `session_status` when the agent needs the current time; the status card
-includes a timestamp line.
+includes a timestamp line. The same tool can optionally set a per-session model
+override (`model=default` clears it).
 
 Configure with:
 
@@ -109,6 +113,10 @@ When eligible skills exist, OpenClaw injects a compact **available skills list**
 prompt instructs the model to use `read` to load the SKILL.md at the listed
 location (workspace, managed, or bundled). If no skills are eligible, the
 Skills section is omitted.
+
+Eligibility includes skill metadata gates, runtime environment/config checks,
+and the effective agent skill allowlist when `agents.defaults.skills` or
+`agents.list[].skills` is configured.
 
 ```
 <available_skills>

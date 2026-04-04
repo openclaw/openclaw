@@ -230,7 +230,7 @@ describe("googlechat inbound access policy", () => {
           config: {
             groups: {
               "spaces/AAA": {
-                allow: true,
+                enabled: true,
               },
             },
           },
@@ -337,7 +337,7 @@ describe("googlechat inbound access policy", () => {
                 users: ["users/alice"],
               },
               "Finance Ops": {
-                allow: false,
+                enabled: false,
                 users: ["users/bob"],
               },
             },

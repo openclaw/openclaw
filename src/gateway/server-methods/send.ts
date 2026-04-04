@@ -382,22 +382,27 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, channel } = resolvedChannel;
-    if (typeof request.durationSeconds === "number" && channel !== "telegram") {
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+    const outbound = plugin?.outbound;
+    if (
+      typeof request.durationSeconds === "number" &&
+      outbound?.supportsPollDurationSeconds !== true
+    ) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "durationSeconds is only supported for Telegram polls",
+          `durationSeconds is not supported for ${channel} polls`,
         ),
       );
       return;
     }
-    if (typeof request.isAnonymous === "boolean" && channel !== "telegram") {
+    if (typeof request.isAnonymous === "boolean" && outbound?.supportsAnonymousPolls !== true) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "isAnonymous is only supported for Telegram polls"),
+        errorShape(ErrorCodes.INVALID_REQUEST, `isAnonymous is not supported for ${channel} polls`),
       );
       return;
     }
@@ -417,8 +422,6 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
-      const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
         respond(
           false,

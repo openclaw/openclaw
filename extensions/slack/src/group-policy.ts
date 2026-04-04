@@ -5,7 +5,7 @@ import {
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import { normalizeHyphenSlug } from "openclaw/plugin-sdk/core";
+import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
 
 type SlackChannelPolicyEntry = {

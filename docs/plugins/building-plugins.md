@@ -146,6 +146,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | CLI inference backend | `api.registerCliBackend(...)`                 | [CLI Backends](/gateway/cli-backends)                                           |
 | Channel / messaging   | `api.registerChannel(...)`                    | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
 | Speech (TTS/STT)      | `api.registerSpeechProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Realtime voice        | `api.registerRealtimeVoiceProvider(...)`      | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Media understanding   | `api.registerMediaUnderstandingProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Image generation      | `api.registerImageGenerationProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search            | `api.registerWebSearchProvider(...)`          | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
@@ -156,6 +157,11 @@ A single plugin can register any number of capabilities via the `api` object:
 | CLI subcommands       | `api.registerCli(...)`                        | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
+
+If your plugin registers custom gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
+`operator.admin`, even if a plugin asks for a narrower scope.
 
 Hook guard semantics to keep in mind:
 

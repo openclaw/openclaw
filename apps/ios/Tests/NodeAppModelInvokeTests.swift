@@ -2,6 +2,7 @@ import OpenClawKit
 import Foundation
 import Testing
 import UIKit
+import UserNotifications
 @testable import OpenClaw
 
 private func makeAgentDeepLinkURL(
@@ -68,6 +69,28 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
     }
 }
 
+private final class MockBootstrapNotificationCenter: NotificationCentering, @unchecked Sendable {
+    var status: NotificationAuthorizationStatus = .notDetermined
+    var requestAuthorizationResult = false
+    var requestAuthorizationCalls = 0
+
+    func authorizationStatus() async -> NotificationAuthorizationStatus {
+        self.status
+    }
+
+    func requestAuthorization(options _: UNAuthorizationOptions) async throws -> Bool {
+        self.requestAuthorizationCalls += 1
+        if self.requestAuthorizationResult {
+            self.status = .authorized
+        } else {
+            self.status = .denied
+        }
+        return self.requestAuthorizationResult
+    }
+
+    func add(_: UNNotificationRequest) async throws {}
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
     @Test @MainActor func decodeParamsFailsWithoutJSON() {
         #expect(throws: Error.self) {
@@ -127,6 +150,15 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         )
     }
 
+    @Test @MainActor func successfulBootstrapOnboardingRequestsNotificationAuthorization() async {
+        let center = MockBootstrapNotificationCenter()
+        let appModel = NodeAppModel(notificationCenter: center)
+
+        await appModel._test_handleSuccessfulBootstrapGatewayOnboarding()
+
+        #expect(center.requestAuthorizationCalls == 1)
+    }
+
     @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() {
         let config = GatewayConnectConfig(
             url: URL(string: "wss://gateway.example")!,
@@ -145,7 +177,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
                 clientMode: "node",
                 clientDisplayName: nil))
 
-        let cleared = NodeAppModel.clearingBootstrapToken(in: config)
+        let cleared = NodeAppModel._test_clearingBootstrapToken(in: config)
         #expect(cleared?.bootstrapToken == nil)
         #expect(cleared?.url == config.url)
         #expect(cleared?.stableID == config.stableID)

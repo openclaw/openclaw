@@ -79,8 +79,9 @@ Onboarding requests TCC permissions needed for:
 </Step>
 <Step title="CLI">
   <Info>This step is optional</Info>
-  The app can install the global `openclaw` CLI via npm/pnpm so terminal
-  workflows and launchd tasks work out of the box.
+  The app can install the global `openclaw` CLI via npm, pnpm, or bun.
+  It prefers npm first, then pnpm, then bun if that is the only detected
+  package manager. For the Gateway runtime, Node remains the recommended path.
 </Step>
 <Step title="Onboarding Chat (dedicated session)">
   After setup, the app opens a dedicated onboarding chat session so the agent can

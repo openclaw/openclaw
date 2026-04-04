@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-registry.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import {
+  resetTaskRegistryDeliveryRuntimeForTests,
+  resetTaskRegistryForTests,
+  setTaskRegistryDeliveryRuntimeForTests,
+} from "../../tasks/task-registry.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
 import { createRuntimeTaskFlows, createRuntimeTaskRuns } from "./runtime-tasks.js";
 
@@ -15,10 +19,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../tasks/task-registry-delivery-runtime.js", () => ({
-  sendMessage: hoisted.sendMessageMock,
-}));
-
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
     cancelSession: hoisted.cancelSessionMock,
@@ -30,12 +30,19 @@ vi.mock("../../agents/subagent-control.js", () => ({
 }));
 
 afterEach(() => {
+  resetTaskRegistryDeliveryRuntimeForTests();
   resetTaskRegistryForTests();
   resetTaskFlowRegistryForTests({ persist: false });
   vi.clearAllMocks();
 });
 
 describe("runtime tasks", () => {
+  beforeEach(() => {
+    setTaskRegistryDeliveryRuntimeForTests({
+      sendMessage: hoisted.sendMessageMock,
+    });
+  });
+
   it("exposes canonical task and TaskFlow DTOs without leaking raw registry fields", () => {
     const legacyTaskFlow = createRuntimeTaskFlow().bindSession({
       sessionKey: "agent:main:main",

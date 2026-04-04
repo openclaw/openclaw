@@ -55,17 +55,19 @@ export default definePluginEntry({
 - `id` must match your `openclaw.plugin.json` manifest.
 - `kind` is for exclusive slots: `"memory"` or `"context-engine"`.
 - `configSchema` can be a function for lazy evaluation.
+- OpenClaw resolves and memoizes that schema on first access, so expensive schema
+  builders only run once.
 
 ## `defineChannelPluginEntry`
 
-**Import:** `openclaw/plugin-sdk/core`
+**Import:** `openclaw/plugin-sdk/channel-core`
 
 Wraps `definePluginEntry` with channel-specific wiring. Automatically calls
 `api.registerChannel({ plugin })`, exposes an optional root-help CLI metadata
 seam, and gates `registerFull` on registration mode.
 
 ```typescript
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
 export default defineChannelPluginEntry({
   id: "my-channel",
@@ -103,20 +105,26 @@ export default defineChannelPluginEntry({
   with full plugin loads.
 - `registerFull` only runs when `api.registrationMode === "full"`. It is skipped
   during setup-only loading.
+- Like `definePluginEntry`, `configSchema` can be a lazy factory and OpenClaw
+  memoizes the resolved schema on first access.
 - For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
   when you want the command to stay lazy-loaded without disappearing from the
   root CLI parse tree. For channel plugins, prefer registering those descriptors
   from `registerCliMetadata(...)` and keep `registerFull(...)` focused on runtime-only work.
+- If `registerFull(...)` also registers gateway RPC methods, keep them on a
+  plugin-specific prefix. Reserved core admin namespaces (`config.*`,
+  `exec.approvals.*`, `wizard.*`, `update.*`) are always coerced to
+  `operator.admin`.
 
 ## `defineSetupPluginEntry`
 
-**Import:** `openclaw/plugin-sdk/core`
+**Import:** `openclaw/plugin-sdk/channel-core`
 
 For the lightweight `setup-entry.ts` file. Returns just `{ plugin }` with no
 runtime or CLI wiring.
 
 ```typescript
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
 
 export default defineSetupPluginEntry(myChannelPlugin);
 ```

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -31,7 +30,6 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { createAnthropicVertexStreamFnForModel } from "../../anthropic-vertex-stream.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -55,7 +53,7 @@ import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { createOpenAIWebSocketStreamFn, releaseWsSession } from "../../openai-ws-stream.js";
+import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
 import {
@@ -96,20 +94,22 @@ import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
+import { resolveCacheRetention } from "../anthropic-cache-retention.js";
 import { isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
-import {
-  logToolSchemasForGoogle,
-  sanitizeSessionHistory,
-  sanitizeToolsForGoogle,
-  validateReplayTurns,
-} from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import {
+  collectPromptCacheToolNames,
+  beginPromptCacheObservation,
+  completePromptCacheObservation,
+  type PromptCacheChange,
+} from "../prompt-cache-observability.js";
+import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
@@ -121,17 +121,24 @@ import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manage
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
+  describeEmbeddedAgentStreamStrategy,
+  resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentApiKey,
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+} from "../stream-resolution.js";
+import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
-import {
-  dropThinkingBlocks,
-  sanitizeThinkingForRecovery,
-  wrapAnthropicStreamWithRecovery,
-} from "../thinking.js";
+import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
+import {
+  logProviderToolSchemaDiagnostics,
+  normalizeProviderToolSchemas,
+} from "../tool-schema-runtime.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -146,6 +153,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
@@ -195,6 +203,7 @@ export {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 export {
@@ -217,54 +226,13 @@ export {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
+export {
+  resetEmbeddedAgentBaseStreamFnCacheForTest,
+  resolveEmbeddedAgentBaseStreamFn,
+  resolveEmbeddedAgentStreamFn,
+};
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-
-function shouldEnableAnthropicThinkingRecovery(api: string | null | undefined): boolean {
-  return api === "anthropic-messages" || api === "bedrock-converse-stream";
-}
-
-export function resolveEmbeddedAgentStreamFn(params: {
-  currentStreamFn: StreamFn | undefined;
-  providerStreamFn?: StreamFn;
-  shouldUseWebSocketTransport: boolean;
-  wsApiKey?: string;
-  sessionId: string;
-  signal?: AbortSignal;
-  model: EmbeddedRunAttemptParams["model"];
-  authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
-}): StreamFn {
-  if (params.providerStreamFn) {
-    const inner = params.providerStreamFn;
-    // The default pi-coding-agent streamFn injects apiKey from authStorage
-    // into options via modelRegistry.getApiKeyAndHeaders(). Provider-supplied
-    // stream functions bypass that default, so we replicate the injection here
-    // so the resolved credential reaches the provider's HTTP layer.
-    if (params.authStorage) {
-      const { authStorage, model } = params;
-      return async (m, context, options) => {
-        const apiKey = await authStorage.getApiKey(model.provider);
-        return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
-      };
-    }
-    return inner;
-  }
-
-  const currentStreamFn = params.currentStreamFn ?? streamSimple;
-  if (params.shouldUseWebSocketTransport) {
-    return params.wsApiKey
-      ? createOpenAIWebSocketStreamFn(params.wsApiKey, params.sessionId, {
-          signal: params.signal,
-        })
-      : currentStreamFn;
-  }
-
-  if (params.model.provider === "anthropic-vertex") {
-    return createAnthropicVertexStreamFnForModel(params.model);
-  }
-
-  return currentStreamFn;
-}
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
@@ -357,12 +325,18 @@ export async function runEmbeddedAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
 
   let restoreSkillEnv: (() => void) | undefined;
   try {
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
+      agentId: sessionAgentId,
       skillsSnapshot: params.skillsSnapshot,
     });
     restoreSkillEnv = params.skillsSnapshot
@@ -380,6 +354,7 @@ export async function runEmbeddedAttempt(
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      agentId: sessionAgentId,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -418,7 +393,7 @@ export async function runEmbeddedAttempt(
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
 
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    const { defaultAgentId } = resolveSessionAgentIds({
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
@@ -505,7 +480,7 @@ export async function runEmbeddedAttempt(
           return allTools;
         })();
     const toolsEnabled = supportsModelTools(params.model);
-    const tools = sanitizeToolsForGoogle({
+    const tools = normalizeProviderToolSchemas({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,
       config: params.config,
@@ -553,7 +528,7 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
-    logToolSchemasForGoogle({
+    logProviderToolSchemaDiagnostics({
       tools: effectiveTools,
       provider: params.provider,
       config: params.config,
@@ -935,7 +910,11 @@ export async function runEmbeddedAttempt(
         workspaceDir: params.workspaceDir,
       });
 
-      const defaultSessionStreamFn = activeSession.agent.streamFn;
+      // Rebuild each turn from the session's original stream base so prior-turn
+      // wrappers do not pin us to stale provider/API transport behavior.
+      const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
+        session: activeSession,
+      });
       const providerStreamFn = registerProviderStreamForModel({
         model: params.model,
         cfg: params.config,
@@ -947,13 +926,24 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
       });
       const wsApiKey = shouldUseWebSocketTransport
-        ? await params.authStorage.getApiKey(params.provider)
+        ? await resolveEmbeddedAgentApiKey({
+            provider: params.provider,
+            resolvedApiKey: params.resolvedApiKey,
+            authStorage: params.authStorage,
+          })
         : undefined;
       if (shouldUseWebSocketTransport && !wsApiKey) {
         log.warn(
           `[ws-stream] no API key for provider=${params.provider}; keeping session-managed HTTP transport`,
         );
       }
+      const streamStrategy = describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: defaultSessionStreamFn,
+        providerStreamFn,
+        shouldUseWebSocketTransport,
+        wsApiKey,
+        model: params.model,
+      });
       activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
         currentStreamFn: defaultSessionStreamFn,
         providerStreamFn,
@@ -962,6 +952,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: params.model,
+        resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
       });
 
@@ -991,6 +982,13 @@ export async function runEmbeddedAttempt(
         );
         activeSession.agent.setTransport(agentTransportOverride);
       }
+
+      const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
+      const promptCacheToolNames = collectPromptCacheToolNames([
+        ...builtInTools,
+        ...allCustomTools,
+      ] as Array<{ name?: string }>);
+      let promptCacheChangesForTurn: PromptCacheChange[] | null = null;
 
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
@@ -1114,13 +1112,6 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
-        activeSession.agent.streamFn = wrapAnthropicStreamWithRecovery(
-          activeSession.agent.streamFn,
-          { id: activeSession.sessionId },
-        );
-      }
-
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -1146,28 +1137,6 @@ export async function runEmbeddedAttempt(
       }
 
       try {
-        if (shouldEnableAnthropicThinkingRecovery(params.model.api)) {
-          const originalMessageCount = activeSession.messages.length;
-          const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
-          if (messages !== activeSession.messages) {
-            activeSession.agent.replaceMessages(messages);
-          }
-          if (messages.length !== originalMessageCount) {
-            log.warn(
-              `[session-recovery] dropped latest assistant message with incomplete thinking: sessionId=${params.sessionId}`,
-            );
-          }
-          if (prefill) {
-            // Keeping the signed-thinking turn intact is a forward-compatibility
-            // signal for future prefill-style recovery; the current fallback
-            // still comes from the one-shot stream wrapper if Anthropic rejects
-            // the replayed payload.
-            log.warn(
-              `[session-recovery] keeping latest assistant message with signed thinking and incomplete text: sessionId=${params.sessionId}`,
-            );
-          }
-        }
-
         const prior = await sanitizeSessionHistory({
           messages: activeSession.messages,
           modelApi: params.model.api,
@@ -1496,6 +1465,8 @@ export async function runEmbeddedAttempt(
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
           workspaceDir: params.workspaceDir,
+          modelProviderId: params.model.provider,
+          modelId: params.model.id,
           messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
           channelId: params.messageChannel ?? params.messageProvider ?? undefined,
@@ -1537,6 +1508,38 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        if (cacheObservabilityEnabled) {
+          const cacheObservation = beginPromptCacheObservation({
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            modelId: params.modelId,
+            modelApi: params.model.api,
+            cacheRetention: resolveCacheRetention(
+              effectiveExtraParams,
+              params.provider,
+              params.model.api,
+              params.modelId,
+            ),
+            streamStrategy,
+            transport: activeSession.agent.transport,
+            systemPrompt: systemPromptText,
+            toolNames: promptCacheToolNames,
+          });
+          promptCacheChangesForTurn = cacheObservation.changes;
+          cacheTrace?.recordStage("cache:state", {
+            options: {
+              snapshot: cacheObservation.snapshot,
+              previousCacheRead: cacheObservation.previousCacheRead ?? undefined,
+              changes:
+                cacheObservation.changes?.map((change) => ({
+                  code: change.code,
+                  detail: change.detail,
+                })) ?? undefined,
+            },
+          });
+        }
+
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
@@ -1553,17 +1556,22 @@ export async function runEmbeddedAttempt(
           }
           const sessionContext = sessionManager.buildSessionContext();
           activeSession.agent.replaceMessages(sessionContext.messages);
-          log.warn(
+          const orphanRepairMessage =
             `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
-          );
+            `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
+          if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
+            log.warn(orphanRepairMessage);
+          } else {
+            log.debug(orphanRepairMessage);
+          }
         }
         const transcriptLeafId =
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
-          // Called each run; only mutates already-answered user turns that still carry image blocks.
+          // Only mutates user turns older than a few assistant replies so recent
+          // history stays byte-identical for prompt-cache prefix matching.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.replaceMessages(activeSession.messages);
@@ -1761,6 +1769,7 @@ export async function runEmbeddedAttempt(
           config: params.config,
           provider: params.provider,
           modelId: params.modelId,
+          modelApi: params.model.api,
           isCacheTtlEligibleProvider,
         });
 
@@ -1905,6 +1914,52 @@ export async function runEmbeddedAttempt(
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
         .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+      const attemptUsage = getUsageTotals();
+      if (cacheObservabilityEnabled) {
+        const cacheBreak = completePromptCacheObservation({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          usage: attemptUsage,
+        });
+        if (cacheBreak) {
+          const changeSummary =
+            cacheBreak.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
+            "no tracked cache input change";
+          log.warn(
+            `[prompt-cache] cache read dropped ${cacheBreak.previousCacheRead} -> ${cacheBreak.cacheRead} ` +
+              `for ${params.provider}/${params.modelId} via ${streamStrategy}; ${changeSummary}`,
+          );
+          cacheTrace?.recordStage("cache:result", {
+            options: {
+              previousCacheRead: cacheBreak.previousCacheRead,
+              cacheRead: cacheBreak.cacheRead,
+              changes:
+                cacheBreak.changes?.map((change) => ({
+                  code: change.code,
+                  detail: change.detail,
+                })) ?? undefined,
+            },
+          });
+        } else if (cacheTrace && promptCacheChangesForTurn) {
+          cacheTrace.recordStage("cache:result", {
+            note: "state changed without a cache-read break",
+            options: {
+              cacheRead: attemptUsage?.cacheRead ?? 0,
+              changes: promptCacheChangesForTurn.map((change) => ({
+                code: change.code,
+                detail: change.detail,
+              })),
+            },
+          });
+        } else if (cacheTrace) {
+          cacheTrace.recordStage("cache:result", {
+            note: "stable cache inputs",
+            options: {
+              cacheRead: attemptUsage?.cacheRead ?? 0,
+            },
+          });
+        }
+      }
 
       if (hookRunner?.hasHooks("llm_output")) {
         hookRunner
@@ -1916,7 +1971,7 @@ export async function runEmbeddedAttempt(
               model: params.modelId,
               assistantTexts,
               lastAssistant,
-              usage: getUsageTotals(),
+              usage: attemptUsage,
             },
             {
               runId: params.runId,
@@ -1961,7 +2016,7 @@ export async function runEmbeddedAttempt(
         cloudCodeAssistFormatError: Boolean(
           lastAssistant?.errorMessage && isCloudCodeAssistFormatError(lastAssistant.errorMessage),
         ),
-        attemptUsage: getUsageTotals(),
+        attemptUsage,
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,

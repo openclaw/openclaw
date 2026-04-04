@@ -24,23 +24,21 @@ async function main(): Promise<void> {
       console.error(
         [
           "Plugin SDK API baseline drift detected.",
-          `Expected current: ${path.relative(repoRoot, result.jsonPath)}`,
-          `Expected current: ${path.relative(repoRoot, result.statefilePath)}`,
-          "If this Plugin SDK surface change is intentional, run `pnpm plugin-sdk:api:gen` and commit the updated baseline files.",
+          `Hash mismatch: ${path.relative(repoRoot, result.hashPath)}`,
+          "If this Plugin SDK surface change is intentional, run `pnpm plugin-sdk:api:gen` and commit the updated hash file.",
           "If not intentional, treat this as API drift and fix the plugin-sdk exports or metadata first.",
         ].join("\n"),
       );
       process.exit(1);
     }
-    console.log(
-      `OK ${path.relative(repoRoot, result.jsonPath)} ${path.relative(repoRoot, result.statefilePath)}`,
-    );
+    console.log(`OK ${path.relative(repoRoot, result.hashPath)}`);
     return;
   }
   console.log(
     [
-      `Wrote ${path.relative(repoRoot, result.jsonPath)}`,
-      `Wrote ${path.relative(repoRoot, result.statefilePath)}`,
+      `Wrote ${path.relative(repoRoot, result.hashPath)}`,
+      `Wrote ${path.relative(repoRoot, result.jsonPath)} (gitignored, local only)`,
+      `Wrote ${path.relative(repoRoot, result.statefilePath)} (gitignored, local only)`,
     ].join("\n"),
   );
 }

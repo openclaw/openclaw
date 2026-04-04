@@ -9,9 +9,21 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
-import { createDiscordActionGate, listEnabledDiscordAccounts } from "./accounts.js";
-import { handleDiscordMessageAction } from "./actions/handle-action.js";
+import {
+  createDiscordActionGate,
+  listEnabledDiscordAccounts,
+  resolveDiscordAccount,
+} from "./accounts.js";
 import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
+
+let discordChannelActionsRuntimePromise:
+  | Promise<typeof import("./channel-actions.runtime.js")>
+  | undefined;
+
+async function loadDiscordChannelActionsRuntime() {
+  discordChannelActionsRuntimePromise ??= import("./channel-actions.runtime.js");
+  return await discordChannelActionsRuntimePromise;
+}
 
 function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscordAccounts>[0]) {
   const accounts = listTokenSourcedAccounts(listEnabledDiscordAccounts(cfg));
@@ -30,12 +42,33 @@ function resolveDiscordActionDiscovery(cfg: Parameters<typeof listEnabledDiscord
   };
 }
 
+function resolveScopedDiscordActionDiscovery(params: {
+  cfg: Parameters<typeof listEnabledDiscordAccounts>[0];
+  accountId?: string | null;
+}) {
+  if (!params.accountId) {
+    return resolveDiscordActionDiscovery(params.cfg);
+  }
+  const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
+  if (!account.enabled || !account.token.trim()) {
+    return null;
+  }
+  const gate = createDiscordActionGate({
+    cfg: params.cfg,
+    accountId: account.accountId,
+  });
+  return {
+    isEnabled: (key: keyof DiscordActionConfig, defaultValue = true) => gate(key, defaultValue),
+  };
+}
+
 function describeDiscordMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const discovery = resolveDiscordActionDiscovery(cfg);
+  const discovery = resolveScopedDiscordActionDiscovery({ cfg, accountId });
   if (!discovery) {
     return {
       actions: [],
@@ -154,7 +187,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     toolContext,
     mediaLocalRoots,
   }) => {
-    return await handleDiscordMessageAction({
+    return await (
+      await loadDiscordChannelActionsRuntime()
+    ).handleDiscordMessageAction({
       action,
       params,
       cfg,

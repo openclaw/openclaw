@@ -3,7 +3,8 @@ import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createRunningTaskRun } from "../tasks/task-executor.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
-import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
+import { waitForAgentRun } from "./run-wait.js";
+import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
@@ -35,7 +36,13 @@ export function createSubagentRunManager(params: {
   persist(): void;
   callGateway: typeof callGateway;
   loadConfig: typeof loadConfig;
-  ensureRuntimePluginsLoaded: typeof ensureRuntimePluginsLoaded;
+  ensureRuntimePluginsLoaded:
+    | typeof ensureRuntimePluginsLoadedFn
+    | ((args: {
+        config: ReturnType<typeof loadConfig>;
+        workspaceDir?: string;
+        allowGatewaySubagentBinding?: boolean;
+      }) => void | Promise<void>);
   ensureListener(): void;
   startSweeper(): void;
   stopSweeper(): void;
@@ -68,23 +75,11 @@ export function createSubagentRunManager(params: {
 }) {
   const waitForSubagentCompletion = async (runId: string, waitTimeoutMs: number) => {
     try {
-      const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
-      const wait = await params.callGateway<{
-        status?: string;
-        startedAt?: number;
-        endedAt?: number;
-        error?: string;
-      }>({
-        method: "agent.wait",
-        params: {
-          runId,
-          timeoutMs,
-        },
-        timeoutMs: timeoutMs + 10_000,
+      const wait = await waitForAgentRun({
+        runId,
+        timeoutMs: Math.max(1, Math.floor(waitTimeoutMs)),
+        callGateway: params.callGateway,
       });
-      if (wait?.status !== "ok" && wait?.status !== "error" && wait?.status !== "timeout") {
-        return;
-      }
       const entry = params.runs.get(runId);
       if (!entry) {
         return;
@@ -437,23 +432,28 @@ export function createSubagentRunManager(params: {
           completedAt: now,
         });
         const cfg = params.loadConfig();
-        params.ensureRuntimePluginsLoaded({
-          config: cfg,
-          workspaceDir: entry.workspaceDir,
-          allowGatewaySubagentBinding: true,
-        });
-        void emitSubagentEndedHookOnce({
-          entry,
-          reason: SUBAGENT_ENDED_REASON_KILLED,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
-          error: reason,
-          inFlightRunIds: params.endedHookInFlightRunIds,
-          persist: () => params.persist(),
-        }).catch(() => {
-          // Hook failures should not break termination flow.
-        });
+        void Promise.resolve(
+          params.ensureRuntimePluginsLoaded({
+            config: cfg,
+            workspaceDir: entry.workspaceDir,
+            allowGatewaySubagentBinding: true,
+          }),
+        )
+          .then(() =>
+            emitSubagentEndedHookOnce({
+              entry,
+              reason: SUBAGENT_ENDED_REASON_KILLED,
+              sendFarewell: true,
+              accountId: entry.requesterOrigin?.accountId,
+              outcome: SUBAGENT_ENDED_OUTCOME_KILLED,
+              error: reason,
+              inFlightRunIds: params.endedHookInFlightRunIds,
+              persist: () => params.persist(),
+            }),
+          )
+          .catch(() => {
+            // Hook failures should not break termination flow.
+          });
       }
     }
     return updated;

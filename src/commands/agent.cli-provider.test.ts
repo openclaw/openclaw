@@ -43,14 +43,6 @@ vi.mock("../agents/workspace.js", () => ({
   ensureAgentWorkspace: vi.fn(async ({ dir }: { dir: string }) => ({ dir })),
 }));
 
-vi.mock("../agents/command/session-store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../agents/command/session-store.js")>();
-  return {
-    ...actual,
-    updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
-  };
-});
-
 vi.mock("../agents/skills.js", () => ({
   buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
   loadWorkspaceSkillEntries: vi.fn(() => []),
@@ -84,8 +76,8 @@ function mockConfig(
   const cfg = {
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-5" },
-        models: { "anthropic/claude-opus-4-5": {} },
+        model: { primary: "anthropic/claude-opus-4-6" },
+        models: { "anthropic/claude-opus-4-6": {} },
         workspace: path.join(home, "openclaw"),
         ...agentOverrides,
       },

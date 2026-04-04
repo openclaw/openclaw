@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery-plan.js";
 import type { CronJob } from "./types.js";
 
 function makeJob(overrides: Partial<CronJob>): CronJob {

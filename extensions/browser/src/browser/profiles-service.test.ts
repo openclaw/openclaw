@@ -6,8 +6,8 @@ import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: vi.fn(),
@@ -139,6 +139,30 @@ describe("BrowserProfilesService", () => {
         }),
       }),
     );
+  });
+
+  it("rejects private-network cdpUrl when strict SSRF mode is enabled", async () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+    });
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+        profiles: {},
+      },
+    });
+
+    const service = createBrowserProfilesService(ctx);
+
+    await expect(
+      service.createProfile({
+        name: "remote",
+        cdpUrl: "http://10.0.0.42:9222",
+      }),
+    ).rejects.toThrow(/private\/internal\/special-use ip address/i);
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("creates existing-session profiles as attach-only local entries", async () => {

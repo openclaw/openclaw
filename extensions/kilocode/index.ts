@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createKilocodeWrapper,
   isProxyReasoningUnsupported,
@@ -7,6 +8,9 @@ import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildKilocodeProviderWithDiscovery } from "./provider-catalog.js";
 
 const PROVIDER_ID = "kilocode";
+const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "passthrough-gemini",
+});
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -31,10 +35,7 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildKilocodeProviderWithDiscovery,
     },
-    capabilities: {
-      geminiThoughtSignatureSanitization: true,
-      geminiThoughtSignatureModelHints: ["gemini"],
-    },
+    ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
     wrapStreamFn: (ctx) => {
       const thinkingLevel =
         ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)

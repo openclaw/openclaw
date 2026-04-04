@@ -9,13 +9,14 @@ import type {
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
 import type { PluginActivationSource } from "./config-state.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive.js";
+import { registerPluginInteractiveHandler } from "./interactive-registry.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -38,7 +39,7 @@ import {
 import type {
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
-  WebFetchProviderPlugin,
+  RealtimeTranscriptionProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
   OpenClawPluginCliCommandDescriptor,
@@ -52,6 +53,7 @@ import type {
   OpenClawPluginHookOptions,
   MediaUnderstandingProviderPlugin,
   ProviderPlugin,
+  RealtimeVoiceProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
@@ -67,6 +69,7 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
   SpeechProviderPlugin,
+  WebFetchProviderPlugin,
   WebSearchProviderPlugin,
 } from "./types.js";
 
@@ -142,6 +145,10 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
 
 export type PluginSpeechProviderRegistration =
   PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginRealtimeTranscriptionProviderRegistration =
+  PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
+export type PluginRealtimeVoiceProviderRegistration =
+  PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>;
 export type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
 export type PluginImageGenerationProviderRegistration =
@@ -205,12 +212,16 @@ export type PluginRecord = {
   activationReason?: string;
   status: "loaded" | "disabled" | "error";
   error?: string;
+  failedAt?: Date;
+  failurePhase?: "validation" | "load" | "register";
   toolNames: string[];
   hookNames: string[];
   channelIds: string[];
   cliBackendIds: string[];
   providerIds: string[];
   speechProviderIds: string[];
+  realtimeTranscriptionProviderIds: string[];
+  realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
   imageGenerationProviderIds: string[];
   webFetchProviderIds: string[];
@@ -237,6 +248,8 @@ export type PluginRegistry = {
   providers: PluginProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
+  realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
+  realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];
   mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
   imageGenerationProviders: PluginImageGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
@@ -421,9 +434,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     registry.gatewayHandlers[trimmed] = handler;
-    if (opts?.scope) {
+    const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
+    if (normalizedScope.coercedToReservedAdmin) {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
+      });
+    }
+    const effectiveScope = normalizedScope.scope;
+    if (effectiveScope) {
       registry.gatewayMethodScopes ??= {};
-      registry.gatewayMethodScopes[trimmed] = opts.scope;
+      registry.gatewayMethodScopes[trimmed] = effectiveScope;
     }
     record.gatewayMethods.push(trimmed);
   };
@@ -694,6 +717,32 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       kindLabel: "speech provider",
       registrations: registry.speechProviders,
       ownedIds: record.speechProviderIds,
+    });
+  };
+
+  const registerRealtimeTranscriptionProvider = (
+    record: PluginRecord,
+    provider: RealtimeTranscriptionProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "realtime transcription provider",
+      registrations: registry.realtimeTranscriptionProviders,
+      ownedIds: record.realtimeTranscriptionProviderIds,
+    });
+  };
+
+  const registerRealtimeVoiceProvider = (
+    record: PluginRecord,
+    provider: RealtimeVoiceProviderPlugin,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "realtime voice provider",
+      registrations: registry.realtimeVoiceProviders,
+      ownedIds: record.realtimeVoiceProviderIds,
     });
   };
 
@@ -1007,6 +1056,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
+              registerRealtimeTranscriptionProvider: (provider) =>
+                registerRealtimeTranscriptionProvider(record, provider),
+              registerRealtimeVoiceProvider: (provider) =>
+                registerRealtimeVoiceProvider(record, provider),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
@@ -1196,6 +1249,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerProvider,
     registerCliBackend,
     registerSpeechProvider,
+    registerRealtimeTranscriptionProvider,
+    registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
     registerImageGenerationProvider,
     registerWebSearchProvider,

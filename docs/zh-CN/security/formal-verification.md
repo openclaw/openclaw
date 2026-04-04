@@ -4,7 +4,7 @@ summary: 针对 OpenClaw 最高风险路径的机器检查安全模型。
 title: 形式化验证（安全模型）
 x-i18n:
   generated_at: "2026-02-03T07:54:04Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 8dff6ea41a37fb6b870424e4e788015c3f8a6099075eece5dbf909883c045106
   source_path: security/formal-verification.md

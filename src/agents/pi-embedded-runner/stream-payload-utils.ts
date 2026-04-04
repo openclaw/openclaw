@@ -6,7 +6,7 @@ export function streamWithPayloadPatch(
   context: Parameters<StreamFn>[1],
   options: Parameters<StreamFn>[2],
   patchPayload: (payload: Record<string, unknown>) => void,
-) {
+): ReturnType<StreamFn> {
   const originalOnPayload = options?.onPayload;
   return underlying(model, context, {
     ...options,

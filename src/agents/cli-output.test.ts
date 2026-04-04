@@ -1,5 +1,124 @@
 import { describe, expect, it } from "vitest";
-import { parseCliJsonl } from "./cli-output.js";
+import { parseCliJson, parseCliJsonl } from "./cli-output.js";
+
+describe("parseCliJson", () => {
+  it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {
+    const result = parseCliJson(
+      [
+        "Claude Code starting...",
+        '{"type":"init","session_id":"session-789"}',
+        '{"type":"result","result":"Claude says hi","usage":{"input_tokens":9,"output_tokens":4}}',
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "Claude says hi",
+      sessionId: "session-789",
+      usage: {
+        input: 9,
+        output: 4,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+  });
+
+  it("parses Gemini CLI response text and stats payloads", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-123",
+        response: "Gemini says hello",
+        stats: {
+          total_tokens: 21,
+          input_tokens: 13,
+          output_tokens: 5,
+          cached: 8,
+          input: 5,
+        },
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "Gemini says hello",
+      sessionId: "gemini-session-123",
+      usage: {
+        input: 5,
+        output: 5,
+        cacheRead: 8,
+        cacheWrite: undefined,
+        total: 21,
+      },
+    });
+  });
+
+  it("falls back to input_tokens minus cached when Gemini stats omit input", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-456",
+        response: "Hello",
+        stats: {
+          total_tokens: 21,
+          input_tokens: 13,
+          output_tokens: 5,
+          cached: 8,
+        },
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result?.usage?.input).toBe(5);
+    expect(result?.usage?.cacheRead).toBe(8);
+  });
+
+  it("falls back to Gemini stats when usage exists without token fields", () => {
+    const result = parseCliJson(
+      JSON.stringify({
+        session_id: "gemini-session-789",
+        response: "Gemini says hello",
+        usage: {},
+        stats: {
+          total_tokens: 21,
+          input_tokens: 13,
+          output_tokens: 5,
+          cached: 8,
+          input: 5,
+        },
+      }),
+      {
+        command: "gemini",
+        output: "json",
+        sessionIdFields: ["session_id"],
+      },
+    );
+
+    expect(result).toEqual({
+      text: "Gemini says hello",
+      sessionId: "gemini-session-789",
+      usage: {
+        input: 5,
+        output: 5,
+        cacheRead: 8,
+        cacheWrite: undefined,
+        total: 21,
+      },
+    });
+  });
+});
 
 describe("parseCliJsonl", () => {
   it("parses Claude stream-json result events", () => {
@@ -70,6 +189,24 @@ describe("parseCliJsonl", () => {
         cacheWrite: undefined,
         total: undefined,
       },
+    });
+  });
+
+  it("parses multiple JSON objects embedded on the same line", () => {
+    const result = parseCliJsonl(
+      '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "done",
+      sessionId: "session-999",
+      usage: undefined,
     });
   });
 });

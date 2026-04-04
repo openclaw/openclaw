@@ -389,6 +389,8 @@ describe("loadPluginManifestRegistry", () => {
           method: "api-key",
           choiceId: "openai-api-key",
           choiceLabel: "OpenAI API key",
+          assistantPriority: 10,
+          assistantVisibility: "visible",
         },
       ],
       configSchema: { type: "object" },
@@ -411,6 +413,8 @@ describe("loadPluginManifestRegistry", () => {
         method: "api-key",
         choiceId: "openai-api-key",
         choiceLabel: "OpenAI API key",
+        assistantPriority: 10,
+        assistantVisibility: "visible",
       },
     ]);
   });

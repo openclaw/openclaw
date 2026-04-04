@@ -33,6 +33,9 @@ describe("provider-usage.shared", () => {
   it.each([
     { value: "z-ai", expected: "zai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
+    { value: "minimax-portal", expected: "minimax" },
+    { value: "minimax-cn", expected: "minimax" },
+    { value: "minimax-portal-cn", expected: "minimax" },
     { value: "unknown-provider", expected: undefined },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },

@@ -8,7 +8,7 @@ title: "Personal Assistant Setup"
 
 # Building a personal assistant with OpenClaw
 
-OpenClaw is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
+OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
 
 ## ⚠️ Safety first
 
@@ -107,7 +107,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
-- persona/instructions in `SOUL.md`
+- persona/instructions in [`SOUL.md`](/concepts/soul)
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
 

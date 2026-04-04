@@ -5,7 +5,7 @@ summary: Discord 机器人支持状态、功能和配置
 title: Discord
 x-i18n:
   generated_at: "2026-02-03T07:45:45Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: 2f0083b55648f9158668b80d078353421e7dc310135fdc43f2d280b242bf8459
   source_path: channels/discord.md

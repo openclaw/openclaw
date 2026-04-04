@@ -5,7 +5,7 @@ summary: 跨平台的群聊行为（WhatsApp/Telegram/Discord/Slack/Signal/iMess
 title: 群组
 x-i18n:
   generated_at: "2026-02-03T07:47:08Z"
-  model: claude-opus-4-5
+  model: claude-opus-4-6
   provider: pi
   source_hash: b727a053edf51f6e7b5c0c324c2fc9c9789a9796c37f622418bd555e8b5a0ec4
   source_path: channels/groups.md

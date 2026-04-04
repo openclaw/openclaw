@@ -84,12 +84,11 @@ When you configure a Hugging Face API key (via onboarding, `HUGGINGFACE_HUB_TOKE
 }
 ```
 
-- **Provider / policy selection:** Append a suffix to the **model id** to choose how the router picks the backend:
-  - **`:fastest`** — highest throughput (router picks; provider choice is **locked** — no interactive backend picker).
-  - **`:cheapest`** — lowest cost per output token (router picks; provider choice is **locked**).
-  - **`:provider`** — force a specific backend (e.g. `:sambanova`, `:together`).
+- **Policy suffixes:** OpenClaw's bundled Hugging Face docs and helpers currently treat these two suffixes as the built-in policy variants:
+  - **`:fastest`** — highest throughput.
+  - **`:cheapest`** — lowest cost per output token.
 
-  When you select **:cheapest** or **:fastest** (e.g. in the onboarding model dropdown), the provider is locked: the router decides by cost or speed and no optional “prefer specific backend” step is shown. You can add these as separate entries in `models.providers.huggingface.models` or set `model.primary` with the suffix. You can also set your default order in [Inference Provider settings](https://hf.co/settings/inference-providers) (no suffix = use that order).
+  You can add these as separate entries in `models.providers.huggingface.models` or set `model.primary` with the suffix. You can also set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers) (no suffix = use that order).
 
 - **Config merge:** Existing entries in `models.providers.huggingface.models` (e.g. in `models.json`) are kept when config is merged. So any custom `name`, `alias`, or model options you set there are preserved.
 
@@ -112,7 +111,7 @@ Model refs use the form `huggingface/<org>/<model>` (Hub-style IDs). The list be
 | GLM 4.7                | `zai-org/GLM-4.7`                   |
 | Kimi K2.5              | `moonshotai/Kimi-K2.5`              |
 
-You can append `:fastest`, `:cheapest`, or `:provider` (e.g. `:together`, `:sambanova`) to the model id. Set your default order in [Inference Provider settings](https://hf.co/settings/inference-providers); see [Inference Providers](https://huggingface.co/docs/inference-providers) and **GET** `https://router.huggingface.co/v1/models` for the full list.
+You can append `:fastest` or `:cheapest` to the model id. Set your default order in [Inference Provider settings](https://hf.co/settings/inference-providers); see [Inference Providers](https://huggingface.co/docs/inference-providers) and **GET** `https://router.huggingface.co/v1/models` for the full list.
 
 ### Complete configuration examples
 
@@ -169,21 +168,6 @@ You can append `:fastest`, `:cheapest`, or `:provider` (e.g. `:together`, `:samb
         "huggingface/deepseek-ai/DeepSeek-V3.2": { alias: "DeepSeek V3.2" },
         "huggingface/meta-llama/Llama-3.3-70B-Instruct": { alias: "Llama 3.3 70B" },
         "huggingface/openai/gpt-oss-120b": { alias: "GPT-OSS 120B" },
-      },
-    },
-  },
-}
-```
-
-**Force a specific backend with :provider:**
-
-```json5
-{
-  agents: {
-    defaults: {
-      model: { primary: "huggingface/deepseek-ai/DeepSeek-R1:together" },
-      models: {
-        "huggingface/deepseek-ai/DeepSeek-R1:together": { alias: "DeepSeek R1 (Together)" },
       },
     },
   },

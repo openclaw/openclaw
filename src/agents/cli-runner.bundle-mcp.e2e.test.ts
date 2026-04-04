@@ -11,7 +11,9 @@ import {
 } from "./bundle-mcp.test-harness.js";
 import { runCliAgent } from "./cli-runner.js";
 
-const E2E_TIMEOUT_MS = 20_000;
+// This e2e spins a real stdio MCP server plus a spawned CLI process, which is
+// notably slower under Docker and cold Vitest imports.
+const E2E_TIMEOUT_MS = 40_000;
 
 describe("runCliAgent bundle MCP e2e", () => {
   it(

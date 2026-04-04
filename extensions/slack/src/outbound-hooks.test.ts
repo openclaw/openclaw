@@ -140,6 +140,38 @@ describe("slack outbound hook wiring", () => {
     expectSlackSendCalledWith("hello");
   });
 
+  it("uses configured defaultAccount for hook context when accountId is omitted", async () => {
+    const mockRunner = {
+      hasHooks: vi.fn().mockReturnValue(true),
+      runMessageSending: vi.fn().mockResolvedValue(undefined),
+    };
+    getGlobalHookRunnerMock.mockReturnValue(mockRunner);
+
+    const sendText = slackOutbound.sendText as NonNullable<typeof slackOutbound.sendText>;
+    await sendText({
+      cfg: {
+        channels: {
+          slack: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      to: "C123",
+      text: "hello",
+      replyToId: "1111.2222",
+    });
+
+    expect(mockRunner.runMessageSending).toHaveBeenCalledWith(
+      { to: "C123", content: "hello", metadata: { threadTs: "1111.2222", channelId: "C123" } },
+      { channelId: "slack", accountId: "work" },
+    );
+  });
+
   it("cancels send when hook returns cancel:true", async () => {
     const mockRunner = {
       hasHooks: vi.fn().mockReturnValue(true),

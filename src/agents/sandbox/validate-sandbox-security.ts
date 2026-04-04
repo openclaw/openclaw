@@ -5,6 +5,9 @@
  * Enforced at runtime when creating sandbox containers.
  */
 
+import os from "node:os";
+import path from "node:path";
+import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -31,6 +34,17 @@ export const BLOCKED_HOST_PATHS = [
   "/private/var/run/docker.sock",
   "/run/docker.sock",
 ];
+
+const BLOCKED_HOME_SUBPATHS = [
+  ".aws",
+  ".cargo",
+  ".config",
+  ".docker",
+  ".gnupg",
+  ".netrc",
+  ".npm",
+  ".ssh",
+] as const;
 
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
@@ -100,20 +114,51 @@ export function getBlockedBindReason(bind: string): BlockedBindReason | null {
   }
 
   const normalized = normalizeHostPath(sourceRaw);
-  return getBlockedReasonForSourcePath(normalized);
+  return getBlockedReasonForSourcePath(normalized, getBlockedHostPaths());
 }
 
-export function getBlockedReasonForSourcePath(sourceNormalized: string): BlockedBindReason | null {
+export function getBlockedReasonForSourcePath(
+  sourceNormalized: string,
+  blockedHostPaths: string[],
+): BlockedBindReason | null {
   if (sourceNormalized === "/") {
     return { kind: "covers", blockedPath: "/" };
   }
-  for (const blocked of BLOCKED_HOST_PATHS) {
+  for (const blocked of blockedHostPaths) {
     if (sourceNormalized === blocked || sourceNormalized.startsWith(blocked + "/")) {
       return { kind: "targets", blockedPath: blocked };
     }
   }
 
   return null;
+}
+
+function getBlockedHostPaths(): string[] {
+  const blocked = new Set(BLOCKED_HOST_PATHS.map(normalizeHostPath));
+  for (const home of getBlockedHomeRoots()) {
+    for (const suffix of BLOCKED_HOME_SUBPATHS) {
+      blocked.add(normalizeHostPath(path.posix.join(home, suffix)));
+    }
+  }
+  return [...blocked];
+}
+
+function getBlockedHomeRoots(): string[] {
+  const roots = new Set<string>();
+  for (const candidate of [
+    resolveRequiredHomeDir(process.env, os.homedir),
+    resolveRequiredOsHomeDir(process.env, os.homedir),
+  ]) {
+    const normalized = normalizeHostPath(candidate);
+    if (normalized !== "/") {
+      roots.add(normalized);
+    }
+    const canonical = resolveSandboxHostPathViaExistingAncestor(normalized);
+    if (canonical !== "/") {
+      roots.add(canonical);
+    }
+  }
+  return [...roots];
 }
 
 function normalizeAllowedRoots(roots: string[] | undefined): string[] {
@@ -183,9 +228,10 @@ function enforceSourcePathPolicy(params: {
   bind: string;
   sourcePath: string;
   allowedRoots: string[];
+  blockedHostPaths: string[];
   allowSourcesOutsideAllowedRoots: boolean;
 }): void {
-  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath);
+  const blockedReason = getBlockedReasonForSourcePath(params.sourcePath, params.blockedHostPaths);
   if (blockedReason) {
     throw formatBindBlockedError({ bind: params.bind, reason: blockedReason });
   }
@@ -221,7 +267,7 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
   const verb = params.reason.kind === "covers" ? "covers" : "targets";
   return new Error(
     `Sandbox security: bind mount "${params.bind}" ${verb} blocked path "${params.reason.blockedPath}". ` +
-      "Mounting system directories (or Docker socket paths) into sandbox containers is not allowed. " +
+      "Mounting system directories, credential paths, or Docker socket paths into sandbox containers is not allowed. " +
       "Use project-specific paths instead (e.g. /home/user/myproject).",
   );
 }
@@ -240,6 +286,7 @@ export function validateBindMounts(
   }
 
   const allowedRoots = normalizeAllowedRoots(options?.allowedSourceRoots);
+  const blockedHostPaths = getBlockedHostPaths();
 
   for (const rawBind of binds) {
     const bind = rawBind.trim();
@@ -266,6 +313,7 @@ export function validateBindMounts(
       bind,
       sourcePath: sourceNormalized,
       allowedRoots,
+      blockedHostPaths,
       allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
     });
 
@@ -275,6 +323,7 @@ export function validateBindMounts(
       bind,
       sourcePath: sourceCanonical,
       allowedRoots,
+      blockedHostPaths,
       allowSourcesOutsideAllowedRoots: options?.allowSourcesOutsideAllowedRoots === true,
     });
   }

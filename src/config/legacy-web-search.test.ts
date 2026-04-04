@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
+import { migrateLegacyConfig } from "./legacy-migrate.js";
 import {
   listLegacyWebSearchConfigPaths,
   migrateLegacyWebSearchConfig,
 } from "./legacy-web-search.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 
 describe("legacy web search config", () => {
   it("migrates legacy provider config through bundled web search ownership metadata", () => {
@@ -85,6 +87,46 @@ describe("legacy web search config", () => {
       "tools.web.search.grok.apiKey",
       "tools.web.search.grok.model",
       "tools.web.search.kimi.model",
+    ]);
+  });
+
+  it("participates in shared legacy detection and migration", () => {
+    const rawConfig = {
+      tools: {
+        web: {
+          search: {
+            provider: "brave",
+            brave: {
+              apiKey: "brave-key",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(findLegacyConfigIssues(rawConfig)).toEqual([
+      {
+        path: "tools.web.search",
+        message:
+          "tools.web.search provider-owned config moved to plugins.entries.<plugin>.config.webSearch (auto-migrated on load).",
+      },
+    ]);
+
+    const migrated = migrateLegacyConfig(rawConfig);
+    expect(migrated.config).not.toBeNull();
+    expect(migrated.config?.tools?.web?.search).toEqual({
+      provider: "brave",
+    });
+    expect(migrated.config?.plugins?.entries?.brave).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "brave-key",
+        },
+      },
+    });
+    expect(migrated.changes).toEqual([
+      "Moved tools.web.search.brave → plugins.entries.brave.config.webSearch.",
     ]);
   });
 });

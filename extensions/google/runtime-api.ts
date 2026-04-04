@@ -3,4 +3,5 @@ export {
   normalizeGoogleApiBaseUrl,
   normalizeGoogleModelId,
   parseGeminiAuth,
+  resolveGoogleGenerativeAiHttpRequestConfig,
 } from "./api.js";

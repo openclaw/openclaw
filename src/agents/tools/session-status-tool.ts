@@ -426,6 +426,7 @@ export function createSessionStatusTool(opts?: {
                   model: selection.model,
                   isDefault: selection.isDefault,
                 },
+          markLiveSwitchPending: true,
         });
         if (applied.updated) {
           store[resolved.key] = nextEntry;
@@ -499,6 +500,7 @@ export function createSessionStatusTool(opts?: {
         skipDefaultTaskLookup: true,
         primaryModelLabelOverride: primaryModelLabel,
         ...(providerForCard ? {} : { modelAuthOverride: undefined }),
+        includeTranscriptUsage: true,
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;

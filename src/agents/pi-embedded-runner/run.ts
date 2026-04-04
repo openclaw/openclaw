@@ -25,17 +25,15 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
-import {
-  hasDifferentLiveSessionModelSelection,
-  LiveSessionModelSwitchError,
-  consumeLiveSessionModelSwitch,
-} from "../live-model-switch.js";
+import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
+import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
+  shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
@@ -156,6 +154,8 @@ export async function runEmbeddedPiAgent(
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
         workspaceDir: resolvedWorkspace,
+        modelProviderId: provider,
+        modelId,
         messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
         channelId: params.messageChannel ?? params.messageProvider ?? undefined,
@@ -210,12 +210,14 @@ export async function runEmbeddedPiAgent(
           lockedProfileId = undefined;
         }
       }
-      const profileOrder = resolveAuthProfileOrder({
-        cfg: params.config,
-        store: authStore,
-        provider,
-        preferredProfile: preferredProfileId,
-      });
+      const profileOrder = shouldPreferExplicitConfigApiKeyAuth(params.config, provider)
+        ? []
+        : resolveAuthProfileOrder({
+            cfg: params.config,
+            store: authStore,
+            provider,
+            preferredProfile: preferredProfileId,
+          });
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);
       }
@@ -233,12 +235,6 @@ export async function runEmbeddedPiAgent(
       let lastProfileId: string | undefined;
       let runtimeAuthState: RuntimeAuthState | null = null;
       let runtimeAuthRefreshCancelled = false;
-      const resolveCurrentLiveSelection = () => ({
-        provider,
-        model: modelId,
-        authProfileId: preferredProfileId,
-        authProfileIdSource: params.authProfileIdSource,
-      });
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -480,6 +476,10 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          let resolvedStreamApiKey: string | undefined;
+          if (!runtimeAuthState && apiKeyInfo) {
+            resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
+          }
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -529,6 +529,7 @@ export async function runEmbeddedPiAgent(
               runtimeAuthState ? null : apiKeyInfo,
               params.config,
             ),
+            resolvedApiKey: resolvedStreamApiKey,
             authProfileId: lastProfileId,
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             authStorage,
@@ -618,12 +619,23 @@ export async function runEmbeddedPiAgent(
             !attempt.lastToolError &&
             attempt.toolMetas.length === 0 &&
             attempt.assistantTexts.length === 0;
-          const requestedSelection = consumeLiveSessionModelSwitch(params.sessionId);
-          if (
-            requestedSelection &&
-            canRestartForLiveSwitch &&
-            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), requestedSelection)
-          ) {
+          const requestedSelection = shouldSwitchToLiveModel({
+            cfg: params.config,
+            sessionKey: params.sessionKey,
+            agentId: params.agentId,
+            defaultProvider: DEFAULT_PROVIDER,
+            defaultModel: DEFAULT_MODEL,
+            currentProvider: provider,
+            currentModel: modelId,
+            currentAuthProfileId: preferredProfileId,
+            currentAuthProfileIdSource: params.authProfileIdSource,
+          });
+          if (requestedSelection && canRestartForLiveSwitch) {
+            await clearLiveModelSwitchPending({
+              cfg: params.config,
+              sessionKey: params.sessionKey,
+              agentId: params.agentId,
+            });
             log.info(
               `live session model switch requested during active attempt for ${params.sessionId}: ${provider}/${modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
             );

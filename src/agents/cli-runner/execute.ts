@@ -1,4 +1,5 @@
 import { shouldLogVerbose } from "../../globals.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
@@ -6,13 +7,14 @@ import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
 import { scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { prependBootstrapPromptWarning } from "../bootstrap-budget.js";
-import { parseCliOutput, type CliOutput } from "../cli-output.js";
+import { createCliJsonlStreamingParser, parseCliOutput, type CliOutput } from "../cli-output.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import {
   appendImagePathsToPrompt,
   buildCliSupervisorScopeKey,
   buildCliArgs,
+  resolveCliRunQueueKey,
   enqueueCliRun,
   loadPromptRefImages,
   resolveCliNoOutputTimeoutMs,
@@ -138,10 +140,13 @@ export async function executePreparedCliRun(
     useResume,
   });
 
-  const serialize = backend.serialize ?? true;
-  const queueKey = serialize
-    ? context.backendResolved.id
-    : `${context.backendResolved.id}:${params.runId}`;
+  const queueKey = resolveCliRunQueueKey({
+    backendId: context.backendResolved.id,
+    serialize: backend.serialize,
+    runId: params.runId,
+    workspaceDir: context.workspaceDir,
+    cliSessionId: useResume ? resolvedSessionId : undefined,
+  });
 
   try {
     return await enqueueCliRun(queueKey, async () => {
@@ -172,6 +177,7 @@ export async function executePreparedCliRun(
         for (const key of backend.clearEnv ?? []) {
           delete next[key];
         }
+        Object.assign(next, context.preparedBackend.env);
         return next;
       })();
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
@@ -179,6 +185,23 @@ export async function executePreparedCliRun(
         timeoutMs: params.timeoutMs,
         useResume,
       });
+      const streamingParser =
+        backend.output === "jsonl"
+          ? createCliJsonlStreamingParser({
+              backend,
+              providerId: context.backendResolved.id,
+              onAssistantDelta: ({ text, delta }) => {
+                emitAgentEvent({
+                  runId: params.runId,
+                  stream: "assistant",
+                  data: {
+                    text,
+                    delta,
+                  },
+                });
+              },
+            })
+          : null;
       const supervisor = executeDeps.getProcessSupervisor();
       const scopeKey = buildCliSupervisorScopeKey({
         backend,
@@ -198,8 +221,10 @@ export async function executePreparedCliRun(
         cwd: context.workspaceDir,
         env,
         input: stdinPayload,
+        onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
       });
       const result = await managedRun.wait();
+      streamingParser?.finish();
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();

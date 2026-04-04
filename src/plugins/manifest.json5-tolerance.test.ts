@@ -81,6 +81,27 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes modelSupport metadata from the manifest", () => {
+    const dir = makeTempDir();
+    const json5Content = `{
+  id: "provider-plugin",
+  modelSupport: {
+    modelPrefixes: ["gpt-", "", "claude-"],
+    modelPatterns: ["^o[0-9].*", ""],
+  },
+  configSchema: { type: "object" }
+}`;
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), json5Content, "utf-8");
+    const result = loadPluginManifest(dir, false);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.modelSupport).toEqual({
+        modelPrefixes: ["gpt-", "claude-"],
+        modelPatterns: ["^o[0-9].*"],
+      });
+    }
+  });
+
   it("still rejects completely invalid syntax", () => {
     const dir = makeTempDir();
     fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), "not json at all {{{}}", "utf-8");
