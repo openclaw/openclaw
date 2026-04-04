@@ -5,8 +5,7 @@ export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already proces
 /**
  * Number of most-recent completed turns whose preceding user/toolResult image
  * blocks are kept intact. Counts all completed turns, not just image-bearing
- * ones, so text-only turns consume the window and pruning older turns reduces
- * prompt-cache churn.
+ * ones, so text-only turns consume the window.
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 
