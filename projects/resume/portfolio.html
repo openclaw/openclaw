@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cruz Tang · AI 企業顧問 | ThinkerCafe</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Noto Sans TC', sans-serif;
+            background: linear-gradient(135deg, #E5EEF9 0%, #F8FAFC 50%, #E0E7FF 100%);
+            color: #0f172a;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Header Navigation */
+        header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            padding: 20px 40px;
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: #0f172a;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 32px;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: #475569;
+            text-decoration: none;
+            font-size: 15px;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            color: #3b82f6;
+        }
+
+        .lang-switcher {
+            display: flex;
+            gap: 8px;
+            padding: 6px 12px;
+            background: rgba(59, 130, 246, 0.08);
+            border-radius: 8px;
+            font-size: 13px;
+        }
+
+        .lang-switcher button {
+            padding: 4px 8px;
+            border: none;
+            background: transparent;
+            color: #64748b;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: all 0.3s ease;
+        }
+
+        .lang-switcher button:hover {
+            background: rgba(59, 130, 246, 0.1);
+            color: #3b82f6;
+        }
+
+        .lang-switcher button.active {
+            background: rgba(59, 130, 246, 0.15);
+            color: #3b82f6;
+            font-weight: 600;
+        }
+
+        /* Hero Section */
+        .hero {
+            margin-top: 100px;
+            padding: 80px 40px 120px;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+            z-index: -1;
+            animation: pulse 8s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
+            50% { opacity: 0.8; transform: translateX(-50%) scale(1.1); }
+        }
+
+        .hero h1 {
+            font-size: 56px;
+            font-weight: 800;
+            line-height: 1.2;
+            margin-bottom: 24px;
+            background: linear-gradient(135deg, #0f172a 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .subtitle {
+            font-size: 28px;
+            color: #475569;
+            margin-bottom: 16px;
+            font-weight: 600;
+        }
+
+        .hero .role {
+            font-size: 18px;
+            color: #64748b;
+            margin-bottom: 48px;
+        }
+
+        .glass-btn {
+            display: inline-block;
+            padding: 16px 40px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            color: #0f172a;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+            cursor: pointer;
+        }
+
+        .glass-btn:hover {
+            background: rgba(255, 255, 255, 0.4);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+            transform: translateY(-3px);
+        }
+
+        /* Trust Badges */
+        .trust-section {
+            padding: 60px 40px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .trust-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 32px;
+        }
+
+        .trust-card {
+            padding: 32px;
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 20px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .trust-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .trust-card .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .trust-card h3 {
+            font-size: 18px;
+            color: #0f172a;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .trust-card p {
+            font-size: 14px;
+            color: #64748b;
+            line-height: 1.5;
+        }
+
+        /* Problem-Solution Section */
+        .comparison-section {
+            padding: 100px 40px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(240, 249, 255, 0.4) 100%);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            position: relative;
+        }
+
+        .comparison-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 800px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.08) 0%, transparent 70%);
+            z-index: 0;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 42px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            color: #0f172a;
+            position: relative;
+            z-index: 1;
+        }
+
+        .section-subtitle {
+            text-align: center;
+            font-size: 18px;
+            color: #64748b;
+            margin-bottom: 60px;
+            line-height: 1.6;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+            position: relative;
+            z-index: 1;
+        }
+
+        .comparison-grid {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: grid;
+            gap: 32px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .comparison-row {
+            display: grid;
+            grid-template-columns: 1fr 80px 1fr;
+            gap: 0;
+            align-items: center;
+            opacity: 0;
+            transform: translateY(30px);
+            animation: slideIn 0.6s ease-out forwards;
+        }
+
+        .comparison-row:nth-child(1) { animation-delay: 0.1s; }
+        .comparison-row:nth-child(2) { animation-delay: 0.2s; }
+        .comparison-row:nth-child(3) { animation-delay: 0.3s; }
+        .comparison-row:nth-child(4) { animation-delay: 0.4s; }
+
+        @keyframes slideIn {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .before, .after {
+            padding: 28px 36px;
+            min-height: 120px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            transition: box-shadow 0.3s ease, transform 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .before {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.5) 0%, rgba(248, 250, 252, 0.6) 100%);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(239, 68, 68, 0.15);
+            border-left: 5px solid #ef4444;
+            border-radius: 16px 0 0 16px;
+            box-shadow: -4px 0 16px rgba(239, 68, 68, 0.08);
+        }
+
+        .before::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, rgba(239, 68, 68, 0.03) 0%, transparent 100%);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+            pointer-events: none;
+        }
+
+        .after {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.6) 0%, rgba(240, 249, 255, 0.7) 100%);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-left: 5px solid #10b981;
+            border-radius: 0 16px 16px 0;
+            box-shadow: 4px 0 16px rgba(16, 185, 129, 0.12);
+        }
+
+        .after::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(270deg, rgba(59, 130, 246, 0.04) 0%, transparent 100%);
+            opacity: 0;
+            transition: opacity 0.4s ease;
+            pointer-events: none;
+        }
+
+        /* 桌面版 hover 效果 */
+        @media (min-width: 769px) {
+            .before:hover::before,
+            .after:hover::before {
+                opacity: 1;
+            }
+
+            .before:hover,
+            .after:hover {
+                box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+            }
+
+            .after:hover {
+                border-left-color: #3b82f6;
+            }
+        }
+
+        .arrow {
+            font-size: 28px;
+            color: #3b82f6;
+            text-align: center;
+            font-weight: 700;
+            z-index: 10;
+            position: relative;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: translateX(0);
+                opacity: 0.7;
+            }
+            50% {
+                transform: translateX(5px);
+                opacity: 1;
+            }
+        }
+
+        .comparison-label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 12px;
+            font-weight: 700;
+            display: block;
+        }
+
+        .before .comparison-label {
+            color: #dc2626;
+        }
+
+        .after .comparison-label {
+            color: #059669;
+        }
+
+        .comparison-value {
+            font-size: 20px;
+            font-weight: 700;
+            line-height: 1.4;
+            display: block;
+        }
+
+        .before .comparison-value {
+            color: #475569;
+        }
+
+        .after .comparison-value {
+            color: #0f172a;
+            background: linear-gradient(135deg, #0f172a 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .highlight-metric {
+            font-size: 24px;
+            font-weight: 800;
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            margin-left: 4px;
+        }
+
+        .before .highlight-metric {
+            color: #dc2626;
+            background: rgba(239, 68, 68, 0.08);
+        }
+
+        .after .highlight-metric {
+            color: #059669;
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        /* Case Study Section */
+        .cases-section {
+            padding: 80px 40px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .case-card {
+            margin-bottom: 48px;
+            padding: 48px;
+            background: rgba(255, 255, 255, 0.35);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 24px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+        }
+
+        .case-header {
+            margin-bottom: 32px;
+        }
+
+        .case-header h3 {
+            font-size: 32px;
+            color: #0f172a;
+            margin-bottom: 16px;
+            font-weight: 700;
+        }
+
+        .case-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 32px;
+        }
+
+        .case-column h4 {
+            font-size: 16px;
+            color: #3b82f6;
+            margin-bottom: 16px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .case-column ul {
+            list-style: none;
+        }
+
+        .case-column li {
+            padding: 8px 0;
+            color: #475569;
+            font-size: 15px;
+        }
+
+        .case-column li::before {
+            content: '✓';
+            color: #10b981;
+            font-weight: bold;
+            margin-right: 12px;
+        }
+
+        .case-result {
+            display: flex;
+            gap: 32px;
+            margin-top: 24px;
+            padding-top: 24px;
+            border-top: 1px solid rgba(0, 0, 0, 0.08);
+        }
+
+        .result-item {
+            flex: 1;
+            text-align: center;
+        }
+
+        .result-label {
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .result-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        .result-compare {
+            font-size: 14px;
+            color: #ef4444;
+            text-decoration: line-through;
+            margin-right: 8px;
+        }
+
+        /* Services Section */
+        .services-section {
+            padding: 80px 40px;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+
+        .services-grid {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 32px;
+        }
+
+        .service-card {
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.45);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 20px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .service-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.12);
+        }
+
+        .service-card h3 {
+            font-size: 28px;
+            color: #0f172a;
+            margin-bottom: 16px;
+            font-weight: 700;
+        }
+
+        .service-card .target {
+            font-size: 14px;
+            color: #64748b;
+            margin-bottom: 24px;
+            padding: 8px 16px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 8px;
+            display: inline-block;
+        }
+
+        .service-card ul {
+            list-style: none;
+            margin-bottom: 24px;
+        }
+
+        .service-card li {
+            padding: 10px 0;
+            color: #475569;
+            font-size: 15px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .service-card li:last-child {
+            border-bottom: none;
+        }
+
+        .service-card .duration {
+            font-size: 14px;
+            color: #3b82f6;
+            font-weight: 600;
+            margin-top: 16px;
+        }
+
+        /* CTA Section */
+        .cta-section {
+            padding: 100px 40px;
+            text-align: center;
+        }
+
+        .cta-box {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 64px 48px;
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: 32px;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.1);
+        }
+
+        .cta-box h2 {
+            font-size: 36px;
+            color: #0f172a;
+            margin-bottom: 24px;
+            font-weight: 700;
+        }
+
+        .cta-box p {
+            font-size: 18px;
+            color: #64748b;
+            margin-bottom: 40px;
+            line-height: 1.6;
+        }
+
+        .contact-methods {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .contact-btn {
+            padding: 14px 32px;
+            background: rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 12px;
+            color: #0f172a;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+        }
+
+        .contact-btn:hover {
+            background: rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Footer */
+        footer {
+            padding: 40px;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        footer p {
+            color: #64748b;
+            font-size: 14px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 36px; }
+            .hero .subtitle { font-size: 20px; }
+            .section-title { font-size: 32px; }
+            .section-subtitle { font-size: 16px; padding: 0 20px; }
+
+            .comparison-grid {
+                gap: 20px;
+            }
+
+            .comparison-row {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+
+            .arrow {
+                display: none;
+            }
+
+            .before, .after {
+                border-radius: 12px;
+            }
+
+            .case-content { grid-template-columns: 1fr; }
+            .nav-links { display: none; }
+            .services-grid { grid-template-columns: 1fr; }
+        }
+
+        @media (min-width: 769px) {
+            .comparison-row {
+                max-width: 1100px;
+                margin-left: auto;
+                margin-right: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <nav>
+            <div class="logo">ThinkerCafe</div>
+            <div style="display: flex; align-items: center; gap: 24px;">
+                <ul class="nav-links">
+                    <li><a href="#about">關於</a></li>
+                    <li><a href="#cases">案例</a></li>
+                    <li><a href="#services">合作方式</a></li>
+                    <li><a href="#contact">聯繫</a></li>
+                </ul>
+                <div class="lang-switcher">
+                    <button onclick="switchLanguage('zh-TW')" data-lang="zh-TW" class="active">中</button>
+                    <button onclick="switchLanguage('en')" data-lang="en">EN</button>
+                    <button onclick="switchLanguage('ja')" data-lang="ja">日</button>
+                    <button onclick="switchLanguage('ko')" data-lang="ko">한</button>
+                    <button onclick="switchLanguage('ar')" data-lang="ar">ع</button>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1>企業 AI 轉型的最大瓶頸？<br>不是技術，是執行速度。</h1>
+        <p class="subtitle">快速交付、實際可用、持續運作</p>
+        <p class="role">Cruz Tang · ThinkerCafe 創辦人 & CEO<br>
+            AI-Native 開發者 · 系統架構師 · 教育者</p>
+        <a href="#contact" class="glass-btn">預約免費 AI 診斷</a>
+    </section>
+
+    <!-- Trust Badges -->
+    <section class="trust-section" id="about">
+        <div class="trust-grid">
+            <div class="trust-card">
+                <div class="icon">🎓</div>
+                <h3>專業認證</h3>
+                <p>iPAS AI 應用規劃師<br>認證命題委員（工研院）</p>
+            </div>
+            <div class="trust-card">
+                <div class="icon">🌏</div>
+                <h3>實戰經驗</h3>
+                <p>曾管理 300+ 跨國團隊<br>Topvan Group 菲/中/馬/越</p>
+            </div>
+            <div class="trust-card">
+                <div class="icon">👨‍🏫</div>
+                <h3>教學資歷</h3>
+                <p>10+ 年教學經驗<br>工研院/資策會/文化大學</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Problem-Solution Comparison -->
+    <section class="comparison-section">
+        <h2 class="section-title">你是否也遇到這些問題？</h2>
+        <p class="section-subtitle">還在用傳統方法開發嗎？看看我們如何<strong>快速開發實際可用的系統，通常1週內上線</strong>。</p>
+        <div class="comparison-grid">
+            <div class="comparison-row">
+                <div class="before">
+                    <div class="comparison-label">舊時代開發</div>
+                    <div class="comparison-value">開發週期 3-6 個月</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="after">
+                    <div class="comparison-label">AI 協作</div>
+                    <div class="comparison-value">通常1週內上線</div>
+                </div>
+            </div>
+            <div class="comparison-row">
+                <div class="before">
+                    <div class="comparison-label">傳統成本</div>
+                    <div class="comparison-value">30-100 萬投入</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="after">
+                    <div class="comparison-label">AI 協作</div>
+                    <div class="comparison-value">成本降低 60-70%</div>
+                </div>
+            </div>
+            <div class="comparison-row">
+                <div class="before">
+                    <div class="comparison-label">傳統團隊</div>
+                    <div class="comparison-value">需要多人團隊協作</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="after">
+                    <div class="comparison-label">AI 協作</div>
+                    <div class="comparison-value">1-2 人即可完成</div>
+                </div>
+            </div>
+            <div class="comparison-row">
+                <div class="before">
+                    <div class="comparison-label">迭代困境</div>
+                    <div class="comparison-value">修改慢、迭代難、文件缺</div>
+                </div>
+                <div class="arrow">→</div>
+                <div class="after">
+                    <div class="comparison-label">AI 協作</div>
+                    <div class="comparison-value">即改即測、自動文檔</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+
+    <!-- Case Studies -->
+    <section class="cases-section" id="cases">
+        <h2 class="section-title">實際案例</h2>
+
+        <div class="case-card">
+            <div class="case-header">
+                <h3>物理治療診所 LINE Bot 預約系統</h3>
+            </div>
+            <div class="case-content">
+                <div class="case-column">
+                    <h4>客戶痛點</h4>
+                    <ul>
+                        <li>每天花 2 小時手動處理預約</li>
+                        <li>客戶常打不通電話</li>
+                        <li>沒有系統化管理</li>
+                    </ul>
+                </div>
+                <div class="case-column">
+                    <h4>交付成果</h4>
+                    <ul>
+                        <li>全自動預約/取消/提醒</li>
+                        <li>24/7 即時回應</li>
+                        <li>整合 Google Calendar</li>
+                    </ul>
+                </div>
+                <div class="case-column">
+                    <h4>技術細節</h4>
+                    <ul>
+                        <li>LINE Messaging API</li>
+                        <li>Google Calendar API</li>
+                        <li>Supabase 資料庫</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="case-result">
+                <div class="result-item">
+                    <div class="result-label">時程</div>
+                    <div class="result-value">傳統外包通常需要數週到數月，我們5天完成</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">效果</div>
+                    <div class="result-value">大幅減少人工處理時間</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="case-card">
+            <div class="case-header">
+                <h3>學術研究系統開發</h3>
+            </div>
+            <div class="case-content">
+                <div class="case-column">
+                    <h4>客戶背景</h4>
+                    <ul>
+                        <li>成功大學教授</li>
+                        <li>需要互動式R語言學習系統</li>
+                        <li>用於學術研究和教學</li>
+                    </ul>
+                </div>
+                <div class="case-column">
+                    <h4>交付成果</h4>
+                    <ul>
+                        <li>4章完整教材內容</li>
+                        <li>進度追蹤系統</li>
+                        <li>響應式設計</li>
+                        <li>互動式學習介面</li>
+                    </ul>
+                </div>
+                <div class="case-column">
+                    <h4>技術細節</h4>
+                    <ul>
+                        <li>R Shiny 應用</li>
+                        <li>互動式視覺化</li>
+                        <li>響應式網頁設計</li>
+                        <li>學習進度管理</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="case-result">
+                <div class="result-item">
+                    <div class="result-label">時程</div>
+                    <div class="result-value">1週完成</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">成果</div>
+                    <div class="result-value">已交付使用</div>
+                </div>
+                <div class="result-item">
+                    <div class="result-label">反饋</div>
+                    <div class="result-value">教授滿意度極高</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Services -->
+    <section class="services-section" id="services">
+        <h2 class="section-title">合作方式</h2>
+        <div class="services-grid">
+            <div class="service-card">
+                <h3>顧問諮詢</h3>
+                <div class="target">適合：想建立 AI 轉型策略的企業</div>
+                <ul>
+                    <li>現況診斷</li>
+                    <li>轉型路徑規劃</li>
+                    <li>技術選型建議</li>
+                    <li>執行指導</li>
+                </ul>
+                <div class="duration">⏱ 時程：2-4 週</div>
+            </div>
+
+            <div class="service-card">
+                <h3>內部培訓</h3>
+                <div class="target">適合：想提升團隊 AI 協作能力</div>
+                <ul>
+                    <li>實戰工作坊</li>
+                    <li>工具實作教學</li>
+                    <li>流程 SOP</li>
+                    <li>案例演練</li>
+                </ul>
+                <div class="duration">⏱ 時程：1-2 天</div>
+            </div>
+
+            <div class="service-card">
+                <h3>專案開發</h3>
+                <div class="target">適合：需要快速交付特定系統</div>
+                <ul>
+                    <li>完整系統開發</li>
+                    <li>技術文檔</li>
+                    <li>操作培訓</li>
+                    <li>維護支援</li>
+                </ul>
+                <div class="duration">⏱ 時程：3-7 天起</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta-section" id="contact">
+        <div class="cta-box">
+            <h2>免費 AI 診斷預約</h2>
+            <p>為了更好地了解您的需求，請透過以下方式與我聯繫：<br>
+            <small style="color: #94a3b8;">您的資訊僅用於此次諮詢評估，我會在 24 小時內回覆您</small></p>
+            <div class="contact-methods">
+                <a href="mailto:cruz@thinker.cafe" class="contact-btn">📧 Email 預約診斷</a>
+                <a href="https://line.me/ti/p/~sulaxxd" class="contact-btn">💬 LINE 直接聯繫</a>
+                <a href="tel:+886937431998" class="contact-btn">📞 電話：+886 937 431 998</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <p>© 2025 ThinkerCafe (思考者咖啡有限公司) · Cruz Tang · All Rights Reserved</p>
+        <p style="margin-top: 8px; font-size: 12px;">AI-Native 開發者 · 系統架構師 · 教育者</p>
+        <p style="margin-top: 12px; font-size: 11px; opacity: 0.8;">
+            <a href="privacy.html" style="color: inherit; text-decoration: none; transition: opacity 0.3s;">隱私政策 Privacy Policy</a>
+        </p>
+    </footer>
+
+    <script>
+        // Data loading and localization system
+        let currentLang = localStorage.getItem('preferred-language') || 'zh-TW';
+        let siteData = null;
+
+        // Switch language
+        function switchLanguage(lang) {
+            currentLang = lang;
+            localStorage.setItem('preferred-language', lang);
+
+            // Update active button state
+            document.querySelectorAll('.lang-switcher button').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.lang === lang);
+            });
+
+            // Reload page content
+            initializePage();
+        }
+
+        // Load data.json and initialize page
+        async function loadData() {
+            try {
+                const response = await fetch('data.json');
+                siteData = await response.json();
+
+                // Set initial active button
+                document.querySelectorAll('.lang-switcher button').forEach(btn => {
+                    btn.classList.toggle('active', btn.dataset.lang === currentLang);
+                });
+
+                initializePage();
+            } catch (error) {
+                console.error('Failed to load data.json:', error);
+            }
+        }
+
+        // Initialize all page sections
+        function initializePage() {
+            if (!siteData || !siteData[currentLang]) return;
+
+            const data = siteData[currentLang];
+
+            // Check if portfolio data exists, otherwise fallback to resume structure
+            if (data.portfolio) {
+                populatePortfolioNav(data.portfolio.nav);
+                populatePortfolioHero(data.portfolio.hero);
+                populatePortfolioTrust(data.portfolio.trust);
+                populatePortfolioComparison(data.portfolio.comparison);
+                populatePortfolioCases(data.portfolio.cases);
+                populatePortfolioServices(data.portfolio.services);
+                populatePortfolioCTA(data.portfolio.cta);
+            }
+        }
+
+        // Populate navigation menu
+        function populatePortfolioNav(navData) {
+            if (!navData) return;
+            const navLinks = document.querySelector('.nav-links');
+            if (navLinks) {
+                navLinks.innerHTML = `
+                    <li><a href="#about">${navData.about || '關於'}</a></li>
+                    <li><a href="#cases">${navData.cases || '案例'}</a></li>
+                    <li><a href="#services">${navData.services || '合作方式'}</a></li>
+                    <li><a href="#contact">${navData.contact || '聯繫'}</a></li>
+                `;
+            }
+        }
+
+        // Populate hero section
+        function populatePortfolioHero(heroData) {
+            if (!heroData) return;
+            const heroSection = document.querySelector('.hero');
+            if (heroSection) {
+                const h1 = heroSection.querySelector('h1');
+                const subtitle = heroSection.querySelector('.subtitle');
+                const role = heroSection.querySelector('.role');
+                const cta = heroSection.querySelector('.glass-btn');
+
+                if (h1) h1.innerHTML = heroData.title || '';
+                if (subtitle) subtitle.innerHTML = heroData.subtitle || '';
+                if (role) role.innerHTML = heroData.role || '';
+                if (cta) cta.textContent = heroData.cta || '';
+            }
+        }
+
+        // Populate trust badges section
+        function populatePortfolioTrust(trustData) {
+            if (!trustData || !trustData.items) return;
+            const trustGrid = document.querySelector('.trust-grid');
+            if (trustGrid) {
+                trustGrid.innerHTML = trustData.items.map(item => `
+                    <div class="trust-card">
+                        <div class="icon">${item.icon || ''}</div>
+                        <h3>${item.title || ''}</h3>
+                        <p>${item.description || ''}</p>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Populate comparison section
+        function populatePortfolioComparison(comparisonData) {
+            if (!comparisonData) return;
+            const comparisonSection = document.querySelector('.comparison-section');
+            if (comparisonSection) {
+                const title = comparisonSection.querySelector('h2');
+                const subtitle = comparisonSection.querySelector('.section-subtitle');
+
+                if (title) title.textContent = comparisonData.title || '';
+                if (subtitle) subtitle.innerHTML = comparisonData.subtitle || '';
+
+                const grid = comparisonSection.querySelector('.comparison-grid');
+                if (grid && comparisonData.items) {
+                    grid.innerHTML = comparisonData.items.map((item, index) => {
+                        const beforeText = item.before || '';
+                        const beforeHighlight = item.beforeHighlight || '';
+                        const afterText = item.after || '';
+                        const afterHighlight = item.afterHighlight || '';
+
+                        return `
+                        <div class="comparison-row">
+                            <div class="before">
+                                <div class="comparison-label">${item.icon || ''} ${item.label || ''}</div>
+                                <div class="comparison-value">
+                                    ${beforeText}${beforeText && beforeHighlight ? '：' : ''}<span class="highlight-metric">${beforeHighlight}</span>
+                                </div>
+                            </div>
+                            <div class="arrow">→</div>
+                            <div class="after">
+                                <div class="comparison-label">${item.afterLabel || 'AI 協作'}</div>
+                                <div class="comparison-value">
+                                    ${afterText}${afterText && afterHighlight ? ' ' : ''}<span class="highlight-metric">${afterHighlight}</span>
+                                </div>
+                            </div>
+                        </div>
+                        `;
+                    }).join('');
+                }
+            }
+        }
+
+        // Populate cases section
+        function populatePortfolioCases(casesData) {
+            if (!casesData) return;
+            const casesSection = document.querySelector('.cases-section');
+            if (casesSection) {
+                const title = casesSection.querySelector('h2');
+                if (title) title.textContent = casesData.title || '';
+
+                const casesGrid = casesSection.querySelector('.cases-grid');
+                if (casesGrid && casesData.items) {
+                    casesGrid.innerHTML = casesData.items.map(caseItem => `
+                        <div class="case-card">
+                            <h3>${caseItem.title || ''}</h3>
+
+                            <div class="case-section">
+                                <h4>❌ 痛點</h4>
+                                <ul>
+                                    ${(caseItem.painPoints || []).map(point => `<li>${point}</li>`).join('')}
+                                </ul>
+                            </div>
+
+                            <div class="case-section">
+                                <h4>✅ 交付內容</h4>
+                                <ul>
+                                    ${(caseItem.deliverables || []).map(item => `<li>${item}</li>`).join('')}
+                                </ul>
+                            </div>
+
+                            <div class="case-section">
+                                <h4>🔧 使用技術</h4>
+                                <div class="tech-tags">
+                                    ${(caseItem.tech || []).map(tech => `<span class="tech-tag">${tech}</span>`).join('')}
+                                </div>
+                            </div>
+
+                            <div class="case-results">
+                                <h4>📊 實際成果</h4>
+                                <div class="results-grid">
+                                    ${caseItem.results.timeline ? `
+                                        <div class="result-item">
+                                            <div class="result-label">開發時程</div>
+                                            <div class="result-value">${caseItem.results.timeline.before} → <strong>${caseItem.results.timeline.after}</strong></div>
+                                        </div>
+                                    ` : ''}
+                                    ${caseItem.results.cost ? `
+                                        <div class="result-item">
+                                            <div class="result-label">開發成本</div>
+                                            <div class="result-value">${caseItem.results.cost.before} → <strong>${caseItem.results.cost.after}</strong></div>
+                                        </div>
+                                    ` : ''}
+                                    ${caseItem.results.efficiency ? `
+                                        <div class="result-item">
+                                            <div class="result-label">效率提升</div>
+                                            <div class="result-value"><strong>${caseItem.results.efficiency}</strong></div>
+                                        </div>
+                                    ` : ''}
+                                    ${caseItem.results.satisfaction ? `
+                                        <div class="result-item">
+                                            <div class="result-label">滿意度</div>
+                                            <div class="result-value"><strong>${caseItem.results.satisfaction}</strong></div>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            }
+        }
+
+        // Populate services section
+        function populatePortfolioServices(servicesData) {
+            if (!servicesData) return;
+            const servicesSection = document.querySelector('.services-section');
+            if (servicesSection) {
+                const title = servicesSection.querySelector('h2');
+                if (title) title.textContent = servicesData.title || '';
+
+                const servicesGrid = servicesSection.querySelector('.services-grid');
+                if (servicesGrid && servicesData.items) {
+                    servicesGrid.innerHTML = servicesData.items.map(service => `
+                        <div class="service-card">
+                            <h3>${service.title || ''}</h3>
+                            <p class="service-target">${service.target || ''}</p>
+                            <ul class="service-features">
+                                ${(service.features || []).map(feature => `<li>${feature}</li>`).join('')}
+                            </ul>
+                            <p class="service-duration">${service.duration || ''}</p>
+                        </div>
+                    `).join('');
+                }
+            }
+        }
+
+        // Populate CTA section
+        function populatePortfolioCTA(ctaData) {
+            if (!ctaData) return;
+            const ctaSection = document.querySelector('.cta-section');
+            if (ctaSection) {
+                const title = ctaSection.querySelector('h2');
+                const description = ctaSection.querySelector('p');
+
+                if (title) title.textContent = ctaData.title || '';
+                if (description) description.innerHTML = ctaData.description || '';
+
+                const ctaGrid = ctaSection.querySelector('.cta-grid');
+                if (ctaGrid && ctaData.methods) {
+                    ctaGrid.innerHTML = ctaData.methods.map(method => `
+                        <a href="${method.link || '#'}" class="contact-btn">
+                            ${method.text || ''}
+                        </a>
+                    `).join('');
+                }
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', loadData);
+    </script>
+</body>
+</html>

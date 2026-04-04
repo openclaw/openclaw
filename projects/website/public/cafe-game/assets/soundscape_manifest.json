@@ -1,0 +1,112 @@
+{
+  "units": [
+    {
+      "file": "k_00.mp3",
+      "pool": "keynote",
+      "centroid": 1456.7,
+      "rms": 0.005505,
+      "hour": 11
+    },
+    {
+      "file": "k_01.mp3",
+      "pool": "keynote",
+      "centroid": 1456.0,
+      "rms": 0.00551,
+      "hour": 11
+    },
+    {
+      "file": "k_02.mp3",
+      "pool": "keynote",
+      "centroid": 1433.7,
+      "rms": 0.005773,
+      "hour": 11
+    },
+    {
+      "file": "k_03.mp3",
+      "pool": "keynote",
+      "centroid": 1434.6,
+      "rms": 0.005722,
+      "hour": 11
+    },
+    {
+      "file": "s_00.mp3",
+      "pool": "signal",
+      "centroid": 1444.6,
+      "rms": 0.005638,
+      "hour": 11
+    },
+    {
+      "file": "s_01.mp3",
+      "pool": "signal",
+      "centroid": 1445.8,
+      "rms": 0.005634,
+      "hour": 11
+    },
+    {
+      "file": "s_02.mp3",
+      "pool": "signal",
+      "centroid": 1450.0,
+      "rms": 0.005612,
+      "hour": 11
+    },
+    {
+      "file": "s_03.mp3",
+      "pool": "signal",
+      "centroid": 1441.7,
+      "rms": 0.005618,
+      "hour": 11
+    },
+    {
+      "file": "m_00.mp3",
+      "pool": "soundmark",
+      "centroid": 1439.7,
+      "rms": 0.005698,
+      "hour": 11
+    },
+    {
+      "file": "m_01.mp3",
+      "pool": "soundmark",
+      "centroid": 1458.1,
+      "rms": 0.005564,
+      "hour": 11
+    },
+    {
+      "file": "m_02.mp3",
+      "pool": "soundmark",
+      "centroid": 1463.2,
+      "rms": 0.005543,
+      "hour": 11
+    },
+    {
+      "file": "m_03.mp3",
+      "pool": "soundmark",
+      "centroid": 1439.9,
+      "rms": 0.005709,
+      "hour": 11
+    }
+  ],
+  "metadata": {
+    "recorded_at": "2026-04-03T12:31:00+08:00",
+    "location": "苗栗・Cruz 家中",
+    "recorder": "MacBook Pro 內建麥克風",
+    "session_note": "Cruz 在彈波希米亞狂想曲 + 鍵盤打字",
+    "classification": {
+      "method": "R. Murray Schafer 三層分類 (keynote/signal/soundmark)",
+      "classifier": "classify.py (mel spectrogram + z-score)",
+      "keynote_description": "風扇低頻持續底噪",
+      "signal_description": "鍵盤打字聲（主要）、鋼琴演奏片段",
+      "soundmark_description": "突發性環境聲（椅子移動等）"
+    },
+    "piano_fragment": {
+      "source_files": [
+        "signal_123215.wav (6-16s)",
+        "signal_123359.wav (2-10s)"
+      ],
+      "content": "波希米亞狂想曲 (Bohemian Rhapsody) — Cruz 鋼琴演奏",
+      "processing": "1s spectral crossfade, normalized to 0.9 peak",
+      "duration_seconds": 17.0
+    },
+    "generated_at": "2026-04-03T15:23:06.358290",
+    "total_units": 12
+  }
+}

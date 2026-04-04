@@ -1,0 +1,822 @@
+{
+  "object": "page",
+  "id": "28805e9d-e121-807a-a596-f976e32ae474",
+  "created_time": "2025-10-10T01:32:00.000Z",
+  "last_edited_time": "2025-11-03T09:24:00.000Z",
+  "created_by": {
+    "object": "user",
+    "id": "142d872b-594c-8118-af7d-000260d7c612"
+  },
+  "last_edited_by": {
+    "object": "user",
+    "id": "60b625cf-115f-4aa9-8f45-03b99d075e84"
+  },
+  "cover": null,
+  "icon": {
+    "type": "external",
+    "external": {
+      "url": "https://www.notion.so/icons/groups_blue.svg"
+    }
+  },
+  "parent": {
+    "type": "data_source_id",
+    "data_source_id": "26405e9d-e121-8048-9bd5-000bef526bf6",
+    "database_id": "26405e9d-e121-80ff-9e11-e4b93209d16b"
+  },
+  "archived": false,
+  "in_trash": false,
+  "is_locked": false,
+  "properties": {
+    "created_time": {
+      "id": "%3A%3AP%40",
+      "type": "created_time",
+      "created_time": "2025-10-10T01:32:00.000Z"
+    },
+    "zh_description": {
+      "id": "%3DTr%7D",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "三天實體密集培訓，從理論到實戰，打造你的 AI 自動化系統。手把手帶你建立屬於自己的 AI 數位勞工，讓 AI 成為你 24/7 運作的得力助手。小班制教學，確保每位學員都能真正掌握核心技能。",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "三天實體密集培訓，從理論到實戰，打造你的 AI 自動化系統。手把手帶你建立屬於自己的 AI 數位勞工，讓 AI 成為你 24/7 運作的得力助手。小班制教學，確保每位學員都能真正掌握核心技能。",
+          "href": null
+        }
+      ]
+    },
+    "bar_text_1": {
+      "id": "%40Ioz",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "📅 11/29, 12/6, 12/13",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "📅 11/29, 12/6, 12/13",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight3_image": {
+      "id": "%40K%3EN",
+      "type": "files",
+      "files": [
+        {
+          "name": "image.png",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/caeb7bcf-ee22-4965-95b7-a5c82b1f46f0/image.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=549db7f3ddb6cdc1ac03beb65656a78fe68f1f2230d3851dfc4156570ca8e858&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.143Z"
+          }
+        }
+      ]
+    },
+    "created_by": {
+      "id": "%40wuO",
+      "type": "created_by",
+      "created_by": {
+        "object": "user",
+        "id": "142d872b-594c-8118-af7d-000260d7c612",
+        "name": "Rhaenyra Liang",
+        "avatar_url": null,
+        "type": "person",
+        "person": {
+          "email": "rhaenyra@thinker.cafe"
+        }
+      }
+    },
+    "last_updated_time": {
+      "id": "AEBi",
+      "type": "last_edited_time",
+      "last_edited_time": "2025-11-03T09:24:00.000Z"
+    },
+    "content_highlight3_description": {
+      "id": "BlPL",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "同時掌握技術視野與多元應用",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "同時掌握技術視野與多元應用",
+          "href": null
+        }
+      ]
+    },
+    "sort_desc": {
+      "id": "Bw%5Cy",
+      "type": "number",
+      "number": 6
+    },
+    "content_highlight4_description": {
+      "id": "COkO",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "成為全能的決策者",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "成為全能的決策者",
+          "href": null
+        }
+      ]
+    },
+    "en_category": {
+      "id": "Cc%40p",
+      "type": "multi_select",
+      "multi_select": [
+        {
+          "id": "2cdd543a-6287-482b-84b7-4d884b2b9fd6",
+          "name": "初學者友善",
+          "color": "yellow"
+        }
+      ]
+    },
+    "single_price": {
+      "id": "Dvsy",
+      "type": "number",
+      "number": 45000
+    },
+    "summery": {
+      "id": "FeAb",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "這是一場從零到一的 AI 實戰訓練營。三天 21 小時的密集培訓，你將親手打造出一個能夠自動執行任務的 AI 系統。我們不只教理論，更注重實際動手操作。每位學員都會在課程中完成一個真實專案，並學會如何持續優化你的 AI 助理。小班制確保講師能夠照顧到每一位學員的學習進度。",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "這是一場從零到一的 AI 實戰訓練營。三天 21 小時的密集培訓，你將親手打造出一個能夠自動執行任務的 AI 系統。我們不只教理論，更注重實際動手操作。每位學員都會在課程中完成一個真實專案，並學會如何持續優化你的 AI 助理。小班制確保講師能夠照顧到每一位學員的學習進度。",
+          "href": null
+        }
+      ]
+    },
+    "course_id": {
+      "id": "Ffth",
+      "type": "number",
+      "number": 6
+    },
+    "single_price_early": {
+      "id": "HC%7Dg",
+      "type": "number",
+      "number": 10000
+    },
+    "content_highlight6_image": {
+      "id": "Mk%3Fj",
+      "type": "files",
+      "files": [
+        {
+          "name": "image.png",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/2ef6b0a6-538d-4785-b436-3cfadb2e9357/image.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=f90ffc4186b7e87cb0e3e0224272d93c19bbfc83e507bfade5ca9aba88813562&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.149Z"
+          }
+        }
+      ]
+    },
+    "content_video": {
+      "id": "PChz",
+      "type": "files",
+      "files": [
+        {
+          "name": "個人.mov",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/e4e26271-d5ee-48c6-b6ba-c345423b7382/%E5%80%8B%E4%BA%BA.mov?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=bba42cb8413205af7ec016a7f011b463f5348f7e6935f4132afb1d1a73c73169&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.153Z"
+          }
+        }
+      ]
+    },
+    "bar_text_2": {
+      "id": "R%40v%3F",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "📍 板橋區公所旁",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "📍 板橋區公所旁",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight5_image": {
+      "id": "RXx%3B",
+      "type": "files",
+      "files": [
+        {
+          "name": "image.png",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/5aade0e3-687e-4e90-a5b2-e149344f24e7/image.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=b8c2c5de28ecb3ad675ee8273f92e6b05786d0ffbaa8e35b455513b1369140da&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.175Z"
+          }
+        }
+      ]
+    },
+    "bar_text_4": {
+      "id": "SrH%7C",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "⏰ 截止 11/24",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "⏰ 截止 11/24",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight2_image": {
+      "id": "Sr%5BD",
+      "type": "files",
+      "files": [
+        {
+          "name": "image.png",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/71e98c29-6f3e-46d3-baab-4524b08f278f/image.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=ddcc319c6581c4e39de698cde0403c4e97e1ba552b82ae89e92a6818b21d2ea4&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.183Z"
+          }
+        }
+      ]
+    },
+    "content_highlight4_image": {
+      "id": "TfzP",
+      "type": "files",
+      "files": [
+        {
+          "name": "image.png",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/60bc61cb-5130-40a9-add9-911606054d3e/image.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=ff02298d822985224b23e30eb2a5c08f1a34e9a130a2b0037737004a6c0c0317&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.191Z"
+          }
+        }
+      ]
+    },
+    "featured": {
+      "id": "UFYG",
+      "type": "checkbox",
+      "checkbox": true
+    },
+    "en_description": {
+      "id": "UawN",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "三天實體密集培訓，從理論到實戰，打造你的 AI 自動化系統。手把手帶你建立屬於自己的 AI 數位勞工，讓 AI 成為你 24/7 運作的得力助手。小班制教學，確保每位學員都能真正掌握核心技能。",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "三天實體密集培訓，從理論到實戰，打造你的 AI 自動化系統。手把手帶你建立屬於自己的 AI 數位勞工，讓 AI 成為你 24/7 運作的得力助手。小班制教學，確保每位學員都能真正掌握核心技能。",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight2": {
+      "id": "VvT%7D",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": " 建構 AI 自動化指揮中心",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": " 建構 AI 自動化指揮中心",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight5_description": {
+      "id": "Y%3Cf%5D",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "建構從技術到應用的完整 AI 能力體系",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "建構從技術到應用的完整 AI 能力體系",
+          "href": null
+        }
+      ]
+    },
+    "published": {
+      "id": "%5BFGU",
+      "type": "checkbox",
+      "checkbox": true
+    },
+    "you_will_learn": {
+      "id": "%5DAJg",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "✓ 第一天：AI 基礎建設與環境配置\n  - 建立完整的 AI 開發環境\n  - 掌握 ChatGPT API 串接技術\n  - 設計你的第一個 AI 助理\n\n✓ 第二天：自動化工作流程實戰\n  - 瀏覽器自動化技術\n  - AI 排程與任務管理\n  - 打造 24/7 運行的數位勞工\n\n✓ 第三天：專案實作與部署\n  - 完成個人專案交付\n  - 系統部署與維護\n  - 持續優化策略",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "✓ 第一天：AI 基礎建設與環境配置\n  - 建立完整的 AI 開發環境\n  - 掌握 ChatGPT API 串接技術\n  - 設計你的第一個 AI 助理\n\n✓ 第二天：自動化工作流程實戰\n  - 瀏覽器自動化技術\n  - AI 排程與任務管理\n  - 打造 24/7 運行的數位勞工\n\n✓ 第三天：專案實作與部署\n  - 完成個人專案交付\n  - 系統部署與維護\n  - 持續優化策略",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight3": {
+      "id": "%5E%3Deq",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "掌握 AI 高效內容工作流",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "掌握 AI 高效內容工作流",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight4": {
+      "id": "%5EMHV",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "化身 AI 文本偵探",
+            "link": null
+          },
+          "annotations": {
+            "bold": true,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "化身 AI 文本偵探",
+          "href": null
+        }
+      ]
+    },
+    "zh_category": {
+      "id": "%60G%5Dg",
+      "type": "multi_select",
+      "multi_select": [
+        {
+          "id": "Ex=j",
+          "name": "初學者友善",
+          "color": "yellow"
+        }
+      ]
+    },
+    "group_price_early": {
+      "id": "a%3AOV",
+      "type": "number",
+      "number": 0
+    },
+    "content_highlight2_description": {
+      "id": "b%3BSM",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "建立全面 AI 知識體系",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "建立全面 AI 知識體系",
+          "href": null
+        }
+      ]
+    },
+    "last_edited_by": {
+      "id": "bKik",
+      "type": "last_edited_by",
+      "last_edited_by": {
+        "object": "user",
+        "id": "60b625cf-115f-4aa9-8f45-03b99d075e84",
+        "name": "Cruz",
+        "avatar_url": null,
+        "type": "bot",
+        "bot": {}
+      }
+    },
+    "bar_text_3": {
+      "id": "iebe",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "👥 限額 12 人",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "👥 限額 12 人",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight5": {
+      "id": "jKaM",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "成為「系統建立者」",
+            "link": null
+          },
+          "annotations": {
+            "bold": true,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "成為「系統建立者」",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight1": {
+      "id": "lC%5C%5C",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "課堂價格",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "課堂價格",
+          "href": null
+        }
+      ]
+    },
+    "image": {
+      "id": "of%7Bo",
+      "type": "files",
+      "files": [
+        {
+          "name": "image.png",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/566bce00-aef9-46b7-9b0a-40baff57cad2/image.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=d63e153f8643765643a90d12f094b55ba4e3f2acd33d0a398a936daf775138f6&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.198Z"
+          }
+        }
+      ]
+    },
+    "zh_name": {
+      "id": "qC%7Db",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "AI 全能實戰營",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "AI 全能實戰營",
+          "href": null
+        }
+      ]
+    },
+    "content_highlight6": {
+      "id": "uTt%3A",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "成為全方位 AI 駭客",
+            "link": null
+          },
+          "annotations": {
+            "bold": true,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "成為全方位 AI 駭客",
+          "href": null
+        }
+      ]
+    },
+    "group_price": {
+      "id": "zXZC",
+      "type": "number",
+      "number": 0
+    },
+    "skill_tags": {
+      "id": "%7B%3Bm_",
+      "type": "multi_select",
+      "multi_select": [
+        {
+          "id": "S]@{",
+          "name": "瀏覽器自動化",
+          "color": "default"
+        },
+        {
+          "id": "zKXE",
+          "name": "AI 環境建置",
+          "color": "purple"
+        },
+        {
+          "id": "|nsg",
+          "name": "真實專案交付",
+          "color": "red"
+        },
+        {
+          "id": "UUGO",
+          "name": "ChatGPT 應用",
+          "color": "yellow"
+        },
+        {
+          "id": "axLP",
+          "name": "AI人物誌分析",
+          "color": "red"
+        },
+        {
+          "id": "exH]",
+          "name": "AI文本分析",
+          "color": "brown"
+        },
+        {
+          "id": "B<oE",
+          "name": "排程設定",
+          "color": "yellow"
+        }
+      ]
+    },
+    "content_highlight1_description": {
+      "id": "%7BRY%5E",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "名額有限，要報名要快！",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "名額有限，要報名要快！",
+          "href": null
+        }
+      ]
+    },
+    "content_tags": {
+      "id": "%7BTyG",
+      "type": "multi_select",
+      "multi_select": [
+        {
+          "id": "9c56778f-6f44-4bd0-a32a-6cd91db591c3",
+          "name": "📜 研習證書",
+          "color": "green"
+        },
+        {
+          "id": "22137f99-0e47-459d-983f-b451dd79c3db",
+          "name": "🤖 AI 課程助教",
+          "color": "default"
+        },
+        {
+          "id": "2af63f92-1dbe-4dc1-b212-85624b914f3c",
+          "name": "👥 社群參與",
+          "color": "red"
+        },
+        {
+          "id": "_^L<",
+          "name": "11門課獨立心法",
+          "color": "gray"
+        },
+        {
+          "id": "Ome_",
+          "name": "個人AI轉型作戰地圖",
+          "color": "brown"
+        }
+      ]
+    },
+    "content_highlight1_image": {
+      "id": "%7CcXs",
+      "type": "files",
+      "files": [
+        {
+          "name": "Group 948 (4).png",
+          "type": "file",
+          "file": {
+            "url": "https://prod-files-secure.s3.us-west-2.amazonaws.com/156606c6-168c-41e7-acfb-f5c1582e10b9/e3ba2a20-d591-4f74-a1a2-e27ad1baf6d4/Group_948_%284%29.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Content-Sha256=UNSIGNED-PAYLOAD&X-Amz-Credential=ASIAZI2LB466SP2CUNRX%2F20251103%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20251103T092447Z&X-Amz-Expires=3600&X-Amz-Security-Token=IQoJb3JpZ2luX2VjEJH%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FwEaCXVzLXdlc3QtMiJHMEUCIQDJDCh1H%2FPYdAg3bouuuKct5NjX0xkvbVfzzpQRs3GW2QIgMQ1rqvtYMSI5r%2BbIWsyeKErv0Qci7ErTsYXwAXZMpPwq%2FwMIWhAAGgw2Mzc0MjMxODM4MDUiDHCGstoqHdlh1Em5FircAzEPB8wNfpnL0IDJZfSvug%2FyqDpKDtlSqWzDlpgdSOcPn8e6Gg0OJqmrv27nlraCEEVWBTziH5XuWnABP5I4jd%2Bf9rTq8K%2Bxsb37y3ROWaNOb%2BRvH58H3k9keHRZmlCBHZUciQbSTOmA0ctfuPmHafKUCcBVavfb97IVG93RXkMZU7XsaavAcnQEMTEyMKvCXh%2FrCXiU5DAnROpWiQd489GL3wcPPnkFRYHMFMDChgMShOUVDCxPJ%2BjEKRV3NIfgEWQEgkVCtCQ2i0h%2B7fCm766hCTYtNlcH%2FcuacNHdnq8Zbai8X4UieLf%2B%2BaLi0LNx74XxkpCBTp6OT8Lsh90VjM2QrvESYYhSLODooSyhdaFGZxJZKO3UCO%2FPyznqRiH1Wub0mGr9COW%2Fy2zKDewVA24IkCP6eptOv86RB5Y4mf9Y3IuH697p4N57oqTGlXqfaiAdP%2Bc4%2BcnE2yHBn7eKrh8JSxJYsOZGVoQsEi%2F3mp2QKumPmPjO4hBkY5dxuCY7BgKRiSHgTFUV%2B%2BpDWDzbJ36BOMTNFVESG3Ao10eMTn1fV79Zj6lma7YNskF1yho99BNwxf0RCXWNp%2F3XBLLGI2wExhVtUEbYQP6CTEV1ei7%2FEsDsQ8hUX67m21k6MI%2FRocgGOqUBhvQaws9OzEVQufmmJgAahWlcDOo0kF3wdoLSQbWlB01QKNGqjr1z4SDGoVHgc5xQRGwYE%2FtRi8VN2QmavMQJTo9UhmhlEc42WTEdWhyvTGxLUXa7%2Fu7f7icnWUesBkNPm6bI6Rq8x9%2FcGbYjqaIbE3Yk8nCIm%2B4kYCI0Fq1JDk1YArry3FrVhcSgBMN9ZB3G0BbHEFPJ2UeXKilKY74Xw08Z%2FkAR&X-Amz-Signature=557bb6caf86ef19fbf26af021ee927cf975519e68aa0fd7b9d804327f935d04c&X-Amz-SignedHeaders=host&x-amz-checksum-mode=ENABLED&x-id=GetObject",
+            "expiry_time": "2025-11-03T10:24:47.205Z"
+          }
+        }
+      ]
+    },
+    "content_highlight6_description": {
+      "id": "%7D%5BTh",
+      "type": "rich_text",
+      "rich_text": [
+        {
+          "type": "text",
+          "text": {
+            "content": "你獲得的技能將在未來數年內持續為你創造價值、節省時間",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "你獲得的技能將在未來數年內持續為你創造價值、節省時間",
+          "href": null
+        }
+      ]
+    },
+    "en_name": {
+      "id": "title",
+      "type": "title",
+      "title": [
+        {
+          "type": "text",
+          "text": {
+            "content": "AI 全能實戰營",
+            "link": null
+          },
+          "annotations": {
+            "bold": false,
+            "italic": false,
+            "strikethrough": false,
+            "underline": false,
+            "code": false,
+            "color": "default"
+          },
+          "plain_text": "AI 全能實戰營",
+          "href": null
+        }
+      ]
+    }
+  },
+  "url": "https://www.notion.so/AI-28805e9de121807aa596f976e32ae474",
+  "public_url": null,
+  "request_id": "4c0cc6d0-4265-4271-b59c-62adaa51ae14"
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@thinker-cafe/news",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Thinker News - AI 自動化新聞日報系統",
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'News automation (runs on GitHub Actions)'",
+    "build": "echo 'Build news artifacts'",
+    "generate": "python scripts/main.py",
+    "test": "python scripts/test_local.py",
+    "deploy": "python scripts/main.py && git add . && git commit -m 'Daily news update' && git push"
+  },
+  "keywords": ["news", "automation", "ai", "github-actions"],
+  "engines": {
+    "python": ">=3.11"
+  }
+}

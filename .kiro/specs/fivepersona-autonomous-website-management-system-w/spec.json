@@ -1,0 +1,22 @@
+{
+  "feature_name": "fivepersona-autonomous-website-management-system-w",
+  "created_at": "2025-11-02T06:35:51.396Z",
+  "updated_at": "2025-11-02T06:35:54.497Z",
+  "language": "en",
+  "phase": "requirements-generated",
+  "approvals": {
+    "requirements": {
+      "generated": true,
+      "approved": false
+    },
+    "design": {
+      "generated": false,
+      "approved": false
+    },
+    "tasks": {
+      "generated": false,
+      "approved": false
+    }
+  },
+  "ready_for_implementation": false
+}

@@ -1,0 +1,270 @@
+{
+  "version": "1.0.0",
+  "metadata": {
+    "created_at": "2025-11-04T05:30:00.000Z",
+    "last_updated": "2025-11-04T05:30:00.000Z",
+    "ttl": {
+      "seo_metrics": 86400,
+      "keywords": 604800,
+      "ai_citations": 1209600,
+      "reddit_engagement": 86400
+    }
+  },
+  "capabilities": {
+    "audit_technical_seo": {
+      "status": "verified",
+      "verified_at": "2025-11-04T05:30:00.000Z",
+      "confidence": 100,
+      "test_method": "完成首次技術 SEO 審核",
+      "test_result": "成功識別 5 個緊急問題、4 個重要問題、3 個建議改善項目。生成完整報告於 reports/seo-audit-2025-11-04.md"
+    },
+    "optimize_for_ai": {
+      "status": "theoretical",
+      "verified_at": null,
+      "confidence": 85,
+      "test_method": "待測試 AI 引用率改善",
+      "test_result": null
+    },
+    "manage_reddit_strategy": {
+      "status": "theoretical",
+      "verified_at": null,
+      "confidence": 75,
+      "test_method": "待建立第一個 Reddit 參與記錄",
+      "test_result": null
+    },
+    "track_rankings": {
+      "status": "theoretical",
+      "verified_at": null,
+      "confidence": 90,
+      "test_method": "待整合 Google Search Console API",
+      "test_result": null
+    }
+  },
+  "website": {
+    "url": "https://thinkcafe.tw",
+    "platform": "Next.js",
+    "cms": "Notion",
+    "hosting": "Vercel"
+  },
+  "seo_status": {
+    "fetched_at": "2025-11-04T05:30:00.000Z",
+    "technical_seo": {
+      "https": true,
+      "mobile_friendly": true,
+      "core_web_vitals": {
+        "lcp": null,
+        "fid": null,
+        "cls": null,
+        "note": "PageSpeed API 配額已滿，需明天測試"
+      },
+      "structured_data": {
+        "implemented": false,
+        "types": [],
+        "missing": ["Organization", "Course", "FAQPage", "BreadcrumbList"]
+      },
+      "sitemap": false,
+      "robots_txt": false,
+      "html_lang": "en",
+      "html_lang_correct": false
+    },
+    "indexed_pages": null,
+    "crawl_errors": null,
+    "issues": [
+      {
+        "priority": "urgent",
+        "title": "缺少 robots.txt",
+        "impact": "搜尋引擎無法有效爬取",
+        "estimated_hours": 0.5
+      },
+      {
+        "priority": "urgent",
+        "title": "缺少 sitemap.xml",
+        "impact": "Google 無法有效發現所有課程頁面",
+        "estimated_hours": 2
+      },
+      {
+        "priority": "urgent",
+        "title": "缺少結構化資料",
+        "impact": "無法出現在 Rich Results，AI 難以理解內容",
+        "estimated_hours": 6
+      },
+      {
+        "priority": "urgent",
+        "title": "Meta 標籤不完整",
+        "impact": "搜尋結果顯示不佳，社交分享無預覽",
+        "estimated_hours": 3
+      },
+      {
+        "priority": "urgent",
+        "title": "HTML lang 屬性錯誤",
+        "impact": "Google 可能誤判語言",
+        "estimated_hours": 0.1
+      },
+      {
+        "priority": "important",
+        "title": "缺少 FAQ 內容",
+        "impact": "錯失精選摘要機會",
+        "estimated_hours": 12
+      },
+      {
+        "priority": "important",
+        "title": "缺少麵包屑導航",
+        "impact": "用戶體驗、內部連結結構",
+        "estimated_hours": 3
+      }
+    ]
+  },
+  "keywords": {
+    "fetched_at": null,
+    "primary": [
+      {
+        "keyword": "AI 課程",
+        "search_volume": "high",
+        "difficulty": "high",
+        "current_rank": null,
+        "target_rank": 10,
+        "target_page": "/courses"
+      },
+      {
+        "keyword": "ChatGPT 教學",
+        "search_volume": "high",
+        "difficulty": "medium",
+        "current_rank": null,
+        "target_rank": 5,
+        "target_page": "/courses/chatgpt"
+      },
+      {
+        "keyword": "AI 實戰課程",
+        "search_volume": "medium",
+        "difficulty": "medium",
+        "current_rank": null,
+        "target_rank": 3,
+        "target_page": "/courses"
+      }
+    ],
+    "secondary": [],
+    "long_tail": []
+  },
+  "ai_optimization": {
+    "fetched_at": null,
+    "platforms": {
+      "chatgpt": {
+        "citation_rate": 0,
+        "average_position": null,
+        "last_checked": null,
+        "test_queries": [
+          "台灣最好的 AI 課程",
+          "如何學習 ChatGPT",
+          "AI 實戰課程推薦",
+          "適合行銷人員的 AI 課程"
+        ]
+      },
+      "perplexity": {
+        "citation_rate": 0,
+        "average_position": null,
+        "last_checked": null
+      },
+      "gemini": {
+        "citation_rate": 0,
+        "average_position": null,
+        "last_checked": null
+      },
+      "claude": {
+        "citation_rate": 0,
+        "average_position": null,
+        "last_checked": null
+      }
+    },
+    "optimized_pages": [],
+    "faq_schema_pages": []
+  },
+  "reddit_strategy": {
+    "fetched_at": null,
+    "target_subreddits": [
+      {
+        "name": "r/artificial",
+        "subscribers": null,
+        "daily_active": null,
+        "relevance": 9,
+        "priority": "high",
+        "rules_friendly": null,
+        "participation_count": 0,
+        "average_upvote": 0,
+        "traffic_generated": 0
+      },
+      {
+        "name": "r/ChatGPT",
+        "subscribers": null,
+        "daily_active": null,
+        "relevance": 10,
+        "priority": "high",
+        "rules_friendly": null,
+        "participation_count": 0,
+        "average_upvote": 0,
+        "traffic_generated": 0
+      },
+      {
+        "name": "r/taiwan",
+        "subscribers": null,
+        "daily_active": null,
+        "relevance": 8,
+        "priority": "medium",
+        "rules_friendly": null,
+        "participation_count": 0,
+        "average_upvote": 0,
+        "traffic_generated": 0
+      }
+    ],
+    "engagement_log": [],
+    "brand_mentions": {
+      "positive": 0,
+      "neutral": 0,
+      "negative": 0,
+      "total": 0
+    }
+  },
+  "analytics": {
+    "fetched_at": null,
+    "organic_traffic": {
+      "current_month": null,
+      "previous_month": null,
+      "growth_rate": null
+    },
+    "ai_traffic": {
+      "current_month": null,
+      "previous_month": null,
+      "sources": {
+        "chatgpt": 0,
+        "perplexity": 0,
+        "other": 0
+      }
+    },
+    "reddit_traffic": {
+      "current_month": null,
+      "previous_month": null,
+      "conversion_rate": null
+    },
+    "top_landing_pages": [],
+    "conversion_rate": {
+      "organic": null,
+      "ai": null,
+      "reddit": null
+    }
+  },
+  "competitors": [
+    {
+      "name": "競爭對手範例",
+      "url": "https://example.com",
+      "strengths": [],
+      "weaknesses": [],
+      "keyword_overlap": []
+    }
+  ],
+  "reports": {
+    "latest_seo_audit": ".kiro/personas/visibility-expert/reports/seo-audit-2025-11-04.md",
+    "latest_keyword_analysis": null,
+    "latest_ai_citation_check": null,
+    "latest_reddit_analysis": null,
+    "latest_monthly_report": null
+  }
+}

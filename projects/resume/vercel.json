@@ -1,0 +1,25 @@
+{
+  "version": 2,
+  "outputDirectory": ".",
+  "installCommand": "echo 'No install needed for static site'",
+  "buildCommand": "echo 'No build needed for static site'",
+  "git": {
+    "deploymentEnabled": {
+      "main": true
+    }
+  },
+  "github": {
+    "autoAlias": false
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300, s-maxage=300"
+        }
+      ]
+    }
+  ]
+}

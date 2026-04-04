@@ -1,0 +1,39 @@
+<svg width="600" height="400" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景 -->
+  <rect width="600" height="400" fill="#f8f9fa"/>
+
+  <!-- 標題 -->
+  <text x="300" y="60" font-family="Arial, sans-serif" font-size="40" font-weight="bold" fill="#2c3e50" text-anchor="middle">
+    AI 全能實戰營
+  </text>
+
+  <!-- 副標題 -->
+  <text x="300" y="100" font-family="Arial, sans-serif" font-size="24" fill="#7f8c8d" text-anchor="middle">
+    實體課程限時優惠
+  </text>
+
+  <!-- 原價（刪除線） -->
+  <g>
+    <text x="300" y="180" font-family="Arial, sans-serif" font-size="28" fill="#95a5a6" text-anchor="middle" text-decoration="line-through">
+      原價 NT$ 20,768
+    </text>
+  </g>
+
+  <!-- 優惠價格 -->
+  <text x="300" y="250" font-family="Arial, sans-serif" font-size="64" font-weight="bold" fill="#FF6B6B" text-anchor="middle">
+    NT$ 10,000
+  </text>
+
+  <!-- 節省金額 -->
+  <g>
+    <rect x="200" y="280" width="200" height="50" rx="25" fill="#28a745"/>
+    <text x="300" y="313" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="white" text-anchor="middle">
+      省下 NT$ 10,768
+    </text>
+  </g>
+
+  <!-- 底部註記 -->
+  <text x="300" y="365" font-family="Arial, sans-serif" font-size="18" fill="#7f8c8d" text-anchor="middle">
+    限額 12 人 · 報名截止 11/24
+  </text>
+</svg>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThinkerCafe Cron Job 測試</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            background-color: #f8f9fa;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .test-section {
+            background: #f0f8f4;
+            padding: 20px;
+            border-radius: 6px;
+            border-left: 4px solid #28a745;
+            margin: 20px 0;
+        }
+        .button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        .button:hover {
+            background: #0056b3;
+        }
+        .result {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .status {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            margin: 10px 0;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .info-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 3px solid #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 ThinkerCafe Cron Job - Paomateng Trigger</h1>
+            <p>每 5 分鐘自動觸發 Paomateng GitHub Workflow</p>
+        </div>
+
+        <div class="info-grid">
+            <div class="info-card">
+                <h3>📅 Cron 排程</h3>
+                <p>每 5 分鐘觸發一次</p>
+                <code>*/5 * * * *</code>
+            </div>
+            <div class="info-card">
+                <h3>🔗 API 端點</h3>
+                <p><code>/api/cron/test</code></p>
+            </div>
+            <div class="info-card">
+                <h3>📊 功能項目</h3>
+                <p>觸發 Paomateng GitHub Workflow</p>
+            </div>
+        </div>
+
+        <div class="test-section">
+            <h3>🧪 手動測試</h3>
+            <p>點擊下方按鈕手動觸發 Paomateng GitHub Workflow：</p>
+
+            <button class="button" onclick="testCronJob()">
+                🚀 觸發 Paomateng Workflow
+            </button>
+
+            <button class="button" onclick="clearResults()">
+                🧹 清空結果
+            </button>
+
+            <div id="status"></div>
+            <div id="result" class="result" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        async function testCronJob() {
+            const statusEl = document.getElementById('status');
+            const resultEl = document.getElementById('result');
+
+            statusEl.innerHTML = '<div class="status">🔄 正在測試...</div>';
+            resultEl.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/cron/test');
+                const data = await response.json();
+
+                statusEl.innerHTML = '<div class="status success">✅ 測試成功</div>';
+                resultEl.textContent = JSON.stringify(data, null, 2);
+                resultEl.style.display = 'block';
+
+                console.log('🎉 Cron Job 測試結果:', data);
+            } catch (error) {
+                statusEl.innerHTML = '<div class="status error">❌ 測試失敗: ' + error.message + '</div>';
+                console.error('❌ 錯誤:', error);
+            }
+        }
+
+        function clearResults() {
+            document.getElementById('status').innerHTML = '';
+            document.getElementById('result').style.display = 'none';
+        }
+
+        // 頁面載入時顯示當前時間
+        document.addEventListener('DOMContentLoaded', function() {
+            const now = new Date().toLocaleString('zh-TW', {
+                timeZone: 'Asia/Taipei',
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            console.log('📅 頁面載入時間 (台灣時間):', now);
+        });
+    </script>
+</body>
+</html>

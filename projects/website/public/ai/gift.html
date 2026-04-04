@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 禮包 | ThinkerCafe</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="stylesheet" href="/ai/gift-styles.css">
+</head>
+<body>
+    <div class="container">
+        <div id="verify-page" class="card fade-in">
+            <div class="verify-box">
+                <h1>🎁 AI 禮包</h1>
+                <p class="subtitle">請輸入你的專屬密碼</p>
+
+                <input
+                    type="text"
+                    id="access-code"
+                    placeholder="請輸入密碼"
+                    maxlength="20"
+                    autocomplete="off"
+                >
+                <div id="verify-error" class="error hidden">密碼錯誤或禮包不存在</div>
+
+                <button class="btn" onclick="verifyAccess()">進入禮包</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function verifyAccess() {
+            const password = document.getElementById('access-code').value.trim().toUpperCase();
+            const errorDiv = document.getElementById('verify-error');
+
+            try {
+                // 查找索引
+                const index = await fetch('/ai/gift-index.json').then(r => r.json());
+                const htmlFile = index[password];
+
+                if (!htmlFile) {
+                    errorDiv.classList.remove('hidden');
+                    return;
+                }
+
+                // 儲存密碼到 localStorage
+                localStorage.setItem('gift_password', password);
+
+                // 跳轉到對應的 HTML 框架
+                window.location.href = `/ai/templates/${htmlFile}`;
+            } catch (error) {
+                console.error('驗證錯誤:', error);
+                errorDiv.classList.remove('hidden');
+            }
+        }
+
+        // Enter 鍵支援
+        document.getElementById('access-code')?.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                verifyAccess();
+            }
+        });
+    </script>
+</body>
+</html>

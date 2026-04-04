@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 禮包 | ThinkerCafe</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="stylesheet" href="/ai/gift-styles.css">
+</head>
+<body>
+    <div class="container">
+
+        <!-- 第二步：選擇禮包 -->
+        <div id="select-page" class="card fade-in">
+            <h1 id="gift-title">選擇你的發財路線</h1>
+            <p id="gift-subtitle" class="subtitle">三條路線，各有 3 個實戰提示詞。選一條最適合你的開始吧!</p>
+
+            <div class="gift-cards">
+                <div class="gift-card" data-gift-type="efficiency" onclick="selectGift('efficiency')">
+                    <div class="icon">⏰</div>
+                    <h3>AI 效率淘金包</h3>
+                    <div class="target">適合：忙碌上班族、專案經理</div>
+                    <div class="preview">
+                        ✓ 20 頁報告秒變 3 句重點<br>
+                        ✓ 會議錄音自動生成行動清單<br>
+                        ✓ 找出最值得自動化的工作
+                    </div>
+                </div>
+
+                <div class="gift-card" data-gift-type="content" onclick="selectGift('content')">
+                    <div class="icon">✍️</div>
+                    <h3>AI 內容印鈔機</h3>
+                    <div class="target">適合：創作者、行銷人員、小編</div>
+                    <div class="preview">
+                        ✓ 萃取你的個人寫作風格<br>
+                        ✓ 一個想法變 5 天內容<br>
+                        ✓ 快速生成爆款視覺圖
+                    </div>
+                </div>
+
+                <div class="gift-card" data-gift-type="decision" onclick="selectGift('decision')">
+                    <div class="icon">🧠</div>
+                    <h3>AI 決策智囊團</h3>
+                    <div class="target">適合：創業者、高階主管、策略規劃者</div>
+                    <div class="preview">
+                        ✓ AI 魔鬼代言人壓力測試<br>
+                        ✓ 多角色決策圓桌會議<br>
+                        ✓ 偵察競品致命弱點
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 第三步：互動式體驗 -->
+        <div id="experience-page" class="card hidden">
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <div class="progress-text">已完成 <span id="progress-num">0</span>/3 個提示詞</div>
+
+            <!-- 提示詞 1 -->
+            <div id="prompt-1" class="prompt-step">
+                <h3>提示詞 1</h3>
+                <div class="scenario">
+                    <strong>場景：</strong>（由 JS 動態填充）
+                </div>
+
+                <div class="input-fields">
+                    <!-- 由 JS 動態生成 -->
+                </div>
+
+                <button class="btn" onclick="generatePrompt(1)">生成我的專屬提示詞</button>
+
+                <div id="result-1" class="prompt-result hidden">
+                    <button class="copy-btn" onclick="copyPrompt(1)">複製</button>
+                    <pre id="prompt-1-text"></pre>
+                </div>
+
+                <div id="hint-1" class="hint hidden">
+                    ✅ 提示詞已生成! 複製後前往 <a href="https://chatgpt.com" target="_blank" style="color: #667eea; font-weight: bold;">ChatGPT</a> 貼上使用
+                </div>
+
+                <!-- Email Gate -->
+                <div id="email-gate-1" class="email-gate hidden">
+                    <h2>🎉 想解鎖剩下 2 個提示詞？</h2>
+                    <p class="subtitle">留下 email，完整禮包與早鳥優惠將發送給你</p>
+
+                    <input
+                        type="email"
+                        id="user-email"
+                        placeholder="your@email.com"
+                        required
+                    >
+
+                    <button class="btn" onclick="submitEmail()">解鎖剩下的提示詞</button>
+                    <div id="email-error" class="error hidden">請輸入有效的 email</div>
+                </div>
+            </div>
+
+            <!-- 提示詞 2 -->
+            <div id="prompt-2" class="prompt-step hidden">
+                <h3>提示詞 2</h3>
+                <div class="scenario">
+                    <strong>場景：</strong>（由 JS 動態填充）
+                </div>
+
+                <div class="input-fields">
+                    <!-- 由 JS 動態生成 -->
+                </div>
+
+                <button class="btn" onclick="generatePrompt(2)">生成我的專屬提示詞</button>
+
+                <div id="result-2" class="prompt-result hidden">
+                    <button class="copy-btn" onclick="copyPrompt(2)">複製</button>
+                    <pre id="prompt-2-text"></pre>
+                </div>
+
+                <div id="hint-2" class="hint hidden">
+                    ✅ 又省下 30 分鐘整理時間!
+                </div>
+
+                <div id="next-2" class="hidden" style="margin-top: 20px; text-align: center;">
+                    <button class="btn" onclick="showPrompt(3)">解鎖最後一個提示詞 →</button>
+                </div>
+            </div>
+
+            <!-- 提示詞 3 -->
+            <div id="prompt-3" class="prompt-step hidden">
+                <h3>提示詞 3</h3>
+                <div class="scenario">
+                    <strong>場景：</strong>（由 JS 動態填充）
+                </div>
+
+                <div class="input-fields">
+                    <!-- 由 JS 動態生成 -->
+                </div>
+
+                <button class="btn" onclick="generatePrompt(3)">生成我的專屬提示詞</button>
+
+                <div id="result-3" class="prompt-result hidden">
+                    <button class="copy-btn" onclick="copyPrompt(3)">複製</button>
+                    <pre id="prompt-3-text"></pre>
+                </div>
+
+                <div id="hint-3" class="hint hidden">
+                    🎯 這個分析將幫你找到最值得投資的自動化項目!
+                </div>
+
+                <div id="complete-btn" class="hidden" style="margin-top: 30px; text-align: center;">
+                    <button class="btn" onclick="goToCompletion()">查看完整禮包與課程優惠 →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 第四步：完成頁面 -->
+        <div id="completion-page" class="card hidden">
+            <div class="completion">
+                <div class="icon">🎉</div>
+                <h1>恭喜!你已解鎖全部 3 個提示詞</h1>
+                <p class="subtitle">完整禮包 PDF 已發送到你的信箱<br>接下來，要不要升級你的 AI 協作能力？</p>
+
+                <div class="cta-box">
+                    <h3>🚀 人生駭客手冊：AI 時代生存指南</h3>
+                    <p>從痛點到自動化，從思考到執行<br>11 門課程，打造你的 AI 作業系統</p>
+
+                    <div class="price">
+                        <span class="original-price">NT$ 9,800</span><br>
+                        早鳥優惠 NT$ 4,980
+                    </div>
+
+                    <a href="https://thinker.cafe/products" class="btn btn-cta">立即查看課程</a>
+                </div>
+
+                <div class="hint">
+                    💡 這個禮包只是開始。真正的價值，在於建立一套屬於你自己的 AI 協作系統。
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="/ai/gift-app.js"></script>
+</body>
+</html>

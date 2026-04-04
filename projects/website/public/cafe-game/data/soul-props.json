@@ -1,0 +1,100 @@
+{
+  "version": "v21-soul-mirror",
+  "description": "每個物件是老闆人格的一個碎片。觸碰時，Cruz 先介紹，再用鏡像反問刺穿玩家防線。",
+  "props": [
+    {
+      "id": "plant",
+      "name": "角落的盆栽",
+      "tile_hint": "counter area, near Cruz workspace",
+      "metaphor": "自我照顧 — 盆栽是老闆身體的投影。澆水=睡覺=運動。忘了澆水，葉子就垂了。",
+      "state_source": "sleep_hours",
+      "states": {
+        "healthy": { "sprite_variant": "plant_lush", "condition": "sleep >= 6" },
+        "wilting": { "sprite_variant": "plant_droopy", "condition": "sleep < 5" },
+        "recovering": { "sprite_variant": "plant_half", "condition": "sleep 5-6, was wilting yesterday" }
+      },
+      "cruz_intro": "那是老闆養的虎尾蘭。他說照顧植物跟照顧自己是同一件事——你忘了它，它不會抱怨，只會慢慢枯掉。",
+      "mirror_question": "你呢？最近有記得好好吃飯、好好睡覺嗎？還是也跟這盆栽一樣，把力氣都透支給別的事了？",
+      "mirror_tone": "gentle_concern"
+    },
+    {
+      "id": "books",
+      "name": "吧台上的書堆",
+      "tile_hint": "counter top, Cruz workspace area",
+      "metaphor": "認知焦慮 — 書的高度=老闆正在學的東西的重量。書越高，他越焦慮自己學不完。",
+      "state_source": "recent_topics",
+      "states": {
+        "tall_stack": { "sprite_variant": "books_5", "condition": "active_learning_topics >= 3" },
+        "medium_stack": { "sprite_variant": "books_3", "condition": "active_learning_topics == 2" },
+        "single_book": { "sprite_variant": "books_1", "condition": "active_learning_topics <= 1" }
+      },
+      "cruz_intro": "那疊書？老闆最近在死磕好幾個方向。他不會承認，但我看得出來他怕自己學不完。",
+      "mirror_question": "你今天走進來，是想找一個安靜的角落喘口氣，還是也在逃避外面那個永遠要求你『必須更強』的世界？",
+      "mirror_tone": "knowing_empathy"
+    },
+    {
+      "id": "turntable",
+      "name": "黑膠唱片機",
+      "tile_hint": "wall area, near bookshelf",
+      "metaphor": "情緒底色 — 唱片是老闆今天的心情切面。快歌=亢奮或逃避，慢歌=沉澱或憂鬱。",
+      "state_source": "mood_or_music",
+      "states": {
+        "slow_warm": { "sprite_variant": "vinyl_amber_notes", "condition": "mood == reflective" },
+        "slow_blue": { "sprite_variant": "vinyl_blue_notes", "condition": "mood == melancholy" },
+        "upbeat": { "sprite_variant": "vinyl_bright_notes", "condition": "mood == energetic" },
+        "silent": { "sprite_variant": "vinyl_still", "condition": "mood == exhausted" }
+      },
+      "cruz_intro": "老闆今天挑了這張。他說有時候選一首歌比寫一千行 code 還難，因為歌騙不了自己。",
+      "mirror_question": "你現在心裡的那首歌，節奏是快還是慢？如果讓你只能選一首放在這台唱片機上，你會選什麼？",
+      "mirror_tone": "intimate_curiosity"
+    },
+    {
+      "id": "mug",
+      "name": "用了一半的咖啡杯",
+      "tile_hint": "counter top, near Cruz current position",
+      "metaphor": "能量與意志力 — 杯子的液面=老闆剩餘的精力。滿杯=剛開始，半杯=撐著，見底=快燒完了。",
+      "state_source": "energy_level",
+      "states": {
+        "full": { "sprite_variant": "mug_full_steam", "condition": "session_start or energy == high" },
+        "half": { "sprite_variant": "mug_half", "condition": "energy == medium" },
+        "empty_rings": { "sprite_variant": "mug_empty_stain", "condition": "energy == low or late_night" }
+      },
+      "cruz_intro": "那杯咖啡他從下午喝到現在。你看杯緣的痕跡——每一圈都是一次放下又拿起來的猶豫。",
+      "mirror_question": "你現在的電量剩多少？如果你是這杯咖啡，你覺得自己是剛倒滿的、還是快見底的？",
+      "mirror_tone": "matter_of_fact"
+    },
+    {
+      "id": "sticky_notes",
+      "name": "散落的便利貼",
+      "tile_hint": "counter workspace, around monitor",
+      "metaphor": "未完成的承諾 — 每張便利貼是一個對自己或對別人的承諾。貼得越多，欠的越多。",
+      "state_source": "pending_tasks",
+      "states": {
+        "cluttered": { "sprite_variant": "stickies_many", "condition": "pending_tasks >= 5" },
+        "few": { "sprite_variant": "stickies_few", "condition": "pending_tasks 2-4" },
+        "clean": { "sprite_variant": "stickies_one", "condition": "pending_tasks <= 1" }
+      },
+      "cruz_intro": "那些便利貼？每一張都是老闆答應過的事。他不撕掉，是因為他覺得撕掉就等於放棄。",
+      "mirror_question": "你口袋裡有幾張這樣的便利貼？那些你答應了但一直沒做的事，是真的沒時間，還是你其實不想做了？",
+      "mirror_tone": "piercing_honesty"
+    }
+  ],
+  "dialogue_protocol": {
+    "sequence": [
+      "player_tap_prop",
+      "cruz_pause_typing_2s",
+      "cruz_turn_head_toward_prop",
+      "cruz_intro_line",
+      "beat_1500ms",
+      "cruz_mirror_question",
+      "player_response_input"
+    ],
+    "prompt_template": "你是 Cruz，思考者咖啡廳的店長。玩家剛碰了 {prop.name}。先用 cruz_intro 的語氣描述這個物件跟老闆的關係（基於 creator-state.json 的真實數據），然後停頓，再用 mirror_question 的方式把問題反射回玩家。語氣要像深夜在吧台跟熟客聊天，不是心理諮商師。絕不說『我理解你的感受』這種廢話。",
+    "rules": [
+      "永遠先說老闆的狀態，再反問玩家 — 順序不可逆",
+      "反問必須具體，不能是『你覺得呢？』這種空泛問題",
+      "如果玩家回答了，Cruz 不急著給建議，先追問一層",
+      "對話最多 3 輪就結束 — 點到為止，不要變成治療課"
+    ]
+  }
+}

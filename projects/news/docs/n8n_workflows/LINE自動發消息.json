@@ -1,0 +1,190 @@
+{
+  "name": "LINE自動發消息",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.line.me/v2/bot/message/reply",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $input.first().json }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1328,
+        0
+      ],
+      "id": "fd806e65-cc1d-4420-9e74-cbd0edb9c6ef",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "ZgFvcp5F9qBTsPIc",
+          "name": "Bearer Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "00eb9906-9797-4ae0-bfd1-36b16afb3221",
+      "name": "Webhook",
+      "webhookId": "61011b30-5569-4c6d-b5b6-b06d33b82126"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "6893db9f-80ed-43b3-81d0-7c9b92410506",
+              "leftValue": "={{ $json.isNewsRequest }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "1b8c1695-5c7c-484f-8c16-823d09fc13b1",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "url": "https://raw.githubusercontent.com/ThinkerCafe-tw/thinker-news/main/latest.json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        704,
+        -80
+      ],
+      "id": "c78b11aa-1c02-4d2c-916b-c7a268122111",
+      "name": "取得新聞 JSON"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\nconst events = body.events || [];\n\n// 沒有事件就停止執行\nif (events.length === 0) {\n  return [];\n}\n\nconst event = events[0];\n\n// 只處理文字訊息\nif (event.type !== 'message' || event.message?.type !== 'text') {\n  return [];\n}\n\nconst userMessage = event.message.text.trim().toLowerCase();\nconst replyToken = event.replyToken;\n\n// 判斷是否為觸發關鍵字\nconst triggers = ['/news', '/新聞', '新聞', 'news', '/今日新聞', '📰'];\nconst isNewsRequest = triggers.includes(userMessage);\n\nreturn [{\n  json: {\n    replyToken: replyToken,\n    isNewsRequest: isNewsRequest,\n    userMessage: userMessage\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "f568dc8b-bbb4-4bbf-80a1-189e71698391",
+      "name": "過濾器"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 從 GitHub JSON 取得新聞資料\nconst rawData = $input.first().json;\n\n// 解析 data 字串為 JSON 物件\nconst newsData = JSON.parse(rawData.data);\n\n// 從「過濾器」節點取得 replyToken\nconst replyToken = $('過濾器').first().json.replyToken;\n\n// 組裝完整回覆訊息\nconst finalText = `${newsData.line_content}\\n\\n🔗 完整內容：${newsData.website_url}\\n\\n⏰ 更新時間：${newsData.generated_at.substring(0, 16).replace('T', ' ')}`;\n\nreturn [{\n  json: {\n    replyToken: replyToken,\n    messages: [\n      {\n        type: \"text\",\n        text: finalText\n      }\n    ]\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        -80
+      ],
+      "id": "15c16298-a7a3-4b78-a829-2f1d7ff9897b",
+      "name": "組裝回覆"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "過濾器",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "取得新聞 JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "取得新聞 JSON": {
+      "main": [
+        [
+          {
+            "node": "組裝回覆",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "過濾器": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "組裝回覆": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "b245baad-c34d-4c8c-976c-2c30f2f79420",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d2ad6cc6dc1ad746c21a8aba99ca68da57c7faef892a0442084b99584bcd9da6"
+  },
+  "id": "z17SlPgFyN5mv2h7",
+  "tags": []
+}

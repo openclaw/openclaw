@@ -1,0 +1,131 @@
+{
+  "founder": {
+    "id": "Cruz",
+    "track": "founder",
+    "track_label": "店長",
+    "days": 516,
+    "quest_title": "造鏡者的試煉",
+    "difficulty": 5,
+    "status": "yellow",
+    "status_text": "多線推進中，認知頻寬接近上限",
+    "streaks": {
+      "冥想連續天數": 87,
+      "健身連續天數": 62,
+      "早起（7am 前）連續天數": 45,
+      "系統運行天數": 152
+    },
+    "energy": {
+      "精力": "高",
+      "情緒": "穩定但",
+      "動力": "強（內驅型）\n在壓力下反而高效，但需要注意不要把「忙」當成「有進展」。"
+    }
+  },
+  "seats": [
+    {
+      "id": "新星小姐",
+      "track": "A",
+      "track_label": "夥伴 🔥",
+      "days": 30,
+      "quest_title": "創作者的商業覺醒",
+      "difficulty": 4,
+      "status": "yellow",
+      "status_text": "有想法但執行力跟不上，容易被新點子分心",
+      "reward": 0,
+      "history": {
+        "snapshots": [],
+        "directives_log": []
+      }
+    },
+    {
+      "id": "北極同學",
+      "track": "A",
+      "track_label": "夥伴 🔥",
+      "days": 3,
+      "quest_title": "永不滿杯的修行",
+      "difficulty": 3,
+      "status": "green",
+      "status_text": "連續 3 天全勤，節奏穩定建立中",
+      "reward": 89,
+      "history": {
+        "snapshots": [
+          {
+            "date": "2026-03-30",
+            "day": 1,
+            "checkins": {
+              "morning": true,
+              "evening": true
+            },
+            "completion_rate": 1.0,
+            "task_quality": "持平",
+            "goal_alignment": 0.2,
+            "self_awareness": false
+          },
+          {
+            "date": "2026-03-31",
+            "day": 2,
+            "checkins": {
+              "morning": true,
+              "evening": true
+            },
+            "completion_rate": 0.9,
+            "task_quality": "持平",
+            "goal_alignment": 0.3,
+            "self_awareness": false
+          },
+          {
+            "date": "2026-04-01",
+            "day": 3,
+            "checkins": {
+              "morning": true,
+              "evening": null
+            },
+            "completion_rate": null,
+            "task_quality": "持平",
+            "goal_alignment": 0.3,
+            "self_awareness": false
+          }
+        ],
+        "directives_log": []
+      }
+    },
+    {
+      "id": "米拉小姐",
+      "track": "B",
+      "track_label": "引導 🧭",
+      "days": 34,
+      "quest_title": "護理之外的天空",
+      "difficulty": 4,
+      "status": "yellow",
+      "status_text": "多重壓力源，但有穩定系統在支撐",
+      "reward": 0,
+      "history": {
+        "snapshots": [],
+        "directives_log": []
+      }
+    },
+    {
+      "id": "參宿先生",
+      "track": "C",
+      "track_label": "工具 🔧",
+      "days": 9,
+      "quest_title": "數字背後的自由",
+      "difficulty": 2,
+      "status": "green",
+      "status_text": "明確知道自己要什麼，工具型使用",
+      "reward": 139,
+      "history": {
+        "snapshots": [],
+        "directives_log": []
+      }
+    }
+  ],
+  "coach_present": true,
+  "total_seats": 12,
+  "occupied": 6,
+  "empty": 6,
+  "cafe_stats": {
+    "coffees_sent": 0,
+    "total_checkins": 8
+  },
+  "generated_at": "2026-04-01T15:18:33.533506+08:00"
+}

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2025-11-26 AI 科技日報 | Thinker News</title>
+    <meta name="description" content="Ai2推出真開源Olmo 3，Claude 4.5記憶體升級，Meta AI整合社群 - 今日AI科技重點新聞精選">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft JhengHei', sans-serif;
+            line-height: 1.7;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: white;
+            text-decoration: none;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 10px 20px;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .back-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateX(-5px);
+        }
+
+        .article-header {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .article-date {
+            font-size: 1.1em;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+
+        .article-title {
+            font-size: 2.2em;
+            font-weight: 800;
+            margin-bottom: 20px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.3;
+        }
+
+        .article-subtitle {
+            font-size: 1.2em;
+            color: #666;
+            font-weight: 400;
+        }
+
+        .content-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .content-section h2 {
+            color: #667eea;
+            font-size: 1.6em;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .content-section h3 {
+            color: #555;
+            font-size: 1.3em;
+            margin: 25px 0 15px;
+            font-weight: 600;
+        }
+
+        .content-section p {
+            margin-bottom: 15px;
+            line-height: 1.7;
+            font-size: 1.05em;
+        }
+
+        .content-section ul {
+            margin: 15px 0;
+            padding-left: 20px;
+        }
+
+        .content-section li {
+            margin-bottom: 10px;
+            line-height: 1.6;
+        }
+
+        .highlight-box {
+            background: linear-gradient(135deg, #667eea20, #764ba220);
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 0 15px 15px 0;
+        }
+
+        .news-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .news-link:hover {
+            color: #764ba2;
+            text-decoration: underline;
+        }
+
+        .external-link::after {
+            content: " 🔗";
+            font-size: 0.8em;
+        }
+
+        .footer-nav {
+            text-align: center;
+            padding: 30px;
+            color: white;
+        }
+
+        .nav-button {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 15px;
+            }
+
+            .article-header {
+                padding: 25px 20px;
+            }
+
+            .article-title {
+                font-size: 1.8em;
+            }
+
+            .content-section {
+                padding: 25px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="./index.html" class="back-link">← 返回首頁</a>
+
+        <header class="article-header">
+            <div class="article-date">📅 2025年11月26日</div>
+            <h1 class="article-title">🤖 AI 科技日報精選</h1>
+            <p class="article-subtitle">Ai2推出真開源Olmo 3，Claude 4.5記憶體升級，Meta AI整合社群</p>
+        </header>
+
+        <div class="content-section">
+            <h2>✨ 今日必讀 TOP 3</h2>
+
+            <h3>1. Ai2重磅釋出「真開源」思考模型Olmo 3！支援可回溯推理、長上下文，AI研究者必備神器！</h3>
+            <p>🔧 分類: AI工具與應用</p>
+            <p>美國非營利研究機構 Ai2（艾倫人工智慧研究所）近日推出新一代語言模型家族 Olmo 3，主打「真正開源」的思考模型。與市面上僅釋出最終模型權重的做法不同，Olmo 3完整公開了訓練資料、程式碼、評測流程、訓練中各階段的檢查點，甚至包括可用於分析模型決策過程的回溯推理工具。</p>
+            <p>Olmo 3主要特色包括：</p>
+            <ul>
+                <li><strong>可回溯推理</strong>：研究人員可追蹤模型如何逐步形成回答，有助於理解、除錯與優化模型。</li>
+                <li><strong>長上下文支援</strong>：能有效處理長篇文本輸入與輸出，適用於法律、學術、技術文件等高資訊密度場景。</li>
+            </ul>
+            <p>這種全方位開源模式，對AI研究社群極具意義。它促進了研究透明度，降低模型重現與客製化的門檻，也讓研究人員可更深入探討模型行為、偏誤與極端案例。對想要親手打造AI應用的開發者而言，Olmo 3不僅是學習利器，也是實驗平台。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                初學者可藉由分析Olmo 3的訓練流程與回溯推理方式，更深入理解語言模型的運作機制，為日後客製化AI奠定基礎。
+            </div>
+            <p><a href="https://www.ithome.com.tw/news/172441" class="news-link external-link" target="_blank">閱讀更多</a></p>
+
+            <h3>2. Claude Opus 4.5 模型震撼登場！記憶體、跨平台支援大躍進，AI處理能力再升級！</h3>
+            <p>🔧 分類: AI工具與應用</p>
+            <p>Anthropic 近期發表其新一代語言模型 Claude Opus 4.5，針對記憶能力與跨平台整合進行全面升級。面對 OpenAI 和 Google 的激烈競爭，Claude 4.5以更長記憶上下文能力脫穎而出，並新增支援 Chrome 瀏覽器與 Microsoft Excel。</p>
+            <p>記憶體升級讓 Claude 能更精確地處理長篇對話與文件，維持上下文一致性，應用場景包括會議紀錄摘要、技術報告分析等。而在應用整合方面，用戶可直接在 Chrome 分析網頁內容、摘要資訊，或在 Excel 中進行數據整理與公式建議。</p>
+            <p>這項更新使 Claude 更加貼近日常工作流程，提升辦公自動化效率。Anthropic 也藉此展現其在企業應用方向的野心，將 AI 助理推向實用性更高的層級。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                入門者可觀察 Claude 如何結合記憶擴展與應用整合，學習如何設計實用的 AI 助理功能，並拓展自身技術應用視野。
+            </div>
+            <p><a href="https://technews.tw/2025/11/25/anthropic-introducing-claude-opus-4-5/" class="news-link external-link" target="_blank">閱讀更多</a></p>
+
+            <h3>3. Meta AI全面整合IG、FB！不只幫你解惑，還能一鍵生成超吸睛創意圖片，社群互動大變身！</h3>
+            <p>🔧 分類: AI工具與應用</p>
+            <p>Meta 宣布將自家 AI 助理深度整合進 Instagram 與 Facebook。這項更新將使用戶能直接在社群平台中，透過對話或創作工具呼叫 Meta AI，進行資訊查詢、輔助對話或快速生成創意圖片。</p>
+            <p>例如，使用者可在發文時輸入文字描述，AI 即可生成符合情境的視覺素材，大幅減少創作成本並提升內容吸引力。這對社群內容創作者而言具有革命性意義，尤其是缺乏設計背景者。</p>
+            <p>此舉也顯示 Meta 正將 AI 能力從獨立產品轉化為平台核心功能，讓每位用戶都能在互動過程中無縫使用 AI，提升整體平台黏著度與創作生產力。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                初學者可透過這一案例理解 AI 圖像生成技術的應用場景，並學習如何設計直覺、可融入日常操作的智慧功能。
+            </div>
+            <p><a href="https://technews.tw/2025/11/25/meta-ai-integrate/" class="news-link external-link" target="_blank">閱讀更多</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>🛠 AI工具與應用焦點</h2>
+
+            <h3>ChatGPT語音模式大升級！告別獨立介面，文字、語音互動無縫切換，對話更自然！</h3>
+            <p>ChatGPT 現在允許在同一介面中同時使用語音與文字互動，用戶可邊聽 AI 回答邊閱讀文字，也能隨時以文字補充或修正語音輸入。這大幅提升多模態互動的自然度與效率，預示未來人機溝通將更加無縫與直覺。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                理解語音與文字整合設計，對開發多模態AI應用與強化使用者體驗至關重要。
+            </div>
+            <p><a href="https://techcrunch.com/2025/11/25/chatgpts-voice-mode-is-no-longer-a-separate-interface/" class="news-link external-link" target="_blank">閱讀更多</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>📊 產業趨勢與新聞</h2>
+
+            <h3>AWS豪擲500億美元，打造政府AI基礎設施！</h3>
+            <p>亞馬遜宣布將投入500億美元，擴建 AWS 的AI與超算能力，專供美國政府使用。此舉不僅代表商業拓展，也彰顯政府部門對AI技術的高度依賴，尤其在國安、科研與公共服務方面。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                預示AI工程與雲端部署技術將成為政府與企業大規模需求，掌握雲端架構與安全是未來職能關鍵。
+            </div>
+            <p><a href="https://www.ithome.com.tw/news/172452" class="news-link external-link" target="_blank">閱讀更多</a></p>
+
+            <h3>川普簽署「創世任務」行政命令，加速AI科學創新！</h3>
+            <p>美國總統川普啟動「創世任務」，以AI推動聯邦科研轉型，整合超級電腦、國家實驗室與頂尖人才，加速醫療、能源、太空等領域的技術突破。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                AI正成為國家戰略科技核心，參與AI科研與跨領域應用將是新世代數據科學家的重要機會。
+            </div>
+            <p><a href="https://www.ithome.com.tw/news/172451" class="news-link external-link" target="_blank">閱讀更多</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>🔐 資安趨勢快訊</h2>
+            <p>本日無重大更新。</p>
+        </div>
+
+        <div class="content-section">
+            <h2>🌍 產業動態與AI職涯</h2>
+
+            <h3>JetBrains整合GPT-5，重新定義程式開發體驗！</h3>
+            <p>JetBrains 將 GPT-5 納入其 IDE 工具中，用於智慧程式建議、錯誤偵測與測試生成，大幅提升開發效率，並降低初學者學習門檻。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                掌握如何在開發環境中應用AI，是轉型AI開發者或提升程式設計效率的關鍵。
+            </div>
+            <p><a href="https://openai.com/index/jetbrains-2025" class="news-link external-link" target="_blank">閱讀更多</a></p>
+
+            <h3>Swift 6.3強化Embedded Swift，進軍微控制器AI應用！</h3>
+            <p>Swift語言釋出6.3版本，針對微控制器環境優化標準函式庫、C互通與除錯工具，為物聯網與邊緣AI開發提供更現代的程式語言選項。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                若你對AI模型部署至邊緣設備有興趣，Embedded Swift 是值得探索的新技術。
+            </div>
+            <p><a href="https://www.ithome.com.tw/news/172447" class="news-link external-link" target="_blank">閱讀更多</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>💡 深度觀點與建議</h2>
+
+            <h3>OpenAI揭露處理心理健康訴訟原則：同理心與安全設計並重</h3>
+            <p>OpenAI 公開其在面對與心理健康相關訴訟時的原則，強調謹慎、同理與技術改進並進，持續強化 ChatGPT 的安全性與輔助能力。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                AI產品開發者需理解倫理與社會責任，特別在敏感領域如心理健康，更應落實負責任AI設計原則。
+            </div>
+            <p><a href="https://openai.com/index/mental-health-litigation-approach" class="news-link external-link" target="_blank">閱讀更多</a></p>
+
+            <p>今日的焦點集中在語言模型與語音交互的技術進展與實用應用，包括 Olmo 3、Claude 4.5、Meta AI 整合等，引領AI朝向更開放、更實用、更貼近生活場景的方向發展。對初學者而言，這是理解大型語言模型架構、跨平台應用設計與多模態人機互動的絕佳機會。建議選擇一項具體平台（如ChatGPT、Claude或Meta AI）實際操作，從Prompt設計開始，逐步拓展至整合應用。</p>
+        </div>
+
+        <div class="content-section" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
+            <h2 style="color: white; border-bottom: 3px solid white;">📱 LINE 精華版</h2>
+            <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 15px; margin: 20px 0;">
+                <h3>🤖 今日AI重點 (LINE版)</h3>
+                <p><strong>🚨 今日AI大進展！</strong></p>
+                <p>✅ Ai2 推出「真開源」模型 Olmo 3：公開訓練全流程，還能回溯模型推理！</p>
+                <p>✅ Claude Opus 4.5 登場：長記憶+支援 Excel、Chrome，AI助理再升級！</p>
+                <p>✅ Meta AI 深入 IG/FB：一鍵生成創意圖，社群創作者神器！</p>
+                <p><strong>這些更新代表什麼？</strong></p>
+                <p>→ 開源模型不再只是權重，研究與客製更容易</p>
+                <p>→ AI 正快速融入日常工作與社群創作</p>
+                <p>→ 初學者現在就能上手真正實用的 AI 工具</p>
+                <p>#開源AI #AI助理 #社群創作</p>
+            </div>
+
+            <div style="text-align: center; margin-top: 20px;">
+                <p style="font-size: 0.9em; opacity: 0.8;">
+                    💡 此精華版專為LINE推送設計 | 完整分析請閱讀上方詳細報告
+                </p>
+            </div>
+        </div>
+
+        <div class="footer-nav">
+            <a href="./index.html" class="nav-button">🏠 返回首頁</a>
+            <a href="https://github.com/ThinkerCafe-tw/thinker-news" class="nav-button" target="_blank">⭐ GitHub</a>
+        </div>
+    </div>
+
+    <script>
+        // 頁面載入動畫
+        document.addEventListener('DOMContentLoaded', function() {
+            const sections = document.querySelectorAll('.content-section');
+            sections.forEach((section, index) => {
+                section.style.opacity = '0';
+                section.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    section.style.transition = 'all 0.6s ease';
+                    section.style.opacity = '1';
+                    section.style.transform = 'translateY(0)';
+                }, index * 150);
+            });
+        });
+    </script>
+<script src="./thinker_secret_entrance.js"></script>
+</body>
+</html>

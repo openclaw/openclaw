@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cruz Tang | AI-Native Developer & System Architect</title>
+    <meta name="description" content="Cruz Tang - AI-Native Developer, System Architect, and Educator with 10+ years of experience">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Noto Sans TC', sans-serif;
+            background: linear-gradient(135deg, #E5EEF9 0%, #F8FAFC 50%, #E0E7FF 100%);
+            color: #0f172a;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        /* Header */
+        header {
+            position: fixed;
+            top: 0;
+            width: 100%;
+            padding: 20px 40px;
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.03);
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: #0f172a;
+            letter-spacing: -0.5px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 32px;
+            list-style: none;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: #475569;
+            text-decoration: none;
+            font-size: 15px;
+            font-weight: 500;
+            transition: color 0.3s ease;
+        }
+
+        .nav-links a:hover {
+            color: #3b82f6;
+        }
+
+        .lang-switcher {
+            display: flex;
+            gap: 8px;
+        }
+
+        .lang-switcher button {
+            padding: 6px 12px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 8px;
+            color: #475569;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .lang-switcher button.active {
+            background: #3b82f6;
+            color: white;
+            border-color: #3b82f6;
+        }
+
+        .lang-switcher button:hover:not(.active) {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        /* Hero Section */
+        .hero {
+            margin-top: 100px;
+            padding: 80px 40px 60px;
+            text-align: center;
+            position: relative;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: -50px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+            z-index: -1;
+            animation: pulse 8s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
+            50% { opacity: 0.8; transform: translateX(-50%) scale(1.1); }
+        }
+
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 800;
+            line-height: 1.2;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, #0f172a 0%, #3b82f6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero .tagline {
+            font-size: 24px;
+            color: #64748b;
+            margin-bottom: 32px;
+            font-weight: 500;
+        }
+
+        .hero .subtitle {
+            font-size: 18px;
+            color: #475569;
+            max-width: 800px;
+            margin: 0 auto 40px;
+            line-height: 1.8;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 48px;
+            margin-top: 40px;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 40px;
+            font-weight: 800;
+            color: #3b82f6;
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #64748b;
+            margin-top: 8px;
+        }
+
+        /* Section Styles */
+        .section {
+            max-width: 1000px;
+            margin: 60px auto;
+            padding: 0 40px;
+        }
+
+        .section-title {
+            font-size: 32px;
+            font-weight: 800;
+            margin-bottom: 32px;
+            color: #0f172a;
+        }
+
+        /* About Section */
+        .about-content {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: 24px;
+            padding: 40px;
+            font-size: 16px;
+            color: #475569;
+            line-height: 1.8;
+        }
+
+        /* Experience Section */
+        .job {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: 20px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+
+        .job-header {
+            margin-bottom: 20px;
+        }
+
+        .job-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 4px;
+        }
+
+        .job-company {
+            font-size: 18px;
+            color: #3b82f6;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .job-date {
+            font-size: 14px;
+            color: #64748b;
+        }
+
+        .job-points {
+            list-style: none;
+            margin: 16px 0;
+        }
+
+        .job-points li {
+            padding-left: 24px;
+            position: relative;
+            margin-bottom: 12px;
+            color: #475569;
+        }
+
+        .job-points li::before {
+            content: '▸';
+            position: absolute;
+            left: 0;
+            color: #3b82f6;
+            font-weight: bold;
+        }
+
+        .tech-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 16px;
+        }
+
+        .tech-tag {
+            padding: 4px 12px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 12px;
+            font-size: 13px;
+            color: #3b82f6;
+            font-weight: 500;
+        }
+
+        /* Skills Section */
+        .skills-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        .skill-category {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: 16px;
+            padding: 24px;
+        }
+
+        .skill-category h3 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 16px;
+        }
+
+        .skill-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .skill-item {
+            padding: 6px 12px;
+            background: rgba(59, 130, 246, 0.08);
+            border-radius: 8px;
+            font-size: 13px;
+            color: #475569;
+        }
+
+        /* Education & Teaching */
+        .info-card {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.7);
+            border-radius: 20px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+
+        .info-card h3 {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 8px;
+        }
+
+        .info-card .meta {
+            font-size: 14px;
+            color: #64748b;
+            margin-bottom: 12px;
+        }
+
+        .info-card p {
+            color: #475569;
+            line-height: 1.6;
+        }
+
+        /* Contact Section */
+        .contact-links {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .contact-btn {
+            padding: 16px 32px;
+            background: rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 16px;
+            color: #0f172a;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
+        }
+
+        .contact-btn:hover {
+            background: rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 40px;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 36px; }
+            .hero .tagline { font-size: 20px; }
+            .hero .subtitle { font-size: 16px; }
+            .stats { gap: 32px; }
+            .stat-number { font-size: 32px; }
+            .nav-links { display: none; }
+            .section { padding: 0 20px; }
+            header { padding: 16px 20px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header>
+        <nav>
+            <div class="logo">ThinkerCafe</div>
+            <div style="display: flex; align-items: center; gap: 24px;">
+                <ul class="nav-links">
+                    <li><a href="#about">About</a></li>
+                    <li><a href="#experience">Experience</a></li>
+                    <li><a href="#skills">Skills</a></li>
+                    <li><a href="#education">Education</a></li>
+                    <li><a href="#contact">Contact</a></li>
+                </ul>
+                <div class="lang-switcher">
+                    <button onclick="switchLanguage('zh-TW')" data-lang="zh-TW" class="active">中</button>
+                    <button onclick="switchLanguage('en')" data-lang="en">EN</button>
+                    <button onclick="switchLanguage('ja')" data-lang="ja">日</button>
+                    <button onclick="switchLanguage('ko')" data-lang="ko">한</button>
+                    <button onclick="switchLanguage('ar')" data-lang="ar">ع</button>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1 id="hero-name">Cruz Tang</h1>
+        <p class="tagline" id="hero-tagline">AI-Native Leader & System Architect</p>
+        <p class="subtitle" id="hero-subtitle">Transforming Businesses with Practical AI Solutions</p>
+        <div class="stats" id="hero-stats">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section class="section" id="about">
+        <h2 class="section-title" id="about-title">About Me</h2>
+        <div class="about-content" id="about-content">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </section>
+
+    <!-- Experience Section -->
+    <section class="section" id="experience">
+        <h2 class="section-title" id="experience-title">Work Experience</h2>
+        <div id="experience-list">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </section>
+
+    <!-- Skills Section -->
+    <section class="section" id="skills">
+        <h2 class="section-title" id="skills-title">Technical Skills</h2>
+        <div class="skills-grid" id="skills-grid">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </section>
+
+    <!-- Teaching Section -->
+    <section class="section" id="teaching">
+        <h2 class="section-title" id="teaching-title">Teaching Experience</h2>
+        <div id="teaching-list">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </section>
+
+    <!-- Education Section -->
+    <section class="section" id="education">
+        <h2 class="section-title" id="education-title">Education</h2>
+        <div id="education-list">
+            <!-- Will be populated by JavaScript -->
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section class="section" id="contact">
+        <h2 class="section-title" style="text-align: center;">Get in Touch</h2>
+        <div class="contact-links">
+            <a href="mailto:cruz@thinker.cafe" class="contact-btn">📧 Email</a>
+            <a href="https://line.me/ti/p/~sulaxxd" class="contact-btn">💬 LINE</a>
+            <a href="tel:+886937431998" class="contact-btn">📞 Phone</a>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <p>© 2025 ThinkerCafe (思考者咖啡有限公司) · Cruz Tang · All Rights Reserved</p>
+    </footer>
+
+    <script>
+        let siteData = null;
+        let currentLang = localStorage.getItem('preferred-language') || 'zh-TW';
+
+        // Load data.json
+        fetch('data.json')
+            .then(response => response.json())
+            .then(data => {
+                siteData = data;
+                initializePage();
+            })
+            .catch(error => console.error('Error loading data:', error));
+
+        // Language switcher
+        function switchLanguage(lang) {
+            currentLang = lang;
+            localStorage.setItem('preferred-language', lang);
+
+            document.querySelectorAll('.lang-switcher button').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.lang === lang);
+            });
+
+            if (siteData) {
+                initializePage();
+            }
+        }
+
+        // Initialize page with current language
+        function initializePage() {
+            if (!siteData || !siteData[currentLang]) return;
+
+            const data = siteData[currentLang];
+
+            // Update hero
+            if (data.hero) {
+                document.getElementById('hero-name').textContent = data.hero.name || '';
+                document.getElementById('hero-tagline').textContent = data.hero.tagline || '';
+                document.getElementById('hero-subtitle').innerHTML = data.hero.subtitle || '';
+
+                if (data.hero.stats) {
+                    const statsHtml = [
+                        { value: '10+', label: data.hero.stats[0] || 'Years' },
+                        { value: '300+', label: data.hero.stats[1] || 'Teams' },
+                        { value: '2', label: data.hero.stats[2] || 'Companies' },
+                        { value: '50+', label: data.hero.stats[3] || 'Projects' }
+                    ].map(stat => `
+                        <div class="stat-item">
+                            <span class="stat-number">${stat.value}</span>
+                            <span class="stat-label">${stat.label}</span>
+                        </div>
+                    `).join('');
+                    document.getElementById('hero-stats').innerHTML = statsHtml;
+                }
+            }
+
+            // Update about
+            if (data.about) {
+                document.getElementById('about-title').textContent = data.about.title || 'About Me';
+                document.getElementById('about-content').innerHTML = data.about.content || '';
+            }
+
+            // Update navigation
+            if (data.nav) {
+                const navLinks = document.querySelector('.nav-links');
+                if (navLinks) {
+                    navLinks.innerHTML = `
+                        <li><a href="#about">${data.nav.about || 'About'}</a></li>
+                        <li><a href="#experience">${data.nav.experience || 'Experience'}</a></li>
+                        <li><a href="#skills">${data.nav.skills || 'Skills'}</a></li>
+                        <li><a href="#education">${data.nav.education || 'Education'}</a></li>
+                        <li><a href="#contact">${data.nav.contact || 'Contact'}</a></li>
+                    `;
+                }
+            }
+
+            // Update experience
+            if (data.experience) {
+                document.getElementById('experience-title').textContent = data.experience.title || 'Work Experience';
+                if (data.experience.jobs) {
+                    document.getElementById('experience-list').innerHTML = data.experience.jobs.map(job => `
+                        <div class="job">
+                            <div class="job-header">
+                                <div class="job-title">${job.title || ''}</div>
+                                <div class="job-company">${job.company || ''}</div>
+                                <div class="job-date">${job.date || ''}</div>
+                            </div>
+                            ${job.points ? `<ul class="job-points">${job.points.map(point => `<li>${point}</li>`).join('')}</ul>` : ''}
+                            ${job.tech ? `<div class="tech-tags">${job.tech.map(tech => `<span class="tech-tag">${tech}</span>`).join('')}</div>` : ''}
+                        </div>
+                    `).join('');
+                }
+            }
+
+            // Update skills
+            if (data.skills) {
+                document.getElementById('skills-title').textContent = data.skills.title || 'Skills';
+
+                // Handle both legacy categories and new layers structure
+                if (data.skills.layers) {
+                    // New structure with layers
+                    const allCategories = [];
+                    data.skills.layers.forEach(layer => {
+                        if (layer.categories) {
+                            layer.categories.forEach(cat => {
+                                allCategories.push({
+                                    title: cat.name || cat.title,
+                                    items: cat.items || []
+                                });
+                            });
+                        }
+                    });
+                    document.getElementById('skills-grid').innerHTML = allCategories.map(cat => `
+                        <div class="skill-category">
+                            <h3>${cat.title || ''}</h3>
+                            <div class="skill-items">
+                                ${cat.items ? cat.items.map(item => `<span class="skill-item">${item}</span>`).join('') : ''}
+                            </div>
+                        </div>
+                    `).join('');
+                } else if (data.skills.categories) {
+                    // Legacy structure with categories
+                    document.getElementById('skills-grid').innerHTML = data.skills.categories.map(cat => `
+                        <div class="skill-category">
+                            <h3>${cat.title || ''}</h3>
+                            <div class="skill-items">
+                                ${cat.items ? cat.items.map(item => `<span class="skill-item">${item}</span>`).join('') : ''}
+                            </div>
+                        </div>
+                    `).join('');
+                }
+            }
+
+            // Update teaching
+            if (data.teaching) {
+                document.getElementById('teaching-title').textContent = data.teaching.title || 'Teaching';
+
+                let teachingHTML = '';
+
+                // Stats section
+                if (data.teaching.stats) {
+                    const statsLabels = currentLang === 'zh-TW' ?
+                        ['年經驗', '培訓學員', '教學時數', '合作機構'] :
+                        ['Years Experience', 'Students Trained', 'Teaching Hours', 'Partner Institutions'];
+
+                    teachingHTML += `
+                        <div class="stats" style="margin-bottom: 40px;">
+                            <div class="stat-item">
+                                <span class="stat-number">${data.teaching.stats.years}</span>
+                                <span class="stat-label">${statsLabels[0]}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-number">${data.teaching.stats.students}</span>
+                                <span class="stat-label">${statsLabels[1]}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-number">${data.teaching.stats.hours}</span>
+                                <span class="stat-label">${statsLabels[2]}</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-number">${data.teaching.stats.institutions}</span>
+                                <span class="stat-label">${statsLabels[3]}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Certifications
+                if (data.teaching.certifications && data.teaching.certifications.length > 0) {
+                    const certTitle = currentLang === 'zh-TW' ? '官方認證' : 'Official Certifications';
+                    teachingHTML += `<h3 style="font-size: 24px; margin: 40px 0 20px 0;">${certTitle}</h3>`;
+                    teachingHTML += data.teaching.certifications.map(cert => `
+                        <div class="info-card">
+                            <h3>${cert.title}</h3>
+                            <div class="meta">${cert.organization} · ${cert.period}</div>
+                            ${cert.description ? `<p>${cert.description}</p>` : ''}
+                        </div>
+                    `).join('');
+                }
+
+                // Featured course
+                if (data.teaching.featured) {
+                    const featuredTitle = currentLang === 'zh-TW' ? '🔥 目前招生中' : '🔥 Currently Enrolling';
+                    const deadlineLabel = currentLang === 'zh-TW' ? '報名截止' : 'Deadline';
+                    teachingHTML += `
+                        <h3 style="font-size: 24px; margin: 40px 0 20px 0; color: #3b82f6;">${featuredTitle}</h3>
+                        <div class="info-card" style="border: 2px solid #3b82f6;">
+                            <h3>${data.teaching.featured.title}</h3>
+                            <p style="font-size: 16px; color: #64748b;">${data.teaching.featured.subtitle}</p>
+                            <div class="meta">
+                                📅 ${data.teaching.featured.dates}<br>
+                                📍 ${data.teaching.featured.location}<br>
+                                💰 ${data.teaching.featured.price} | 👥 ${data.teaching.featured.capacity}<br>
+                                ⏰ ${deadlineLabel}: ${data.teaching.featured.deadline}
+                            </div>
+                            ${data.teaching.featured.highlights ? `
+                                <ul style="margin-top: 16px;">
+                                    ${data.teaching.featured.highlights.map(h => `<li>${h}</li>`).join('')}
+                                </ul>
+                            ` : ''}
+                        </div>
+                    `;
+                }
+
+                // Recent courses
+                if (data.teaching.recent && data.teaching.recent.length > 0) {
+                    const recentTitle = currentLang === 'zh-TW' ? '近期課程' : 'Recent Courses';
+                    const studentsLabel = currentLang === 'zh-TW' ? '位學員' : ' students';
+                    const satisfactionLabel = currentLang === 'zh-TW' ? '滿意度' : ' satisfaction';
+                    teachingHTML += `<h3 style="font-size: 24px; margin: 40px 0 20px 0;">${recentTitle}</h3>`;
+                    teachingHTML += data.teaching.recent.map(course => `
+                        <div class="info-card">
+                            <h3>${course.title}</h3>
+                            <div class="meta">
+                                ${course.organization || ''} ${course.organization ? '·' : ''} ${course.date}<br>
+                                ${course.duration || ''} ${course.duration ? '|' : ''} ${course.students ? course.students + studentsLabel : ''}
+                                ${course.satisfaction ? ' | ' + course.satisfaction + satisfactionLabel : ''}
+                            </div>
+                            ${course.feedback && course.feedback.length > 0 ? `
+                                <p style="margin-top: 12px; font-style: italic;">
+                                    "${course.feedback[0]}"
+                                </p>
+                            ` : ''}
+                        </div>
+                    `).join('');
+                }
+
+                // Testimonials
+                if (data.teaching.testimonials && data.teaching.testimonials.length > 0) {
+                    const feedbackTitle = currentLang === 'zh-TW' ? '學員反饋' : 'Student Feedback';
+                    teachingHTML += `<h3 style="font-size: 24px; margin: 40px 0 20px 0;">${feedbackTitle}</h3>`;
+                    teachingHTML += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">';
+                    teachingHTML += data.teaching.testimonials.map(test => `
+                        <div class="info-card">
+                            <p style="font-style: italic; margin-bottom: 12px;">"${test.text}"</p>
+                            <div class="meta">— ${test.author}, ${test.course}</div>
+                        </div>
+                    `).join('');
+                    teachingHTML += '</div>';
+                }
+
+                // Institutions
+                if (data.teaching.institutions && data.teaching.institutions.length > 0) {
+                    const institutionsTitle = currentLang === 'zh-TW' ? '合作機構' : 'Partner Institutions';
+                    teachingHTML += `<h3 style="font-size: 24px; margin: 40px 0 20px 0;">${institutionsTitle}</h3>`;
+                    teachingHTML += data.teaching.institutions.map(cat => `
+                        <div class="info-card">
+                            <h3>${cat.category}</h3>
+                            <p>${cat.list.join(' · ')}</p>
+                        </div>
+                    `).join('');
+                }
+
+                document.getElementById('teaching-list').innerHTML = teachingHTML;
+            }
+
+            // Update education
+            if (data.education) {
+                document.getElementById('education-title').textContent = data.education.title || 'Education';
+
+                // Handle both degrees and schools structure
+                const educationData = data.education.degrees || data.education.schools || [];
+                document.getElementById('education-list').innerHTML = educationData.map(item => `
+                    <div class="info-card">
+                        <h3>${item.degree || ''} ${item.major ? '- ' + item.major : ''}</h3>
+                        <div class="meta">${item.school || ''} · ${item.date || ''}</div>
+                        ${item.details ? `<p>${item.details}</p>` : ''}
+                        ${item.location ? `<p>${item.location}</p>` : ''}
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Set initial language button state
+        document.addEventListener('DOMContentLoaded', () => {
+            document.querySelectorAll('.lang-switcher button').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.lang === currentLang);
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,2790 @@
+{
+  "en": {
+    "hero": {
+      "name": "Cruz Tang",
+      "tagline": "AI-Native Leader & System Architect",
+      "subtitle": "Transforming enterprises through AI implementation · From managing 300+ international teams to building AI-first solutions",
+      "stats": [
+        "Years Experience",
+        "Team Managed",
+        "Companies Founded",
+        "Problems Solved"
+      ]
+    },
+    "nav": {
+      "about": "About",
+      "experience": "Experience",
+      "featured": "Portfolio",
+      "projects": "Projects",
+      "contact": "Contact",
+      "education": "Education",
+      "teaching": "Teaching",
+      "skills": "Skills",
+      "portfolio": "Portfolio"
+    },
+    "about": {
+      "title": "About Me",
+      "content": "I bridge the gap between large-scale operations and cutting-edge AI implementation. After managing <strong>300+ team members</strong> at Topvan Group across China, Philippines, Malaysia, and Vietnam, I founded <strong>ThinkerCafe</strong> to democratize AI education and enterprise automation.<br><br>My unique background combines <strong>international team leadership</strong>, <strong>technical depth in AI/data science</strong>, and <strong>10+ years of teaching experience</strong>. I don't just implement AI solutions—I build systems that empower people to work smarter.<br><br>Currently seeking opportunities to bring this combined expertise to enterprise AI consulting and digital transformation projects."
+    },
+    "experience": {
+      "title": "Career Journey",
+      "jobs": [
+        {
+          "title": "CEO & Founder",
+          "company": "ThinkerCafe",
+          "date": "2023 - Present",
+          "points": [
+            "Leading distributed team across Taiwan and US developing AI education and automation products",
+            "Designed comprehensive AI curriculum (Personal OS, AI Communication, Visual/System Hacker series)",
+            "Built LINE Bot, automation systems, and AI-powered productivity tools",
+            "Delivering enterprise consulting on AI implementation and workflow optimization"
+          ],
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Claude API",
+            "Python",
+            "LINE Bot",
+            "n8n",
+            "Supabase",
+            "Notion API"
+          ]
+        },
+        {
+          "title": "Operations Manager",
+          "company": "Topvan Group",
+          "date": "Nov 2020 - Dec 2023 · 3 yrs 2 mos",
+          "points": [
+            "Directly led team of 10-12 people, indirectly managed <strong>300+ members</strong> from China, Philippines, Malaysia, and Vietnam",
+            "Overseas assignments: Dubai Business Bay (4 months), Philippines Clark (1.5 years), Makati/BGC (1 year)",
+            "Enhanced data-driven decision-making using Python and Telegram Bot API",
+            "Managed all operations except finance and retail, reported directly to Chairman"
+          ],
+          "tech": [
+            "Python",
+            "Telegram Bot API",
+            "MySQL",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "R&D Manager",
+          "company": "ICS GAME",
+          "date": "Jul 2019 - Nov 2019 · 5 mos",
+          "points": [
+            "Team rebuilding: addressed 50%+ turnover, recruited new talent",
+            "Implemented Scrum development and testing environments",
+            "Developed operational anomaly reporting system with JIRA automation",
+            "Resolved iOS certificate and IP blocking issues"
+          ],
+          "tech": [
+            "Scrum",
+            "JIRA",
+            "iOS",
+            "Git"
+          ]
+        },
+        {
+          "title": "Data Science Lead",
+          "company": "ICS GAME",
+          "date": "Jun 2018 - Jun 2019 · 1 yr 1 mo",
+          "points": [
+            "Built data science department from scratch",
+            "Established complete environment: Linux, Python, Docker, Jupyter, RStudio",
+            "Predicted player churn and implemented retention strategies",
+            "Detected arbitrage players and compiled quarterly reports"
+          ],
+          "tech": [
+            "Python",
+            "Docker",
+            "Jupyter",
+            "RStudio",
+            "Linux",
+            "Machine Learning"
+          ]
+        },
+        {
+          "title": "Founder",
+          "company": "Thinker Data Corporation",
+          "date": "Sep 2016 - Jun 2018 · 1 yr 10 mos",
+          "points": [
+            "Project-based consultancy with assembled teams",
+            "Vidol (SET TV): web series recommendation system",
+            "Chunghwa Telecom: big data Hadoop consulting",
+            "E.SUN Bank: cross-device member attribution",
+            "ITRI College: talent assessment & job data analysis"
+          ],
+          "tech": [
+            "Big Data",
+            "Hadoop",
+            "Python",
+            "R",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "Big Data R&D Engineer",
+          "company": "Coretronic",
+          "date": "Jul 2014 - Nov 2015 · 1 yr 5 mos",
+          "points": [
+            "Designed data collection workflows and ETL engineering",
+            "Applied statistical methods for analysis and decision support",
+            "Disease Patient Dietary Semantic Analysis: built sentiment lexicon, developed scoring model, automated top 5 food recommendations per disease"
+          ],
+          "tech": [
+            "Python",
+            "ETL",
+            "Statistical Analysis",
+            "NLP",
+            "Sentiment Analysis"
+          ]
+        }
+      ]
+    },
+    "featured": {
+      "title": "Featured Portfolio",
+      "subtitle": "Showcasing AI-native development & rapid delivery",
+      "projects": [
+        {
+          "name": "LINE Bot Booking System",
+          "emoji": "🤖",
+          "tagline": "48-hour delivery clinic appointment management system",
+          "highlight": "48-hour delivery | Fully automated workflow | 95%+ customer satisfaction",
+          "description": "Built a complete LINE Bot-based booking system for a physical therapy clinic, reducing booking time by 70% and dramatically improving customer satisfaction. Integrated with Google Calendar for real-time availability.",
+          "tech": [
+            "Claude Code",
+            "Supabase",
+            "Python",
+            "LINE Bot API",
+            "Google Calendar API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/linebot-booking-system",
+            "demo": ""
+          }
+        },
+        {
+          "name": "ThreadsBot Automation",
+          "emoji": "⚙️",
+          "tagline": "AI-driven social media automation system",
+          "highlight": "Multi-agent collaboration | 300% posting frequency increase",
+          "description": "Developed an intelligent social media automation system using multiple AI agents working together. Achieved 3x increase in engagement rate and 80% reduction in manual operation time through automatic content analysis and scheduling.",
+          "tech": [
+            "Claude API",
+            "MCP",
+            "Python",
+            "n8n",
+            "OpenAI API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/threadsbot",
+            "demo": ""
+          }
+        },
+        {
+          "name": "Personal OS Course",
+          "emoji": "📚",
+          "tagline": "Personal operating system course for the AI era",
+          "highlight": "100% student success rate | Practice-oriented",
+          "description": "Designed and delivered a comprehensive course series helping non-technical professionals build their own AI-powered personal operating systems. Students learn to leverage AI tools like Claude Code and MCP to automate workflows and enhance productivity.",
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Supabase",
+            "Notion API",
+            "Apps Script"
+          ],
+          "links": {
+            "github": "",
+            "demo": "https://thinkercafe.tw/personal-os"
+          }
+        }
+      ]
+    },
+    "education": {
+      "title": "Education",
+      "schools": [
+        {
+          "school": "National Taipei University of Business",
+          "degree": "Master of Science",
+          "major": "Data & Decision Sciences",
+          "date": "June 2013",
+          "location": "Taipei, Taiwan",
+          "coursework": [
+            "Multi-criteria Decision-making",
+            "Business Intelligence",
+            "Algorithms"
+          ]
+        },
+        {
+          "school": "Shih Shin University",
+          "degree": "Bachelor of Business Administration",
+          "major": "Finance",
+          "date": "June 2011",
+          "location": "Taipei, Taiwan",
+          "coursework": [
+            "Statistics",
+            "Financial Management",
+            "Accounting",
+            "Economics"
+          ]
+        }
+      ]
+    },
+    "teaching": {
+      "title": "Teaching & Speaking",
+      "lectures": [
+        {
+          "title": "Text Mining in Practice with R",
+          "organization": "Institute for Information Industry",
+          "type": "Workshop"
+        },
+        {
+          "title": "Data Visualization with R",
+          "organization": "Taipei Computer Association, Fubon Financial",
+          "type": "Training"
+        },
+        {
+          "title": "Data Object, Object-oriented Programming and Coding Skills",
+          "organization": "2013 R Taiwan Conference",
+          "type": "Conference Talk"
+        },
+        {
+          "title": "Mining Facebook for Knowing a Person You Fancy",
+          "organization": "OpenFoundry",
+          "type": "Talk"
+        },
+        {
+          "title": "Data Mining for Finance with R: Machine Data Analytics",
+          "organization": "Taiwan Academy of Banking and Finance",
+          "type": "Course"
+        }
+      ]
+    },
+    "skills": {
+      "title": "Technical Capability Map",
+      "philosophy": {
+        "title": "Technical Philosophy",
+        "content": "I don't chase \"how many languages I know\" — I chase \"how fast I can solve problems.\" In the AI collaboration era, the focus isn't on hand-coding every line, but on: <strong>1) Knowing what tool combinations to use</strong> <strong>2) Designing maintainable system architectures</strong> <strong>3) Making AI your development partner</strong>"
+      },
+      "layers": [
+        {
+          "level": 1,
+          "name": "AI Collaboration Ecosystem",
+          "description": "Core competitive advantage in the AI-Native era",
+          "categories": [
+            {
+              "name": "AI Development Platforms",
+              "items": [
+                "Claude Code",
+                "MCP (Model Context Protocol)",
+                "Claude API",
+                "OpenAI API",
+                "Gemini API",
+                "Prompt Engineering",
+                "Agent Design"
+              ]
+            },
+            {
+              "name": "Automation Orchestration",
+              "items": [
+                "n8n (Workflow Automation)",
+                "GitHub Actions",
+                "Apps Script"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "name": "Modern Cloud Infrastructure",
+          "description": "Deployment and data foundations",
+          "categories": [
+            {
+              "name": "Deployment & Compute",
+              "items": [
+                "Vercel (Frontend)",
+                "Railway (Backend)",
+                "AWS EC2",
+                "Google Compute Engine"
+              ]
+            },
+            {
+              "name": "Database Ecosystem",
+              "items": [
+                "Supabase (PostgreSQL + Realtime)",
+                "Neon (Serverless PostgreSQL)",
+                "SQLite (Local/Edge)"
+              ]
+            },
+            {
+              "name": "Vector Databases",
+              "items": [
+                "Weaviate",
+                "Chroma (AI Semantic Search)"
+              ]
+            },
+            {
+              "name": "Traditional Databases",
+              "items": [
+                "MySQL",
+                "MSSQL",
+                "MongoDB"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "name": "Programming Languages & Frameworks",
+          "description": "Multi-paradigm development capabilities",
+          "categories": [
+            {
+              "name": "Primary Languages",
+              "items": [
+                "Python (AI Collaboration, Data Science, Automation)",
+                "JavaScript (Frontend, Apps Script)",
+                "R (Data Analysis & Visualization)"
+              ]
+            },
+            {
+              "name": "Project Experience",
+              "items": [
+                "PHP",
+                "C#",
+                "Android"
+              ]
+            },
+            {
+              "name": "Markup & Configuration",
+              "items": [
+                "Markdown",
+                "LaTeX"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "name": "Data Science Toolchain",
+          "description": "Analytics and machine learning capabilities",
+          "categories": [
+            {
+              "name": "Machine Learning",
+              "items": [
+                "Regression Models",
+                "Decision Trees",
+                "Neural Networks",
+                "Clustering"
+              ]
+            },
+            {
+              "name": "Data Processing",
+              "items": [
+                "Text Mining",
+                "Semantic Analysis",
+                "Regular Expressions",
+                "Visualization (Shiny, Python Ecosystem)"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 5,
+          "name": "Collaboration & Project Management",
+          "description": "Team coordination and delivery",
+          "categories": [
+            {
+              "name": "Version Control",
+              "items": [
+                "GitHub",
+                "GitLab"
+              ]
+            },
+            {
+              "name": "Project Management",
+              "items": [
+                "JIRA",
+                "Scrum",
+                "Kanban"
+              ]
+            },
+            {
+              "name": "Communication Integration",
+              "items": [
+                "LINE Bot",
+                "RESTful API"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "projects": {
+      "title": "Featured Projects",
+      "items": [
+        {
+          "title": "ThinkerCafe Education Platform",
+          "tags": [
+            "AI Education",
+            "System Design"
+          ],
+          "points": [
+            "Comprehensive AI curriculum (Personal OS, 5+ course series)",
+            "Serving non-technical professionals entering AI era",
+            "Built complete ecosystem from content to delivery",
+            "Emphasis on practical, implementable systems"
+          ]
+        },
+        {
+          "title": "LINE Bot Automation Systems",
+          "tags": [
+            "Enterprise",
+            "Automation"
+          ],
+          "points": [
+            "Booking system for physical therapy clinic",
+            "70% reduction in booking process time",
+            "Google Calendar integration",
+            "Improved customer satisfaction scores"
+          ]
+        },
+        {
+          "title": "Thinker Kit",
+          "tags": [
+            "Productivity",
+            "AI Agent"
+          ],
+          "points": [
+            "Personal AI enhancement system",
+            "Integrated memory, prompt library, productivity tools",
+            "Daily insights and goal tracking",
+            "Gamified engagement system"
+          ]
+        },
+        {
+          "title": "ThreadsBot",
+          "tags": [
+            "Social Media",
+            "AI Agent"
+          ],
+          "points": [
+            "AI-powered social media automation",
+            "3x increase in engagement rate",
+            "80% reduction in operation time",
+            "Automatic content analysis and scheduling"
+          ]
+        },
+        {
+          "title": "Ryan OS & Mary OS",
+          "tags": [
+            "Family Tech",
+            "System"
+          ],
+          "points": [
+            "AI-driven family management systems",
+            "Education tracking (Ryan OS)",
+            "Elder care coordination (Mary OS)",
+            "Data-driven family decisions"
+          ]
+        },
+        {
+          "title": "300+ Team Operations",
+          "tags": [
+            "Leadership",
+            "Scale"
+          ],
+          "points": [
+            "International team across Philippines",
+            "24/7 operations coordination",
+            "Data-driven KPI systems",
+            "40% cost reduction through automation"
+          ]
+        }
+      ]
+    },
+    "cta": {
+      "title": "Let's Build Something Together",
+      "subtitle": "Currently seeking opportunities to work with enterprise clients on AI implementation, digital transformation, and solution architecture.",
+      "location": "Remote-friendly · Taipei/Taichung/Tainan · 70-100K TWD/month",
+      "buttons": [
+        "Get in Touch",
+        "Visit ThinkerCafe",
+        "LinkedIn Profile"
+      ]
+    },
+    "footer": {
+      "built": "Built with intention · Designed to inspire · Updated January 2025",
+      "quote": "When technology returns to humanity, intelligence finds its warmth"
+    },
+    "enterprise": {
+      "hero": {
+        "title": "ThinkerCafe Enterprise AI Solutions",
+        "tagline": "AI-Powered Development · Enterprise Automation · Digital Transformation",
+        "subtitle": "Leveraging AI collaboration to compress traditional 2-week projects into 2 days, accelerating your digital transformation",
+        "stats": [
+          {
+            "number": "3-7 Days",
+            "label": "Rapid Delivery"
+          },
+          {
+            "number": "10+ Years",
+            "label": "Teaching Experience"
+          },
+          {
+            "number": "300+",
+            "label": "Team Management"
+          },
+          {
+            "number": "iPAS",
+            "label": "Certification Committee"
+          }
+        ]
+      },
+      "opening": {
+        "title": "The Biggest Bottleneck in Enterprise AI Transformation?",
+        "subtitle": "Not technology—it's execution speed and talent gaps."
+      },
+      "valueProposition": {
+        "title": "Core Value Proposition",
+        "content": "I deliver systems in <strong>3-7 days</strong> using AI collaboration that traditional teams need <strong>3 months</strong> to build."
+      },
+      "credentials": {
+        "title": "Trust & Authority",
+        "items": [
+          "iPAS AI Application Planning Specialist Certification Committee Member (ITRI)",
+          "10+ years teaching experience (ITRI, Culture University, Institute for Information Industry)",
+          "Led 300+ international team members (Topvan Group)"
+        ]
+      },
+      "cases": {
+        "title": "Proven Results",
+        "subtitle": "Concrete & Verifiable",
+        "items": [
+          {
+            "title": "Physical Therapy Clinic LINE Bot Booking System",
+            "duration": "3 days",
+            "results": "70% reduction in booking time, 95%+ customer satisfaction"
+          },
+          {
+            "title": "Professor Lin (NCKU) Research Automation System",
+            "duration": "7 days",
+            "results": "60% efficiency improvement, fully automated data collection"
+          },
+          {
+            "title": "Enterprise Training - AI Collaboration in Practice",
+            "duration": "Customized",
+            "results": "100% participants successfully built AI workflows"
+          }
+        ]
+      },
+      "services": {
+        "title": "Collaboration Options",
+        "subtitle": "Three flexible approaches for different needs",
+        "items": [
+          {
+            "number": "1",
+            "icon": "🎯",
+            "title": "Enterprise AI Transformation Consulting",
+            "description": "Strategic Planning + Execution Guidance",
+            "points": [
+              "AI use case assessment and prioritization",
+              "Actionable implementation roadmap",
+              "End-to-end technical guidance and troubleshooting"
+            ]
+          },
+          {
+            "number": "2",
+            "icon": "📚",
+            "title": "Internal Team AI Collaboration Training",
+            "description": "Practice-oriented, not theory-based",
+            "points": [
+              "Hands-on Claude Code & MCP training",
+              "Prompt Engineering and Agent Design",
+              "Participants complete 1-2 automation projects"
+            ]
+          },
+          {
+            "number": "3",
+            "icon": "⚡",
+            "title": "Project Outsourcing Development",
+            "description": "Rapid delivery with AI-Native processes",
+            "points": [
+              "3-7 day MVP delivery",
+              "LINE Bot, automation systems, data processing",
+              "Complete documentation and maintenance support"
+            ]
+          }
+        ]
+      },
+      "cta": {
+        "title": "Let's Discuss Your AI Transformation Challenge",
+        "subtitle": "15-minute free consultation to explore how to accelerate your digital transformation",
+        "button": "Schedule Free Consultation"
+      }
+    }
+  },
+  "zh-TW": {
+    "hero": {
+      "name": "湯明軒 Cruz Tang",
+      "tagline": "AI 原生領導者與系統架構師",
+      "subtitle": "透過 AI 實作轉型企業 · 從管理 300+ 國際團隊到打造 AI 優先解決方案",
+      "stats": [
+        "年經驗",
+        "管理團隊",
+        "創立公司",
+        "解決問題"
+      ]
+    },
+    "nav": {
+      "about": "關於我",
+      "experience": "工作經歷",
+      "featured": "作品集",
+      "projects": "專案作品",
+      "contact": "聯絡方式",
+      "education": "教育背景",
+      "teaching": "教學經歷",
+      "skills": "技術能力",
+      "portfolio": "作品集"
+    },
+    "about": {
+      "title": "關於我",
+      "content": "我連結大規模營運與尖端 AI 實作。在 Topvan 集團管理來自中國、菲律賓、馬來西亞、越南的 <strong>300+ 團隊成員</strong>後，我創立 <strong>ThinkerCafe</strong> 以普及 AI 教育與企業自動化。<br><br>我的獨特背景結合了<strong>國際團隊領導</strong>、<strong>AI/資料科學技術深度</strong>、以及 <strong>10+ 年教學經驗</strong>。我不只實作 AI 解決方案—我建立賦能人們更聰明工作的系統。<br><br>目前尋求將這些綜合專業帶入企業 AI 顧問與數位轉型專案的機會。"
+    },
+    "experience": {
+      "title": "職涯歷程",
+      "jobs": [
+        {
+          "title": "執行長暨創辦人",
+          "company": "ThinkerCafe 思考者咖啡",
+          "date": "2023 - 現在",
+          "points": [
+            "領導台美分散式團隊開發 AI 教育與自動化產品",
+            "設計完整 AI 課程（Personal OS、AI 溝通術、視覺/系統駭客系列）",
+            "建立 LINE Bot、自動化系統與 AI 生產力工具",
+            "提供企業 AI 實作與工作流優化顧問服務"
+          ],
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Claude API",
+            "Python",
+            "LINE Bot",
+            "n8n",
+            "Supabase",
+            "Notion API"
+          ]
+        },
+        {
+          "title": "運營經理",
+          "company": "Topvan Group 拓凡集團",
+          "date": "2020年11月 - 2023年12月 · 3年2個月",
+          "points": [
+            "直接領導 10-12 人團隊，間接管理來自中國、菲律賓、馬來西亞、越南的 <strong>300+ 成員</strong>",
+            "海外派駐：杜拜 Business Bay（4個月）、菲律賓克拉克（1.5年）、馬卡地/BGC（1年）",
+            "運用 Python 和 Telegram Bot API 強化數據驅動決策",
+            "管理除財務與零售外的所有營運，直接向董事長報告"
+          ],
+          "tech": [
+            "Python",
+            "Telegram Bot API",
+            "MySQL",
+            "數據分析"
+          ]
+        },
+        {
+          "title": "研發部門經理",
+          "company": "ICS GAME",
+          "date": "2019年7月 - 2019年11月 · 5個月",
+          "points": [
+            "團隊重建：面對 50%+ 員工流失，招募新人才並改革績效評估",
+            "實施 Scrum 開發流程與內外部測試環境",
+            "開發營運異常通報系統，利用 JIRA 自動化流程",
+            "解決 iOS 憑證問題及自製應用的 IP 封鎖問題"
+          ]
+        },
+        {
+          "title": "資料科學部門主管",
+          "company": "ICS GAME",
+          "date": "2018年6月 - 2019年6月 · 1年1個月",
+          "points": [
+            "從無到有建立資料科學部門",
+            "一個月內建立完整環境：Linux、Python、Docker、Jupyter、RStudio",
+            "預測玩家流失並實施挽留策略",
+            "偵測套利玩家並編制季度營運報告"
+          ]
+        },
+        {
+          "title": "創辦人",
+          "company": "Thinker Data Corporation 析客數據",
+          "date": "2016年9月 - 2018年6月 · 1年10個月",
+          "points": [
+            "根據專案需求組建兼職團隊的接案公司",
+            "三立電視 Vidol：開發網劇推薦系統",
+            "中華電信：提供大數據 Hadoop 叢集顧問及維運",
+            "玉山銀行：實作跨裝置會員歸戶機制",
+            "工研院產業學院：產業人才能力鑑定及國際企業職缺資料分析"
+          ],
+          "tech": [
+            "Big Data",
+            "Hadoop",
+            "Python",
+            "R",
+            "數據分析"
+          ]
+        },
+        {
+          "title": "巨量資料技術研發工程師",
+          "company": "Coretronic 中強光電",
+          "date": "2014年7月 - 2015年11月 · 1年5個月",
+          "points": [
+            "設計資料收集流程與 ETL 工程",
+            "運用統計方法進行數據分析並支援決策",
+            "疾病患者飲食語意分析：建立情緒詞庫、開發評分模型、自動報告各疾病建議/避免前五名飲食"
+          ],
+          "tech": [
+            "Python",
+            "ETL",
+            "統計分析",
+            "NLP",
+            "語意分析"
+          ]
+        }
+      ]
+    },
+    "featured": {
+      "title": "精選作品集",
+      "subtitle": "展現 AI-Native 開發與快速交付能力",
+      "projects": [
+        {
+          "name": "LINE Bot 預約系統",
+          "emoji": "🤖",
+          "tagline": "48 小時交付的診所預約管理系統",
+          "highlight": "48 小時交付 | 全自動化流程 | 客戶滿意度 95%+",
+          "description": "為復健診所打造完整的 LINE Bot 預約系統，將預約流程時間縮短 70%，大幅提升客戶滿意度。整合 Google Calendar 實現即時可用時段查詢。",
+          "tech": [
+            "Claude Code",
+            "Supabase",
+            "Python",
+            "LINE Bot API",
+            "Google Calendar API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/linebot-booking-system",
+            "demo": ""
+          }
+        },
+        {
+          "name": "ThreadsBot 自動化",
+          "emoji": "⚙️",
+          "tagline": "AI 驅動的社群自動化系統",
+          "highlight": "多 Agent 協作 | 發文頻率提升 300%",
+          "description": "開發智慧型社群媒體自動化系統，運用多個 AI Agent 協同工作。達成 3 倍互動率提升，並將人工操作時間減少 80%，透過自動內容分析與排程優化社群經營。",
+          "tech": [
+            "Claude API",
+            "MCP",
+            "Python",
+            "n8n",
+            "OpenAI API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/threadsbot",
+            "demo": ""
+          }
+        },
+        {
+          "name": "Personal OS 課程",
+          "emoji": "📚",
+          "tagline": "AI 時代的個人作業系統課程",
+          "highlight": "100% 學員成功建立 AI 系統 | 實戰導向",
+          "description": "設計並教授完整課程系列，協助非技術背景專業人士建立自己的 AI 驅動個人作業系統。學員學習運用 Claude Code、MCP 等 AI 工具自動化工作流程並提升生產力。",
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Supabase",
+            "Notion API",
+            "Apps Script"
+          ],
+          "links": {
+            "github": "",
+            "demo": "https://thinkercafe.tw/personal-os"
+          }
+        }
+      ]
+    },
+    "education": {
+      "title": "教育背景",
+      "schools": [
+        {
+          "school": "國立臺北商業大學",
+          "degree": "碩士",
+          "major": "資料與決策科學系",
+          "date": "2013年6月",
+          "location": "台北，台灣",
+          "coursework": [
+            "多準則決策",
+            "商業智慧",
+            "演算法"
+          ]
+        },
+        {
+          "school": "世新大學",
+          "degree": "學士",
+          "major": "財務金融學系",
+          "date": "2011年6月",
+          "location": "台北，台灣",
+          "coursework": [
+            "統計學",
+            "財務管理",
+            "會計學",
+            "經濟學"
+          ]
+        }
+      ]
+    },
+    "teaching": {
+      "title": "教學與演講",
+      "lectures": [
+        {
+          "title": "R 語言文字探勘實戰",
+          "organization": "資策會",
+          "type": "工作坊"
+        },
+        {
+          "title": "R 語言資料視覺化",
+          "organization": "台北市電腦公會、富邦金控",
+          "type": "企業培訓"
+        },
+        {
+          "title": "資料物件、物件導向程式設計與編碼技巧",
+          "organization": "2013 R Taiwan 研討會",
+          "type": "研討會演講"
+        },
+        {
+          "title": "用 Facebook 探勘了解你喜歡的人",
+          "organization": "OpenFoundry",
+          "type": "技術分享"
+        },
+        {
+          "title": "金融資料探勘：機器資料分析",
+          "organization": "台灣金融研訓院",
+          "type": "課程"
+        }
+      ]
+    },
+    "skills": {
+      "title": "技術能力地圖",
+      "philosophy": {
+        "title": "技術哲學",
+        "content": "我不追求「會多少種語言」，而是追求「能多快解決問題」。在 AI 協作時代，重點不是手寫每一行程式碼，而是：<strong>1) 知道該用什麼工具組合</strong> <strong>2) 能設計出可維護的系統架構</strong> <strong>3) 懂得讓 AI 成為你的開發夥伴</strong>"
+      },
+      "layers": [
+        {
+          "level": 1,
+          "name": "AI 協作生態系統",
+          "description": "AI-Native 時代的核心競爭力",
+          "categories": [
+            {
+              "name": "AI 開發平台",
+              "items": [
+                "Claude Code",
+                "MCP (Model Context Protocol)",
+                "Claude API",
+                "OpenAI API",
+                "Gemini API",
+                "Prompt Engineering",
+                "Agent 設計"
+              ]
+            },
+            {
+              "name": "自動化編排",
+              "items": [
+                "n8n (工作流自動化)",
+                "GitHub Actions",
+                "Apps Script"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "name": "現代雲端基礎設施",
+          "description": "部署與資料基礎",
+          "categories": [
+            {
+              "name": "部署與運算",
+              "items": [
+                "Vercel (前端部署)",
+                "Railway (後端服務)",
+                "AWS EC2",
+                "Google Compute Engine"
+              ]
+            },
+            {
+              "name": "資料庫生態",
+              "items": [
+                "Supabase (PostgreSQL + 即時功能)",
+                "Neon (Serverless PostgreSQL)",
+                "SQLite (本地/邊緣運算)"
+              ]
+            },
+            {
+              "name": "向量資料庫",
+              "items": [
+                "Weaviate",
+                "Chroma (AI 語意搜尋)"
+              ]
+            },
+            {
+              "name": "傳統資料庫",
+              "items": [
+                "MySQL",
+                "MSSQL",
+                "MongoDB"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "name": "程式語言與框架",
+          "description": "多範式開發能力",
+          "categories": [
+            {
+              "name": "主力語言",
+              "items": [
+                "Python (AI 協作、資料科學、自動化)",
+                "JavaScript (前端互動、Apps Script)",
+                "R (資料分析與視覺化)"
+              ]
+            },
+            {
+              "name": "專案經驗",
+              "items": [
+                "PHP",
+                "C#",
+                "Android"
+              ]
+            },
+            {
+              "name": "標記與配置",
+              "items": [
+                "Markdown",
+                "LaTeX"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "name": "資料科學工具鏈",
+          "description": "分析與機器學習能力",
+          "categories": [
+            {
+              "name": "機器學習",
+              "items": [
+                "迴歸模型",
+                "決策樹",
+                "類神經網路",
+                "分群"
+              ]
+            },
+            {
+              "name": "資料處理",
+              "items": [
+                "文字探勘",
+                "語意分析",
+                "正規表達式",
+                "視覺化 (Shiny, Python 生態系)"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 5,
+          "name": "協作與專案管理",
+          "description": "團隊協調與交付",
+          "categories": [
+            {
+              "name": "版本控制",
+              "items": [
+                "GitHub",
+                "GitLab"
+              ]
+            },
+            {
+              "name": "專案管理",
+              "items": [
+                "JIRA",
+                "Scrum",
+                "Kanban"
+              ]
+            },
+            {
+              "name": "通訊整合",
+              "items": [
+                "LINE Bot",
+                "RESTful API"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "projects": {
+      "title": "專案作品",
+      "items": [
+        {
+          "title": "ThinkerCafe 教育平台",
+          "tags": [
+            "AI 教育",
+            "系統設計"
+          ],
+          "points": [
+            "完整 AI 課程體系（Personal OS、5+ 系列課程）",
+            "服務進入 AI 時代的非技術專業人士",
+            "建立從內容到交付的完整生態系統",
+            "強調實用、可實施的系統"
+          ]
+        },
+        {
+          "title": "LINE Bot 自動化系統",
+          "tags": [
+            "企業應用",
+            "自動化"
+          ],
+          "points": [
+            "物理治療診所預約系統",
+            "預約流程時間減少 70%",
+            "Google Calendar 整合",
+            "客戶滿意度提升"
+          ]
+        },
+        {
+          "title": "Thinker Kit",
+          "tags": [
+            "生產力",
+            "AI Agent"
+          ],
+          "points": [
+            "個人 AI 增強系統",
+            "整合記憶、提示詞庫、生產力工具",
+            "每日洞察與目標追蹤",
+            "遊戲化參與系統"
+          ]
+        },
+        {
+          "title": "ThreadsBot",
+          "tags": [
+            "社群媒體",
+            "AI Agent"
+          ],
+          "points": [
+            "AI 驅動的社群媒體自動化",
+            "參與度提升 3 倍",
+            "營運時間減少 80%",
+            "自動內容分析與排程"
+          ]
+        },
+        {
+          "title": "Ryan OS & Mary OS",
+          "tags": [
+            "家庭科技",
+            "系統"
+          ],
+          "points": [
+            "AI 驅動的家庭管理系統",
+            "教育追蹤（Ryan OS）",
+            "長者照護協調（Mary OS）",
+            "數據驅動的家庭決策"
+          ]
+        },
+        {
+          "title": "300+ 人團隊營運",
+          "tags": [
+            "領導力",
+            "規模化"
+          ],
+          "points": [
+            "菲律賓跨國團隊",
+            "24/7 營運協調",
+            "數據驅動的 KPI 系統",
+            "透過自動化降低 40% 成本"
+          ]
+        }
+      ]
+    },
+    "cta": {
+      "title": "讓我們一起打造些什麼",
+      "subtitle": "目前尋求與企業客戶合作 AI 實作、數位轉型和解決方案架構的機會。",
+      "location": "遠端友善 · 台北/台中/台南 · 70-100K TWD/月",
+      "buttons": [
+        "聯繫我",
+        "訪問 ThinkerCafe",
+        "LinkedIn 檔案"
+      ]
+    },
+    "footer": {
+      "built": "用心打造 · 啟發設計 · 更新於 2025 年 1 月",
+      "quote": "當科技回歸人性，智慧找到溫度"
+    },
+    "enterprise": {
+      "hero": {
+        "title": "企業 AI 轉型的最大瓶頸？",
+        "subtitle": "不是技術，是執行速度。",
+        "valueProposition": "我用 AI 協作開發，3-7 天交付傳統團隊 3 個月的系統",
+        "ctaButton": "預約免費 AI 診斷",
+        "authorInfo": {
+          "name": "Cruz Tang",
+          "title": "ThinkerCafe 創辦人 & CEO",
+          "roles": ["AI-Native 開發者", "系統架構師", "教育者"]
+        }
+      },
+      "trustIndicators": {
+        "title": "信任背書",
+        "items": [
+          {
+            "icon": "<i class=\"fas fa-graduation-cap\"></i>",
+            "title": "專業認證",
+            "lines": ["iPAS AI", "應用規劃師", "認證命題委員", "(工研院)"]
+          },
+          {
+            "icon": "<i class=\"fas fa-users\"></i>",
+            "title": "實戰經驗",
+            "lines": ["曾管理 300+", "跨國團隊", "Topvan Group", "菲/中/馬/越"]
+          },
+          {
+            "icon": "<i class=\"fas fa-trophy\"></i>",
+            "title": "教學資歷",
+            "lines": ["10+ 年", "教學經驗", "工研院/資策會", "/文化大學"]
+          }
+        ]
+      },
+      "problemStatement": {
+        "title": "你是否也遇到這些問題？",
+        "ctaButton": "看看我怎麼做到的 ↓",
+        "comparison": [
+          {"label": "<i class=\"fas fa-clock\"></i> 開發週期", "traditional": "3-6 個月", "aiNative": "3-7 天快速交付"},
+          {"label": "<i class=\"fas fa-dollar-sign\"></i> 成本", "traditional": "30-100 萬", "aiNative": "成本降低 60-70%"},
+          {"label": "<i class=\"fas fa-laptop-code\"></i> 團隊規模", "traditional": "需要多人團隊", "aiNative": "1-2 人即可完成"},
+          {"label": "<i class=\"fas fa-rotate\"></i> 迭代速度", "traditional": "修改慢，迭代難", "aiNative": "即改即測，快速迭代"},
+          {"label": "<i class=\"fas fa-book\"></i> 維護性", "traditional": "文件不齊，難維護", "aiNative": "自動生成完整文檔"}
+        ]
+      },
+      "caseStudies": {
+        "title": "實際案例",
+        "ctaText": "如果你有類似需求...",
+        "ctaButton": "預約免費診斷",
+        "featured": {
+          "title": "物理治療診所 LINE Bot 預約系統",
+          "painPoints": ["每天花 2 小時手動處理預約", "客戶常打不通電話", "沒有系統化管理"],
+          "results": ["全自動預約/取消/提醒", "24/7 即時回應", "整合 Google Calendar"],
+          "timeline": {"traditional": "3 個月 + 30 萬", "actual": "3 天 + 10 萬"},
+          "buttons": ["查看 Demo", "技術細節"]
+        },
+        "others": [
+          {"title": "教育機構課程管理自動化", "traditional": "6 週開發", "actual": "7 天完成", "button": "了解更多"},
+          {"title": "企業內訓：AI 協作開發實戰", "company": "XX 公司全員培訓", "rating": "學員滿意度：4.8/5.0", "button": "學員回饋"}
+        ]
+      },
+      "methodology": {
+        "title": "我的工作方法",
+        "subtitle": "不是「做完就跑」，而是建立可持續運作的系統",
+        "steps": [
+          {"number": "1", "title": "診斷", "duration": "15-30 分鐘", "items": ["深度訪談", "痛點分析"]},
+          {"number": "2", "title": "設計", "duration": "1-2 天", "items": ["系統架構", "技術選型"]},
+          {"number": "3", "title": "開發", "duration": "3-5 天", "items": ["AI 協作", "快速迭代"]},
+          {"number": "4", "title": "交付", "duration": "當天", "items": ["部署 & 文檔", "使用培訓"]}
+        ],
+        "support": ["完整技術文檔", "操作 SOP", "維護指引", "後續支援"]
+      },
+      "collaborationModels": {
+        "title": "合作方式",
+        "items": [
+          {
+            "title": "顧問諮詢",
+            "target": "想建立 AI 轉型策略的企業",
+            "deliverables": ["現況診斷", "轉型路徑規劃", "技術選型建議", "執行指導"],
+            "timeline": "2-4 週"
+          },
+          {
+            "title": "內部培訓",
+            "target": "想提升團隊 AI 協作能力",
+            "deliverables": ["實戰工作坊", "工具實作教學", "流程 SOP", "案例演練"],
+            "timeline": "1-2 天"
+          },
+          {
+            "title": "專案開發",
+            "target": "需要快速交付特定系統",
+            "deliverables": ["完整系統開發", "技術文檔", "操作培訓", "維護支援"],
+            "timeline": "3-7 天起"
+          }
+        ]
+      },
+      "contactForm": {
+        "title": "免費 AI 診斷預約",
+        "subtitle": "填寫約需 3-5 分鐘",
+        "note": "您的資訊僅用於此次諮詢評估",
+        "submitButton": "送出 → 我會在 24 小時內回覆您",
+        "googleFormUrl": ""
+      }
+    }
+  },
+  "ja": {
+    "hero": {
+      "name": "Cruz Tang",
+      "tagline": "AIネイティブリーダー＆システムアーキテクト",
+      "subtitle": "AI実装による企業変革 · 300+名の国際チーム管理からAIファーストソリューション構築まで",
+      "stats": [
+        "年の経験",
+        "管理チーム",
+        "創業企業",
+        "解決問題"
+      ]
+    },
+    "nav": {
+      "about": "プロフィール",
+      "experience": "職務経歴",
+      "featured": "Portfolio",
+      "projects": "プロジェクト",
+      "contact": "お問い合わせ",
+      "education": "学歴",
+      "teaching": "講演活動",
+      "skills": "技術スキル",
+      "portfolio": "Portfolio"
+    },
+    "about": {
+      "title": "プロフィール",
+      "content": "私は大規模オペレーションと最先端AI実装の橋渡しをします。Topvan Groupで中国、フィリピン、マレーシア、ベトナムの<strong>300+名のチームメンバー</strong>を管理した後、<strong>ThinkerCafe</strong>を設立しAI教育と企業自動化の民主化に取り組んでいます。<br><br>私のユニークな経歴は、<strong>国際チームリーダーシップ</strong>、<strong>AI/データサイエンスの技術的深さ</strong>、そして<strong>10年以上の教育経験</strong>を組み合わせています。単なるAIソリューションの実装ではなく、人々がよりスマートに働けるシステムを構築します。<br><br>現在、この総合的な専門知識を企業AIコンサルティングとデジタルトランスフォーメーションプロジェクトに活かす機会を求めています。"
+    },
+    "experience": {
+      "title": "職務経歴",
+      "jobs": [
+        {
+          "title": "CEO兼創業者",
+          "company": "ThinkerCafe",
+          "date": "2023 - 現在",
+          "points": [
+            "台湾と米国にまたがる分散チームを率いてAI教育・自動化製品を開発",
+            "包括的なAIカリキュラムを設計（Personal OS、AIコミュニケーション、ビジュアル/システムハッカーシリーズ）",
+            "LINE Bot、自動化システム、AI搭載生産性ツールを構築",
+            "AI実装とワークフロー最適化に関する企業コンサルティングを提供"
+          ],
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Claude API",
+            "Python",
+            "LINE Bot",
+            "n8n",
+            "Supabase",
+            "Notion API"
+          ]
+        },
+        {
+          "title": "オペレーションマネージャー",
+          "company": "Topvan Group",
+          "date": "2020年11月 - 2023年12月 · 3年2ヶ月",
+          "points": [
+            "10-12名のチームを直接指揮、中国、フィリピン、マレーシア、ベトナムの<strong>300+名</strong>を間接管理",
+            "海外赴任：ドバイBusiness Bay（4ヶ月）、フィリピンClark（1.5年）、Makati/BGC（1年）",
+            "PythonとTelegram Bot APIを使用してデータ駆動型意思決定を強化",
+            "財務と小売を除く全オペレーションを管理、会長に直接報告"
+          ],
+          "tech": [
+            "Python",
+            "Telegram Bot API",
+            "MySQL",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "R&Dマネージャー",
+          "company": "ICS GAME",
+          "date": "2019年7月 - 2019年11月 · 5ヶ月",
+          "points": [
+            "チーム再構築：50%以上の離職率に対処、新人材採用",
+            "Scrum開発とテスト環境を実装",
+            "JIRA自動化による運用異常報告システムを開発",
+            "iOS証明書とIPブロッキング問題を解決"
+          ],
+          "tech": [
+            "Scrum",
+            "JIRA",
+            "iOS",
+            "Git"
+          ]
+        },
+        {
+          "title": "データサイエンスリード",
+          "company": "ICS GAME",
+          "date": "2018年6月 - 2019年6月 · 1年1ヶ月",
+          "points": [
+            "ゼロからデータサイエンス部門を構築",
+            "完全な環境を1ヶ月で確立：Linux、Python、Docker、Jupyter、RStudio",
+            "プレイヤーの離脱を予測し、定着戦略を実装",
+            "アービトラージプレイヤーを検出し、四半期報告書を作成"
+          ],
+          "tech": [
+            "Python",
+            "Docker",
+            "Jupyter",
+            "RStudio",
+            "Linux",
+            "Machine Learning"
+          ]
+        },
+        {
+          "title": "創業者",
+          "company": "Thinker Data Corporation",
+          "date": "2016年9月 - 2018年6月 · 1年10ヶ月",
+          "points": [
+            "プロジェクトベースのコンサルティングでチームを編成",
+            "Vidol（SET TV）：ウェブシリーズ推薦システム",
+            "中華電信：ビッグデータHadoopコンサルティング",
+            "E.SUN銀行：クロスデバイス会員アトリビューション",
+            "ITRI College：人材評価と国際企業求人データ分析"
+          ],
+          "tech": [
+            "Big Data",
+            "Hadoop",
+            "Python",
+            "R",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "ビッグデータR&Dエンジニア",
+          "company": "Coretronic",
+          "date": "2014年7月 - 2015年11月 · 1年5ヶ月",
+          "points": [
+            "データ収集ワークフローとETLエンジニアリングを設計",
+            "統計手法を適用して分析と意思決定をサポート",
+            "疾患患者食事意味分析：感情辞書構築、スコアリングモデル開発、疾患別推奨/避けるべき食品トップ5の自動報告"
+          ],
+          "tech": [
+            "Python",
+            "ETL",
+            "Statistical Analysis",
+            "NLP",
+            "Sentiment Analysis"
+          ]
+        }
+      ]
+    },
+    "featured": {
+      "title": "Featured Portfolio",
+      "subtitle": "Showcasing AI-native development & rapid delivery",
+      "projects": [
+        {
+          "name": "LINE Bot Booking System",
+          "emoji": "🤖",
+          "tagline": "48-hour delivery clinic appointment management system",
+          "highlight": "48-hour delivery | Fully automated workflow | 95%+ customer satisfaction",
+          "description": "Built a complete LINE Bot-based booking system for a physical therapy clinic, reducing booking time by 70% and dramatically improving customer satisfaction. Integrated with Google Calendar for real-time availability.",
+          "tech": [
+            "Claude Code",
+            "Supabase",
+            "Python",
+            "LINE Bot API",
+            "Google Calendar API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/linebot-booking-system",
+            "demo": ""
+          }
+        },
+        {
+          "name": "ThreadsBot Automation",
+          "emoji": "⚙️",
+          "tagline": "AI-driven social media automation system",
+          "highlight": "Multi-agent collaboration | 300% posting frequency increase",
+          "description": "Developed an intelligent social media automation system using multiple AI agents working together. Achieved 3x increase in engagement rate and 80% reduction in manual operation time through automatic content analysis and scheduling.",
+          "tech": [
+            "Claude API",
+            "MCP",
+            "Python",
+            "n8n",
+            "OpenAI API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/threadsbot",
+            "demo": ""
+          }
+        },
+        {
+          "name": "Personal OS Course",
+          "emoji": "📚",
+          "tagline": "Personal operating system course for the AI era",
+          "highlight": "100% student success rate | Practice-oriented",
+          "description": "Designed and delivered a comprehensive course series helping non-technical professionals build their own AI-powered personal operating systems. Students learn to leverage AI tools like Claude Code and MCP to automate workflows and enhance productivity.",
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Supabase",
+            "Notion API",
+            "Apps Script"
+          ],
+          "links": {
+            "github": "",
+            "demo": "https://thinkercafe.tw/personal-os"
+          }
+        }
+      ]
+    },
+    "education": {
+      "title": "学歴",
+      "schools": [
+        {
+          "school": "国立台北商業大学",
+          "degree": "修士",
+          "major": "データ・意思決定科学専攻",
+          "date": "2013年6月",
+          "location": "台北、台湾",
+          "coursework": [
+            "多基準意思決定",
+            "ビジネスインテリジェンス",
+            "アルゴリズム"
+          ]
+        },
+        {
+          "school": "世新大学",
+          "degree": "学士",
+          "major": "財務金融学専攻",
+          "date": "2011年6月",
+          "location": "台北、台湾",
+          "coursework": [
+            "統計学",
+            "財務管理",
+            "会計学",
+            "経済学"
+          ]
+        }
+      ]
+    },
+    "teaching": {
+      "title": "講演・教育活動",
+      "lectures": [
+        {
+          "title": "Rによる実践的テキストマイニング",
+          "organization": "資策会",
+          "type": "ワークショップ"
+        },
+        {
+          "title": "Rによるデータビジュアライゼーション",
+          "organization": "台北市コンピュータ協会、富邦金融",
+          "type": "企業研修"
+        },
+        {
+          "title": "データオブジェクト、オブジェクト指向プログラミングとコーディングスキル",
+          "organization": "2013 R Taiwan カンファレンス",
+          "type": "カンファレンス発表"
+        },
+        {
+          "title": "Facebookマイニングで好きな人を理解する",
+          "organization": "OpenFoundry",
+          "type": "技術講演"
+        },
+        {
+          "title": "Rによる金融データマイニング：機械データ分析",
+          "organization": "台湾金融研訓院",
+          "type": "コース"
+        }
+      ]
+    },
+    "skills": {
+      "title": "Technical Capability Map",
+      "philosophy": {
+        "title": "Technical Philosophy",
+        "content": "I don't chase \"how many languages I know\" — I chase \"how fast I can solve problems.\" In the AI collaboration era, the focus isn't on hand-coding every line, but on: <strong>1) Knowing what tool combinations to use</strong> <strong>2) Designing maintainable system architectures</strong> <strong>3) Making AI your development partner</strong>"
+      },
+      "layers": [
+        {
+          "level": 1,
+          "name": "AI Collaboration Ecosystem",
+          "description": "Core competitive advantage in the AI-Native era",
+          "categories": [
+            {
+              "name": "AI Development Platforms",
+              "items": [
+                "Claude Code",
+                "MCP (Model Context Protocol)",
+                "Claude API",
+                "OpenAI API",
+                "Gemini API",
+                "Prompt Engineering",
+                "Agent Design"
+              ]
+            },
+            {
+              "name": "Automation Orchestration",
+              "items": [
+                "n8n (Workflow Automation)",
+                "GitHub Actions",
+                "Apps Script"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "name": "Modern Cloud Infrastructure",
+          "description": "Deployment and data foundations",
+          "categories": [
+            {
+              "name": "Deployment & Compute",
+              "items": [
+                "Vercel (Frontend)",
+                "Railway (Backend)",
+                "AWS EC2",
+                "Google Compute Engine"
+              ]
+            },
+            {
+              "name": "Database Ecosystem",
+              "items": [
+                "Supabase (PostgreSQL + Realtime)",
+                "Neon (Serverless PostgreSQL)",
+                "SQLite (Local/Edge)"
+              ]
+            },
+            {
+              "name": "Vector Databases",
+              "items": [
+                "Weaviate",
+                "Chroma (AI Semantic Search)"
+              ]
+            },
+            {
+              "name": "Traditional Databases",
+              "items": [
+                "MySQL",
+                "MSSQL",
+                "MongoDB"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "name": "Programming Languages & Frameworks",
+          "description": "Multi-paradigm development capabilities",
+          "categories": [
+            {
+              "name": "Primary Languages",
+              "items": [
+                "Python (AI Collaboration, Data Science, Automation)",
+                "JavaScript (Frontend, Apps Script)",
+                "R (Data Analysis & Visualization)"
+              ]
+            },
+            {
+              "name": "Project Experience",
+              "items": [
+                "PHP",
+                "C#",
+                "Android"
+              ]
+            },
+            {
+              "name": "Markup & Configuration",
+              "items": [
+                "Markdown",
+                "LaTeX"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "name": "Data Science Toolchain",
+          "description": "Analytics and machine learning capabilities",
+          "categories": [
+            {
+              "name": "Machine Learning",
+              "items": [
+                "Regression Models",
+                "Decision Trees",
+                "Neural Networks",
+                "Clustering"
+              ]
+            },
+            {
+              "name": "Data Processing",
+              "items": [
+                "Text Mining",
+                "Semantic Analysis",
+                "Regular Expressions",
+                "Visualization (Shiny, Python Ecosystem)"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 5,
+          "name": "Collaboration & Project Management",
+          "description": "Team coordination and delivery",
+          "categories": [
+            {
+              "name": "Version Control",
+              "items": [
+                "GitHub",
+                "GitLab"
+              ]
+            },
+            {
+              "name": "Project Management",
+              "items": [
+                "JIRA",
+                "Scrum",
+                "Kanban"
+              ]
+            },
+            {
+              "name": "Communication Integration",
+              "items": [
+                "LINE Bot",
+                "RESTful API"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "projects": {
+      "title": "Featured Projects",
+      "items": [
+        {
+          "title": "ThinkerCafe Education Platform",
+          "tags": [
+            "AI Education",
+            "System Design"
+          ],
+          "points": [
+            "Comprehensive AI curriculum (Personal OS, 5+ course series)",
+            "Serving non-technical professionals entering AI era",
+            "Built complete ecosystem from content to delivery",
+            "Emphasis on practical, implementable systems"
+          ]
+        },
+        {
+          "title": "LINE Bot Automation Systems",
+          "tags": [
+            "Enterprise",
+            "Automation"
+          ],
+          "points": [
+            "Booking system for physical therapy clinic",
+            "70% reduction in booking process time",
+            "Google Calendar integration",
+            "Improved customer satisfaction scores"
+          ]
+        },
+        {
+          "title": "Thinker Kit",
+          "tags": [
+            "Productivity",
+            "AI Agent"
+          ],
+          "points": [
+            "Personal AI enhancement system",
+            "Integrated memory, prompt library, productivity tools",
+            "Daily insights and goal tracking",
+            "Gamified engagement system"
+          ]
+        },
+        {
+          "title": "ThreadsBot",
+          "tags": [
+            "Social Media",
+            "AI Agent"
+          ],
+          "points": [
+            "AI-powered social media automation",
+            "3x increase in engagement rate",
+            "80% reduction in operation time",
+            "Automatic content analysis and scheduling"
+          ]
+        },
+        {
+          "title": "Ryan OS & Mary OS",
+          "tags": [
+            "Family Tech",
+            "System"
+          ],
+          "points": [
+            "AI-driven family management systems",
+            "Education tracking (Ryan OS)",
+            "Elder care coordination (Mary OS)",
+            "Data-driven family decisions"
+          ]
+        },
+        {
+          "title": "300+ Team Operations",
+          "tags": [
+            "Leadership",
+            "Scale"
+          ],
+          "points": [
+            "International team across Philippines",
+            "24/7 operations coordination",
+            "Data-driven KPI systems",
+            "40% cost reduction through automation"
+          ]
+        }
+      ]
+    },
+    "cta": {
+      "title": "Let's Build Something Together",
+      "subtitle": "Currently seeking opportunities to work with enterprise clients on AI implementation, digital transformation, and solution architecture.",
+      "location": "Remote-friendly · Taipei/Taichung/Tainan · 70-100K TWD/month",
+      "buttons": [
+        "Get in Touch",
+        "Visit ThinkerCafe",
+        "LinkedIn Profile"
+      ]
+    },
+    "footer": {
+      "built": "Built with intention · Designed to inspire · Updated January 2025",
+      "quote": "When technology returns to humanity, intelligence finds its warmth"
+    }
+  },
+  "ko": {
+    "hero": {
+      "name": "Cruz Tang",
+      "tagline": "AI 네이티브 리더 & 시스템 아키텍트",
+      "subtitle": "AI 구현을 통한 기업 혁신 · 300+ 국제 팀 관리부터 AI 우선 솔루션 구축까지",
+      "stats": [
+        "년 경험",
+        "관리 팀",
+        "설립 기업",
+        "해결 문제"
+      ]
+    },
+    "nav": {
+      "about": "소개",
+      "experience": "경력",
+      "featured": "Portfolio",
+      "projects": "프로젝트",
+      "contact": "연락처",
+      "education": "학력",
+      "teaching": "강연 활동",
+      "skills": "기술 역량",
+      "portfolio": "Portfolio"
+    },
+    "about": {
+      "title": "소개",
+      "content": "저는 대규모 운영과 최첨단 AI 구현의 가교 역할을 합니다. Topvan Group에서 중국, 필리핀, 말레이시아, 베트남의 <strong>300+ 팀원</strong>을 관리한 후, AI 교육과 기업 자동화를 민주화하기 위해 <strong>ThinkerCafe</strong>를 설립했습니다.<br><br>저의 독특한 배경은 <strong>국제 팀 리더십</strong>, <strong>AI/데이터 과학 기술 깊이</strong>, 그리고 <strong>10년 이상의 강의 경험</strong>을 결합합니다. 단순히 AI 솔루션을 구현하는 것이 아니라 사람들이 더 스마트하게 일할 수 있도록 시스템을 구축합니다.<br><br>현재 이러한 종합적인 전문성을 기업 AI 컨설팅 및 디지털 전환 프로젝트에 적용할 기회를 찾고 있습니다."
+    },
+    "experience": {
+      "title": "경력",
+      "jobs": [
+        {
+          "title": "CEO 겸 창업자",
+          "company": "ThinkerCafe",
+          "date": "2023 - 현재",
+          "points": [
+            "대만과 미국에 걸친 분산 팀을 이끌며 AI 교육 및 자동화 제품 개발",
+            "종합 AI 커리큘럼 설계 (Personal OS, AI 커뮤니케이션, 비주얼/시스템 해커 시리즈)",
+            "LINE Bot, 자동화 시스템, AI 기반 생산성 도구 구축",
+            "AI 구현 및 워크플로우 최적화에 대한 기업 컨설팅 제공"
+          ],
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Claude API",
+            "Python",
+            "LINE Bot",
+            "n8n",
+            "Supabase",
+            "Notion API"
+          ]
+        },
+        {
+          "title": "운영 관리자",
+          "company": "Topvan Group",
+          "date": "2020년 11월 - 2023년 12월 · 3년 2개월",
+          "points": [
+            "10-12명 팀 직접 리드, 중국, 필리핀, 말레이시아, 베트남의 <strong>300+ 멤버</strong> 간접 관리",
+            "해외 파견: 두바이 Business Bay (4개월), 필리핀 Clark (1.5년), Makati/BGC (1년)",
+            "Python 및 Telegram Bot API를 사용하여 데이터 기반 의사결정 강화",
+            "재무 및 소매를 제외한 모든 운영 관리, 회장에게 직접 보고"
+          ],
+          "tech": [
+            "Python",
+            "Telegram Bot API",
+            "MySQL",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "R&D 매니저",
+          "company": "ICS GAME",
+          "date": "2019년 7월 - 2019년 11월 · 5개월",
+          "points": [
+            "팀 재건: 50% 이상의 이직률 해결, 신규 인재 채용",
+            "Scrum 개발 및 테스트 환경 구축",
+            "JIRA 자동화를 통한 운영 이상 보고 시스템 개발",
+            "iOS 인증서 및 IP 차단 문제 해결"
+          ],
+          "tech": [
+            "Scrum",
+            "JIRA",
+            "iOS",
+            "Git"
+          ]
+        },
+        {
+          "title": "데이터 사이언스 리드",
+          "company": "ICS GAME",
+          "date": "2018년 6월 - 2019년 6월 · 1년 1개월",
+          "points": [
+            "제로부터 데이터 사이언스 부서 구축",
+            "완전한 환경을 1개월 내 구축: Linux, Python, Docker, Jupyter, RStudio",
+            "플레이어 이탈 예측 및 유지 전략 구현",
+            "차익거래 플레이어 탐지 및 분기별 보고서 작성"
+          ],
+          "tech": [
+            "Python",
+            "Docker",
+            "Jupyter",
+            "RStudio",
+            "Linux",
+            "Machine Learning"
+          ]
+        },
+        {
+          "title": "창업자",
+          "company": "Thinker Data Corporation",
+          "date": "2016년 9월 - 2018년 6월 · 1년 10개월",
+          "points": [
+            "프로젝트 기반 컨설팅으로 팀 구성",
+            "Vidol (SET TV): 웹 시리즈 추천 시스템",
+            "중화전신: 빅데이터 Hadoop 컨설팅",
+            "E.SUN 은행: 크로스 디바이스 회원 귀속",
+            "ITRI College: 인재 평가 및 국제 기업 채용 데이터 분석"
+          ],
+          "tech": [
+            "Big Data",
+            "Hadoop",
+            "Python",
+            "R",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "빅데이터 R&D 엔지니어",
+          "company": "Coretronic",
+          "date": "2014년 7월 - 2015년 11월 · 1년 5개월",
+          "points": [
+            "데이터 수집 워크플로우 및 ETL 엔지니어링 설계",
+            "통계 방법을 적용하여 분석 및 의사결정 지원",
+            "질병 환자 식이 의미 분석: 감정 사전 구축, 스코어링 모델 개발, 질병별 추천/회피 상위 5개 식품 자동 보고"
+          ],
+          "tech": [
+            "Python",
+            "ETL",
+            "Statistical Analysis",
+            "NLP",
+            "Sentiment Analysis"
+          ]
+        }
+      ]
+    },
+    "featured": {
+      "title": "Featured Portfolio",
+      "subtitle": "Showcasing AI-native development & rapid delivery",
+      "projects": [
+        {
+          "name": "LINE Bot Booking System",
+          "emoji": "🤖",
+          "tagline": "48-hour delivery clinic appointment management system",
+          "highlight": "48-hour delivery | Fully automated workflow | 95%+ customer satisfaction",
+          "description": "Built a complete LINE Bot-based booking system for a physical therapy clinic, reducing booking time by 70% and dramatically improving customer satisfaction. Integrated with Google Calendar for real-time availability.",
+          "tech": [
+            "Claude Code",
+            "Supabase",
+            "Python",
+            "LINE Bot API",
+            "Google Calendar API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/linebot-booking-system",
+            "demo": ""
+          }
+        },
+        {
+          "name": "ThreadsBot Automation",
+          "emoji": "⚙️",
+          "tagline": "AI-driven social media automation system",
+          "highlight": "Multi-agent collaboration | 300% posting frequency increase",
+          "description": "Developed an intelligent social media automation system using multiple AI agents working together. Achieved 3x increase in engagement rate and 80% reduction in manual operation time through automatic content analysis and scheduling.",
+          "tech": [
+            "Claude API",
+            "MCP",
+            "Python",
+            "n8n",
+            "OpenAI API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/threadsbot",
+            "demo": ""
+          }
+        },
+        {
+          "name": "Personal OS Course",
+          "emoji": "📚",
+          "tagline": "Personal operating system course for the AI era",
+          "highlight": "100% student success rate | Practice-oriented",
+          "description": "Designed and delivered a comprehensive course series helping non-technical professionals build their own AI-powered personal operating systems. Students learn to leverage AI tools like Claude Code and MCP to automate workflows and enhance productivity.",
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Supabase",
+            "Notion API",
+            "Apps Script"
+          ],
+          "links": {
+            "github": "",
+            "demo": "https://thinkercafe.tw/personal-os"
+          }
+        }
+      ]
+    },
+    "education": {
+      "title": "학력",
+      "schools": [
+        {
+          "school": "국립 타이베이 상업대학교",
+          "degree": "석사",
+          "major": "데이터 및 의사결정 과학",
+          "date": "2013년 6월",
+          "location": "타이베이, 대만",
+          "coursework": [
+            "다기준 의사결정",
+            "비즈니스 인텔리전스",
+            "알고리즘"
+          ]
+        },
+        {
+          "school": "스신 대학교",
+          "degree": "학사",
+          "major": "재무금융학",
+          "date": "2011년 6월",
+          "location": "타이베이, 대만",
+          "coursework": [
+            "통계학",
+            "재무관리",
+            "회계학",
+            "경제학"
+          ]
+        }
+      ]
+    },
+    "teaching": {
+      "title": "강연 및 교육",
+      "lectures": [
+        {
+          "title": "R을 활용한 실전 텍스트 마이닝",
+          "organization": "자책회",
+          "type": "워크숍"
+        },
+        {
+          "title": "R을 활용한 데이터 시각화",
+          "organization": "타이베이 컴퓨터 협회, 푸방 금융",
+          "type": "기업 교육"
+        },
+        {
+          "title": "데이터 객체, 객체지향 프로그래밍 및 코딩 기술",
+          "organization": "2013 R Taiwan 컨퍼런스",
+          "type": "컨퍼런스 발표"
+        },
+        {
+          "title": "Facebook 마이닝으로 좋아하는 사람 이해하기",
+          "organization": "OpenFoundry",
+          "type": "기술 발표"
+        },
+        {
+          "title": "R을 활용한 금융 데이터 마이닝: 머신 데이터 분석",
+          "organization": "대만 금융연수원",
+          "type": "강좌"
+        }
+      ]
+    },
+    "skills": {
+      "title": "Technical Capability Map",
+      "philosophy": {
+        "title": "Technical Philosophy",
+        "content": "I don't chase \"how many languages I know\" — I chase \"how fast I can solve problems.\" In the AI collaboration era, the focus isn't on hand-coding every line, but on: <strong>1) Knowing what tool combinations to use</strong> <strong>2) Designing maintainable system architectures</strong> <strong>3) Making AI your development partner</strong>"
+      },
+      "layers": [
+        {
+          "level": 1,
+          "name": "AI Collaboration Ecosystem",
+          "description": "Core competitive advantage in the AI-Native era",
+          "categories": [
+            {
+              "name": "AI Development Platforms",
+              "items": [
+                "Claude Code",
+                "MCP (Model Context Protocol)",
+                "Claude API",
+                "OpenAI API",
+                "Gemini API",
+                "Prompt Engineering",
+                "Agent Design"
+              ]
+            },
+            {
+              "name": "Automation Orchestration",
+              "items": [
+                "n8n (Workflow Automation)",
+                "GitHub Actions",
+                "Apps Script"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "name": "Modern Cloud Infrastructure",
+          "description": "Deployment and data foundations",
+          "categories": [
+            {
+              "name": "Deployment & Compute",
+              "items": [
+                "Vercel (Frontend)",
+                "Railway (Backend)",
+                "AWS EC2",
+                "Google Compute Engine"
+              ]
+            },
+            {
+              "name": "Database Ecosystem",
+              "items": [
+                "Supabase (PostgreSQL + Realtime)",
+                "Neon (Serverless PostgreSQL)",
+                "SQLite (Local/Edge)"
+              ]
+            },
+            {
+              "name": "Vector Databases",
+              "items": [
+                "Weaviate",
+                "Chroma (AI Semantic Search)"
+              ]
+            },
+            {
+              "name": "Traditional Databases",
+              "items": [
+                "MySQL",
+                "MSSQL",
+                "MongoDB"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "name": "Programming Languages & Frameworks",
+          "description": "Multi-paradigm development capabilities",
+          "categories": [
+            {
+              "name": "Primary Languages",
+              "items": [
+                "Python (AI Collaboration, Data Science, Automation)",
+                "JavaScript (Frontend, Apps Script)",
+                "R (Data Analysis & Visualization)"
+              ]
+            },
+            {
+              "name": "Project Experience",
+              "items": [
+                "PHP",
+                "C#",
+                "Android"
+              ]
+            },
+            {
+              "name": "Markup & Configuration",
+              "items": [
+                "Markdown",
+                "LaTeX"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "name": "Data Science Toolchain",
+          "description": "Analytics and machine learning capabilities",
+          "categories": [
+            {
+              "name": "Machine Learning",
+              "items": [
+                "Regression Models",
+                "Decision Trees",
+                "Neural Networks",
+                "Clustering"
+              ]
+            },
+            {
+              "name": "Data Processing",
+              "items": [
+                "Text Mining",
+                "Semantic Analysis",
+                "Regular Expressions",
+                "Visualization (Shiny, Python Ecosystem)"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 5,
+          "name": "Collaboration & Project Management",
+          "description": "Team coordination and delivery",
+          "categories": [
+            {
+              "name": "Version Control",
+              "items": [
+                "GitHub",
+                "GitLab"
+              ]
+            },
+            {
+              "name": "Project Management",
+              "items": [
+                "JIRA",
+                "Scrum",
+                "Kanban"
+              ]
+            },
+            {
+              "name": "Communication Integration",
+              "items": [
+                "LINE Bot",
+                "RESTful API"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "projects": {
+      "title": "Featured Projects",
+      "items": [
+        {
+          "title": "ThinkerCafe Education Platform",
+          "tags": [
+            "AI Education",
+            "System Design"
+          ],
+          "points": [
+            "Comprehensive AI curriculum (Personal OS, 5+ course series)",
+            "Serving non-technical professionals entering AI era",
+            "Built complete ecosystem from content to delivery",
+            "Emphasis on practical, implementable systems"
+          ]
+        },
+        {
+          "title": "LINE Bot Automation Systems",
+          "tags": [
+            "Enterprise",
+            "Automation"
+          ],
+          "points": [
+            "Booking system for physical therapy clinic",
+            "70% reduction in booking process time",
+            "Google Calendar integration",
+            "Improved customer satisfaction scores"
+          ]
+        },
+        {
+          "title": "Thinker Kit",
+          "tags": [
+            "Productivity",
+            "AI Agent"
+          ],
+          "points": [
+            "Personal AI enhancement system",
+            "Integrated memory, prompt library, productivity tools",
+            "Daily insights and goal tracking",
+            "Gamified engagement system"
+          ]
+        },
+        {
+          "title": "ThreadsBot",
+          "tags": [
+            "Social Media",
+            "AI Agent"
+          ],
+          "points": [
+            "AI-powered social media automation",
+            "3x increase in engagement rate",
+            "80% reduction in operation time",
+            "Automatic content analysis and scheduling"
+          ]
+        },
+        {
+          "title": "Ryan OS & Mary OS",
+          "tags": [
+            "Family Tech",
+            "System"
+          ],
+          "points": [
+            "AI-driven family management systems",
+            "Education tracking (Ryan OS)",
+            "Elder care coordination (Mary OS)",
+            "Data-driven family decisions"
+          ]
+        },
+        {
+          "title": "300+ Team Operations",
+          "tags": [
+            "Leadership",
+            "Scale"
+          ],
+          "points": [
+            "International team across Philippines",
+            "24/7 operations coordination",
+            "Data-driven KPI systems",
+            "40% cost reduction through automation"
+          ]
+        }
+      ]
+    },
+    "cta": {
+      "title": "Let's Build Something Together",
+      "subtitle": "Currently seeking opportunities to work with enterprise clients on AI implementation, digital transformation, and solution architecture.",
+      "location": "Remote-friendly · Taipei/Taichung/Tainan · 70-100K TWD/month",
+      "buttons": [
+        "Get in Touch",
+        "Visit ThinkerCafe",
+        "LinkedIn Profile"
+      ]
+    },
+    "footer": {
+      "built": "Built with intention · Designed to inspire · Updated January 2025",
+      "quote": "When technology returns to humanity, intelligence finds its warmth"
+    }
+  },
+  "ar": {
+    "hero": {
+      "name": "كروز تانج",
+      "tagline": "قائد مبني على الذكاء الاصطناعي ومهندس أنظمة",
+      "subtitle": "تحويل المؤسسات من خلال تطبيق الذكاء الاصطناعي · من إدارة 300+ فريق دولي إلى بناء حلول الذكاء الاصطناعي الأولى",
+      "stats": [
+        "سنوات الخبرة",
+        "الفريق المُدار",
+        "الشركات المؤسسة",
+        "المشاكل المحلولة"
+      ]
+    },
+    "nav": {
+      "about": "نبذة عني",
+      "experience": "الخبرة",
+      "featured": "Portfolio",
+      "projects": "المشاريع",
+      "contact": "اتصل بي",
+      "education": "التعليم",
+      "teaching": "التدريس",
+      "skills": "المهارات",
+      "portfolio": "Portfolio"
+    },
+    "about": {
+      "title": "نبذة عني",
+      "content": "أربط بين العمليات واسعة النطاق وتطبيق الذكاء الاصطناعي المتطور. بعد إدارة <strong>300+ عضو فريق</strong> في Topvan Group عبر الصين والفلبين وماليزيا وفيتنام، أسست <strong>ThinkerCafe</strong> لإضفاء الطابع الديمقراطي على تعليم الذكاء الاصطناعي والأتمتة المؤسسية.<br><br>تجمع خلفيتي الفريدة بين <strong>القيادة الدولية للفرق</strong> و<strong>العمق التقني في الذكاء الاصطناعي/علوم البيانات</strong> و<strong>خبرة تدريس تزيد عن 10 سنوات</strong>. لا أقوم فقط بتنفيذ حلول الذكاء الاصطناعي - بل أبني أنظمة تمكن الناس من العمل بذكاء أكبر.<br><br>أبحث حاليًا عن فرص لجلب هذه الخبرة الشاملة إلى استشارات الذكاء الاصطناعي المؤسسي ومشاريع التحول الرقمي."
+    },
+    "experience": {
+      "title": "المسار المهني",
+      "jobs": [
+        {
+          "title": "الرئيس التنفيذي والمؤسس",
+          "company": "ThinkerCafe",
+          "date": "2023 - الحاضر",
+          "points": [
+            "قيادة فريق موزع عبر تايوان والولايات المتحدة لتطوير منتجات تعليم الذكاء الاصطناعي والأتمتة",
+            "تصميم منهج شامل للذكاء الاصطناعي (نظام OS الشخصي، تواصل الذكاء الاصطناعي، سلسلة الهاكر البصري/النظامي)",
+            "بناء LINE Bot وأنظمة الأتمتة وأدوات الإنتاجية المدعومة بالذكاء الاصطناعي",
+            "تقديم استشارات مؤسسية حول تطبيق الذكاء الاصطناعي وتحسين سير العمل"
+          ],
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Claude API",
+            "Python",
+            "LINE Bot",
+            "n8n",
+            "Supabase",
+            "Notion API"
+          ]
+        },
+        {
+          "title": "مدير العمليات",
+          "company": "Topvan Group",
+          "date": "نوفمبر 2020 - ديسمبر 2023 · 3 سنوات و2 شهر",
+          "points": [
+            "قيادة مباشرة لفريق من 10-12 شخصًا، إدارة غير مباشرة لـ <strong>300+ عضو</strong> من الصين والفلبين وماليزيا وفيتنام",
+            "مهام خارجية: دبي بزنس باي (4 أشهر)، الفلبين كلارك (1.5 سنة)، ماكاتي/BGC (سنة واحدة)",
+            "تعزيز اتخاذ القرارات المستندة إلى البيانات باستخدام Python وTelegram Bot API",
+            "إدارة جميع العمليات باستثناء المالية والتجزئة، التقارير مباشرة إلى الرئيس"
+          ],
+          "tech": [
+            "Python",
+            "Telegram Bot API",
+            "MySQL",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "مدير البحث والتطوير",
+          "company": "ICS GAME",
+          "date": "يوليو 2019 - نوفمبر 2019 · 5 أشهر",
+          "points": [
+            "إعادة بناء الفريق: معالجة معدل دوران بنسبة 50%+، توظيف مواهب جديدة",
+            "تنفيذ Scrum وبيئات الاختبار",
+            "تطوير نظام الإبلاغ عن الحالات الشاذة التشغيلية مع أتمتة JIRA",
+            "حل مشاكل شهادة iOS وحظر IP"
+          ],
+          "tech": [
+            "Scrum",
+            "JIRA",
+            "iOS",
+            "Git"
+          ]
+        },
+        {
+          "title": "قائد علوم البيانات",
+          "company": "ICS GAME",
+          "date": "يونيو 2018 - يونيو 2019 · سنة و1 شهر",
+          "points": [
+            "بناء قسم علوم البيانات من الصفر",
+            "إنشاء بيئة كاملة في شهر واحد: Linux، Python، Docker، Jupyter، RStudio",
+            "التنبؤ بتوقف اللاعبين وتنفيذ استراتيجيات الاحتفاظ",
+            "اكتشاف لاعبي المراجحة وإعداد التقارير الفصلية"
+          ],
+          "tech": [
+            "Python",
+            "Docker",
+            "Jupyter",
+            "RStudio",
+            "Linux",
+            "Machine Learning"
+          ]
+        },
+        {
+          "title": "المؤسس",
+          "company": "Thinker Data Corporation",
+          "date": "سبتمبر 2016 - يونيو 2018 · سنة و10 أشهر",
+          "points": [
+            "استشارات قائمة على المشاريع مع فرق مجمعة",
+            "Vidol (SET TV): نظام توصية مسلسلات الويب",
+            "Chunghwa Telecom: استشارات Hadoop للبيانات الضخمة",
+            "بنك E.SUN: إسناد الأعضاء عبر الأجهزة",
+            "ITRI College: تقييم المواهب وتحليل بيانات وظائف الشركات الدولية"
+          ],
+          "tech": [
+            "Big Data",
+            "Hadoop",
+            "Python",
+            "R",
+            "Data Analysis"
+          ]
+        },
+        {
+          "title": "مهندس بحث وتطوير البيانات الضخمة",
+          "company": "Coretronic",
+          "date": "يوليو 2014 - نوفمبر 2015 · سنة و5 أشهر",
+          "points": [
+            "تصميم سير عمل جمع البيانات وهندسة ETL",
+            "تطبيق الأساليب الإحصائية للتحليل ودعم اتخاذ القرار",
+            "التحليل الدلالي للنظام الغذائي لمرضى الأمراض: بناء معجم المشاعر، تطوير نموذج التسجيل، إعداد تقارير تلقائية لأفضل 5 أطعمة موصى بها/يجب تجنبها لكل مرض"
+          ],
+          "tech": [
+            "Python",
+            "ETL",
+            "Statistical Analysis",
+            "NLP",
+            "Sentiment Analysis"
+          ]
+        }
+      ]
+    },
+    "featured": {
+      "title": "Featured Portfolio",
+      "subtitle": "Showcasing AI-native development & rapid delivery",
+      "projects": [
+        {
+          "name": "LINE Bot Booking System",
+          "emoji": "🤖",
+          "tagline": "48-hour delivery clinic appointment management system",
+          "highlight": "48-hour delivery | Fully automated workflow | 95%+ customer satisfaction",
+          "description": "Built a complete LINE Bot-based booking system for a physical therapy clinic, reducing booking time by 70% and dramatically improving customer satisfaction. Integrated with Google Calendar for real-time availability.",
+          "tech": [
+            "Claude Code",
+            "Supabase",
+            "Python",
+            "LINE Bot API",
+            "Google Calendar API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/linebot-booking-system",
+            "demo": ""
+          }
+        },
+        {
+          "name": "ThreadsBot Automation",
+          "emoji": "⚙️",
+          "tagline": "AI-driven social media automation system",
+          "highlight": "Multi-agent collaboration | 300% posting frequency increase",
+          "description": "Developed an intelligent social media automation system using multiple AI agents working together. Achieved 3x increase in engagement rate and 80% reduction in manual operation time through automatic content analysis and scheduling.",
+          "tech": [
+            "Claude API",
+            "MCP",
+            "Python",
+            "n8n",
+            "OpenAI API"
+          ],
+          "links": {
+            "github": "https://github.com/thinkercafe-tw/threadsbot",
+            "demo": ""
+          }
+        },
+        {
+          "name": "Personal OS Course",
+          "emoji": "📚",
+          "tagline": "Personal operating system course for the AI era",
+          "highlight": "100% student success rate | Practice-oriented",
+          "description": "Designed and delivered a comprehensive course series helping non-technical professionals build their own AI-powered personal operating systems. Students learn to leverage AI tools like Claude Code and MCP to automate workflows and enhance productivity.",
+          "tech": [
+            "Claude Code",
+            "MCP",
+            "Supabase",
+            "Notion API",
+            "Apps Script"
+          ],
+          "links": {
+            "github": "",
+            "demo": "https://thinkercafe.tw/personal-os"
+          }
+        }
+      ]
+    },
+    "education": {
+      "title": "التعليم",
+      "schools": [
+        {
+          "school": "جامعة تايبيه الوطنية للأعمال",
+          "degree": "ماجستير العلوم",
+          "major": "علوم البيانات واتخاذ القرار",
+          "date": "يونيو 2013",
+          "location": "تايبيه، تايوان",
+          "coursework": [
+            "اتخاذ القرار متعدد المعايير",
+            "ذكاء الأعمال",
+            "الخوارزميات"
+          ]
+        },
+        {
+          "school": "جامعة شيه شين",
+          "degree": "بكالوريوس إدارة الأعمال",
+          "major": "المالية",
+          "date": "يونيو 2011",
+          "location": "تايبيه، تايوان",
+          "coursework": [
+            "الإحصاء",
+            "الإدارة المالية",
+            "المحاسبة",
+            "الاقتصاد"
+          ]
+        }
+      ]
+    },
+    "teaching": {
+      "title": "التدريس والمحاضرات",
+      "lectures": [
+        {
+          "title": "التنقيب عن النصوص باستخدام R",
+          "organization": "معهد صناعة المعلومات",
+          "type": "ورشة عمل"
+        },
+        {
+          "title": "تصور البيانات باستخدام R",
+          "organization": "جمعية الكمبيوتر في تايبيه، فوبون المالية",
+          "type": "تدريب مؤسسي"
+        },
+        {
+          "title": "كائنات البيانات والبرمجة الكائنية ومهارات الترميز",
+          "organization": "مؤتمر R Taiwan 2013",
+          "type": "عرض تقديمي"
+        },
+        {
+          "title": "التنقيب في Facebook لمعرفة الشخص الذي تحبه",
+          "organization": "OpenFoundry",
+          "type": "محاضرة تقنية"
+        },
+        {
+          "title": "التنقيب في البيانات المالية باستخدام R",
+          "organization": "أكاديمية تايوان للخدمات المصرفية والمالية",
+          "type": "دورة"
+        }
+      ]
+    },
+    "skills": {
+      "title": "Technical Capability Map",
+      "philosophy": {
+        "title": "Technical Philosophy",
+        "content": "I don't chase \"how many languages I know\" — I chase \"how fast I can solve problems.\" In the AI collaboration era, the focus isn't on hand-coding every line, but on: <strong>1) Knowing what tool combinations to use</strong> <strong>2) Designing maintainable system architectures</strong> <strong>3) Making AI your development partner</strong>"
+      },
+      "layers": [
+        {
+          "level": 1,
+          "name": "AI Collaboration Ecosystem",
+          "description": "Core competitive advantage in the AI-Native era",
+          "categories": [
+            {
+              "name": "AI Development Platforms",
+              "items": [
+                "Claude Code",
+                "MCP (Model Context Protocol)",
+                "Claude API",
+                "OpenAI API",
+                "Gemini API",
+                "Prompt Engineering",
+                "Agent Design"
+              ]
+            },
+            {
+              "name": "Automation Orchestration",
+              "items": [
+                "n8n (Workflow Automation)",
+                "GitHub Actions",
+                "Apps Script"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "name": "Modern Cloud Infrastructure",
+          "description": "Deployment and data foundations",
+          "categories": [
+            {
+              "name": "Deployment & Compute",
+              "items": [
+                "Vercel (Frontend)",
+                "Railway (Backend)",
+                "AWS EC2",
+                "Google Compute Engine"
+              ]
+            },
+            {
+              "name": "Database Ecosystem",
+              "items": [
+                "Supabase (PostgreSQL + Realtime)",
+                "Neon (Serverless PostgreSQL)",
+                "SQLite (Local/Edge)"
+              ]
+            },
+            {
+              "name": "Vector Databases",
+              "items": [
+                "Weaviate",
+                "Chroma (AI Semantic Search)"
+              ]
+            },
+            {
+              "name": "Traditional Databases",
+              "items": [
+                "MySQL",
+                "MSSQL",
+                "MongoDB"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "name": "Programming Languages & Frameworks",
+          "description": "Multi-paradigm development capabilities",
+          "categories": [
+            {
+              "name": "Primary Languages",
+              "items": [
+                "Python (AI Collaboration, Data Science, Automation)",
+                "JavaScript (Frontend, Apps Script)",
+                "R (Data Analysis & Visualization)"
+              ]
+            },
+            {
+              "name": "Project Experience",
+              "items": [
+                "PHP",
+                "C#",
+                "Android"
+              ]
+            },
+            {
+              "name": "Markup & Configuration",
+              "items": [
+                "Markdown",
+                "LaTeX"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "name": "Data Science Toolchain",
+          "description": "Analytics and machine learning capabilities",
+          "categories": [
+            {
+              "name": "Machine Learning",
+              "items": [
+                "Regression Models",
+                "Decision Trees",
+                "Neural Networks",
+                "Clustering"
+              ]
+            },
+            {
+              "name": "Data Processing",
+              "items": [
+                "Text Mining",
+                "Semantic Analysis",
+                "Regular Expressions",
+                "Visualization (Shiny, Python Ecosystem)"
+              ]
+            }
+          ]
+        },
+        {
+          "level": 5,
+          "name": "Collaboration & Project Management",
+          "description": "Team coordination and delivery",
+          "categories": [
+            {
+              "name": "Version Control",
+              "items": [
+                "GitHub",
+                "GitLab"
+              ]
+            },
+            {
+              "name": "Project Management",
+              "items": [
+                "JIRA",
+                "Scrum",
+                "Kanban"
+              ]
+            },
+            {
+              "name": "Communication Integration",
+              "items": [
+                "LINE Bot",
+                "RESTful API"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "projects": {
+      "title": "Featured Projects",
+      "items": [
+        {
+          "title": "ThinkerCafe Education Platform",
+          "tags": [
+            "AI Education",
+            "System Design"
+          ],
+          "points": [
+            "Comprehensive AI curriculum (Personal OS, 5+ course series)",
+            "Serving non-technical professionals entering AI era",
+            "Built complete ecosystem from content to delivery",
+            "Emphasis on practical, implementable systems"
+          ]
+        },
+        {
+          "title": "LINE Bot Automation Systems",
+          "tags": [
+            "Enterprise",
+            "Automation"
+          ],
+          "points": [
+            "Booking system for physical therapy clinic",
+            "70% reduction in booking process time",
+            "Google Calendar integration",
+            "Improved customer satisfaction scores"
+          ]
+        },
+        {
+          "title": "Thinker Kit",
+          "tags": [
+            "Productivity",
+            "AI Agent"
+          ],
+          "points": [
+            "Personal AI enhancement system",
+            "Integrated memory, prompt library, productivity tools",
+            "Daily insights and goal tracking",
+            "Gamified engagement system"
+          ]
+        },
+        {
+          "title": "ThreadsBot",
+          "tags": [
+            "Social Media",
+            "AI Agent"
+          ],
+          "points": [
+            "AI-powered social media automation",
+            "3x increase in engagement rate",
+            "80% reduction in operation time",
+            "Automatic content analysis and scheduling"
+          ]
+        },
+        {
+          "title": "Ryan OS & Mary OS",
+          "tags": [
+            "Family Tech",
+            "System"
+          ],
+          "points": [
+            "AI-driven family management systems",
+            "Education tracking (Ryan OS)",
+            "Elder care coordination (Mary OS)",
+            "Data-driven family decisions"
+          ]
+        },
+        {
+          "title": "300+ Team Operations",
+          "tags": [
+            "Leadership",
+            "Scale"
+          ],
+          "points": [
+            "International team across Philippines",
+            "24/7 operations coordination",
+            "Data-driven KPI systems",
+            "40% cost reduction through automation"
+          ]
+        }
+      ]
+    },
+    "cta": {
+      "title": "Let's Build Something Together",
+      "subtitle": "Currently seeking opportunities to work with enterprise clients on AI implementation, digital transformation, and solution architecture.",
+      "location": "Remote-friendly · Taipei/Taichung/Tainan · 70-100K TWD/month",
+      "buttons": [
+        "Get in Touch",
+        "Visit ThinkerCafe",
+        "LinkedIn Profile"
+      ]
+    },
+    "footer": {
+      "built": "Built with intention · Designed to inspire · Updated January 2025",
+      "quote": "When technology returns to humanity, intelligence finds its warmth"
+    }
+  }
+}

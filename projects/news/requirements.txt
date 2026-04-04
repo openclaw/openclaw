@@ -1,0 +1,21 @@
+# RSS Feed 處理
+feedparser==6.0.11
+
+# AI APIs
+google-generativeai==0.8.3
+openai==1.57.4
+
+# HTTP 請求
+requests==2.32.3
+
+# HTML 模板
+Jinja2==3.1.4
+
+# 日期時間處理
+python-dateutil==2.9.0
+
+# JSON 修復
+json-repair==0.30.0
+
+# 環境變數管理
+python-dotenv==1.2.1

@@ -1,0 +1,86 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+  <!-- Background gradient matching website theme -->
+  <defs>
+    <linearGradient id="bg-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#581c87;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#1e3a8a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0f766e;stop-opacity:1" />
+    </linearGradient>
+
+    <!-- Radial overlay for depth -->
+    <radialGradient id="radial-overlay" cx="30%" cy="70%">
+      <stop offset="0%" style="stop-color:#7877c6;stop-opacity:0.3" />
+      <stop offset="50%" style="stop-color:#7877c6;stop-opacity:0" />
+    </radialGradient>
+
+    <!-- Orange glow for emphasis -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Base gradient background -->
+  <rect width="1200" height="630" fill="url(#bg-gradient)"/>
+
+  <!-- Radial overlay -->
+  <rect width="1200" height="630" fill="url(#radial-overlay)"/>
+
+  <!-- Main content - centered vertically -->
+  <g transform="translate(120, 180)">
+    <!-- Brand name with extra bold weight -->
+    <text
+      x="0"
+      y="0"
+      font-family="'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif"
+      font-size="80"
+      font-weight="900"
+      fill="#ffffff"
+      letter-spacing="-2">
+      Thinker Cafe
+    </text>
+
+    <!-- Chinese subtitle -->
+    <text
+      x="0"
+      y="85"
+      font-family="'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif"
+      font-size="52"
+      font-weight="900"
+      fill="#ffffff"
+      opacity="0.95">
+      思考者咖啡
+    </text>
+
+    <!-- Tagline with orange accent -->
+    <text
+      x="0"
+      y="180"
+      font-family="'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', sans-serif"
+      font-size="40"
+      font-weight="800"
+      fill="#fb923c"
+      filter="url(#glow)">
+      AI 時代的實戰課程
+    </text>
+
+    <!-- Decorative accent bar -->
+    <rect
+      x="0"
+      y="215"
+      width="220"
+      height="8"
+      fill="#fb923c"
+      rx="4"/>
+  </g>
+
+  <!-- Subtle pattern overlay for texture -->
+  <g opacity="0.06">
+    <circle cx="950" cy="150" r="140" fill="#ffffff"/>
+    <circle cx="1080" cy="480" r="100" fill="#ffffff"/>
+    <circle cx="180" cy="520" r="80" fill="#ffffff"/>
+  </g>
+</svg>

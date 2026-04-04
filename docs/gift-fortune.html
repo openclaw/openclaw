@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 發財提示詞禮包 | ThinkerCafe</title>
+    <meta name="robots" content="noindex, nofollow">
+
+    <!-- Google Analytics 4 -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-9WV2YC6165"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-9WV2YC6165');
+    </script>
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Noto Sans TC', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #333;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        h2 {
+            font-size: 1.8em;
+            margin-bottom: 15px;
+            color: #667eea;
+        }
+
+        .subtitle {
+            font-size: 1.2em;
+            color: #666;
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* 驗證頁面 */
+        .verify-box {
+            text-align: center;
+        }
+
+        .verify-box input {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.2em;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+            letter-spacing: 3px;
+        }
+
+        .verify-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* 按鈕 */
+        .btn {
+            display: inline-block;
+            padding: 15px 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            text-decoration: none;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        /* 禮包卡片 */
+        .gift-cards {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+            margin-top: 30px;
+        }
+
+        .gift-card {
+            border: 3px solid #eee;
+            border-radius: 15px;
+            padding: 30px;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .gift-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .gift-card:hover {
+            border-color: #667eea;
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+        }
+
+        .gift-card:hover::before {
+            opacity: 0.05;
+        }
+
+        .gift-card h3 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+            color: #333;
+            position: relative;
+            z-index: 1;
+        }
+
+        .gift-card .target {
+            color: #888;
+            font-size: 0.9em;
+            margin-bottom: 15px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .gift-card .preview {
+            color: #666;
+            line-height: 1.6;
+            position: relative;
+            z-index: 1;
+        }
+
+        .gift-card .icon {
+            font-size: 3em;
+            margin-bottom: 10px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* 進度條 */
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #eee;
+            border-radius: 10px;
+            margin: 30px 0;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.5s ease;
+            border-radius: 10px;
+        }
+
+        .progress-text {
+            text-align: center;
+            color: #888;
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+
+        /* 提示詞生成器 */
+        .prompt-step {
+            margin: 30px 0;
+        }
+
+        .prompt-step h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .prompt-step .scenario {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+
+        .input-group {
+            margin: 20px 0;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 10px;
+            color: #666;
+            font-weight: 500;
+        }
+
+        .input-group input,
+        .input-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1em;
+            font-family: inherit;
+        }
+
+        .input-group textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .input-group input:focus,
+        .input-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .prompt-result {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            border: 2px solid #667eea;
+            position: relative;
+        }
+
+        .prompt-result pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 0.95em;
+            line-height: 1.6;
+            color: #333;
+            margin-top: 40px;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            padding: 8px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+
+        .copy-btn:hover {
+            background: #5568d3;
+        }
+
+        .copy-btn.copied {
+            background: #4caf50;
+        }
+
+        /* Email 收集 */
+        .email-gate {
+            text-align: center;
+            padding: 40px 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            margin: 30px 0;
+        }
+
+        .email-gate input[type="email"] {
+            width: 100%;
+            max-width: 400px;
+            padding: 15px;
+            font-size: 1.1em;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            margin: 20px auto;
+            display: block;
+        }
+
+        .email-gate input[type="email"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* 完成頁面 */
+        .completion {
+            text-align: center;
+        }
+
+        .completion .icon {
+            font-size: 5em;
+            margin: 20px 0;
+        }
+
+        .cta-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 15px;
+            margin: 30px 0;
+        }
+
+        .cta-box h3 {
+            color: white;
+            margin-bottom: 15px;
+        }
+
+        .cta-box .price {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 15px 0;
+        }
+
+        .cta-box .original-price {
+            text-decoration: line-through;
+            opacity: 0.7;
+            font-size: 0.8em;
+        }
+
+        .btn-cta {
+            background: white;
+            color: #667eea;
+            padding: 18px 50px;
+            font-size: 1.2em;
+            margin-top: 20px;
+        }
+
+        /* 提示訊息 */
+        .hint {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            color: #856404;
+        }
+
+        /* 響應式 */
+        @media (max-width: 768px) {
+            .card {
+                padding: 25px;
+            }
+
+            h1 {
+                font-size: 2em;
+            }
+
+            h2 {
+                font-size: 1.5em;
+            }
+
+            .btn {
+                padding: 12px 30px;
+                font-size: 1em;
+            }
+        }
+
+        /* 動畫 */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease;
+        }
+
+        .error {
+            color: #dc3545;
+            text-align: center;
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        
+        <!-- 第一步：驗證頁面 -->
+        <div id="verify-page" class="card fade-in">
+            <div class="verify-box">
+                <h1>🎁 AI 發財提示詞禮包</h1>
+                <p class="subtitle">感謝你在 Reels 留下「有趣」!<br>這是專屬於你的 AI 協作秘笈</p>
+                
+                <input 
+                    type="text" 
+                    id="access-code" 
+                    placeholder="請輸入通關密語"
+                    maxlength="20"
+                    autocomplete="off"
+                >
+                <div id="verify-error" class="error hidden">密語錯誤，請檢查私訊內容</div>
+                
+                <button class="btn" onclick="verifyAccess()">進入禮包</button>
+            </div>
+        </div>
+
+        <!-- 第二步：選擇禮包 -->
+        <div id="select-page" class="card hidden">
+            <h1>選擇你的發財路線</h1>
+            <p class="subtitle">三條路線，各有 3 個實戰提示詞。選一條最適合你的開始吧!</p>
+
+            <div class="gift-cards">
+                <div class="gift-card" onclick="selectGift('efficiency')">
+                    <div class="icon">⏰</div>
+                    <h3>AI 效率淘金包</h3>
+                    <div class="target">適合：忙碌上班族、專案經理</div>
+                    <div class="preview">
+                        ✓ 20 頁報告秒變 3 句重點<br>
+                        ✓ 會議錄音自動生成行動清單<br>
+                        ✓ 找出最值得自動化的工作
+                    </div>
+                </div>
+
+                <div class="gift-card" onclick="selectGift('content')">
+                    <div class="icon">✍️</div>
+                    <h3>AI 內容印鈔機</h3>
+                    <div class="target">適合：創作者、行銷人員、小編</div>
+                    <div class="preview">
+                        ✓ 萃取你的個人寫作風格<br>
+                        ✓ 一個想法變 5 天內容<br>
+                        ✓ 快速生成爆款視覺圖
+                    </div>
+                </div>
+
+                <div class="gift-card" onclick="selectGift('decision')">
+                    <div class="icon">🧠</div>
+                    <h3>AI 決策智囊團</h3>
+                    <div class="target">適合：創業者、高階主管、策略規劃者</div>
+                    <div class="preview">
+                        ✓ AI 魔鬼代言人壓力測試<br>
+                        ✓ 多角色決策圓桌會議<br>
+                        ✓ 偵察競品致命弱點
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 第三步：互動式體驗 -->
+        <div id="experience-page" class="card hidden">
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <div class="progress-text">已完成 <span id="progress-num">0</span>/3 個提示詞</div>
+
+            <h1 id="gift-title">AI 效率淘金包</h1>
+            <p class="subtitle" id="gift-subtitle">時間就是金錢，讓 AI 幫你購買時間</p>
+
+            <!-- 提示詞 1 -->
+            <div id="prompt-1" class="prompt-step">
+                <h3>提示詞 1：20 頁報告 ➔ 3 句重點</h3>
+                <div class="scenario">
+                    <strong>場景：</strong>老闆丟來一份 20 頁的報告，10 分鐘後就要開會。
+                </div>
+
+                <div class="input-group">
+                    <label>你的角色是？(例如：產品經理、行銷主管)</label>
+                    <input type="text" id="input-1-role" placeholder="產品經理">
+                </div>
+
+                <div class="input-group">
+                    <label>你需要從報告中看出什麼？(例如：市場機會、風險評估)</label>
+                    <input type="text" id="input-1-goal" placeholder="市場機會和潛在風險">
+                </div>
+
+                <div class="input-group">
+                    <label>貼上報告內容 (可以是摘要或完整內容)</label>
+                    <textarea id="input-1-content" placeholder="貼上報告內容..."></textarea>
+                </div>
+
+                <button class="btn" onclick="generatePrompt(1)">生成我的專屬提示詞</button>
+
+                <div id="result-1" class="prompt-result hidden">
+                    <button class="copy-btn" onclick="copyPrompt(1)">複製</button>
+                    <pre id="prompt-1-text"></pre>
+                </div>
+
+                <div id="hint-1" class="hint hidden">
+                    ✅ 提示詞已生成! 複製後前往 <a href="https://chatgpt.com" target="_blank" style="color: #667eea; font-weight: bold;">ChatGPT</a> 貼上使用
+                </div>
+
+                <!-- Email Gate (在第一個提示詞生成後出現) -->
+                <div id="email-gate-1" class="email-gate hidden">
+                    <h2>🎉 想解鎖剩下 2 個提示詞？</h2>
+                    <p class="subtitle">留下 email，完整禮包與早鳥優惠將發送給你</p>
+                    
+                    <input 
+                        type="email" 
+                        id="user-email" 
+                        placeholder="your@email.com"
+                        required
+                    >
+                    
+                    <button class="btn" onclick="submitEmail()">解鎖剩下的提示詞</button>
+                    <div id="email-error" class="error hidden">請輸入有效的 email</div>
+                </div>
+            </div>
+
+            <!-- 提示詞 2 -->
+            <div id="prompt-2" class="prompt-step hidden">
+                <h3>提示詞 2：會議錄音 ➔ 行動清單</h3>
+                <div class="scenario">
+                    <strong>場景：</strong>剛開完 1 小時的腦力激盪會議，內容雜亂無章。
+                </div>
+
+                <div class="input-group">
+                    <label>會議主題是？</label>
+                    <input type="text" id="input-2-topic" placeholder="Q4 行銷策略討論">
+                </div>
+
+                <div class="input-group">
+                    <label>貼上會議逐字稿或重點記錄</label>
+                    <textarea id="input-2-content" placeholder="貼上會議內容..."></textarea>
+                </div>
+
+                <button class="btn" onclick="generatePrompt(2)">生成我的專屬提示詞</button>
+
+                <div id="result-2" class="prompt-result hidden">
+                    <button class="copy-btn" onclick="copyPrompt(2)">複製</button>
+                    <pre id="prompt-2-text"></pre>
+                </div>
+
+                <div id="hint-2" class="hint hidden">
+                    ✅ 又省下 30 分鐘整理時間!
+                </div>
+
+                <div id="next-2" class="hidden" style="margin-top: 20px; text-align: center;">
+                    <button class="btn" onclick="showPrompt(3)">解鎖最後一個提示詞 →</button>
+                </div>
+            </div>
+
+            <!-- 提示詞 3 -->
+            <div id="prompt-3" class="prompt-step hidden">
+                <h3>提示詞 3：工作流自動化啟發</h3>
+                <div class="scenario">
+                    <strong>場景：</strong>每天都在做重複的雜事，想自動化卻沒頭緒。
+                </div>
+
+                <div class="input-group">
+                    <label>你的職位是？</label>
+                    <input type="text" id="input-3-role" placeholder="電商營運專員">
+                </div>
+
+                <div class="input-group">
+                    <label>列出你每天的 3 個重複任務</label>
+                    <textarea id="input-3-tasks" placeholder="1. 檢查 5 個競品網站的價格&#10;2. 整理客戶訂單到 Excel&#10;3. 回覆相似的客服問題"></textarea>
+                </div>
+
+                <button class="btn" onclick="generatePrompt(3)">生成我的專屬提示詞</button>
+
+                <div id="result-3" class="prompt-result hidden">
+                    <button class="copy-btn" onclick="copyPrompt(3)">複製</button>
+                    <pre id="prompt-3-text"></pre>
+                </div>
+
+                <div id="hint-3" class="hint hidden">
+                    🎯 這個分析將幫你找到最值得投資的自動化項目!
+                </div>
+
+                <div id="complete-btn" class="hidden" style="margin-top: 30px; text-align: center;">
+                    <button class="btn" onclick="goToCompletion()">查看完整禮包與課程優惠 →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 第四步：完成頁面 -->
+        <div id="completion-page" class="card hidden">
+            <div class="completion">
+                <div class="icon">🎉</div>
+                <h1>恭喜!你已解鎖全部 3 個提示詞</h1>
+                <p class="subtitle">完整禮包 PDF 已發送到你的信箱<br>接下來，要不要升級你的 AI 協作能力？</p>
+
+                <div class="cta-box">
+                    <h3>🚀 AI 自媒體工作流實戰營</h3>
+                    <p>📱 100% 手機課程，帶走三樣成果<br>一週社群素材 + 自動化私訊機制 + 專屬 AI 工具包</p>
+
+                    <div class="price">
+                        限時優惠 NT$ 10,000
+                    </div>
+
+                    <div style="color: white; margin: 15px 0; font-size: 0.95em;">
+                        ⏰ 11/29, 12/6, 12/13 (六) | 📍 府中站 5 分鐘 | 👥 限額 12 人
+                    </div>
+
+                    <a href="https://www.thinker.cafe/products/28805e9d-e121-807a-a596-f976e32ae474" class="btn btn-cta">立即報名</a>
+
+                    <div style="color: rgba(255,255,255,0.8); margin-top: 15px; font-size: 0.85em;">
+                        ⚠️ 報名截止：11/24 (一) 23:59
+                    </div>
+
+                    <!-- 即時人數提示（5人以上才顯示） -->
+                    <div id="enrollment-count" class="hidden" style="background: rgba(255,255,255,0.2); padding: 12px; border-radius: 8px; margin-top: 15px; font-size: 0.9em;">
+                        🔥 已有 <span id="current-enrollment">0</span> 位學員報名
+                    </div>
+                </div>
+
+                <div class="hint">
+                    💡 這個禮包只是開始。真正的價值，在於建立一套屬於你自己的 AI 協作系統。
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ===== 狀態管理 =====
+        let currentGift = '';
+        let userEmail = '';
+        let completedPrompts = 0;
+
+        // ===== 根據 URL 參數自動進入對應禮包 =====
+        function autoSelectGiftFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const giftParam = urlParams.get('gift'); // 例如: ?gift=efficiency
+
+            // 有效的禮包類型
+            const validGifts = ['efficiency', 'content', 'decision'];
+
+            if (giftParam && validGifts.includes(giftParam)) {
+                // 隱藏驗證頁面，直接進入對應禮包
+                document.getElementById('verify-page').classList.add('hidden');
+                selectGift(giftParam);
+
+                // 追蹤事件
+                trackEvent('auto_select_gift', { gift_type: giftParam, source: 'url_param' });
+            }
+            // 如果沒有參數或參數無效，保留驗證頁面（讓用戶手動選擇）
+        }
+
+        // ===== 驗證通關密語（備用方案，也支援密碼）=====
+        function verifyAccess() {
+            const code = document.getElementById('access-code').value.trim();
+            const errorDiv = document.getElementById('verify-error');
+
+            // 密碼對應表（備用）
+            const PASSWORD_MAPPING = {
+                '簡單': 'select',
+                '效率': 'efficiency',
+                '內容': 'content',
+                '決策': 'decision',
+                'CRUZ2025': 'select'
+            };
+
+            const giftType = PASSWORD_MAPPING[code] || PASSWORD_MAPPING[code.toUpperCase()];
+
+            if (giftType) {
+                errorDiv.classList.add('hidden');
+                document.getElementById('verify-page').classList.add('hidden');
+
+                if (giftType === 'select') {
+                    document.getElementById('select-page').classList.remove('hidden');
+                } else {
+                    selectGift(giftType);
+                }
+
+                trackEvent('access_verified', { code: code, gift_type: giftType });
+            } else {
+                errorDiv.classList.remove('hidden');
+            }
+        }
+
+        // Enter 鍵也可以驗證
+        document.getElementById('access-code')?.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                verifyAccess();
+            }
+        });
+
+        // ===== 選擇禮包 =====
+        function selectGift(giftType) {
+            currentGift = giftType;
+            
+            document.getElementById('select-page').classList.add('hidden');
+            document.getElementById('experience-page').classList.remove('hidden');
+            
+            // 更新標題與副標題
+            const titles = {
+                'efficiency': {
+                    title: '⏰ AI 效率淘金包',
+                    subtitle: '時間就是金錢，讓 AI 幫你購買時間'
+                },
+                'content': {
+                    title: '✍️ AI 內容印鈔機',
+                    subtitle: '內容就是資產，用 AI 放大你的創作價值'
+                },
+                'decision': {
+                    title: '🧠 AI 決策智囊團',
+                    subtitle: '決策品質決定財富，讓 AI 當你的軍師'
+                }
+            };
+            
+            document.getElementById('gift-title').textContent = titles[giftType].title;
+            document.getElementById('gift-subtitle').textContent = titles[giftType].subtitle;
+            
+            // 根據禮包類型更新提示詞的場景和標籤
+            updatePromptLabels(giftType);
+            
+            // 追蹤事件
+            trackEvent('gift_selected', { gift_type: giftType });
+        }
+
+        //===== 更新提示詞標籤 =====
+        function updatePromptLabels(giftType) {
+            if (giftType === 'content') {
+                // 提示詞 1
+                document.querySelector('#prompt-1 h3').textContent = '提示詞 1：個人風格萃取';
+                document.querySelector('#prompt-1 .scenario').innerHTML = '<strong>場景：</strong>知道自己要寫什麼，但怕 AI 寫得沒「人味」。';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(1) label').textContent = '貼上你自己寫的 2-3 篇文章（任何主題都可以）';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(1) input').placeholder = '貼上文章內容...';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(2)').style.display = 'none';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(3)').style.display = 'none';
+                
+                // 提示詞 2
+                document.querySelector('#prompt-2 h3').textContent = '提示詞 2：一魚十吃內容矩陣';
+                document.querySelector('#prompt-2 .scenario').innerHTML = '<strong>場景：</strong>好不容易想出一個點子，但發完文就沒了，CP 值很低。';
+                document.querySelector('#prompt-2 .input-group:nth-of-type(1) label').textContent = '你的核心觀點或想法是什麼？';
+                document.querySelector('#prompt-2 .input-group:nth-of-type(1) input').placeholder = '例如：投資自己，才是最賺的';
+                document.querySelector('#prompt-2 .input-group:nth-of-type(2)').style.display = 'none';
+                
+                // 提示詞 3
+                document.querySelector('#prompt-3 h3').textContent = '提示詞 3：爆款視覺生成';
+                document.querySelector('#prompt-3 .scenario').innerHTML = '<strong>場景：</strong>文案寫好了，但缺一張吸睛的封面圖。';
+                document.querySelector('#prompt-3 .input-group:nth-of-type(1) label').textContent = '發布平台是？';
+                document.querySelector('#prompt-3 .input-group:nth-of-type(1) input').placeholder = '例如：Instagram 貼文';
+                document.querySelector('#prompt-3 .input-group:nth-of-type(2) label').textContent = '圖片主題是什麼？';
+                document.querySelector('#prompt-3 .input-group:nth-of-type(2) textarea').placeholder = '例如：AI 協作提升工作效率';
+                
+            } else if (giftType === 'decision') {
+                // 提示詞 1
+                document.querySelector('#prompt-1 h3').textContent = '提示詞 1：AI 魔鬼代言人';
+                document.querySelector('#prompt-1 .scenario').innerHTML = '<strong>場景：</strong>你有一個絕妙的點子（例如：新產品企劃），生怕有盲點。';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(1)').style.display = 'none';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(2)').style.display = 'none';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(3) label').textContent = '描述你的商業計畫或重大決策';
+                document.querySelector('#prompt-1 .input-group:nth-of-type(3) textarea').placeholder = '例如：我打算開一家...';
+                
+                // 提示詞 2
+                document.querySelector('#prompt-2 h3').textContent = '提示詞 2：多角色決策圓桌';
+                document.querySelector('#prompt-2 .scenario').innerHTML = '<strong>場景：</strong>面臨兩難選擇（例如：該 A 或該 B？該創業或該上班？）。';
+                document.querySelector('#prompt-2 .input-group:nth-of-type(1)').style.display = 'none';
+                document.querySelector('#prompt-2 .input-group:nth-of-type(2) label').textContent = '你面臨的兩難問題是什麼？';
+                document.querySelector('#prompt-2 .input-group:nth-of-type(2) textarea').placeholder = '描述你的兩難處境...';
+                
+                // 提示詞 3
+                document.querySelector('#prompt-3 h3').textContent = '提示詞 3：競品弱點偵察機';
+                document.querySelector('#prompt-3 .scenario').innerHTML = '<strong>場景：</strong>要進入一個新市場，想知道龍頭老大的「阿基里斯腱」在哪。';
+                document.querySelector('#prompt-3 .input-group:nth-of-type(1)').style.display = 'none';
+                document.querySelector('#prompt-3 .input-group:nth-of-type(2) label').textContent = '你的主要競爭對手是誰？(貼上官網連結或產品介紹)';
+                document.querySelector('#prompt-3 .input-group:nth-of-type(2) textarea').placeholder = '貼上競品的官網 URL 或產品介紹...';
+            }
+        }
+
+        // ===== 生成提示詞 =====
+        function generatePrompt(promptNum) {
+            let promptText = '';
+            
+            if (currentGift === 'efficiency') {
+                promptText = generateEfficiencyPrompt(promptNum);
+            } else if (currentGift === 'content') {
+                promptText = generateContentPrompt(promptNum);
+            } else if (currentGift === 'decision') {
+                promptText = generateDecisionPrompt(promptNum);
+            }
+            
+            // 顯示結果
+            const resultDiv = document.getElementById(`result-${promptNum}`);
+            const promptTextDiv = document.getElementById(`prompt-${promptNum}-text`);
+            const hintDiv = document.getElementById(`hint-${promptNum}`);
+            
+            promptTextDiv.textContent = promptText;
+            resultDiv.classList.remove('hidden');
+            hintDiv.classList.remove('hidden');
+            
+            // 更新進度
+            completedPrompts = Math.max(completedPrompts, promptNum);
+            updateProgress();
+            
+            // 第一個提示詞完成後顯示 Email Gate
+            if (promptNum === 1) {
+                setTimeout(() => {
+                    document.getElementById('email-gate-1').classList.remove('hidden');
+                    document.getElementById('email-gate-1').scrollIntoView({ 
+                        behavior: 'smooth',
+                        block: 'center'
+                    });
+                }, 500);
+            }
+            
+            // 第二個提示詞完成後顯示「解鎖第三個」按鈕
+            if (promptNum === 2) {
+                setTimeout(() => {
+                    document.getElementById('next-2').classList.remove('hidden');
+                }, 500);
+            }
+            
+            // 第三個提示詞完成後顯示「完成」按鈕
+            if (promptNum === 3) {
+                setTimeout(() => {
+                    document.getElementById('complete-btn').classList.remove('hidden');
+                }, 500);
+            }
+            
+            // 追蹤事件
+            trackEvent('prompt_generated', { 
+                gift_type: currentGift, 
+                prompt_num: promptNum 
+            });
+        }
+
+        // ===== 效率淘金包的提示詞生成 =====
+        function generateEfficiencyPrompt(promptNum) {
+            if (promptNum === 1) {
+                const role = document.getElementById('input-1-role').value || '專業幕僚';
+                const goal = document.getElementById('input-1-goal').value || '核心結論和行動建議';
+                const content = document.getElementById('input-1-content').value || '[請在此貼上報告內容]';
+                
+                return `你現在是專業的 ${role}，這份分析是給「沒耐心、只看重點」的老闆看的。
+
+我需要你抓出：
+1. 3 個核心結論
+2. 1 個首要行動建議
+
+分析角度：${goal}
+
+請用投資人的角度來分析，只關注 ROI 和風險。
+
+文本：
+${content}`;
+            }
+            
+            if (promptNum === 2) {
+                const topic = document.getElementById('input-2-topic').value || '會議主題';
+                const content = document.getElementById('input-2-content').value || '[請在此貼上會議逐字稿]';
+                
+                return `你是一名資深專案經理。這是一份「${topic}」的會議逐字稿。
+
+請幫我：
+1. **摘要：** 用 3 句話總結會議核心
+2. **決議事項：** 列出所有已達成的共識
+3. **行動清單 (To-Do List)：** 格式為「[任務] - [負責人] - [截止日期]」
+
+逐字稿：
+${content}`;
+            }
+            
+            if (promptNum === 3) {
+                const role = document.getElementById('input-3-role').value || '你的職位';
+                const tasks = document.getElementById('input-3-tasks').value || '[列出你的重複任務]';
+                
+                return `我是一名 ${role}，我每天的重複任務有：
+
+${tasks}
+
+請擔任 AI 自動化顧問，分析上述任務：
+1. 哪一項最適合用 AI 自動化？
+2. 為什麼？（ROI 最高、最容易實現？）
+3. 要實現這個自動化，我的第一步該做什麼？
+
+請給我具體的行動建議，而不是空泛的概念。`;
+            }
+        }
+
+        // ===== 內容印鈔機的提示詞生成 =====
+        function generateContentPrompt(promptNum) {
+            if (promptNum === 1) {
+                const articles = document.getElementById('input-1-role').value || '[請貼上你的文章內容]';
+                
+                return `你是一名文案風格分析師。請分析以下我寫的文章，找出我的「寫作風格 DNA」：
+
+${articles}
+
+請總結我的風格特徵：
+1. 語氣特色（例如：幽默、嚴肅、親切、專業）
+2. 常用詞彙或口頭禪
+3. 句子結構偏好（長句/短句、修辭手法）
+4. 核心價值觀或立場
+
+然後，用「我的風格」寫一段關於 [新主題：請填入你想寫的主題] 的 300 字開場白。`;
+            }
+            
+            if (promptNum === 2) {
+                const topic = document.getElementById('input-2-topic').value || '投資自己，才是最賺的';
+                
+                return `我有一個核心觀點：${topic}
+
+請將這個觀點，擴展成一個「一週內容發佈計畫」：
+
+**週一 (長文)：** 深度分析文 (800-1000 字)
+- 標題 + 開場 + 3 個論點 + 行動呼籲
+
+**週二 (短影音)：** 20 秒短影片腳本
+- 開場挑釁 + 核心金句 + 反轉結尾
+
+**週三 (圖文)：** 3 張 IG 圖卡內容
+- 每張圖的標題 + 核心內文
+
+**週四 (互動)：** FB 提問貼文
+- 引發討論的開放式問題
+
+**週五 (總結)：** Email 電子報 (給訂閱者)
+- 本週精華 + 下週預告
+
+請直接提供可複製使用的文案內容。`;
+            }
+            
+            if (promptNum === 3) {
+                const platform = document.getElementById('input-3-role').value || 'Instagram 貼文';
+                const theme = document.getElementById('input-3-tasks').value || 'AI 協作提升工作效率';
+                
+                return `我需要一張用於 ${platform} 的圖片，主題是「${theme}」。
+
+要求：
+1. **風格：** 科技感、專業、現代簡約
+2. **視覺元素：** 請列出 5 個適合的視覺符號或物件
+3. **色調：** 建議 3 種主色調組合
+4. **構圖：** 描述畫面布局和焦點
+
+請給我 3 個不同風格的 Midjourney 或 DALL-E 提示詞，每個提示詞要：
+- 完整可直接使用
+- 包含風格、元素、色調、構圖
+- 適合 ${platform} 的尺寸比例`;
+            }
+        }
+
+        // ===== 決策智囊團的提示詞生成 =====
+        function generateDecisionPrompt(promptNum) {
+            if (promptNum === 1) {
+                const plan = document.getElementById('input-1-content').value || '[請描述你的商業計畫或重大決策]';
+                
+                return `我有一個商業計畫（或重大決策）：
+
+${plan}
+
+你現在扮演「魔鬼代言人」，你的任務是站在最嚴厲、最挑剔的反方立場，找出這個計畫中：
+
+1. **3 個最致命的缺陷或未經證實的假設**
+2. **每個缺陷可能導致的最壞情況**
+3. **我需要準備什麼數據或證據來反駁你的質疑**
+
+你的分析必須尖銳、不留情面，就像一個想讓我破產的競爭對手。不要客氣，直接開砲。`;
+            }
+            
+            if (promptNum === 2) {
+                const dilemma = document.getElementById('input-2-content').value || '[描述你的兩難問題]';
+                
+                return `我正在面臨一個重大決策：
+
+${dilemma}
+
+請你召開一場決策圓桌會議，並扮演以下 3 個角色，分別給出他們的觀點：
+
+**角色 1 - CFO (保守派財務長)：**
+- 只關注風險與現金流
+- 分析最壞情況和應對方案
+- 給出財務建議
+
+**角色 2 - CMO (激進派行銷長)：**
+- 只關注市場機會與增長潛力
+- 分析競爭優勢和時機
+- 給出市場建議
+
+**角色 3 - COO (務實派營運長)：**
+- 只關注執行可行性和資源配置
+- 分析實際操作的難點
+- 給出執行建議
+
+最後，請你總結這三方意見，給我一個綜合性的決策建議。`;
+            }
+            
+            if (promptNum === 3) {
+                const competitor = document.getElementById('input-3-tasks').value || '[競爭對手的產品或服務描述]';
+                
+                return `你是一名頂尖的市場情報分析師。
+
+這是我的主要競爭對手：
+${competitor}
+
+請分析他們的公開資料（官網、產品說明、客戶評價），找出：
+
+1. **3 個他們「刻意不提」的環節**
+   - 為什麼他們避而不談？
+   - 這代表什麼弱點？
+
+2. **3 個他們「論述薄弱」的賣點**
+   - 哪些功能或服務只是點到為止？
+   - 背後可能的原因是什麼？
+
+3. **我的市場切入策略**
+   - 基於上述弱點，我應該如何定位？
+   - 給我 3 個具體的差異化方向
+
+這些「破口」就是我切入市場的最佳機會。`;
+            }
+        }
+
+        // ===== 複製提示詞 =====
+        function copyPrompt(promptNum) {
+            const promptText = document.getElementById(`prompt-${promptNum}-text`).textContent;
+            const btn = event.target;
+            
+            navigator.clipboard.writeText(promptText).then(() => {
+                const originalText = btn.textContent;
+                btn.textContent = '已複製!';
+                btn.classList.add('copied');
+                
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.classList.remove('copied');
+                }, 2000);
+                
+                // 追蹤事件
+                trackEvent('prompt_copied', { 
+                    gift_type: currentGift, 
+                    prompt_num: promptNum 
+                });
+            });
+        }
+
+        // ===== 提交 Email =====
+        function submitEmail() {
+            const email = document.getElementById('user-email').value.trim();
+            const errorDiv = document.getElementById('email-error');
+            
+            // 簡單的 email 驗證
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            
+            if (!emailRegex.test(email)) {
+                errorDiv.classList.remove('hidden');
+                return;
+            }
+            
+            errorDiv.classList.add('hidden');
+            userEmail = email;
+            
+            // 隱藏 Email Gate，顯示第二個提示詞
+            document.getElementById('email-gate-1').classList.add('hidden');
+            showPrompt(2);
+            
+            // 提交到後端
+            submitToBackend(email);
+            
+            // 追蹤事件
+            trackEvent('email_submitted', { 
+                email: email,
+                gift_type: currentGift,
+                completed_prompts: completedPrompts
+            });
+        }
+
+        // Email 輸入框的 Enter 鍵支援
+        document.getElementById('user-email')?.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                submitEmail();
+            }
+        });
+
+        // ===== 顯示下一個提示詞 =====
+        function showPrompt(promptNum) {
+            document.getElementById(`prompt-${promptNum}`).classList.remove('hidden');
+            
+            // 滾動到該提示詞
+            setTimeout(() => {
+                document.getElementById(`prompt-${promptNum}`).scrollIntoView({ 
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }, 100);
+        }
+
+        // ===== 更新進度條 =====
+        function updateProgress() {
+            const percentage = (completedPrompts / 3) * 100;
+            document.getElementById('progress-fill').style.width = percentage + '%';
+            document.getElementById('progress-num').textContent = completedPrompts;
+        }
+
+        // ===== 顯示完成頁面 =====
+        function goToCompletion() {
+            document.getElementById('experience-page').classList.add('hidden');
+            document.getElementById('completion-page').classList.remove('hidden');
+            
+            // 滾動到頂部
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            
+            // 追蹤事件
+            trackEvent('all_prompts_completed', { 
+                gift_type: currentGift,
+                email: userEmail
+            });
+        }
+
+        // ===== 後端提交 (Supabase 範例) =====
+        async function submitToBackend(email) {
+            const data = {
+                email: email,
+                gift_type: currentGift,
+                completed_prompts: completedPrompts,
+                timestamp: new Date().toISOString(),
+                source: 'reels_2025_01'
+            };
+            
+            console.log('提交數據:', data);
+            
+            // TODO: 實際實作時取消註解並填入你的 Supabase 資訊
+            /*
+            try {
+                const response = await fetch('YOUR_SUPABASE_URL/rest/v1/gift_leads', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'apikey': 'YOUR_API_KEY',
+                        'Authorization': 'Bearer YOUR_API_KEY'
+                    },
+                    body: JSON.stringify(data)
+                });
+                
+                if (response.ok) {
+                    console.log('Email 提交成功');
+                } else {
+                    console.error('Email 提交失敗');
+                }
+            } catch (error) {
+                console.error('提交錯誤:', error);
+            }
+            */
+        }
+
+        // ===== 事件追蹤 =====
+        function trackEvent(eventName, data) {
+            console.log('追蹤事件:', eventName, data);
+            
+            // Google Analytics 4 追蹤
+            if (typeof gtag !== 'undefined') {
+                gtag('event', eventName, data);
+            }
+            
+            // 也可以發送到你自己的後端
+            // fetch('/api/track', { method: 'POST', body: JSON.stringify({ event: eventName, data }) });
+        }
+
+        // ===== 查詢即時報名人數 =====
+        async function fetchEnrollmentCount() {
+            try {
+                // 課程 ID: 28805e9d-e121-807a-a596-f976e32ae474
+                const response = await fetch('https://www.thinker.cafe/api/enrollment-count?course_id=28805e9d-e121-807a-a596-f976e32ae474');
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const count = data.count || 0;
+
+                    // 只有 5 人以上才顯示
+                    if (count >= 5) {
+                        document.getElementById('current-enrollment').textContent = count;
+                        document.getElementById('enrollment-count').classList.remove('hidden');
+                    }
+                }
+            } catch (error) {
+                console.log('無法取得報名人數:', error);
+                // 失敗時不顯示，不影響使用者體驗
+            }
+        }
+
+        // ===== 頁面載入完成 =====
+        window.addEventListener('load', function() {
+            // 檢查 URL 參數，自動進入對應禮包
+            autoSelectGiftFromURL();
+
+            trackEvent('page_loaded', {
+                timestamp: new Date().toISOString(),
+                referrer: document.referrer
+            });
+
+            // 查詢報名人數
+            fetchEnrollmentCount();
+        });
+
+        // ===== 離開頁面追蹤 =====
+        window.addEventListener('beforeunload', function() {
+            if (completedPrompts > 0 && !userEmail) {
+                // 用戶生成了提示詞但沒留 email
+                trackEvent('exit_without_email', {
+                    gift_type: currentGift,
+                    completed_prompts: completedPrompts
+                });
+            }
+        });
+    </script>
+</body>
+</html>

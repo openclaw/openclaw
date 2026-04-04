@@ -1,0 +1,26 @@
+{
+  "date": "2026-04-04",
+  "time": "15:18",
+  "beat": 129,
+  "status": "active",
+  "guardian_mode": "daily",
+  "guardian_score": 0,
+  "evo_phase": 1,
+  "threads_unreplied": 8,
+  "cpu_load": 8.5,
+  "gateway": true,
+  "ollama": true,
+  "actions": [
+    "[perception] threads:8 unreplied | transcripts:7 new",
+    "[hook] DEGRADED: 100 errors, 0 slow, avg 28ms in last 100 runs",
+    "[L0] CPU load 8.5 (1m) / 7.7 (5m) — 過載",
+    "[L0] HOG: PID 78040 99% CPU for 00:28 — /opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.",
+    "[L0] HOG: PID 672 54% CPU for 04-05:42:48 — /System/Library/PrivateFrameworks/SkyLight.framework/Resourc",
+    "[L0] HOG: PID 1753 52% CPU for 04-05:42:20 — /Applications/Google Chrome.app/Contents/Frameworks/Google C",
+    "[L2] Cruz: +1073 signals, +764 lessons | fitness=0.22 | 1600c/697a",
+    "[L2] WARNING: correction-heavy (1600c vs 697a) — alignment drifting?",
+    "[L2] Fitness below 0.3 with 4 invariants — possible anchor drift",
+    "[L2] Injected 1600 lesson(s) into SOUL.md (3 total)"
+  ],
+  "generated_at": "2026-04-04T15:18:37.146812"
+}

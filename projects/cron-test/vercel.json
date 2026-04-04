@@ -1,0 +1,20 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/test",
+      "schedule": "*/5 * * * *"
+    }
+  ],
+  "functions": {
+    "api/cron/test.js": {
+      "maxDuration": 30
+    }
+  },
+  "regions": ["hkg1"],
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/index.html"
+    }
+  ]
+}

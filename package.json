@@ -1,0 +1,28 @@
+{
+  "name": "thinker-cafe-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter website dev",
+    "build": "cd projects/website && pnpm build",
+    "build:news": "cd projects/news && python scripts/main.py",
+    "build:paomateng": "pnpm --filter paomateng build",
+    "test": "pnpm --filter website test"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.9",
+    "@types/node": "^22",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5",
+    "tailwindcss": "^4.1.9",
+    "turbo": "^2.6.0"
+  },
+  "packageManager": "pnpm@10.17.0+sha512.fce8a3dd29a4ed2ec566fb53efbb04d8c44a0f05bc6f24a73046910fb9c3ce7afa35a0980500668fa3573345bd644644fa98338fa168235c80f4aa17aa17fbef",
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "dependencies": {
+    "ioredis": "^5.10.1"
+  }
+}

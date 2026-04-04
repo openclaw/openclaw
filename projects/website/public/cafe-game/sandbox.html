@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thinker Cafe — Vibe 調音沙盒</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e; color: #e0d8c8; font-family: 'SF Mono', 'Menlo', monospace;
+    display: flex; height: 100vh; overflow: hidden;
+  }
+  /* Left: visual preview */
+  .preview {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    position: relative; overflow: hidden;
+  }
+  .preview canvas { border-radius: 8px; }
+  .preview .status {
+    position: absolute; bottom: 20px; left: 20px;
+    font-size: 11px; color: rgba(255,255,255,0.4);
+  }
+  .preview .title {
+    position: absolute; top: 20px; left: 20px;
+    font-size: 14px; color: rgba(255,213,79,0.8);
+  }
+  /* Right: control panel */
+  .panel {
+    width: 320px; background: rgba(20,20,40,0.95); border-left: 1px solid rgba(255,255,255,0.08);
+    padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px;
+  }
+  .panel h2 { font-size: 13px; color: #ffd54f; text-transform: uppercase; letter-spacing: 2px; }
+  .panel h3 { font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 8px; }
+  .control { display: flex; flex-direction: column; gap: 4px; }
+  .control label {
+    font-size: 11px; color: rgba(255,255,255,0.6);
+    display: flex; justify-content: space-between;
+  }
+  .control label span { color: #ffd54f; }
+  input[type="range"] {
+    -webkit-appearance: none; width: 100%; height: 4px; background: rgba(255,255,255,0.1);
+    border-radius: 2px; outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
+    background: #ffd54f; cursor: pointer;
+  }
+  .btn {
+    padding: 10px; border: 1px solid rgba(255,213,79,0.3); background: rgba(255,213,79,0.08);
+    color: #ffd54f; font-family: inherit; font-size: 12px; border-radius: 4px;
+    cursor: pointer; text-align: center; transition: background 0.2s;
+  }
+  .btn:hover { background: rgba(255,213,79,0.2); }
+  .btn.active { background: rgba(255,213,79,0.3); border-color: #ffd54f; }
+  .btn-row { display: flex; gap: 8px; }
+  .btn-row .btn { flex: 1; }
+  .divider { border-top: 1px solid rgba(255,255,255,0.06); }
+  .config-output {
+    font-size: 10px; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 4px;
+    color: rgba(255,255,255,0.5); max-height: 120px; overflow-y: auto; word-break: break-all;
+    display: none;
+  }
+  /* Spectrogram canvas */
+  .spectrogram { width: 100%; height: 60px; background: #000; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- Visual Preview (mini cafe scene) -->
+<div class="preview">
+  <canvas id="viz" width="480" height="320"></canvas>
+  <div class="title">☕ Thinker Cafe — Acoustic Sandbox</div>
+  <div class="status" id="audioStatus">Click anywhere to start audio</div>
+</div>
+
+<!-- Control Panel -->
+<div class="panel">
+  <h2>🎛️ Vibe 調音台</h2>
+
+  <!-- Master -->
+  <div class="control">
+    <label>Master Volume <span id="v_master">0.25</span></label>
+    <input type="range" id="masterVol" min="0" max="0.5" step="0.01" value="0.25">
+  </div>
+
+  <div class="divider"></div>
+  <h3>🌧️ Rain (Pink Noise → Lowpass)</h3>
+
+  <div class="control">
+    <label>Rain Filter Freq <span id="v_rainFreq">350</span> Hz</label>
+    <input type="range" id="rainFreq" min="80" max="1200" step="10" value="350">
+  </div>
+  <div class="control">
+    <label>Rain Filter Q <span id="v_rainQ">1.0</span></label>
+    <input type="range" id="rainQ" min="0.1" max="8.0" step="0.1" value="1.0">
+  </div>
+  <div class="control">
+    <label>Rain Gain <span id="v_rainGain">0.15</span></label>
+    <input type="range" id="rainGain" min="0" max="0.4" step="0.01" value="0.15">
+  </div>
+
+  <div class="divider"></div>
+  <h3>💿 Vinyl Crackle</h3>
+
+  <div class="control">
+    <label>Crackle Rate <span id="v_crackleRate">0.012</span></label>
+    <input type="range" id="crackleRate" min="0.001" max="0.05" step="0.001" value="0.012">
+  </div>
+  <div class="control">
+    <label>Crackle Gain <span id="v_crackleGain">0.06</span></label>
+    <input type="range" id="crackleGain" min="0" max="0.2" step="0.005" value="0.06">
+  </div>
+  <div class="control">
+    <label>Crackle Filter <span id="v_crackleFreq">2000</span> Hz</label>
+    <input type="range" id="crackleFreq" min="500" max="6000" step="100" value="2000">
+  </div>
+
+  <div class="divider"></div>
+  <h3>🎵 Lo-Fi Hum (Sub Bass)</h3>
+
+  <div class="control">
+    <label>Hum Freq <span id="v_humFreq">55</span> Hz</label>
+    <input type="range" id="humFreq" min="30" max="120" step="1" value="55">
+  </div>
+  <div class="control">
+    <label>Hum Gain <span id="v_humGain">0.03</span></label>
+    <input type="range" id="humGain" min="0" max="0.1" step="0.005" value="0.03">
+  </div>
+
+  <div class="divider"></div>
+  <h3>📊 Frequency Spectrum</h3>
+  <canvas class="spectrogram" id="specCanvas" width="280" height="60"></canvas>
+
+  <div class="divider"></div>
+
+  <div class="btn-row">
+    <div class="btn" id="btnToggle">▶ Start</div>
+    <div class="btn" id="btnCopy">📋 Copy Config</div>
+  </div>
+
+  <div class="config-output" id="configOut"></div>
+
+  <div style="font-size:10px; color:rgba(255,255,255,0.3); margin-top:8px;">
+    Blind Tuning Protocol v1 — 戴耳機調音<br>
+    調好後按 Copy Config → 貼給 Claude hardcode
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Audio Engine ────────────────────────────────────────────
+  var audioCtx = null;
+  var masterGain = null;
+  var rainSource = null, rainGain = null, rainFilter = null;
+  var crackleInterval = null;
+  var crackleGainNode = null, crackleFilter = null;
+  var humOsc = null, humGain = null;
+  var analyser = null;
+  var running = false;
+
+  // ── Config (live-bound to sliders) ──
+  var config = {
+    masterVol: 0.25,
+    rainFreq: 350,
+    rainQ: 1.0,
+    rainGain: 0.15,
+    crackleRate: 0.012,
+    crackleGain: 0.06,
+    crackleFreq: 2000,
+    humFreq: 55,
+    humGain: 0.03
+  };
+
+  // ── Pink Noise Generator (Paul Kellet's algorithm) ──
+  function createPinkNoise(ctx, seconds) {
+    var bufferSize = ctx.sampleRate * seconds;
+    var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    var data = buffer.getChannelData(0);
+    var b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+    for (var i = 0; i < bufferSize; i++) {
+      var white = Math.random() * 2 - 1;
+      b0 = 0.99886 * b0 + white * 0.0555179;
+      b1 = 0.99332 * b1 + white * 0.0750759;
+      b2 = 0.96900 * b2 + white * 0.1538520;
+      b3 = 0.86650 * b3 + white * 0.3104856;
+      b4 = 0.55000 * b4 + white * 0.5329522;
+      b5 = -0.7616 * b5 - white * 0.0168980;
+      data[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+      b6 = white * 0.115926;
+    }
+    return buffer;
+  }
+
+  function initAudio() {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Master gain — CLAMPED to 0.5 max (防爆音結界)
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = Math.min(config.masterVol, 0.5);
+    masterGain.connect(audioCtx.destination);
+
+    // Analyser for spectrogram
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    masterGain.connect(analyser);
+
+    // ── Rain: Pink noise → Lowpass filter → Gain ──
+    var pinkBuffer = createPinkNoise(audioCtx, 4);
+    rainSource = audioCtx.createBufferSource();
+    rainSource.buffer = pinkBuffer;
+    rainSource.loop = true;
+
+    rainFilter = audioCtx.createBiquadFilter();
+    rainFilter.type = 'lowpass';
+    rainFilter.frequency.value = config.rainFreq;
+    rainFilter.Q.value = config.rainQ;
+
+    rainGain = audioCtx.createGain();
+    rainGain.gain.value = 0; // Start at 0, fade in (防突波)
+
+    rainSource.connect(rainFilter);
+    rainFilter.connect(rainGain);
+    rainGain.connect(masterGain);
+
+    // Fade in over 500ms (envelope shaping — 防音爆)
+    rainSource.start();
+    rainGain.gain.linearRampToValueAtTime(config.rainGain, audioCtx.currentTime + 0.5);
+
+    // ── Vinyl Crackle: Random impulses → Bandpass ──
+    crackleGainNode = audioCtx.createGain();
+    crackleGainNode.gain.value = config.crackleGain;
+
+    crackleFilter = audioCtx.createBiquadFilter();
+    crackleFilter.type = 'bandpass';
+    crackleFilter.frequency.value = config.crackleFreq;
+    crackleFilter.Q.value = 2.0;
+
+    crackleGainNode.connect(crackleFilter);
+    crackleFilter.connect(masterGain);
+
+    startCrackle();
+
+    // ── Lo-Fi Hum: Sub-bass sine wave ──
+    humOsc = audioCtx.createOscillator();
+    humOsc.type = 'sine';
+    humOsc.frequency.value = config.humFreq;
+
+    humGain = audioCtx.createGain();
+    humGain.gain.value = 0;
+
+    humOsc.connect(humGain);
+    humGain.connect(masterGain);
+    humOsc.start();
+    humGain.gain.linearRampToValueAtTime(config.humGain, audioCtx.currentTime + 0.5);
+  }
+
+  function startCrackle() {
+    if (crackleInterval) clearInterval(crackleInterval);
+    crackleInterval = setInterval(function () {
+      if (!audioCtx || Math.random() > config.crackleRate * 10) return;
+      var t = audioCtx.currentTime;
+      var bufSize = Math.floor(audioCtx.sampleRate * 0.003); // 3ms impulse
+      var buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+      var data = buf.getChannelData(0);
+      for (var i = 0; i < bufSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufSize * 0.3));
+      }
+      var src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      var g = audioCtx.createGain();
+      g.gain.setValueAtTime(config.crackleGain, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.015);
+      src.connect(g);
+      g.connect(crackleFilter);
+      src.start(t);
+      src.stop(t + 0.02);
+    }, 16); // Check every frame
+  }
+
+  function stopAudio() {
+    if (rainGain) rainGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+    if (humGain) humGain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+    if (crackleInterval) clearInterval(crackleInterval);
+    setTimeout(function () {
+      if (audioCtx) audioCtx.close();
+      audioCtx = null;
+    }, 500);
+  }
+
+  // ── Slider Bindings ───────────────────────────────────────��─
+  var sliders = {
+    masterVol: { el: 'masterVol', display: 'v_master', apply: function (v) {
+      config.masterVol = v;
+      if (masterGain) masterGain.gain.linearRampToValueAtTime(Math.min(v, 0.5), audioCtx.currentTime + 0.05);
+    }},
+    rainFreq: { el: 'rainFreq', display: 'v_rainFreq', apply: function (v) {
+      config.rainFreq = v;
+      if (rainFilter) rainFilter.frequency.linearRampToValueAtTime(v, audioCtx.currentTime + 0.05);
+    }},
+    rainQ: { el: 'rainQ', display: 'v_rainQ', apply: function (v) {
+      config.rainQ = v;
+      if (rainFilter) rainFilter.Q.value = v;
+    }},
+    rainGain: { el: 'rainGain', display: 'v_rainGain', apply: function (v) {
+      config.rainGain = v;
+      if (rainGain) rainGain.gain.linearRampToValueAtTime(v, audioCtx.currentTime + 0.05);
+    }},
+    crackleRate: { el: 'crackleRate', display: 'v_crackleRate', apply: function (v) {
+      config.crackleRate = v;
+    }},
+    crackleGain: { el: 'crackleGain', display: 'v_crackleGain', apply: function (v) {
+      config.crackleGain = v;
+      if (crackleGainNode) crackleGainNode.gain.linearRampToValueAtTime(v, audioCtx.currentTime + 0.05);
+    }},
+    crackleFreq: { el: 'crackleFreq', display: 'v_crackleFreq', apply: function (v) {
+      config.crackleFreq = v;
+      if (crackleFilter) crackleFilter.frequency.linearRampToValueAtTime(v, audioCtx.currentTime + 0.05);
+    }},
+    humFreq: { el: 'humFreq', display: 'v_humFreq', apply: function (v) {
+      config.humFreq = v;
+      if (humOsc) humOsc.frequency.linearRampToValueAtTime(v, audioCtx.currentTime + 0.05);
+    }},
+    humGain: { el: 'humGain', display: 'v_humGain', apply: function (v) {
+      config.humGain = v;
+      if (humGain) humGain.gain.linearRampToValueAtTime(v, audioCtx.currentTime + 0.05);
+    }}
+  };
+
+  Object.keys(sliders).forEach(function (key) {
+    var s = sliders[key];
+    var el = document.getElementById(s.el);
+    var disp = document.getElementById(s.display);
+    el.addEventListener('input', function () {
+      var v = parseFloat(el.value);
+      disp.textContent = v;
+      s.apply(v);
+    });
+  });
+
+  // ── Toggle Button ────────────────────────────────────────���──
+  var btnToggle = document.getElementById('btnToggle');
+  btnToggle.addEventListener('click', function () {
+    if (!running) {
+      initAudio();
+      running = true;
+      btnToggle.textContent = '⏸ Stop';
+      btnToggle.classList.add('active');
+      document.getElementById('audioStatus').textContent = 'Audio running — 戴耳機調音';
+      drawSpectrogram();
+    } else {
+      stopAudio();
+      running = false;
+      btnToggle.textContent = '▶ Start';
+      btnToggle.classList.remove('active');
+      document.getElementById('audioStatus').textContent = 'Audio stopped';
+    }
+  });
+
+  // ── Copy Config ─────────────────────────────────────────────
+  document.getElementById('btnCopy').addEventListener('click', function () {
+    var output = JSON.stringify(config, null, 2);
+    var outEl = document.getElementById('configOut');
+    outEl.style.display = 'block';
+    outEl.textContent = output;
+    navigator.clipboard.writeText(output).then(function () {
+      document.getElementById('btnCopy').textContent = '✅ Copied!';
+      setTimeout(function () { document.getElementById('btnCopy').textContent = '📋 Copy Config'; }, 2000);
+    });
+  });
+
+  // ── Spectrogram Visualization ───────────────────────────────
+  var specCanvas = document.getElementById('specCanvas');
+  var specCtx = specCanvas.getContext('2d');
+
+  function drawSpectrogram() {
+    if (!running || !analyser) return;
+    var bufLen = analyser.frequencyBinCount;
+    var data = new Uint8Array(bufLen);
+    analyser.getByteFrequencyData(data);
+
+    specCtx.fillStyle = 'rgba(0,0,0,0.3)';
+    specCtx.fillRect(0, 0, specCanvas.width, specCanvas.height);
+
+    var barW = specCanvas.width / bufLen;
+    for (var i = 0; i < bufLen; i++) {
+      var h = (data[i] / 255) * specCanvas.height;
+      // Color: low freq = blue, mid = green, high = red
+      var ratio = i / bufLen;
+      var r = Math.floor(ratio * 255);
+      var g = Math.floor((1 - Math.abs(ratio - 0.5) * 2) * 200);
+      var b = Math.floor((1 - ratio) * 255);
+      specCtx.fillStyle = 'rgb(' + r + ',' + g + ',' + b + ')';
+      specCtx.fillRect(i * barW, specCanvas.height - h, barW + 1, h);
+    }
+
+    // Safety indicator: check if energy is concentrated in low freq
+    var lowEnergy = 0, highEnergy = 0;
+    for (var j = 0; j < bufLen; j++) {
+      if (j < bufLen * 0.2) lowEnergy += data[j];
+      else if (j > bufLen * 0.7) highEnergy += data[j];
+    }
+    var safeColor = highEnergy > lowEnergy * 0.5 ? '#ff4444' : '#44ff44';
+    specCtx.fillStyle = safeColor;
+    specCtx.fillRect(specCanvas.width - 8, 2, 6, 6);
+
+    requestAnimationFrame(drawSpectrogram);
+  }
+
+  // ── Visual Preview (rain on cafe window) ────────────────────
+  var vizCanvas = document.getElementById('viz');
+  var vizCtx = vizCanvas.getContext('2d');
+  var drops = [];
+  for (var i = 0; i < 60; i++) {
+    drops.push({
+      x: Math.random() * 480,
+      y: Math.random() * 320,
+      speed: 1 + Math.random() * 3,
+      len: 4 + Math.random() * 12,
+      alpha: 0.1 + Math.random() * 0.3
+    });
+  }
+
+  function drawViz() {
+    // Dark cafe interior with warm glow
+    vizCtx.fillStyle = '#1a1410';
+    vizCtx.fillRect(0, 0, 480, 320);
+
+    // Window frame
+    vizCtx.fillStyle = '#2a2018';
+    vizCtx.fillRect(40, 20, 400, 280);
+
+    // Outside (dark blue night)
+    vizCtx.fillStyle = '#0a1020';
+    vizCtx.fillRect(44, 24, 392, 272);
+
+    // Street light glow
+    var glowAlpha = 0.08 + 0.02 * Math.sin(Date.now() / 2000);
+    vizCtx.fillStyle = 'rgba(255,200,100,' + glowAlpha.toFixed(3) + ')';
+    vizCtx.beginPath();
+    vizCtx.arc(240, 150, 120, 0, Math.PI * 2);
+    vizCtx.fill();
+
+    // Rain drops on glass
+    for (var d = 0; d < drops.length; d++) {
+      var drop = drops[d];
+      drop.y += drop.speed;
+      if (drop.y > 300) { drop.y = 20; drop.x = 44 + Math.random() * 392; }
+
+      vizCtx.strokeStyle = 'rgba(180,200,220,' + drop.alpha.toFixed(2) + ')';
+      vizCtx.lineWidth = 1;
+      vizCtx.beginPath();
+      vizCtx.moveTo(drop.x, drop.y);
+      vizCtx.lineTo(drop.x - 0.5, drop.y + drop.len);
+      vizCtx.stroke();
+
+      // Refraction glow at drop tip
+      if (drop.alpha > 0.25) {
+        vizCtx.fillStyle = 'rgba(255,240,200,' + (drop.alpha * 0.3).toFixed(3) + ')';
+        vizCtx.fillRect(drop.x - 1, drop.y + drop.len, 2, 2);
+      }
+    }
+
+    // Interior warm reflection on glass
+    vizCtx.fillStyle = 'rgba(255,180,80,0.03)';
+    vizCtx.fillRect(44, 24, 392, 272);
+
+    // Window condensation effect (subtle fog)
+    vizCtx.fillStyle = 'rgba(200,210,220,0.02)';
+    vizCtx.fillRect(44, 200, 392, 96);
+
+    requestAnimationFrame(drawViz);
+  }
+  drawViz();
+
+  // Click anywhere to start
+  document.body.addEventListener('click', function () {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }, { once: true });
+
+})();
+</script>
+</body>
+</html>

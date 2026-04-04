@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2026-01-28 AI 科技日報 | Thinker News</title>
+    <meta name="description" content="OpenAI Prism 整合 AI 寫作協作，Claude 升級行動代理 - 今日AI科技重點新聞精選">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft JhengHei', sans-serif;
+            line-height: 1.7;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .back-link {
+            display: inline-block;
+            margin-bottom: 20px;
+            color: white;
+            text-decoration: none;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 10px 20px;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .back-link:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateX(-5px);
+        }
+
+        .article-header {
+            text-align: center;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .article-date {
+            font-size: 1.1em;
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+
+        .article-title {
+            font-size: 2.2em;
+            font-weight: 800;
+            margin-bottom: 20px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.3;
+        }
+
+        .article-subtitle {
+            font-size: 1.2em;
+            color: #666;
+            font-weight: 400;
+        }
+
+        .content-section {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            margin-bottom: 30px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+        }
+
+        .content-section h2 {
+            color: #667eea;
+            font-size: 1.6em;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .content-section h3 {
+            color: #555;
+            font-size: 1.3em;
+            margin: 25px 0 15px;
+            font-weight: 600;
+        }
+
+        .content-section p {
+            margin-bottom: 15px;
+            line-height: 1.7;
+            font-size: 1.05em;
+        }
+
+        .content-section ul {
+            margin: 15px 0;
+            padding-left: 20px;
+        }
+
+        .content-section li {
+            margin-bottom: 10px;
+            line-height: 1.6;
+        }
+
+        .highlight-box {
+            background: linear-gradient(135deg, #667eea20, #764ba220);
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 0 15px 15px 0;
+        }
+
+        .news-link {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .news-link:hover {
+            color: #764ba2;
+            text-decoration: underline;
+        }
+
+        .external-link::after {
+            content: " 🔗";
+            font-size: 0.8em;
+        }
+
+        .footer-nav {
+            text-align: center;
+            padding: 30px;
+            color: white;
+        }
+
+        .nav-button {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            text-decoration: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 15px;
+            }
+
+            .article-header {
+                padding: 25px 20px;
+            }
+
+            .article-title {
+                font-size: 1.8em;
+            }
+
+            .content-section {
+                padding: 25px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="./index.html" class="back-link">← 返回首頁</a>
+
+        <header class="article-header">
+            <div class="article-date">📅 2026年1月28日</div>
+            <h1 class="article-title">🤖 AI 科技日報精選</h1>
+            <p class="article-subtitle">OpenAI Prism 整合 AI 寫作協作，Claude 升級行動代理</p>
+        </header>
+
+        <div class="content-section">
+            <h2>✨ 今日必讀 TOP 3</h2>
+
+            <h3>1. OpenAI 科學研究「魔法工作室」登場！Prism 整合 AI 寫作協作，研究效率狂飆</h3>
+            <p>OpenAI 正式推出一個針對科學研究打造的新平台「Prism」，這是一個以 LaTeX 為核心設計的免費研究工作區，並深度整合最新的 GPT-5.2 模型。Prism 的目標是大幅簡化學術寫作流程，讓研究人員能在單一平台中完成撰寫、合作、程式碼補全、生成內容等各項任務。</p>
+            <p>該平台支援多人即時協作，AI 可根據研究內容提供建議與觀點，特別在數據分析與結果闡釋方面展現出強大輔助能力。Prism 的推出象徵著 AI 不再只是工具，而是學術研究流程中不可或缺的智能夥伴，有助於加速知識創造與傳播。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                初學者可透過 Prism 體驗 AI 在研究寫作中的實際應用，熟悉 LaTeX 同時提升撰寫效率與表達力，對於準備報告或技術文件極具幫助。
+            </div>
+            <p><a href="https://openai.com/index/introducing-prism" class="news-link external-link" target="_blank">閱讀原文</a></p>
+
+            <h3>2. Anthropic Claude 大升級！MCP Apps 加持，與 Canva、Figma、Slack 無縫整合，工作流效率爆棚！</h3>
+            <p>Anthropic 宣布旗下 AI 助理 Claude 將支援 MCP Apps（Model Context Protocol Applications），這使得第三方應用如 Asana、Figma、Slack 等可直接嵌入 Claude 介面中。使用者無需切換視窗，即可與多個工具互動，完成專案管理、設計協作與團隊溝通等任務。</p>
+            <p>這項功能讓 Claude 從「聊天工具」進化為「行動代理」— 能主動執行任務、整合工具、優化工作流，成為真正的 AI 工作中樞。接下來，Claude 將進一步支援 Salesforce 等企業應用，擴大其商業應用範圍。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                對初學者而言，這是一個認識 AI 助理如何整合日常工具、自動執行任務的絕佳案例，幫助你理解未來工作流程中的 AI 角色與價值。
+            </div>
+            <p><a href="https://technews.tw/2026/01/27/your-favorite-work-tools-are-now-interactive-inside-claude/" class="news-link external-link" target="_blank">閱讀原文</a></p>
+
+            <h3>3. Google AI Plus 驚喜上線！每月超值價 $7.99，Gemini 3 Pro 全球開放，AI 應用不再是夢！</h3>
+            <p>Google 宣布推出全球版「AI Plus」訂閱服務，每月僅需 7.99美元（約新台幣250元），使用者即可存取最新 Gemini 3 Pro 模型與多項進階 AI 工具，涵蓋內容創作、資料分析、程式碼補全等功能。</p>
+            <p>這項策略降低了高階 AI 工具的使用門檻，使更多人可以實際體驗尖端 AI 的效能與便利，也促使其他科技巨頭推出更具競爭力的產品。AI Plus 預計將加速 AI 在各產業的應用擴散。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                對於資料科學初學者而言，這是一個低成本、高效益的方式來熟悉主流 AI 模型與應用，適合進行日常學習、專案實作與技能提升。
+            </div>
+            <p><a href="https://techcrunch.com/2026/01/27/googles-ai-plus-plan-rolls-out-to-all-markets-including-the-u-s/" class="news-link external-link" target="_blank">閱讀原文</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>🛠 AI工具與應用焦點</h2>
+            <h3>Clawdbot 爆紅！開源 AI 行動代理助理來臨，不再依賴雲端平台</h3>
+            <p>由奧地利工程師 Peter Steinberger 發布的 Clawdbot，近期在開發者社群中爆紅。這是一個可本地部署的開源 AI 助理，具備語意理解與任務執行能力，可取代傳統雲端 AI 工具，並根據個人需求進行高度客製化。</p>
+            <p>Clawdbot 展現了 AI 助理從「聊天式互動」進化為「行動代理」的趨勢，能管理資料、自動執行流程、與應用程式互動，成為真正的個人化智慧助理。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                學會部署與修改開源 AI 助理，對初學者是絕佳的實作練習，能幫助你從 Prompt 使用者邁向 AI 開發者。
+            </div>
+            <p><a href="https://www.ithome.com.tw/news/173578" class="news-link external-link" target="_blank">閱讀原文</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>📊 產業趨勢與新聞</h2>
+            <h3>中國 AI 大爆發！阿里巴巴與月之暗面推出旗艦模型，正面迎戰 OpenAI、Google</h3>
+            <p>中國阿里巴巴與新創公司月之暗面，近日相繼發布旗艦 AI 模型，展現中國在基礎模型研發與應用整合上的重大進展。阿里巴巴準備將模型整合進電商、物流和雲端業務，而月之暗面則主打長文本與多模態處理能力。</p>
+            <p>這場中美 AI 模型競賽加劇，代表全球 AI 發展將進入技術與資源的雙重競爭時代。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                初學者應關注各國模型特色與應用場景，了解未來工具選擇不再侷限於 OpenAI，開啟多元學習視野。
+            </div>
+            <p><a href="https://technews.tw/2026/01/27/chinas-alibaba-moonshot-claim-latest-flagship-ai-models-challenge-openai-google/" class="news-link external-link" target="_blank">閱讀原文</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>🔐 資安趨勢快訊</h2>
+            <h3>VS Code AI 外掛藏資安危機！150 萬開發者資料恐外洩</h3>
+            <p>資安公司 Koi Security 發現，兩款熱門 VS Code AI 外掛，在未告知使用者的情況下，將用戶的工作區與程式碼資料回傳至中國伺服器，事件代號「MaliciousCorgi」。</p>
+            <p>這些外掛合計安裝超過 150 萬次，可能造成企業機密與個人資料外洩，對開發者與企業資安構成重大威脅。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                使用 AI 工具時需謹慎審查來源與權限設定，建立資安意識是每位資料人不可忽視的基本功。
+            </div>
+            <p><a href="https://www.ithome.com.tw/news/173617" class="news-link external-link" target="_blank">閱讀原文</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>🌍 產業動態與AI職涯</h2>
+            <h3>OpenAI 踩煞車：不再「狂徵人」，AI 巨頭進入穩健期？</h3>
+            <p>OpenAI 執行長 Sam Altman 表示，公司將放緩徵才步調，專注於內部組織優化與技術方向調整。這可能代表 AI 巨頭從高速擴張轉向穩健經營階段。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                初學者應關注產業節奏變化，培養深度技能與實務能力，才能在競爭中脫穎而出。
+            </div>
+            <p><a href="https://technews.tw/2026/01/27/openai-no-more-frenzied-expeditions/" class="news-link external-link" target="_blank">閱讀原文</a></p>
+        </div>
+
+        <div class="content-section">
+            <h2>💡 深度觀點與建議</h2>
+            <h3>微軟 BitLocker 金鑰外洩爭議，數位隱私誰來守？</h3>
+            <p>Forbes 報導指出，微軟曾將 BitLocker 加密金鑰提供給美國 FBI，引發用戶對資料加密與隱私保障的疑慮。雖然是配合法律調查，但也暴露出使用者對雲端儲存與自動加密的過度信任問題。</p>
+            <div class="highlight-box">
+                <strong>💡 學習價值：</strong><br>
+                這提醒我們即使使用加密技術，也應謹慎評估資料儲存與授權機制，尤其是涉及敏感模型、資料或專案原始碼時。
+            </div>
+            <p><a href="https://www.ithome.com.tw/news/173599" class="news-link external-link" target="_blank">閱讀原文</a></p>
+
+            <hr>
+
+            <h3>📬 日報後記</h3>
+            <p>今天的新聞展現出 AI 正加速進入「工具整合」與「行動代理」的新階段，從 Prism 到 Claude MCP Apps，我們看到 AI 不再只是回答問題，而是主動參與整個工作流。對初學者而言，這意味著更低門檻的學習環境與更多實作機會。</p>
+            <p>同時，產業對 AI 人才的期待也從「懂模型」轉向「能上線」，如何使用 AI 工具解決實際問題、整合應用流程，將是關鍵競爭力。</p>
+            <p>建議本週可著手實測：</p>
+            <ul>
+                <li>安裝並體驗 Gemini 或 Claude 的整合應用</li>
+                <li>嘗試用 LaTeX + GPT 寫一篇學習筆記或報告</li>
+                <li>檢查 VS Code 外掛與 GitHub 權限設定，強化資安意識</li>
+            </ul>
+            <p>AI 的未來已在眼前，現在就是最好的學習時機！</p>
+        </div>
+
+        <div class="content-section" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
+            <h2 style="color: white; border-bottom: 3px solid white;">📱 LINE 精華版</h2>
+            <div style="background: rgba(255,255,255,0.1); padding: 20px; border-radius: 15px; margin: 20px 0;">
+                <h3>🤖 今日AI重點 (LINE版)</h3>
+                <p><strong>🚀 AI 正式進入「行動代理」時代！</strong> OpenAI Prism 助寫論文、Claude 升級行動代理、Google Gemini 3 Pro 開放訂閱。</p>
+            </div>
+
+            <div style="text-align: center; margin-top: 20px;">
+                <p style="font-size: 0.9em; opacity: 0.8;">
+                    💡 此精華版專為LINE推送設計 | 完整分析請閱讀上方詳細報告
+                </p>
+            </div>
+        </div>
+
+        <div class="footer-nav">
+            <a href="./index.html" class="nav-button">🏠 返回首頁</a>
+            <a href="https://github.com/ThinkerCafe-tw/thinker-news" class="nav-button" target="_blank">⭐ GitHub</a>
+        </div>
+    </div>
+
+    <script>
+        // 頁面載入動畫
+        document.addEventListener('DOMContentLoaded', function() {
+            const sections = document.querySelectorAll('.content-section');
+            sections.forEach((section, index) => {
+                section.style.opacity = '0';
+                section.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    section.style.transition = 'all 0.6s ease';
+                    section.style.opacity = '1';
+                    section.style.transform = 'translateY(0)';
+                }, index * 150);
+            });
+        });
+    </script>
+<script src="./thinker_secret_entrance.js"></script>
+</body>
+</html>
