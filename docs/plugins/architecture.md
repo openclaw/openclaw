@@ -775,9 +775,9 @@ api.registerProvider({
   scoped to Claude ids instead of every `anthropic-messages` transport.
 - Amazon Bedrock uses `buildReplayPolicy`, `matchesContextOverflowError`,
   `classifyFailoverReason`, and `resolveDefaultThinkingLevel` because it owns
-  Bedrock-specific replay policy plus throttle/not-ready/context-overflow
-  error classification for Anthropic-on-Bedrock traffic; its replay policy
-  shares the same Claude-only `anthropic-by-model` guard.
+  Bedrock-specific throttle/not-ready/context-overflow error classification
+  for Anthropic-on-Bedrock traffic; its replay policy still shares the same
+  Claude-only `anthropic-by-model` guard.
 - OpenRouter, Kilocode, Opencode, and Opencode Go use `buildReplayPolicy`
   through the `passthrough-gemini` replay family because they proxy Gemini
   models through OpenAI-compatible transports and need Gemini
@@ -796,7 +796,9 @@ api.registerProvider({
 - Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
   `isCacheTtlEligible` because it needs provider-owned request headers,
   reasoning payload normalization, Gemini transcript hints, and Anthropic
-  cache-TTL gating.
+  cache-TTL gating; the `kilocode-thinking` stream family keeps Kilo thinking
+  injection on the shared proxy stream path while skipping `kilo/auto` and
+  other proxy model ids that do not support explicit reasoning payloads.
 - Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
   `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
   `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,

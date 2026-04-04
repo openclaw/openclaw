@@ -128,14 +128,14 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
-    | `plugin-sdk/provider-model-shared` | `normalizeModelCompat`, `buildProviderReplayFamilyHooks`, `sanitizeGoogleGeminiReplayHistory`, `resolveTaggedReasoningOutputMode` |
+    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
     | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
     | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/config helpers |
-    | `plugin-sdk/provider-tools` | `buildProviderToolCompatFamilyHooks`, Gemini schema helpers, xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
+    | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
-    | `plugin-sdk/provider-stream` | `buildProviderStreamFamilyHooks`, stream wrapper types, provider stream wrappers, shared OpenAI/OpenRouter stream-family helpers |
+    | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
     | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
   </Accordion>
@@ -169,6 +169,7 @@ explicitly promotes one as public.
     | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
     | `plugin-sdk/plugin-runtime` | Shared plugin command/hook/http/interactive helpers |
     | `plugin-sdk/hook-runtime` | Shared webhook/internal hook pipeline helpers |
+    | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
     | `plugin-sdk/process-runtime` | Process exec helpers |
     | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
     | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
@@ -177,10 +178,13 @@ explicitly promotes one as public.
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
+    | `plugin-sdk/reply-history` | Shared short-window reply-history helpers such as `buildHistoryContext`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
     | `plugin-sdk/session-store-runtime` | Session store path + updated-at helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
+    | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
     | `plugin-sdk/string-normalization-runtime` | Slug/string normalization helpers |
     | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |

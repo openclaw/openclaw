@@ -61,8 +61,10 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 **Notes:**
 
-- Local connections (`127.0.0.1`) are auto-approved.
-- Remote connections (LAN, Tailnet, etc.) require explicit approval.
+- Direct local loopback browser connections (`127.0.0.1` / `localhost`) are
+  auto-approved.
+- Tailnet and LAN browser connects still require explicit approval, even when
+  they originate from the same machine.
 - Each browser profile generates a unique device ID, so switching browsers or
   clearing browser data will require re-pairing.
 

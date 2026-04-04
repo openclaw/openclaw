@@ -371,6 +371,7 @@ export type FailoverSignal = {
   status?: number;
   code?: string;
   message?: string;
+  provider?: string;
 };
 
 export type FailoverClassification =
@@ -523,8 +524,11 @@ export function isTransientHttpError(raw: string): boolean {
 export function classifyFailoverReasonFromHttpStatus(
   status: number | undefined,
   message?: string,
+  opts?: { provider?: string },
 ): FailoverReason | null {
-  const messageClassification = message ? classifyFailoverClassificationFromMessage(message) : null;
+  const messageClassification = message
+    ? classifyFailoverClassificationFromMessage(message, opts?.provider)
+    : null;
   return failoverReasonFromClassification(
     classifyFailoverClassificationFromHttpStatus(status, message, messageClassification),
   );
@@ -629,7 +633,33 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
-function classifyFailoverClassificationFromMessage(raw: string): FailoverClassification | null {
+function isProvider(provider: string | undefined, match: string): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return Boolean(normalized && normalized.includes(match));
+}
+
+function isAnthropicGenericUnknownError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "anthropic") && raw.toLowerCase().includes("an unknown error occurred")
+  );
+}
+
+function isOpenRouterProviderReturnedError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") && raw.toLowerCase().includes("provider returned error")
+  );
+}
+
+function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") && /\bkey\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
+  );
+}
+
+function classifyFailoverClassificationFromMessage(
+  raw: string,
+  provider?: string,
+): FailoverClassification | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
   }
@@ -648,6 +678,9 @@ function classifyFailoverClassificationFromMessage(raw: string): FailoverClassif
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
+  }
+  if (isOpenRouterKeyLimitExceededError(raw, provider)) {
+    return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
@@ -677,6 +710,12 @@ function classifyFailoverClassificationFromMessage(raw: string): FailoverClassif
   if (isAuthErrorMessage(raw)) {
     return toReasonClassification("auth");
   }
+  if (isAnthropicGenericUnknownError(raw, provider)) {
+    return toReasonClassification("timeout");
+  }
+  if (isOpenRouterProviderReturnedError(raw, provider)) {
+    return toReasonClassification("timeout");
+  }
   if (isServerErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
@@ -703,7 +742,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
       ? signal.status
       : extractLeadingHttpStatus(signal.message?.trim() ?? "")?.code;
   const messageClassification = signal.message
-    ? classifyFailoverClassificationFromMessage(signal.message)
+    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
@@ -1207,24 +1246,28 @@ function isCliSessionExpiredErrorMessage(raw: string): boolean {
   );
 }
 
-export function classifyFailoverReason(raw: string): FailoverReason | null {
+export function classifyFailoverReason(
+  raw: string,
+  opts?: { provider?: string },
+): FailoverReason | null {
   const trimmed = raw.trim();
   const leadingStatus = extractLeadingHttpStatus(trimmed);
   return failoverReasonFromClassification(
     classifyFailoverSignal({
       status: leadingStatus?.code,
       message: raw,
+      provider: opts?.provider,
     }),
   );
 }
 
-export function isFailoverErrorMessage(raw: string): boolean {
-  return classifyFailoverReason(raw) !== null;
+export function isFailoverErrorMessage(raw: string, opts?: { provider?: string }): boolean {
+  return classifyFailoverReason(raw, opts) !== null;
 }
 
 export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
   }
-  return isFailoverErrorMessage(msg.errorMessage ?? "");
+  return isFailoverErrorMessage(msg.errorMessage ?? "", { provider: msg.provider });
 }
