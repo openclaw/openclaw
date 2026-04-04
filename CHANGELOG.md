@@ -125,6 +125,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Kimi Coding: keep native Anthropic tool payloads on the Kimi coding endpoint while still parsing tagged tool-call text on the response path, so tool calls execute again instead of echoing raw markup. (#60391) Thanks @Eric-Guo.
 - Plugins/install: preserve `--dangerously-force-unsafe-install` across linked plugin probes and linked hook-pack fallback probes so local `--link` installs honor the documented unsafe override. (#60624) Thanks @JerrettDavis.
 - Auto-reply/reasoning: preserve reasoning and compaction markers while coalescing adjacent reply blocks so hidden reasoning does not leak when mixed with visible text on channels like WhatsApp. Thanks @mcaxtr.
+- Exec/gateway: reuse durable exact-command `allow-always` approvals in allowlist mode so repeated gateway exec reruns stop re-prompting or failing on allowlist misses. (#59880) Thanks @luoyanglang.
 
 ## 2026.4.2
 
