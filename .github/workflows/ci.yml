@@ -545,7 +545,6 @@ jobs:
           echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
           if [ "$TASK" = "channels" ]; then
             echo "OPENCLAW_VITEST_MAX_WORKERS=1" >> "$GITHUB_ENV"
-            echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
           fi
 
       - name: Download dist artifact
