@@ -181,11 +181,14 @@ export async function runCli(argv: string[] = process.argv) {
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
     // These log the error and exit gracefully instead of crashing without trace.
-    // Guard: skip registration when already installed by src/index.ts to avoid
-    // duplicate handlers (see P2 review feedback on PR #60627).
-    if (process.listenerCount("uncaughtException") === 0) {
+    // Guard each event type independently so that an external listener on one
+    // event (e.g., a test harness adding "uncaughtException") does not prevent
+    // the other handler from being installed.
+    if (process.listenerCount("unhandledRejection") === 0) {
       installUnhandledRejectionHandler();
+    }
 
+    if (process.listenerCount("uncaughtException") === 0) {
       process.on("uncaughtException", (error) => {
         if (isAbortError(error)) {
           console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
