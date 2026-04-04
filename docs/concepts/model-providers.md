@@ -28,7 +28,9 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `normalizeConfig`, `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `normalizeTransport`, `normalizeConfig`,
+  `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
+  `resolveSyntheticAuth`, `shouldDeferSyntheticProfileAuth`,
   `resolveDynamicModel`, `prepareDynamicModel`,
   `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`,
   `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
@@ -54,9 +56,17 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
+- `normalizeTransport`: provider normalizes transport-family `api` / `baseUrl`
+  before generic model assembly; OpenClaw checks the matched provider first,
+  then other hook-capable provider plugins until one actually changes the
+  transport
 - `normalizeConfig`: provider normalizes `models.providers.<id>` config before runtime uses it; OpenClaw checks the matched provider first, then other hook-capable provider plugins until one actually changes the config
 - `applyNativeStreamingUsageCompat`: provider applies endpoint-driven native streaming-usage compat rewrites for config providers
 - `resolveConfigApiKey`: provider resolves env-marker auth for config providers without forcing full runtime auth loading
+- `resolveSyntheticAuth`: provider can expose local/self-hosted or other
+  config-backed auth availability without persisting plaintext secrets
+- `shouldDeferSyntheticProfileAuth`: provider can mark stored synthetic profile
+  placeholders as lower precedence than env/config-backed auth
 - `resolveDynamicModel`: provider accepts model ids not present in the local
   static catalog yet
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
