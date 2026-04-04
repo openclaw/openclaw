@@ -408,14 +408,21 @@ schema:
 
 ## Reverse Proxy Configuration
 
-If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), you should configure `gateway.trustedProxies` for proper client IP detection.
+If you run the Gateway behind a reverse proxy (nginx, Caddy, Traefik, etc.), configure
+`gateway.trustedProxies` for proper forwarded-client IP handling.
 
 When the Gateway detects proxy headers from an address that is **not** in `trustedProxies`, it will **not** treat connections as local clients. If gateway auth is disabled, those connections are rejected. This prevents authentication bypass where proxied connections would otherwise appear to come from localhost and receive automatic trust.
+
+`gateway.trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, but that auth mode is stricter:
+
+- trusted-proxy auth **fails closed on loopback-source proxies**
+- same-host loopback reverse proxies can still use `gateway.trustedProxies` for local-client detection and forwarded IP handling
+- for same-host loopback reverse proxies, use token/password auth instead of `gateway.auth.mode: "trusted-proxy"`
 
 ```yaml
 gateway:
   trustedProxies:
-    - "127.0.0.1" # if your proxy runs on localhost
+    - "10.0.0.1" # reverse proxy IP
   # Optional. Default false.
   # Only enable if your proxy cannot provide X-Forwarded-For.
   allowRealIpFallback: false
