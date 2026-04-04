@@ -37,10 +37,11 @@ the broader umbrella surface and shared helpers such as
 
 Do not add or depend on provider-named convenience seams such as
 `openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, or `openclaw/plugin-sdk/whatsapp`. Bundled plugins should compose generic SDK
-subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core should
-either use those plugin-local barrels or add a narrow generic SDK contract when
-the need is truly cross-channel.
+`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, or
+`openclaw/plugin-sdk/whatsapp-surface`. Bundled plugins should compose generic
+SDK subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core
+should either use those plugin-local barrels or add a narrow generic SDK
+contract when the need is truly cross-channel.
 
 The generated export map still contains a small set of bundled-plugin helper
 seams such as `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`,
@@ -270,9 +271,9 @@ explicitly promotes one as public.
     | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
     | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
     | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
-    | Channel-specific helpers | `plugin-sdk/googlechat`, `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles`, `plugin-sdk/bluebubbles-policy`, `plugin-sdk/mattermost`, `plugin-sdk/mattermost-policy`, `plugin-sdk/feishu-conversation`, `plugin-sdk/msteams`, `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`, `plugin-sdk/twitch` | Bundled channel compatibility/helper seams |
+    | Channel-specific helpers | `plugin-sdk/googlechat`, `plugin-sdk/whatsapp-surface`, `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles`, `plugin-sdk/bluebubbles-policy`, `plugin-sdk/mattermost`, `plugin-sdk/mattermost-policy`, `plugin-sdk/feishu-conversation`, `plugin-sdk/msteams`, `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`, `plugin-sdk/twitch` | Bundled channel compatibility/helper seams |
     | Provider-specific helpers | `plugin-sdk/openai`, `plugin-sdk/moonshot`, `plugin-sdk/qwen`, `plugin-sdk/qwen-definitions`, `plugin-sdk/modelstudio`, `plugin-sdk/modelstudio-definitions`, `plugin-sdk/provider-moonshot`, `plugin-sdk/together`, `plugin-sdk/amazon-bedrock`, `plugin-sdk/anthropic-vertex`, `plugin-sdk/cloudflare-ai-gateway`, `plugin-sdk/byteplus`, `plugin-sdk/chutes`, `plugin-sdk/deepseek`, `plugin-sdk/google`, `plugin-sdk/huggingface`, `plugin-sdk/kimi-coding`, `plugin-sdk/kilocode`, `plugin-sdk/minimax`, `plugin-sdk/mistral`, `plugin-sdk/nvidia`, `plugin-sdk/ollama`, `plugin-sdk/ollama-surface`, `plugin-sdk/opencode`, `plugin-sdk/opencode-go`, `plugin-sdk/qianfan`, `plugin-sdk/sglang`, `plugin-sdk/synthetic`, `plugin-sdk/venice`, `plugin-sdk/vllm`, `plugin-sdk/xai`, `plugin-sdk/volcengine` | Bundled provider-specific helper seams; prefer canonical `qwen*`, keep `modelstudio*` as compatibility aliases |
-    | Auth/plugin-specific helpers | `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`, `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`, `plugin-sdk/voice-call` | Bundled feature/plugin helper seams |
+    | Auth/plugin-specific helpers | `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`, `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`, `plugin-sdk/voice-call` | Bundled feature/plugin helper seams; `plugin-sdk/github-copilot-token` currently exports `DEFAULT_COPILOT_API_BASE_URL`, `deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken` |
   </Accordion>
 </AccordionGroup>
 
