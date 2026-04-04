@@ -20,7 +20,7 @@ Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
 
 ## Quick start (beginner)
 
-1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic Claude CLI or legacy token auth) or set your own cadence.
+1. Leave heartbeats enabled (default is `30m`, or `1h` for Anthropic OAuth/token auth, including Claude CLI reuse) or set your own cadence.
 2. Create a tiny `HEARTBEAT.md` checklist or `tasks:` block in the agent workspace (optional but recommended).
 3. Decide where heartbeat messages should go (`target: "none"` is the default; set `target: "last"` to route to the last contact).
 4. Optional: enable heartbeat reasoning delivery for transparency.
@@ -50,7 +50,7 @@ Example config:
 
 ## Defaults
 
-- Interval: `30m` (or `1h` when Anthropic Claude CLI or legacy token auth is the detected auth mode). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
+- Interval: `30m` (or `1h` when Anthropic OAuth/token auth is the detected auth mode, including Claude CLI reuse). Set `agents.defaults.heartbeat.every` or per-agent `agents.list[].heartbeat.every`; use `0m` to disable.
 - Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
   `Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system

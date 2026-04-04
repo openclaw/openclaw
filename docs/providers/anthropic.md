@@ -16,7 +16,7 @@ if they are already configured.
 <Warning>
 Anthropic changed third-party harness billing on **April 4, 2026 at 12:00 PM
 PT / 8:00 PM BST**. Anthropic says Claude subscription limits no longer cover
-OpenClaw or other third-party harnesses. Existing legacy Anthropic token auth
+OpenClaw or other third-party harnesses. Existing Anthropic OAuth/token auth
 can still run in OpenClaw, but Anthropic now requires **Extra Usage**
 (pay-as-you-go, billed separately from the subscription) for that traffic.
 
@@ -90,7 +90,7 @@ Important limits:
 
 ## Prompt caching (Anthropic API)
 
-OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; legacy Anthropic token auth does not honor cache settings.
+OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; Anthropic OAuth/token auth does not honor cache settings.
 
 ### Configuration
 
@@ -182,15 +182,15 @@ This only activates when `params.context1m` is explicitly set to `true` for
 that model.
 
 Requirement: Anthropic must allow long-context usage on that credential
-(typically API key billing, or Claude CLI / legacy token auth with Extra Usage
-enabled). Otherwise Anthropic returns:
+(typically API key billing, or Anthropic OAuth/subscription auth with Extra
+Usage enabled). Otherwise Anthropic returns:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
 
 Note: Anthropic currently rejects `context-1m-*` beta requests when using
-legacy Anthropic token auth (`sk-ant-oat-*`). If you configure
-`context1m: true` with that legacy auth mode, OpenClaw logs a warning and
-falls back to the standard context window by skipping the context1m beta
-header while keeping the required OAuth betas.
+Anthropic OAuth/subscription tokens (`sk-ant-oat-*`). If you configure
+`context1m: true` with that auth mode, OpenClaw logs a warning and falls back
+to the standard context window by skipping the context1m beta header while
+keeping the required OAuth betas.
 
 ## Option B: Claude CLI as the message provider
 
@@ -334,9 +334,12 @@ More details: [/gateway/cli-backends](/gateway/cli-backends)
 ## Notes
 
 - Anthropic says that starting **April 4, 2026 at 12:00 PM PT / 8:00 PM BST**,
-  OpenClaw usage with Claude CLI or legacy Anthropic token auth requires **Extra Usage**
-  (pay-as-you-go billed separately from the subscription).
-- Existing legacy Anthropic token profiles are still honored at runtime, but OpenClaw no longer offers setup-token onboarding or auth commands for new setups.
+  OpenClaw usage with Claude CLI or Anthropic OAuth/subscription token auth
+  requires **Extra Usage** (pay-as-you-go billed separately from the
+  subscription).
+- Existing legacy Anthropic token profiles are still honored at runtime, but
+  OpenClaw no longer offers setup-token onboarding or auth commands for new
+  setups.
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
 
 ## Troubleshooting

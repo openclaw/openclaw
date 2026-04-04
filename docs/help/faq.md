@@ -631,15 +631,16 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 <a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
 <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
 That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-use **Claude CLI**, wait for the window to reset or upgrade your plan. If you
-use an **Anthropic API key**, check the Anthropic Console
+use **Claude CLI** or **Anthropic OAuth/subscription tokens**, wait for the
+window to reset or enable/upgrade Extra Usage. If you use an **Anthropic API
+key**, check the Anthropic Console
 for usage/billing and raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
     Anthropic's 1M context beta (`context1m: true`). That only works when your
-    credential is eligible for long-context billing (API key billing or Claude
-    CLI with Extra Usage enabled).
+    credential is eligible for long-context billing (API key billing or
+    Anthropic OAuth/subscription auth with Extra Usage enabled).
 
     Tip: set a **fallback model** so OpenClaw can keep replying while a provider is rate-limited.
     See [Models](/cli/models), [OAuth](/concepts/oauth), and
