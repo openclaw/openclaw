@@ -10,6 +10,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
+import type { ResolvedTextRepetitionGuardConfig } from "./text-repetition-guard.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
@@ -54,6 +55,13 @@ export type EmbeddedPiSubscribeState = {
   assistantTextBaseline: number;
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
+
+  /** deltaBuffer length at last text-repetition-guard check (throttle). */
+  textRepetitionLastCheckedLen: number;
+  /** Resolved text-repetition-guard config, cached at message start. */
+  resolvedTextRepetitionGuardConfig?: ResolvedTextRepetitionGuardConfig;
+  /** Set when the text-repetition guard fires; prevents blockChunker drain in handleMessageEnd. */
+  abortedByTextRepetitionGuard: boolean;
 
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
