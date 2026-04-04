@@ -439,7 +439,9 @@ function getCompatibleActivePluginRegistry(
   // making it a superset of any snapshot request. Reuse it directly to avoid
   // redundant loadOpenClawPlugins calls caused by cache-key mismatches when
   // callers omit workspaceDir or pass a narrower onlyPluginIds scope.
-  if (options.activate !== true) {
+  // Note: activate:undefined is treated as activating (shouldActivate defaults
+  // true), so only explicit activate:false qualifies as a snapshot-only load.
+  if (options.activate === false) {
     return activeRegistry;
   }
   const activeCacheKey = getActivePluginRegistryKey();
