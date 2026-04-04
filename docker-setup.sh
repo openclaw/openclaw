@@ -30,8 +30,8 @@ fi
 if [[ -f ~/.bashrc ]]; then
   _OPENCLAW_PROJECT="${COMPOSE_PROJECT_NAME:-openclaw}"
   _OPENCLAW_CONTAINER="${_OPENCLAW_PROJECT}-openclaw-gateway-1"
-  _OPENCLAW_ALIAS="alias openclaw='docker exec ${_OPENCLAW_CONTAINER} openclaw'"
-  if grep -q "alias openclaw=" ~/.bashrc 2>/dev/null; then
+  _OPENCLAW_ALIAS="alias openclaw='docker exec -it ${_OPENCLAW_CONTAINER} openclaw'"
+  if grep -q "^alias openclaw=" ~/.bashrc 2>/dev/null; then
     sed -i "s|^alias openclaw=.*|${_OPENCLAW_ALIAS}|" ~/.bashrc
   else
     echo "${_OPENCLAW_ALIAS}" >> ~/.bashrc
