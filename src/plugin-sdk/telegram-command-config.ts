@@ -27,6 +27,7 @@ type TelegramCommandConfigContract = {
 };
 
 const FALLBACK_TELEGRAM_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
+let cachedTelegramCommandConfigContract: TelegramCommandConfigContract | null = null;
 
 function fallbackNormalizeTelegramCommandName(value: string): string {
   const trimmed = value.trim();
@@ -121,15 +122,15 @@ const FALLBACK_TELEGRAM_COMMAND_CONFIG_CONTRACT: TelegramCommandConfigContract =
 };
 
 function loadTelegramCommandConfigContract(): TelegramCommandConfigContract {
-  const contract = getBundledChannelContractSurfaceModule<TelegramCommandConfigContract>({
-    pluginId: "telegram",
-    preferredBasename: "contract-surfaces.ts",
-  });
-  return contract ?? FALLBACK_TELEGRAM_COMMAND_CONFIG_CONTRACT;
+  cachedTelegramCommandConfigContract ??=
+    getBundledChannelContractSurfaceModule<TelegramCommandConfigContract>({
+      pluginId: "telegram",
+      preferredBasename: "contract-surfaces.ts",
+    }) ?? FALLBACK_TELEGRAM_COMMAND_CONFIG_CONTRACT;
+  return cachedTelegramCommandConfigContract;
 }
 
-export const TELEGRAM_COMMAND_NAME_PATTERN =
-  loadTelegramCommandConfigContract().TELEGRAM_COMMAND_NAME_PATTERN;
+export const TELEGRAM_COMMAND_NAME_PATTERN = FALLBACK_TELEGRAM_COMMAND_NAME_PATTERN;
 
 export function normalizeTelegramCommandName(value: string): string {
   return loadTelegramCommandConfigContract().normalizeTelegramCommandName(value);
