@@ -129,6 +129,11 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "usage",
+    description: "Show token usage and cost summaries",
+    hasSubcommands: false,
+  },
+  {
     name: "completion",
     description: "Generate shell completion script",
     hasSubcommands: false,
