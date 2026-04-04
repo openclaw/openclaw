@@ -79,6 +79,36 @@ export function encodeAbsolutePathForBackupArchive(sourcePath: string): string {
   return path.posix.join("relative", normalized);
 }
 
+export type DecodedArchivePath = {
+  platform: "posix" | "windows" | "relative";
+  absolutePath: string;
+};
+
+export function decodeAbsolutePathFromBackupArchive(encodedPath: string): DecodedArchivePath {
+  const normalized = encodedPath.replaceAll("\\", "/");
+
+  if (normalized.startsWith("posix/")) {
+    return { platform: "posix", absolutePath: `/${normalized.slice("posix/".length)}` };
+  }
+
+  if (normalized.startsWith("windows/")) {
+    const rest = normalized.slice("windows/".length);
+    const driveMatch = rest.match(/^([A-Za-z])\/(.*)$/);
+    if (driveMatch) {
+      const drive = driveMatch[1].toUpperCase();
+      const tail = driveMatch[2].replaceAll("/", "\\");
+      return { platform: "windows", absolutePath: `${drive}:\\${tail}` };
+    }
+    return { platform: "windows", absolutePath: rest };
+  }
+
+  if (normalized.startsWith("relative/")) {
+    return { platform: "relative", absolutePath: normalized.slice("relative/".length) };
+  }
+
+  throw new Error(`Unrecognized backup archive path encoding: ${encodedPath}`);
+}
+
 export function buildBackupArchivePath(archiveRoot: string, sourcePath: string): string {
   return path.posix.join(archiveRoot, "payload", encodeAbsolutePathForBackupArchive(sourcePath));
 }

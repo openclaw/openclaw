@@ -10,7 +10,7 @@ import { formatHelpExamples } from "../help-format.js";
 export function registerBackupCommand(program: Command) {
   const backup = program
     .command("backup")
-    .description("Create and verify local backup archives for OpenClaw state")
+    .description("Create, verify, and restore local backup archives for OpenClaw state")
     .addHelpText(
       "after",
       () =>
@@ -86,6 +86,42 @@ export function registerBackupCommand(program: Command) {
         await backupVerifyCommand(defaultRuntime, {
           archive: archive as string,
           json: Boolean(opts.json),
+        });
+      });
+    });
+
+  backup
+    .command("restore <archive>")
+    .description("Restore OpenClaw state from a backup archive")
+    .option("--json", "Output JSON", false)
+    .option("--dry-run", "Preview the restore plan without writing files", false)
+    .option("--force", "Overwrite existing files at restore targets", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw backup restore ./2026-04-01T00-00-00.000Z-openclaw-backup.tar.gz",
+            "Restore state from the given backup archive.",
+          ],
+          [
+            "openclaw backup restore ~/Backups/latest.tar.gz --dry-run",
+            "Preview what would be restored without writing.",
+          ],
+          [
+            "openclaw backup restore ./backup.tar.gz --force",
+            "Restore and overwrite any conflicting files.",
+          ],
+        ])}`,
+    )
+    .action(async (archive, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { backupRestoreCommand } = await import("../../commands/backup-restore.js");
+        await backupRestoreCommand(defaultRuntime, {
+          archive: archive as string,
+          json: Boolean(opts.json),
+          dryRun: Boolean(opts.dryRun),
+          force: Boolean(opts.force),
         });
       });
     });
