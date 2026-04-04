@@ -17,6 +17,7 @@ export { runEmbeddedPiAgent } from "./pi-embedded-runner/run.js";
 export {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
+  isEmbeddedPiRunActiveForSessionKey,
   isEmbeddedPiRunStreaming,
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
