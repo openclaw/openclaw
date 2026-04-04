@@ -130,8 +130,8 @@ openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
 This keeps your existing Anthropic auth profiles for rollback, but changes the
-default model selection to `claude-cli/...` and adds matching Claude CLI
-allowlist entries under `agents.defaults.models`.
+default model selection to a canonical `claude-cli/claude-*` ref and adds
+matching Claude CLI allowlist entries under `agents.defaults.models`.
 
 Verify:
 

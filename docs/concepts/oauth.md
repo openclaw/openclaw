@@ -113,9 +113,10 @@ openclaw onboard --auth-choice anthropic-cli
 ```
 
 This keeps existing Anthropic auth profiles for rollback, but rewrites the main
-default-model path from `anthropic/...` to `claude-cli/...`, rewrites matching
-Anthropic Claude fallbacks, and adds matching `claude-cli/...` allowlist
-entries under `agents.defaults.models`.
+default-model path from `anthropic/...` to a canonical
+`claude-cli/claude-*` ref, rewrites matching Anthropic Claude fallbacks, and
+adds matching canonical `claude-cli/claude-*` allowlist entries under
+`agents.defaults.models`.
 
 Verify:
 
@@ -135,7 +136,8 @@ Claude CLI path:
 
 1. sign in with `claude auth login` on the gateway host
 2. run `openclaw models auth login --provider anthropic --method cli --set-default`
-3. store no new auth profile; switch model selection to `claude-cli/...`
+3. store no new auth profile; switch model selection to a canonical
+   `claude-cli/claude-*` ref
 4. keep existing Anthropic auth profiles for rollback
 
 Interactive assistant path:
