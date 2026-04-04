@@ -585,6 +585,7 @@ async function sendSubagentAnnounceDirectly(params: {
   triggerMessage: string;
   summaryLine?: string;
   internalEvents?: AgentInternalEvent[];
+  requesterMessageId?: string;
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
