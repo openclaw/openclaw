@@ -181,6 +181,7 @@ Docs: https://docs.openclaw.ai
 - Browser/CDP: validate both initial and discovered CDP websocket endpoints before connect so strict SSRF policy blocks cross-host pivots and direct websocket targets. (#60469) Thanks @eleqtrizit.
 - Browser/profiles: reject remote browser profile `cdpUrl` values that violate strict SSRF policy before saving config, with clearer validation errors for blocked endpoints. (#60477) Thanks @eleqtrizit.
 - Mattermost/slash commands: harden native slash-command callback token validation to use constant-time secret comparison, matching the existing interaction-token path.
+- Agents/scheduling: route delayed follow-up requests toward cron only when cron is actually available, while keeping background `exec`/`process` guidance scoped to work that starts now. (#60811) Thanks @vincentkoc.
 
 ## 2026.4.1
 
