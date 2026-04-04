@@ -28,15 +28,17 @@ For model selection rules, see [/concepts/models](/concepts/models).
   map is now just for non-plugin/core providers and a few generic-precedence
   cases such as Anthropic API-key-first onboarding.
 - Provider plugins can also own provider runtime behavior via
-  `normalizeTransport`, `normalizeConfig`,
+  `normalizeModelId`, `normalizeTransport`, `normalizeConfig`,
   `applyNativeStreamingUsageCompat`, `resolveConfigApiKey`,
   `resolveSyntheticAuth`, `shouldDeferSyntheticProfileAuth`,
   `resolveDynamicModel`, `prepareDynamicModel`,
-  `normalizeResolvedModel`, `capabilities`, `normalizeToolSchemas`,
+  `normalizeResolvedModel`, `contributeResolvedModelCompat`,
+  `capabilities`, `normalizeToolSchemas`,
   `inspectToolSchemas`, `resolveReasoningOutputMode`,
   `prepareExtraParams`, `createStreamFn`, `wrapStreamFn`,
   `resolveTransportTurnState`, `resolveWebSocketSessionPolicy`,
-  `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`,
+  `createEmbeddingProvider`, `formatApiKey`, `refreshOAuth`,
+  `buildAuthDoctorHint`,
   `matchesContextOverflowError`, `classifyFailoverReason`,
   `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`,
   `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`,
@@ -60,6 +62,8 @@ Typical split:
 - `wizard.setup` / `wizard.modelPicker`: provider owns auth-choice labels,
   legacy aliases, onboarding allowlist hints, and setup entries in onboarding/model pickers
 - `catalog`: provider appears in `models.providers`
+- `normalizeModelId`: provider normalizes legacy/preview model ids before
+  lookup or canonicalization
 - `normalizeTransport`: provider normalizes transport-family `api` / `baseUrl`
   before generic model assembly; OpenClaw checks the matched provider first,
   then other hook-capable provider plugins until one actually changes the
@@ -76,6 +80,8 @@ Typical split:
 - `prepareDynamicModel`: provider needs a metadata refresh before retrying
   dynamic resolution
 - `normalizeResolvedModel`: provider needs transport or base URL rewrites
+- `contributeResolvedModelCompat`: provider contributes compat flags for its
+  vendor models even when they arrive through another compatible transport
 - `capabilities`: provider publishes transcript/tooling/provider-family quirks
 - `normalizeToolSchemas`: provider cleans tool schemas before the embedded
   runner sees them
@@ -91,6 +97,8 @@ Typical split:
   headers or metadata
 - `resolveWebSocketSessionPolicy`: provider supplies native WebSocket session
   headers or session cool-down policy
+- `createEmbeddingProvider`: provider owns memory embedding behavior when it
+  belongs with the provider plugin instead of the core embedding switchboard
 - `formatApiKey`: provider formats stored auth profiles into the runtime
   `apiKey` string expected by the transport
 - `refreshOAuth`: provider owns OAuth refresh when the shared `pi-ai`
