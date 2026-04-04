@@ -59,8 +59,9 @@ You can override mode or cadence per session:
 
 ## Notes
 
-- `message` mode won’t show typing for silent-only replies (e.g. the `NO_REPLY`
-  token used to suppress output).
+- `message` mode won’t show typing for silent-only replies (for example
+  `NO_REPLY` / `no_reply`, which are treated case-insensitively for exact
+  silent-token suppression).
 - `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
   If the model doesn’t emit reasoning deltas, typing won’t start.
 - Heartbeats never show typing, regardless of mode.
