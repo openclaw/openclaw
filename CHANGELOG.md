@@ -112,6 +112,7 @@ Docs: https://docs.openclaw.ai
 - Mattermost/config schema: accept `groups.*.requireMention` again so existing Mattermost configs no longer fail strict validation after upgrade. (#58271) Thanks @MoerAI.
 - Providers/OpenRouter failover: classify `403 "Key limit exceeded"` spending-limit responses as billing so model fallback continues instead of stopping on generic auth. (#59892) Thanks @rockcent.
 - Device pairing/security: keep non-operator device scope checks bound to the requested role prefix so bootstrap verification cannot redeem `operator.*` scopes through `node` auth. (#57258) Thanks @jlapenna.
+- Gateway/device pairing: require non-admin paired-device sessions to manage only their own device for token rotate/revoke and paired-device removal, blocking cross-device token theft inside pairing-scoped sessions. (#50627) Thanks @coygeek.
 
 ## 2026.4.2
 
