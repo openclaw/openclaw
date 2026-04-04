@@ -1569,8 +1569,8 @@ export async function runEmbeddedAttempt(
           (sessionManager.getLeafEntry() as { id?: string } | null | undefined)?.id ?? null;
 
         try {
-          // Legacy cleanup: prune old persisted image blocks. The delay
-          // also reduces prompt-cache churn.
+          // Prune old image blocks to limit context growth; skips recent
+          // turns to reduce prompt-cache churn.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.state.messages = activeSession.messages;
