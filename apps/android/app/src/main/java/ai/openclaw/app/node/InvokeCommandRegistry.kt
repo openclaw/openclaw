@@ -8,6 +8,7 @@ import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
+import ai.openclaw.app.protocol.OpenClawHttpCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
@@ -96,6 +97,7 @@ object InvokeCommandRegistry {
         name = OpenClawCapability.CallLog.rawValue,
         availability = NodeCapabilityAvailability.CallLogAvailable,
       ),
+      NodeCapabilitySpec(name = OpenClawCapability.Http.rawValue),
     )
 
   val all: List<InvokeCommandSpec> =
@@ -206,6 +208,9 @@ object InvokeCommandRegistry {
       InvokeCommandSpec(
         name = OpenClawCallLogCommand.Search.rawValue,
         availability = InvokeCommandAvailability.CallLogAvailable,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawHttpCommand.Request.rawValue,
       ),
       InvokeCommandSpec(
         name = "debug.logs",

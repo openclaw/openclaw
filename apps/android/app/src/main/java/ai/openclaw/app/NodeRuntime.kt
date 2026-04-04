@@ -133,6 +133,8 @@ class NodeRuntime(
     sms = sms,
   )
 
+  private val httpHandler: HttpHandler = HttpHandler(json = json)
+
   private val a2uiHandler: A2UIHandler = A2UIHandler(
     canvas = canvas,
     json = json,
@@ -170,6 +172,7 @@ class NodeRuntime(
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
     callLogHandler = callLogHandler,
+    httpHandler = httpHandler,
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },

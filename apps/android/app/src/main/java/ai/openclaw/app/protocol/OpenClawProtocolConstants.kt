@@ -14,6 +14,7 @@ enum class OpenClawCapability(val rawValue: String) {
   Calendar("calendar"),
   Motion("motion"),
   CallLog("callLog"),
+  Http("http"),
 }
 
 enum class OpenClawCanvasCommand(val rawValue: String) {
@@ -146,5 +147,14 @@ enum class OpenClawCallLogCommand(val rawValue: String) {
 
   companion object {
     const val NamespacePrefix: String = "callLog."
+  }
+}
+
+enum class OpenClawHttpCommand(val rawValue: String) {
+  Request("http.request"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "http."
   }
 }
