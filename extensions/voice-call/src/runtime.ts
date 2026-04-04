@@ -161,6 +161,10 @@ async function resolveRealtimeProvider(params: {
     cfgForResolve: params.fullConfig,
     getConfiguredProvider: (providerId) => getRealtimeVoiceProvider(providerId, params.fullConfig),
     listProviders: () => listRealtimeVoiceProviders(params.fullConfig),
+    resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
+      provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
+    isProviderConfigured: ({ provider, cfg, providerConfig }) =>
+      provider.isConfigured({ cfg, providerConfig }),
   });
   if (!resolution.ok && resolution.code === "missing-configured-provider") {
     throw new Error(

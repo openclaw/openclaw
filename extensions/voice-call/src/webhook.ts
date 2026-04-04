@@ -170,6 +170,10 @@ export class VoiceCallWebhookServer {
       getConfiguredProvider: (providerId) =>
         getRealtimeTranscriptionProvider(providerId, pluginConfig),
       listProviders: () => listRealtimeTranscriptionProviders(pluginConfig),
+      resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
+        provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
+      isProviderConfigured: ({ provider, cfg, providerConfig }) =>
+        provider.isConfigured({ cfg, providerConfig }),
     });
     if (!resolution.ok && resolution.code === "missing-configured-provider") {
       console.warn(

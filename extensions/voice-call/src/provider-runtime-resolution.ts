@@ -5,11 +5,6 @@ type AutoSelectableProvider = {
   autoSelectOrder?: number;
 };
 
-type ConfigurableProvider<TConfig, TFullConfig> = AutoSelectableProvider & {
-  resolveConfig?: (params: { cfg: TFullConfig; rawConfig: Record<string, unknown> }) => TConfig;
-  isConfigured: (params: { cfg: TFullConfig | undefined; providerConfig: TConfig }) => boolean;
-};
-
 export type ResolvedConfiguredProvider<TProvider, TConfig> =
   | {
       ok: true;
@@ -27,7 +22,7 @@ export type ResolvedConfiguredProvider<TProvider, TConfig> =
 export function resolveConfiguredCapabilityProvider<
   TConfig,
   TFullConfig,
-  TProvider extends ConfigurableProvider<TConfig, TFullConfig>,
+  TProvider extends AutoSelectableProvider,
 >(params: {
   configuredProviderId?: string;
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
@@ -35,6 +30,16 @@ export function resolveConfiguredCapabilityProvider<
   cfgForResolve: TFullConfig;
   getConfiguredProvider: (providerId: string | undefined) => TProvider | undefined;
   listProviders: () => Iterable<TProvider>;
+  resolveProviderConfig: (params: {
+    provider: TProvider;
+    cfg: TFullConfig;
+    rawConfig: Record<string, unknown>;
+  }) => TConfig;
+  isProviderConfigured: (params: {
+    provider: TProvider;
+    cfg: TFullConfig | undefined;
+    providerConfig: TConfig;
+  }) => boolean;
 }): ResolvedConfiguredProvider<TProvider, TConfig> {
   const selection = selectConfiguredOrAutoProvider({
     configuredProviderId: params.configuredProviderId,
@@ -63,13 +68,13 @@ export function resolveConfiguredCapabilityProvider<
     configuredProviderId: selection.configuredProviderId,
     providerConfigs: params.providerConfigs,
   });
-  const providerConfig =
-    provider.resolveConfig?.({
-      cfg: params.cfgForResolve,
-      rawConfig: rawProviderConfig,
-    }) ?? (rawProviderConfig as TConfig);
+  const providerConfig = params.resolveProviderConfig({
+    provider,
+    cfg: params.cfgForResolve,
+    rawConfig: rawProviderConfig,
+  });
 
-  if (!provider.isConfigured({ cfg: params.cfg, providerConfig })) {
+  if (!params.isProviderConfigured({ provider, cfg: params.cfg, providerConfig })) {
     return {
       ok: false,
       code: "provider-not-configured",
