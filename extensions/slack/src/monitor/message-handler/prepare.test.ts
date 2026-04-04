@@ -2056,6 +2056,18 @@ describe("prepareSlackMessage sender prefix", () => {
       const result = await prepareIgnoreMsg(createIgnoreOtherMentionsCtx(), "hello");
       expect(result).not.toBeNull();
     });
+
+    it("does not drop messages when botUserId is unknown even if mention regexes exist", async () => {
+      // When auth.test fails, botUserId is empty. Mention regexes may still be non-empty
+      // (auto-derived from agent identity). Without botUserId, we cannot distinguish a bot
+      // mention from a coworker mention — the gate must not activate.
+      const ctx = {
+        ...createIgnoreOtherMentionsCtx(),
+        botUserId: "",
+      } as unknown as SlackMonitorContext;
+      const result = await prepareIgnoreMsg(ctx, "<@U456> help");
+      expect(result).not.toBeNull();
+    });
   });
 
   it("detects /new as control command when prefixed with Slack mention", async () => {

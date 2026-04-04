@@ -490,14 +490,25 @@ export async function prepareSlackMessage(params: {
   // Unlike Discord, Slack implicit mentions (thread participation) are very broad — they fire
   // for every message in a bot-participated thread. We intentionally ignore implicitMention here
   // so that tagging a coworker in a bot thread does not trigger a reply.
-  // Guard on canDetectMention: when botUserId is unknown and no custom mention regexes are
-  // configured, wasMentioned is unreliable — skip the gate to avoid false drops.
+  // Guard on canDetectMention: require an explicit bot user ID before activating the gate.
+  // hasAnyMention matches any <@...> token, so without botUserId we cannot distinguish
+  // "bot was mentioned" from "someone else was mentioned". When botUserId is unknown (e.g.
+  // auth.test failed), skip the gate entirely to avoid dropping legitimate bot pings.
+  // Mention regexes alone are insufficient — they are derived from agent identity (name-based
+  // patterns) and do not match Slack <@USER_ID> tokens, so canDetectMention must not rely
+  // on mentionRegexes.length > 0 as a fallback.
   // Note: when inbound debouncing merges multiple messages, hasAnyMention and wasMentioned
   // reflect the combined batch. This is intentional — debounced messages are a single logical
   // unit, and a batch where someone tagged a coworker (but not the bot) is correctly dropped.
-  const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
+  const canDetectMentionForIgnoreOtherMentions = Boolean(ctx.botUserId);
   const ignoreOtherMentions = channelConfig?.ignoreOtherMentions ?? false;
-  if (isRoom && ignoreOtherMentions && canDetectMention && hasAnyMention && !wasMentioned) {
+  if (
+    isRoom &&
+    ignoreOtherMentions &&
+    canDetectMentionForIgnoreOtherMentions &&
+    hasAnyMention &&
+    !wasMentioned
+  ) {
     logInboundDrop({
       log: logVerbose,
       channel: "slack",
