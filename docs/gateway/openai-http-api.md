@@ -25,14 +25,25 @@ Under the hood, requests are executed as a normal Gateway agent run (same codepa
 
 ## Authentication
 
-Uses the Gateway auth configuration. Send a bearer token:
+Uses the Gateway auth configuration.
 
-- `Authorization: Bearer <token>`
+Common HTTP auth paths:
+
+- shared-secret auth (`gateway.auth.mode="token"` or `"password"`):
+  `Authorization: Bearer <token-or-password>`
+- trusted identity-bearing HTTP auth (`gateway.auth.mode="trusted-proxy"`):
+  route through the configured identity-aware proxy and let it inject the
+  required identity headers
+- private-ingress open auth (`gateway.auth.mode="none"`):
+  no auth header required
 
 Notes:
 
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
+  configured non-loopback trusted proxy source; same-host loopback proxies do
+  not satisfy this mode.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
