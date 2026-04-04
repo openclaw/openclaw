@@ -165,7 +165,7 @@ Example:
     SSH and tailnet access patterns.
   </Card>
   <Card title="Channels" href="/channels/telegram" icon="message-square">
-    Channel-specific setup for WhatsApp, Telegram, Discord, and more.
+    Channel-specific setup for Feishu, Microsoft Teams, WhatsApp, Telegram, Discord, and more.
   </Card>
   <Card title="Nodes" href="/nodes" icon="smartphone">
     iOS and Android nodes with pairing, Canvas, camera, and device actions.

@@ -32,7 +32,8 @@ Regardless of which path you choose, onboarding sets up:
 1. **Model provider and auth** — API key, OAuth, or setup token for your chosen provider
 2. **Workspace** — directory for agent files, bootstrap templates, and memory
 3. **Gateway** — port, bind address, auth mode
-4. **Channels** (optional) — WhatsApp, Telegram, Discord, and more
+4. **Channels** (optional) — bundled chat channels such as Feishu, Google Chat,
+   Microsoft Teams, Telegram, WhatsApp, Discord, and more
 5. **Daemon** (optional) — background service so the Gateway starts automatically
 
 ## CLI onboarding
