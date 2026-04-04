@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   isXaiToolEnabled,
+  resolveFallbackXaiAuth,
   resolveFallbackXaiApiKey,
   resolveXaiToolApiKey,
 } from "./tool-auth-shared.js";
@@ -35,6 +37,44 @@ describe("xai tool auth helpers", () => {
         },
       }),
     ).toBe("plugin-key");
+  });
+
+  it("returns source metadata and managed markers for fallback auth", () => {
+    expect(
+      resolveFallbackXaiAuth({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "file", provider: "vault", id: "/xai/tool-key" },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      apiKey: NON_ENV_SECRETREF_MARKER,
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+    });
+
+    expect(
+      resolveFallbackXaiAuth({
+        tools: {
+          web: {
+            search: {
+              grok: {
+                apiKey: "legacy-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      apiKey: "legacy-key",
+      source: "tools.web.search.grok.apiKey",
+    });
   });
 
   it("falls back to runtime, then source config, then env for tool auth", () => {
